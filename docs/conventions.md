@@ -15,7 +15,7 @@ inside are fine — `jit` unrolls them.
   returns an `int` from a length; `jit` would trace it away.
 - composes other work in a static loop with host-side steps between — e.g.
   `zorch.prove` loops the round, and `SumcheckRound.__call__` wraps the
-  round-poly/fold arithmetic around the host-side transcript `commit` /
+  round-poly/fold arithmetic around the host-side transcript `observe` /
   `challenge`. Decorating these would inline everything into one trace and pull
   the transcript ops in with it.
 

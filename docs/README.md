@@ -25,13 +25,24 @@ several kernels. "One fused kernel" is the ideal limit of the same idea, not a
 separate goal.
 
 Two enablers make a round capturable: (1) the **whole round body in one traced
-region** with a **device-side** transcript (so `commit`/`challenge` are device
+region** with a **device-side** transcript (so `observe`/`challenge` are device
 ops, not host steps that break the capture), and (2) a `stablehlo.composite`
 marker the emitter lowers as one unit. Until those land — the device transcript
 is [#3](https://github.com/fractalyze/zorch/issues/3); the marker + generic zkx
 emitter are Phase 3 — round bodies are written **fusion-ready**: element-wise
 field ops plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they
 drop into that path unchanged. See [`sumcheck.md`](sumcheck.md).
+
+**Measured (ZKX GPU).** The bodies already lower as intended: `SumcheckRound.round_poly`
+compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
+`Σ`, no marker needed — and `fold` to a single element-wise (`kLoop`) kernel. A full round
+(`round_poly` + `fold`) is **two** kernels (its message and folded state are disjoint
+outputs), and with a host-side transcript it is not one traced region at all. So "one round
+= one unit" means **one replayed CUDA graph** over those kernels (enablers (1)+(2)), not one
+mega-fused kernel: a single giant extension-field kernel fights the compiler's field-aware
+fusion splitting, and graph capture alone does not move warm time — the bottleneck is per-op
+device latency, not host launch. The actual perf lever (register-resident fused kernels) is
+a separate axis; rationale on epic #1.
 
 ## Conventions
 

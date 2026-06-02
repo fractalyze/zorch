@@ -1,4 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+from unittest.mock import MagicMock
+
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
@@ -10,12 +12,14 @@ KB = zk_dtypes.koalabear
 
 
 class RoundBaseTest(absltest.TestCase):
-    def test_commit_delegates_to_observe(self):
+    def test_observe_delegates_to_transcript(self):
+        # StubTranscript.observe is a no-op, so a mock is needed to assert delegation.
         r = Round()
-        t = StubTranscript(jnp.array([1, 2], dtype=KB))
-        # observe is a no-op stub; commit must return a transcript unchanged in pos
-        t2 = r.commit(t, jnp.array([9, 9], dtype=KB))
-        self.assertEqual(t2.pos, 0)
+        t = MagicMock()
+        values = jnp.array([9, 9], dtype=KB)
+        t2 = r.observe(t, values)
+        t.observe.assert_called_once_with(values)
+        self.assertIs(t2, t.observe.return_value)
 
     def test_challenge_delegates_to_sample(self):
         r = Round()

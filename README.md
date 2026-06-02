@@ -27,9 +27,10 @@ the way deep learning stacks `Layer`s, `zorch` stacks **`Round`s**.
 
 ## Building blocks
 
-- **`Round`** — the composable unit. Carries a Fiat-Shamir interface: `commit`
-  to absorb into the transcript, `challenge` to squeeze randomness out.
-- **Fiat-Shamir / Challenge** — the duplex-sponge transcript: `absorb` / `squeeze`.
+- **`Round`** — the composable unit. Carries a Fiat-Shamir interface: `observe`
+  to put a message into the transcript, `challenge` to draw randomness out.
+- **Fiat-Shamir / Challenge** — the transcript interface `observe` / `sample`; the
+  concrete impl is a duplex sponge (`absorb` / `squeeze`) under the hood.
 - **`Polynomial`** — univariate and multilinear representations.
 - **`PCS`** — polynomial commitment: `commit` / `open` / `verify`.
 - **Fold** — 2-to-1 reduction (same program, half the input), one random
