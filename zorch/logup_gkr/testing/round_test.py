@@ -15,14 +15,6 @@ def _state(seed, width):
     return [rand_field(seed + i, (width,), KB) for i in range(5)]
 
 
-def _combine(lam, eq, n0, d1, n1, d0):
-    return eq * (lam * (n0 * d1 + n1 * d0) + d0 * d1)
-
-
-def _hypercube_sum(lam, state):
-    return jnp.sum(_combine(lam, *state))
-
-
 def _eval_cubic_at(evals, r):
     """Interpolate the degree-3 poly given by `evals` at u=0,1,2,3, eval at r
     (Lagrange over the field — the sumcheck verifier's per-round check)."""
@@ -40,14 +32,14 @@ def _eval_cubic_at(evals, r):
 class LogupGkrRoundTest(absltest.TestCase):
     def test_round_poly_matches_naive_cubic(self):
         st = _state(20, 8)
-        lam = jnp.array(7, KB)
-        msg = LogupGkrRound(lam)._round_poly(st)
+        rnd = LogupGkrRound(jnp.array(7, KB))
+        msg = rnd._round_poly(st)
         self.assertEqual(msg.shape, (4,))  # degree 3 -> 4 evals
         half = 4
         for u in range(4):
             uf = jnp.array(u, KB)
             folded = [x[:half] + uf * (x[half:] - x[:half]) for x in st]
-            want = jnp.sum(_combine(lam, *folded))
+            want = jnp.sum(rnd._combine(*folded))
             self.assertTrue(bool(msg[u] == want))
 
     def test_round_poly_with_batch_dimension(self):
@@ -68,10 +60,10 @@ class LogupGkrRoundTest(absltest.TestCase):
 
     def test_sumcheck_invariant_s0_plus_s1(self):
         st = _state(40, 16)
-        lam = jnp.array(9, KB)
-        msg = LogupGkrRound(lam)._round_poly(st)
+        rnd = LogupGkrRound(jnp.array(9, KB))
+        msg = rnd._round_poly(st)
         # s(0)+s(1) == sum over the full hypercube of the combine (the claim)
-        self.assertTrue(bool(msg[0] + msg[1] == _hypercube_sum(lam, st)))
+        self.assertTrue(bool(msg[0] + msg[1] == jnp.sum(rnd._combine(*st))))
 
     def test_call_threads_state_transcript_msg(self):
         st = _state(50, 8)
@@ -95,14 +87,14 @@ class LogupGkrRoundTest(absltest.TestCase):
         challenges = rand_field(99, (n,), KB)
 
         # Replay round-by-round to check the per-round sumcheck identity.
-        claim = _hypercube_sum(lam, st)
+        claim = jnp.sum(rnd._combine(*st))
         state, t = st, StubTranscript(challenges)
         for i in range(n):
             state, t, msg = rnd(state, t)
             self.assertTrue(bool(msg[0] + msg[1] == claim))
             claim = _eval_cubic_at(msg, challenges[i])
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
-        self.assertTrue(bool(_combine(lam, *state)[0] == claim))
+        self.assertTrue(bool(rnd._combine(*state)[0] == claim))
 
         # The generic `prove` driver produces the same per-round messages.
         _, _, proof = prove(rnd, st, StubTranscript(challenges))
