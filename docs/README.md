@@ -34,7 +34,7 @@ emitter are Phase 3 — round bodies are written **fusion-ready**: element-wise
 field ops plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they
 drop into that path unchanged. See [`sumcheck.md`](sumcheck.md).
 
-**Measured (ZKX GPU).** The bodies already lower as intended: `ProductSumcheckRound._round_poly`
+**Measured (ZKX GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
 compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
 `Σ`, no marker needed — and `_fold` to a single element-wise (`kLoop`) kernel. A full round
 (`_round_poly` + `_fold`) is **two** kernels (its message and folded state are disjoint

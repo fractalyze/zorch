@@ -1,23 +1,21 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck as a `Round`: one round per call, over an arbitrary summand.
+"""Sumcheck prover rounds.
 
-`SumcheckRound` is the protocol skeleton -- split each MLE on the current
+`SumcheckRoundBase` is the protocol skeleton -- split each MLE on the current
 variable, send the round polynomial over the domain [0..degree], fold every MLE
 at the verifier's challenge (P0 + r*(P1 - P0)). A subclass supplies only its
-summand via `_round_poly`: `ProductSumcheckRound` (here) sums a product of
-factors, `LogupGkrRound` (in zorch.logup_gkr) sums the LogUp combine. The fold,
-the Fiat-Shamir loop, and `_split` (which validates then halves) are inherited; a
+summand via `_round_poly`: `SumcheckRound` (here) sums a product of factors,
+`LogupGkrRound` (in zorch.logup_gkr) sums the LogUp combine. The fold, the
+Fiat-Shamir loop, and `_split` (which validates then halves) are inherited; a
 subclass overrides `_split` only for extra input checks (e.g. LogUp's factor
 count).
 
 The round body is element-wise field ops plus the one inherent Sigma (no
 reduce/gather beyond it), so it stays wrappable by the Phase-3 single-kernel
-marker without restructuring (no fusion decorator now).
-
-`SumcheckVerifier` is the dual of the whole family: it checks the round-poly
-identity and reduces the claim, and is summand-agnostic — the product/LogUp
-choice is the prover's concern, so one verifier serves every `SumcheckRound`.
+marker without restructuring (no fusion decorator now). The verifier dual lives
+in `zorch.sumcheck.verifier`.
 """
+
 from __future__ import annotations
 
 import operator
@@ -26,11 +24,10 @@ from functools import reduce
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.poly import eval_univariate
 from zorch.round import Round
 
 
-class SumcheckRound(Round):
+class SumcheckRoundBase(Round):
     """Generic sumcheck round; subclasses implement `_round_poly`."""
 
     def _split(self, state):
@@ -71,7 +68,7 @@ class SumcheckRound(Round):
         return state, transcript, msg
 
 
-class ProductSumcheckRound(SumcheckRound):
+class SumcheckRound(SumcheckRoundBase):
     """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry."""
 
     def __init__(self, degree: int):
@@ -91,26 +88,3 @@ class ProductSumcheckRound(SumcheckRound):
         us = jnp.stack([jnp.array(u, dtype) for u in range(self.degree + 1)])
         factors = (p0 + us[:, None] * (p1 - p0) for (p0, p1) in halves)
         return jnp.sum(reduce(operator.mul, factors), axis=-1)
-
-
-class SumcheckVerifier(Round):
-    """Verifier for any sumcheck round. The observe→challenge order matches
-    `SumcheckRound.__call__` exactly, so the prover's and verifier's Fiat-Shamir
-    transcripts can't diverge. Summand-agnostic: it sees only the round
-    polynomials, so one verifier checks product, LogUp, any summand at `degree`."""
-
-    def __init__(self, degree: int):
-        if degree < 1:
-            raise ValueError("degree must be >= 1")
-        self.degree = degree
-
-    def __call__(self, claim, msg, transcript):
-        if msg.shape[0] != self.degree + 1:
-            raise ValueError(
-                f"round message must have degree+1={self.degree + 1} evals, "
-                f"got {msg.shape[0]}"
-            )
-        ok = claim == msg[0] + msg[1]
-        transcript = transcript.observe(msg)
-        transcript, r = transcript.sample(1)
-        return eval_univariate(msg, r[0]), transcript, r[0], ok

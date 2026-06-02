@@ -4,7 +4,7 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.prove import prove
-from zorch.sumcheck import ProductSumcheckRound, SumcheckVerifier
+from zorch.sumcheck import prover, verifier
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 from zorch.verify import verify
@@ -33,10 +33,10 @@ class SumcheckVerifyTest(absltest.TestCase):
         challenges = rand_field(seed, (n,), KB)
         claimed = jnp.sum(_product(list(factors)))
         _, _, proof = prove(
-            ProductSumcheckRound(degree), list(factors), StubTranscript(challenges)
+            prover.SumcheckRound(degree), list(factors), StubTranscript(challenges)
         )
         point, final_claim, _, ok = verify(
-            SumcheckVerifier(degree), claimed, proof, StubTranscript(challenges)
+            verifier.SumcheckRound(degree), claimed, proof, StubTranscript(challenges)
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(jnp.all(point == challenges)))
@@ -57,9 +57,9 @@ class SumcheckVerifyTest(absltest.TestCase):
         f = rand_field(52, (1 << 4,), KB).astype(EF)
         challenges = rand_field(53, (4,), KB).astype(EF)
         claimed = jnp.sum(f)
-        _, _, proof = prove(ProductSumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
         point, final_claim, _, ok = verify(
-            SumcheckVerifier(1), claimed, proof, StubTranscript(challenges)
+            verifier.SumcheckRound(1), claimed, proof, StubTranscript(challenges)
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(final_claim == _eval_mle(f, point)))
@@ -70,10 +70,10 @@ class SumcheckVerifyTest(absltest.TestCase):
         challenges = rand_field(47, (3,), KB)
         claimed = jnp.sum(a * b)
         final_state, _, proof = prove(
-            ProductSumcheckRound(2), [a, b], StubTranscript(challenges)
+            prover.SumcheckRound(2), [a, b], StubTranscript(challenges)
         )
         _, final_claim, _, ok = verify(
-            SumcheckVerifier(2), claimed, proof, StubTranscript(challenges)
+            verifier.SumcheckRound(2), claimed, proof, StubTranscript(challenges)
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(final_claim == _product([s[0] for s in final_state])))
@@ -81,10 +81,11 @@ class SumcheckVerifyTest(absltest.TestCase):
     def test_single_round_reduces_and_threads(self):
         # The verifier's claim reduction must equal the prover's folded sum at
         # the same challenge (the sumcheck round-to-round identity).
-        prover, verifier = ProductSumcheckRound(1), SumcheckVerifier(1)
+        p_round = prover.SumcheckRound(1)
+        v_round = verifier.SumcheckRound(1)
         f = rand_field(56, (8,), KB)
-        state, _, msg = prover([f], StubTranscript(jnp.array([5, 0], KB)))
-        next_claim, t2, r, ok = verifier(
+        state, _, msg = p_round([f], StubTranscript(jnp.array([5, 0], KB)))
+        next_claim, t2, r, ok = v_round(
             msg[0] + msg[1], msg, StubTranscript(jnp.array([5, 0], KB))
         )
         self.assertTrue(bool(ok))
@@ -95,10 +96,10 @@ class SumcheckVerifyTest(absltest.TestCase):
     def test_wrong_claimed_sum_rejected(self):
         f = rand_field(48, (1 << 4,), KB)
         challenges = rand_field(49, (4,), KB)
-        _, _, proof = prove(ProductSumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
         bad = jnp.sum(f) + jnp.array(1, KB)
         _, _, _, ok = verify(
-            SumcheckVerifier(1), bad, proof, StubTranscript(challenges)
+            verifier.SumcheckRound(1), bad, proof, StubTranscript(challenges)
         )
         self.assertFalse(bool(ok))
 
@@ -108,17 +109,17 @@ class SumcheckVerifyTest(absltest.TestCase):
         f = rand_field(50, (1 << 4,), KB)
         challenges = rand_field(51, (4,), KB)
         claimed = jnp.sum(f)
-        _, _, proof = prove(ProductSumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
         proof = proof.at[2, 0].add(jnp.array(1, KB))
         _, _, _, ok = verify(
-            SumcheckVerifier(1), claimed, proof, StubTranscript(challenges)
+            verifier.SumcheckRound(1), claimed, proof, StubTranscript(challenges)
         )
         self.assertFalse(bool(ok))
 
     def test_empty_proof_raises(self):
         with self.assertRaises(ValueError):
             verify(
-                SumcheckVerifier(1),
+                verifier.SumcheckRound(1),
                 jnp.zeros((), KB),
                 jnp.zeros((0, 2), KB),
                 StubTranscript(jnp.zeros(1, KB)),
@@ -127,7 +128,7 @@ class SumcheckVerifyTest(absltest.TestCase):
     def test_non_2d_proof_raises(self):
         with self.assertRaises(ValueError):
             verify(
-                SumcheckVerifier(1),
+                verifier.SumcheckRound(1),
                 jnp.zeros((), KB),
                 jnp.zeros((2,), KB),
                 StubTranscript(jnp.zeros(1, KB)),
@@ -138,13 +139,15 @@ class SumcheckVerifyTest(absltest.TestCase):
         # (degree-1) proof is a malformed input, not a soundness failure.
         f = rand_field(54, (1 << 2,), KB)
         challenges = rand_field(55, (2,), KB)
-        _, _, proof = prove(ProductSumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
         with self.assertRaises(ValueError):
-            verify(SumcheckVerifier(2), jnp.sum(f), proof, StubTranscript(challenges))
+            verify(
+                verifier.SumcheckRound(2), jnp.sum(f), proof, StubTranscript(challenges)
+            )
 
     def test_degree_must_be_positive(self):
         with self.assertRaises(ValueError):
-            SumcheckVerifier(0)
+            verifier.SumcheckRound(0)
 
 
 if __name__ == "__main__":
