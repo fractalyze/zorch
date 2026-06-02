@@ -1,0 +1,37 @@
+# Bazel
+/bazel-*
+/.ijwb/
+/.aswb/
+/.clwb/
+
+# Local, machine-specific Bazel config (never commit — holds absolute paths)
+.bazelrc.user
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Virtualenvs (dev envs live under $DEVENV_ENVS_DIR, but ignore in-tree ones too)
+.venv/
+venv/
+
+# Compiled / vendored shared libs are opt-in only
+*.so
+*.dylib
+*.dll
+
+# Editors / OS
+.vscode/
+.idea/
+*~
+.DS_Store
+
+# Scratch / logs
+*.log

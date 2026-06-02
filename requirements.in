@@ -1,0 +1,15 @@
+# zorch runtime dependencies.
+#
+# Pulled from the Fractalyze package index alongside upstream PyPI:
+#   pip install -r requirements.in \
+#     --extra-index-url https://fractalyze.github.io/pypi/simple/
+#
+# zorch is proving-scheme- and zkVM-agnostic, so it deliberately does NOT
+# depend on any zkVM package (riscv-witness, rw-constraints, …). zk_dtypes
+# (native finite-field dtypes) arrives transitively via jax.
+absl-py
+numpy
+jax==0.0.5.dev20260524000415
+jaxlib==0.0.5.dev20260524000415
+jax-cuda12-plugin==0.0.5.dev20260524000415
+zkx-cuda-pjrt==0.0.5.dev20260524000415
