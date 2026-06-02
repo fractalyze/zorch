@@ -1,1 +1,12 @@
+load("@rules_python//python:pip.bzl", "compile_pip_requirements")
+
 exports_files(["requirements_lock_3_11.txt"])
+
+# `bazel run //:requirements.update` recompiles the lock from requirements.in.
+# Mechanizes lock updates (incl. the jax-update auto-bump), replacing manual edits.
+compile_pip_requirements(
+    name = "requirements",
+    src = "requirements.in",
+    extra_args = ["--extra-index-url=https://fractalyze.github.io/pypi/simple/"],
+    requirements_txt = "requirements_lock_3_11.txt",
+)
