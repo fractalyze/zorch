@@ -101,14 +101,35 @@ class LogupGkrRoundTest(absltest.TestCase):
         self.assertEqual(proof.shape, (n, 4))
 
     def test_round_poly_is_fusion_ready_stablehlo(self):
-        # Fusion contract: the round body lowers with no gather (kInput boundary
-        # source) and no dot (matmul); only the one inherent Sigma reduce.
+        # Fusion contract (authoritatively enforced by zkx's ZorchRoundRewriter,
+        # issue #21): a marked round body must be straight-line element-wise field
+        # ops + the ONE inherent Sigma. This is the cheap zorch-side proxy: assert
+        # the lowered body uses ONLY fusion-safe ops plus exactly one reduce. A
+        # whitelist (not a gather/dot blacklist) so ANY boundary op (gather,
+        # scatter, dot, while, ...) or a second reduce trips it -- and any new op
+        # in the fusion-critical body gets a conscious look.
+        import re
+
         import jax
 
+        FUSION_SAFE = {
+            "add",
+            "subtract",
+            "multiply",
+            "constant",  # element-wise field + consts
+            "broadcast_in_dim",
+            "reshape",
+            "slice",
+            "concatenate",  # structural
+        }
         st = _state(80, 8)
         hlo = jax.jit(LogupGkrRound(jnp.array(5, KB))._round_poly).lower(st).as_text()
-        self.assertNotIn("gather", hlo)
-        self.assertNotIn("dot", hlo)
+        ops = re.findall(r"stablehlo\.([a-z_]+)", hlo)
+        self.assertEqual(ops.count("reduce"), 1)  # the one inherent Sigma, no more
+        offenders = {op for op in ops if op != "reduce" and op not in FUSION_SAFE}
+        self.assertEqual(
+            offenders, set(), f"non-fusion-safe ops in round body: {offenders}"
+        )
 
     def test_state_must_have_five_factors(self):
         with self.assertRaises(ValueError):
