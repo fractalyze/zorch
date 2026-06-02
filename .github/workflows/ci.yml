@@ -24,8 +24,18 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}
           repository-cache: true
+      # TEMP — the excluded py_tests vmap poseidon2's zorch.round composite,
+      # which needs fractalyze/jax#164's batching rule (absent from the pinned
+      # jax wheel that bazel's hermetic pip resolves). The pytest job runs them
+      # against the fork branch. Restore plain `//...` after the jax pin bump.
       - name: Run bazel test
-        run: bazel test //...
+        run: |
+          bazel test -- //... \
+            -//zorch/commit:merkle_test \
+            -//zorch/hash:compression_test \
+            -//zorch/hash:sponge_test \
+            -//zorch/hash/poseidon2:permute_shape_test \
+            -//zorch/hash/poseidon2/testing:poseidon2_test
 
   pytest:
     runs-on: ubuntu-latest
@@ -40,6 +50,20 @@ jobs:
         run: |
           pip install -r requirements_lock_3_11.txt
           pip install pytest
+      # TEMP — remove once fractalyze/jax#164 merges and the jax-update pin bump
+      # lands here. The pinned jax wheel lacks the vmap-over-composite batching
+      # rule that poseidon2's zorch.round marker needs; override the jax package
+      # with the fork branch (tarball via the read token, since jax is private;
+      # pinned to the PR-head commit so CI is reproducible; --no-deps keeps the
+      # pinned jaxlib).
+      - name: (temp) jax composite-vmap batching rule (fractalyze/jax#164)
+        run: |
+          mkdir -p "${RUNNER_TEMP}/jax-src"
+          curl -fsSL \
+            -H "Authorization: token ${{ secrets.FRACTALYZE_REPOS_READ_TOKEN }}" \
+            "https://api.github.com/repos/fractalyze/jax/tarball/da27584c20f80c6563234d9234116dd61ec3b293" \
+            | tar -xz --strip-components=1 -C "${RUNNER_TEMP}/jax-src"
+          pip install --no-deps --force-reinstall "${RUNNER_TEMP}/jax-src"
       - name: Run module tests
         run: JAX_PLATFORMS=cpu PYTHONPATH=. pytest
 

@@ -5,11 +5,13 @@ py_library(
     name = "poseidon2",
     srcs = [
         "__init__.py",
+        "linear.py",
         "params.py",
         "poseidon2.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:fusion",
         "//zorch/hash:permutation",
         requirement("jax"),
         requirement("numpy"),
