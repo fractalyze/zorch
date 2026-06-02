@@ -1,6 +1,5 @@
 # Bazel
 /bazel-*
-MODULE.bazel.lock
 /.ijwb/
 /.aswb/
 /.clwb/

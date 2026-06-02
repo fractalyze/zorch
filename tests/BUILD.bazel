@@ -5,6 +5,9 @@ py_test(
     name = "smoke_test",
     size = "small",
     srcs = ["smoke_test.py"],
+    # GPU plugins (jax-cuda12-plugin, zkx-cuda-pjrt) are on the deps closure;
+    # pin the smoke test to CPU so it never tries to init CUDA on CPU-only runners.
+    env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         requirement("jax"),
         requirement("zk_dtypes"),
