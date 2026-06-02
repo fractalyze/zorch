@@ -3,9 +3,9 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.poly import eval_univariate
 from zorch.prove import prove
 from zorch.sumcheck import ProductSumcheckRound
-from zorch.testkit.poly import eval_univariate
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 

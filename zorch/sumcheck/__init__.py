@@ -1,4 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-from zorch.sumcheck.round import ProductSumcheckRound, SumcheckRound
+from zorch.sumcheck.round import (
+    ProductSumcheckRound,
+    SumcheckRound,
+    SumcheckVerifier,
+)
 
-__all__ = ["ProductSumcheckRound", "SumcheckRound"]
+__all__ = ["ProductSumcheckRound", "SumcheckRound", "SumcheckVerifier"]

@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.testkit.poly import eval_univariate
+from zorch.poly import eval_univariate
 
 KB = zk_dtypes.koalabear
 
