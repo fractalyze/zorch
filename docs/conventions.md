@@ -16,7 +16,7 @@ inside are fine — `jit` unrolls them.
 - composes other work in a static loop with host-side steps between — e.g.
   `zorch.prove` loops the round, and `SumcheckRound.__call__` wraps the
   round-poly/fold arithmetic around the host-side transcript `observe` /
-  `challenge`. Decorating these would inline everything into one trace and pull
+  `sample`. Decorating these would inline everything into one trace and pull
   the transcript ops in with it.
 
 A round's `_round_poly` / `_fold` are pure numeric and *could* be `@jit`'d,
