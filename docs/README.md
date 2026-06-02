@@ -12,11 +12,31 @@ ______________________________________________________________________
 | --------------------------------------------------------------- | --------------------------------------------------------------------- |
 | What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
+| The sumcheck `Round` block — usage, composition, gotchas        | [`sumcheck.md`](sumcheck.md)                                          |
+
+## Fusion north star
+
+A `Round` must lower to **one replayable GPU unit, by construction** — never by a
+per-primitive compiler pattern-match. The realistic target is a **single CUDA
+graph** that captures the round's full launch sequence (`round_poly` → absorb →
+squeeze → fold), **not necessarily a single fused kernel**: an XLA command buffer
+replays the captured graph with no per-launch overhead, even if it is internally
+several kernels. "One fused kernel" is the ideal limit of the same idea, not a
+separate goal.
+
+Two enablers make a round capturable: (1) the **whole round body in one traced
+region** with a **device-side** transcript (so `commit`/`challenge` are device
+ops, not host steps that break the capture), and (2) a `stablehlo.composite`
+marker the emitter lowers as one unit. Until those land — the device transcript
+is [#3](https://github.com/fractalyze/zorch/issues/3); the marker + generic zkx
+emitter are Phase 3 — round bodies are written **fusion-ready**: element-wise
+field ops plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they
+drop into that path unchanged. See [`sumcheck.md`](sumcheck.md).
 
 ## Conventions
 
-Coding conventions (`docs/conventions.md`) will land alongside the first code
-milestone. Design-doc prose under `docs/` is written in Korean; code, symbols,
+Coding conventions (`@jit` usage, style) live in [`conventions.md`](conventions.md).
+Design-doc prose under `docs/` is written in Korean; code, symbols,
 file paths, and external citations stay in English.
 
 ______________________________________________________________________
