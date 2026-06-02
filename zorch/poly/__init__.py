@@ -7,7 +7,7 @@ import jax.numpy as jnp
 from jax import Array
 
 
-def eval_univariate(evals: Array, x) -> Array:
+def eval_univariate(evals: Array, x: Array) -> Array:
     """Evaluate a univariate given by its values on ``[0, 1, ..., len-1]`` at
     ``x``, by Lagrange interpolation over that integer domain.
 

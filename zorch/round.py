@@ -24,9 +24,16 @@ sequence, e.g. GKR layers).
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Sequence
+from typing import Any
+
+from jax import Array
+
+from zorch.transcript import Transcript
+
 
 class Round:
-    def __call__(self, *args):
+    def __call__(self, *args: Any) -> Any:
         """Run one round, threading the transcript — see the module docstring for
         the prover and verifier signatures. Implemented by subclasses."""
         raise NotImplementedError
@@ -37,10 +44,12 @@ class ProveChain(Round):
     through each round and collects their messages. Itself a `Round`, so chains
     nest."""
 
-    def __init__(self, rounds):
+    def __init__(self, rounds: Iterable[Round]) -> None:
         self.rounds = list(rounds)
 
-    def __call__(self, carry, transcript):
+    def __call__(
+        self, carry: Any, transcript: Transcript
+    ) -> tuple[Any, Transcript, list[Any]]:
         msgs = []
         for rnd in self.rounds:
             carry, transcript, msg = rnd(carry, transcript)
@@ -53,10 +62,12 @@ class VerifyChain(Round):
     threading the carry, and ANDs every round's `ok`. `msgs` aligns with the
     rounds (one per round, in order)."""
 
-    def __init__(self, rounds):
+    def __init__(self, rounds: Iterable[Round]) -> None:
         self.rounds = list(rounds)
 
-    def __call__(self, carry, msgs, transcript):
+    def __call__(
+        self, carry: Any, msgs: Sequence[Any], transcript: Transcript
+    ) -> tuple[Any, Transcript, Array]:
         # Fail loud: a short msgs list would let zip skip rounds while ok stays
         # True -- a silent accept.
         if len(msgs) != len(self.rounds):

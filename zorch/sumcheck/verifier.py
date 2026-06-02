@@ -10,19 +10,24 @@ the prover's and verifier's Fiat-Shamir transcripts cannot diverge.
 
 from __future__ import annotations
 
+from jax import Array
+
 from zorch.poly import eval_univariate
 from zorch.round import Round
+from zorch.transcript import Transcript
 
 
 class SumcheckRound(Round):
     """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`."""
 
-    def __init__(self, degree: int):
+    def __init__(self, degree: int) -> None:
         if degree < 1:
             raise ValueError("degree must be >= 1")
         self.degree = degree
 
-    def __call__(self, claim, msg, transcript):
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
         if msg.shape[0] != self.degree + 1:
             raise ValueError(
                 f"round message must have degree+1={self.degree + 1} evals, "

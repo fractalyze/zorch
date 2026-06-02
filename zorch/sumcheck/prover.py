@@ -19,18 +19,20 @@ in `zorch.sumcheck.verifier`.
 from __future__ import annotations
 
 import operator
+from collections.abc import Sequence
 from functools import reduce
 
 import jax.numpy as jnp
 from jax import Array
 
 from zorch.round import Round
+from zorch.transcript import Transcript
 
 
 class SumcheckRoundBase(Round):
     """Generic sumcheck round; subclasses implement `_round_poly`."""
 
-    def _split(self, state):
+    def _split(self, state: Sequence[Array]) -> list[tuple[Array, Array]]:
         """Validate, then halve each MLE on the current variable: [(P0, P1), ...].
 
         Factors must be non-empty, share a shape, and have an even width -- fail
@@ -51,16 +53,18 @@ class SumcheckRoundBase(Round):
             out.append((evals[..., :half], evals[..., half:]))
         return out
 
-    def _round_poly(self, state) -> Array:
+    def _round_poly(self, state: Sequence[Array]) -> Array:
         """Round polynomial over [0..degree] (degree set by the subclass's
         summand), shape (degree+1, *batch). Supplied by subclasses."""
         raise NotImplementedError
 
-    def _fold(self, state, r) -> list:
+    def _fold(self, state: Sequence[Array], r: Array) -> list[Array]:
         """Fold each MLE at challenge `r`: P0 + r*(P1 - P0). Halves width."""
         return [p0 + r * (p1 - p0) for (p0, p1) in self._split(state)]
 
-    def __call__(self, state, transcript):
+    def __call__(
+        self, state: Sequence[Array], transcript: Transcript
+    ) -> tuple[list[Array], Transcript, Array]:
         msg = self._round_poly(state)
         transcript = transcript.observe(msg)
         transcript, r = transcript.sample(1)
@@ -71,12 +75,12 @@ class SumcheckRoundBase(Round):
 class SumcheckRound(SumcheckRoundBase):
     """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry."""
 
-    def __init__(self, degree: int):
+    def __init__(self, degree: int) -> None:
         if degree < 1:
             raise ValueError("degree must be >= 1")
         self.degree = degree
 
-    def _round_poly(self, state) -> Array:
+    def _round_poly(self, state: Sequence[Array]) -> Array:
         """s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)).
 
         The whole u-domain is evaluated at once -- one batched reduction, so it

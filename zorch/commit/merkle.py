@@ -31,7 +31,7 @@ class MerkleTree:
     (`leaf_hasher.out == compressor.chunk`), and the compressor must be 2-to-1.
     """
 
-    def __init__(self, leaf_hasher: Sponge, compressor: Compression):
+    def __init__(self, leaf_hasher: Sponge, compressor: Compression) -> None:
         if compressor.arity != 2:
             raise ValueError(
                 f"MerkleTree builds a binary tree; compressor arity must be 2, "

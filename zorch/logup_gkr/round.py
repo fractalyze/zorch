@@ -17,6 +17,8 @@ separate, later piece.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import jax.numpy as jnp
 from jax import Array
 
@@ -28,11 +30,11 @@ _NUM_FACTORS = 5  # [eq, n0, d1, n1, d0]
 
 
 class LogupGkrRound(SumcheckRoundBase):
-    def __init__(self, lam):
+    def __init__(self, lam: Array) -> None:
         # Batching challenge; fixed across a layer's variable-rounds.
         self.lam = lam
 
-    def _split(self, state):
+    def _split(self, state: Sequence[Array]) -> list[tuple[Array, Array]]:
         # Factor count is LogUp-specific; shape/even-width checks come from base.
         if len(state) != _NUM_FACTORS:
             raise ValueError(
@@ -41,10 +43,10 @@ class LogupGkrRound(SumcheckRoundBase):
             )
         return super()._split(state)
 
-    def _combine(self, eq, n0, d1, n1, d0):
+    def _combine(self, eq: Array, n0: Array, d1: Array, n1: Array, d0: Array) -> Array:
         return eq * (self.lam * (n0 * d1 + n1 * d0) + d0 * d1)
 
-    def _round_poly(self, state) -> Array:
+    def _round_poly(self, state: Sequence[Array]) -> Array:
         """Round polynomial over the domain [0, 1, ..., degree], shape
         (degree+1, *batch): s[u] = sum_x' combine(f_u for each factor), where
         f_u = P0 + u*(P1 - P0).

@@ -62,7 +62,7 @@ class Poseidon2Params:
     internal_diag: Array
     external_matrix: Array | None = None
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.alpha < 1:
             raise ValueError(f"alpha must be a positive int, got {self.alpha}")
         w = self.width

@@ -35,7 +35,7 @@ class CompressionParams:
     arity: int
     chunk: int
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.arity < 2:
             raise ValueError(f"arity ({self.arity}) must be >= 2")
         if self.chunk < 1:
@@ -50,7 +50,7 @@ class Compression:
     function — the unit that lowers to one fused kernel.
     """
 
-    def __init__(self, permutation: Permutation, params: CompressionParams):
+    def __init__(self, permutation: Permutation, params: CompressionParams) -> None:
         used = params.arity * params.chunk
         if used > permutation.width:
             raise ValueError(

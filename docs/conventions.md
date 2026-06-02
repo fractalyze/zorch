@@ -68,3 +68,32 @@ A leading underscore marks non-public surface. A `Round`'s only public entry is
 `__call__` (plus `__init__`); its internal steps are `_`-prefixed (`_split`,
 `_round_poly`, `_fold`, `_combine`). Same-package tests may still reach in and
 exercise them by name — the prefix marks intent, it doesn't lock the door.
+
+## Type annotations
+
+Every `def` carries a full signature — annotate each parameter and the return,
+on tests and nested closures too, `-> None` included (`__init__`,
+`__post_init__`, `test_*`). mypy's `disallow_untyped_defs` is the gate (it runs
+in pre-commit); a bare parameter or a missing return fails the hook.
+
+Vocabulary:
+
+- `jax.Array` for any field element or array — a scalar challenge is a 0-d
+  `Array`, not a Python number.
+- The per-factor MLE state threaded through a `Round` is `Sequence[Array]` where
+  it is only read, `list[Array]` where it is owned or returned.
+- `Transcript` (the Protocol in `transcript.py`) for the threaded transcript,
+  never a concrete implementation. A test that reaches a stub-only field narrows
+  first: `assert isinstance(t, StubTranscript)`.
+- `Any` for a field dtype — the core names no field and treats `dtype` as
+  opaque, so `dtype: Any` is the honest type, not a placeholder.
+
+`Round.__call__(self, *args: Any) -> Any` is the one deliberately-loose
+signature. A prover round is `(state, transcript) -> (state, transcript, msg)`
+and its verifier dual `(claim, msg, transcript) -> (claim, transcript, r, ok)`,
+so the base can't name a single shape — the subclasses give the precise ones.
+
+mypy can't see through the ZKX `jax` fork (its shipped stubs don't parse) or
+`zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value
+is catching a missing or malformed annotation, not deep array-shape checking —
+write the precise type regardless; it is documentation that outlives the stubs.

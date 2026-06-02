@@ -1,7 +1,12 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
+from collections.abc import Sequence
+
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
+from jax import Array
 
 from zorch.poly import eval_univariate
 from zorch.prove import prove
@@ -12,14 +17,14 @@ from zorch.transcript import StubTranscript
 KB = zk_dtypes.koalabear
 
 
-def _product(factors):
+def _product(factors: Sequence[Array]) -> Array:
     out = factors[0]
     for f in factors[1:]:
         out = out * f
     return out
 
 
-def _eval_mle(evals, point):
+def _eval_mle(evals: Array, point: Array) -> Array:
     """Test oracle: evaluate a multilinear (2^n evals) at `point` (MSB-first)."""
     cur = evals
     for r in point:
@@ -29,7 +34,9 @@ def _eval_mle(evals, point):
 
 
 class SumcheckProveTest(absltest.TestCase):
-    def _check_identity(self, factors, degree, n, seed):
+    def _check_identity(
+        self, factors: Sequence[Array], degree: int, n: int, seed: int
+    ) -> None:
         challenges = rand_field(seed, (n,), KB)
         final_state, _, proof = prove(
             prover.SumcheckRound(degree=degree),
@@ -53,20 +60,20 @@ class SumcheckProveTest(absltest.TestCase):
         last = eval_univariate(proof[n - 1], challenges[n - 1])
         self.assertTrue(bool(last == want))
 
-    def test_empty_state_raises(self):
+    def test_empty_state_raises(self) -> None:
         with self.assertRaises(ValueError):
             prove(prover.SumcheckRound(degree=1), [], StubTranscript(jnp.zeros(1, KB)))
 
-    def test_degree1_single_mle(self):
+    def test_degree1_single_mle(self) -> None:
         f = rand_field(20, (1 << 4,), KB)
         self._check_identity((f,), degree=1, n=4, seed=21)
 
-    def test_degree2_product_two_mles(self):
+    def test_degree2_product_two_mles(self) -> None:
         a = rand_field(22, (1 << 4,), KB)
         b = rand_field(23, (1 << 4,), KB)
         self._check_identity((a, b), degree=2, n=4, seed=24)
 
-    def test_degree1_extension_challenges(self):
+    def test_degree1_extension_challenges(self) -> None:
         EF = zk_dtypes.koalabearx4
         f = rand_field(30, (1 << 4,), KB).astype(EF)
         challenges = rand_field(31, (4,), KB).astype(EF)

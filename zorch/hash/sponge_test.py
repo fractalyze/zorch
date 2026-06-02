@@ -8,6 +8,8 @@ overwrite semantics, and the partial-block rule. An independent Plonky3-generate
 sponge vector is added in the golden-vector slice.
 """
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
@@ -61,14 +63,14 @@ _PLONKY3_SPONGE = {
 }
 
 
-def test_hash_returns_out_shape_and_dtype():
+def test_hash_returns_out_shape_and_dtype() -> None:
     s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     out = s.hash(jnp.arange(16, dtype=F))
     assert out.shape == (8,)
     assert out.dtype == F
 
 
-def test_hash_single_block_is_permute_truncated():
+def test_hash_single_block_is_permute_truncated() -> None:
     perm = koalabear16_perm()
     s = Sponge(perm, SpongeParams(rate=8, out=8))
     x = jnp.arange(8, dtype=F)  # exactly one rate block
@@ -76,7 +78,7 @@ def test_hash_single_block_is_permute_truncated():
     assert jnp.array_equal(s.hash(x), expected)
 
 
-def test_hash_two_full_blocks_overwrite_mode():
+def test_hash_two_full_blocks_overwrite_mode() -> None:
     perm = koalabear16_perm()
     s = Sponge(perm, SpongeParams(rate=8, out=8))
     x = jnp.arange(16, dtype=F)  # two rate blocks
@@ -87,7 +89,7 @@ def test_hash_two_full_blocks_overwrite_mode():
     assert jnp.array_equal(s.hash(x), st[:8])
 
 
-def test_hash_partial_final_block_overwrites_only_its_lanes():
+def test_hash_partial_final_block_overwrites_only_its_lanes() -> None:
     perm = koalabear16_perm()
     s = Sponge(perm, SpongeParams(rate=8, out=8))
     x = jnp.arange(12, dtype=F)  # rate + 4: final block is partial
@@ -98,7 +100,7 @@ def test_hash_partial_final_block_overwrites_only_its_lanes():
     assert jnp.array_equal(s.hash(x), st[:8])
 
 
-def test_rate_not_less_than_width_raises():
+def test_rate_not_less_than_width_raises() -> None:
     perm = koalabear16_perm()
     try:
         Sponge(perm, SpongeParams(rate=16, out=8))
@@ -107,7 +109,7 @@ def test_rate_not_less_than_width_raises():
         pass
 
 
-def test_invalid_params_raise():
+def test_invalid_params_raise() -> None:
     for rate, out in ((0, 8), (8, 0)):  # rate < 1, out < 1
         try:
             SpongeParams(rate=rate, out=out)
@@ -116,7 +118,7 @@ def test_invalid_params_raise():
             pass
 
 
-def test_hash_non_1d_input_raises():
+def test_hash_non_1d_input_raises() -> None:
     s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     try:
         s.hash(jnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
@@ -125,13 +127,13 @@ def test_hash_non_1d_input_raises():
         pass
 
 
-def test_hash_matches_plonky3_golden():
+def test_hash_matches_plonky3_golden() -> None:
     s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     for n, golden in _PLONKY3_SPONGE.items():
         assert jnp.array_equal(s.hash(jnp.arange(n, dtype=F)), golden), f"len {n}"
 
 
-def test_hash_vmap_matches_unbatched():
+def test_hash_vmap_matches_unbatched() -> None:
     s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     a = jnp.arange(16, dtype=F)
     b = jnp.arange(16, dtype=F) + F(3)

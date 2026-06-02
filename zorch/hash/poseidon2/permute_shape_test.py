@@ -1,5 +1,7 @@
 """Poseidon2 implements Permutation and preserves shape/dtype."""
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
@@ -8,7 +10,7 @@ from zorch.hash.permutation import Permutation
 from zorch.hash.poseidon2 import Poseidon2, Poseidon2Params
 
 
-def _params():
+def _params() -> Poseidon2Params:
     w, er, ir = 16, 4, 20
     return Poseidon2Params(
         width=w,
@@ -23,13 +25,13 @@ def _params():
     )
 
 
-def test_is_a_permutation():
+def test_is_a_permutation() -> None:
     p = Poseidon2(_params())
     assert isinstance(p, Permutation)
     assert p.width == 16 and p.dtype == F
 
 
-def test_permute_shape_and_vmap():
+def test_permute_shape_and_vmap() -> None:
     p = Poseidon2(_params())
     x = jnp.arange(16, dtype=F)
     out = p.permute(x)
@@ -40,8 +42,9 @@ def test_permute_shape_and_vmap():
     assert jnp.array_equal(bout[0], out)
 
 
-def test_custom_external_matrix_is_applied():
+def test_custom_external_matrix_is_applied() -> None:
     base = _params()
+    assert base.external_matrix is not None
     custom = base.external_matrix.at[0, 0].add(
         F(1)
     )  # a different valid MDS-shaped matrix

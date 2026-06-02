@@ -10,11 +10,15 @@ consumer's, keeping this block proving-scheme- and PCS-agnostic.
 from __future__ import annotations
 
 import jax.numpy as jnp
+from jax import Array
 
 from zorch.round import Round
+from zorch.transcript import Transcript
 
 
-def verify(verifier: Round, claim, proof, transcript):
+def verify(
+    verifier: Round, claim: Array, proof: Array, transcript: Transcript
+) -> tuple[Array, Array, Transcript, Array]:
     """Replay `proof` against `claim` → `(point, final_claim, transcript, ok)`.
 
     `ok` ANDs every round's check; one false anywhere rejects the proof.
@@ -22,7 +26,7 @@ def verify(verifier: Round, claim, proof, transcript):
     if proof.ndim != 2 or proof.shape[0] == 0:
         raise ValueError("proof must be a non-empty 2-D array (one row per round)")
     ok = jnp.array(True)
-    point = []
+    point: list[Array] = []
     for msg in proof:
         claim, transcript, r, ok_i = verifier(claim, msg, transcript)
         ok = ok & ok_i
