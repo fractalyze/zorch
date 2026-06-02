@@ -38,13 +38,12 @@ class Poseidon2Params:
     its only free part, so it is carried as a vector, not a matrix. There is no
     `monty_inverse` knob — R^-1 is a Montgomery storage artifact, not math.
 
-    Conventions baked into this implementation (not yet parameters): the partial
-    round acts on lane 0 (so `internal_constants` must be zero in lanes 1..w-1),
-    and the external layer is the M4-circulant family (width a multiple of 4).
+    Convention baked into this implementation (not yet a parameter): the partial
+    round acts on lane 0, so `internal_constants` must be zero in lanes 1..w-1.
 
     Contract (validated in __post_init__):
-      external_matrix : (width, width) over dtype; defaults to the canonical
-          M4-circulant. A non-default override is not wired yet (rejected).
+      external_matrix : (width, width) over dtype; applied as `external_matrix @
+          state`, so any matrix works. Defaults to the canonical M4-circulant.
       external_constants_initial/terminal : (external_rounds, width)
       internal_constants : (internal_rounds, width); RC in lane 0, zeros elsewhere
       internal_diag : (width,)
@@ -71,15 +70,6 @@ class Poseidon2Params:
             object.__setattr__(
                 self, "external_matrix", _mds_external_default(w, self.dtype)
             )
-        elif not bool(
-            jnp.array_equal(self.external_matrix, _mds_external_default(w, self.dtype))
-        ):
-            # The normal-form external layer is hardcoded to the canonical
-            # M4-circulant; a genuine override isn't wired yet.
-            raise NotImplementedError(
-                "custom external_matrix override not supported yet; "
-                "omit it for the canonical M4-circulant"
-            )
         checks = {
             "external_matrix": ((w, w), self.external_matrix),
             "external_constants_initial": (
@@ -101,7 +91,9 @@ class Poseidon2Params:
                 raise ValueError(
                     f"{name}: expected dtype {self.dtype}, got {arr.dtype}"
                 )
-        if w > 1 and not bool(jnp.all(self.internal_constants[:, 1:] == self.dtype(0))):
+        if w > 1 and not np.all(
+            np.asarray(self.internal_constants[:, 1:]) == self.dtype(0)
+        ):
             raise ValueError(
                 "internal_constants lanes 1..w-1 must be zero (lane-0 partial round)"
             )

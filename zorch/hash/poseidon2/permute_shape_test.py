@@ -40,19 +40,20 @@ def test_permute_shape_and_vmap():
     assert jnp.array_equal(bout[0], out)
 
 
-def test_custom_external_matrix_override_is_rejected():
+def test_custom_external_matrix_is_applied():
     base = _params()
-    bad = base.external_matrix.at[0, 0].add(F(1))  # non-canonical
-    try:
-        Poseidon2Params(**{**vars(base), "external_matrix": bad})
-    except NotImplementedError:
-        pass
-    else:
-        raise AssertionError("expected NotImplementedError on custom external_matrix")
+    custom = base.external_matrix.at[0, 0].add(
+        F(1)
+    )  # a different valid MDS-shaped matrix
+    over = Poseidon2(Poseidon2Params(**{**vars(base), "external_matrix": custom}))
+    x = jnp.arange(16, dtype=F)
+    # external_matrix is an operand (external_matrix @ state), so a different
+    # matrix produces a different permutation — the override is genuinely used.
+    assert not jnp.array_equal(over.permute(x), Poseidon2(base).permute(x))
 
 
 if __name__ == "__main__":
     test_is_a_permutation()
     test_permute_shape_and_vmap()
-    test_custom_external_matrix_override_is_rejected()
+    test_custom_external_matrix_is_applied()
     print("ok")

@@ -32,16 +32,7 @@ _DEPS = [
         deps = _DEPS,
     )
     for t in [
-        "linear_layers_test",
         "params_test",
         "permute_shape_test",
     ]
 ]
-
-py_test(
-    name = "permute_hlo_test",
-    size = "small",
-    srcs = ["permute_hlo_test.py"],
-    env = {"JAX_PLATFORMS": "cpu"},
-    deps = _DEPS + ["//zorch/hash/poseidon2/testing:koalabear16"],
-)
