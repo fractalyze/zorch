@@ -41,7 +41,7 @@ class LogupGkrRoundTest(absltest.TestCase):
     def test_round_poly_matches_naive_cubic(self):
         st = _state(20, 8)
         lam = jnp.array(7, KB)
-        msg = LogupGkrRound(lam).round_poly(st)
+        msg = LogupGkrRound(lam)._round_poly(st)
         self.assertEqual(msg.shape, (4,))  # degree 3 -> 4 evals
         half = 4
         for u in range(4):
@@ -50,10 +50,17 @@ class LogupGkrRoundTest(absltest.TestCase):
             want = jnp.sum(_combine(lam, *folded))
             self.assertTrue(bool(msg[u] == want))
 
+    def test_round_poly_with_batch_dimension(self):
+        # Leading batch dims must broadcast: msg is (degree+1, *batch).
+        batch = 3
+        st = [x.reshape(batch, -1) for x in _state(20, 24)]
+        msg = LogupGkrRound(jnp.array(7, KB))._round_poly(st)
+        self.assertEqual(msg.shape, (4, batch))
+
     def test_fold_matches_manual(self):
         st = _state(30, 8)
         r = jnp.array(5, KB)
-        got = LogupGkrRound(jnp.array(3, KB)).fold(st, r)
+        got = LogupGkrRound(jnp.array(3, KB))._fold(st, r)
         self.assertEqual(len(got), 5)
         for x, g in zip(st, got):
             self.assertEqual(g.shape, (4,))  # width halved
@@ -62,7 +69,7 @@ class LogupGkrRoundTest(absltest.TestCase):
     def test_sumcheck_invariant_s0_plus_s1(self):
         st = _state(40, 16)
         lam = jnp.array(9, KB)
-        msg = LogupGkrRound(lam).round_poly(st)
+        msg = LogupGkrRound(lam)._round_poly(st)
         # s(0)+s(1) == sum over the full hypercube of the combine (the claim)
         self.assertTrue(bool(msg[0] + msg[1] == _hypercube_sum(lam, st)))
 
@@ -107,13 +114,13 @@ class LogupGkrRoundTest(absltest.TestCase):
         import jax
 
         st = _state(80, 8)
-        hlo = jax.jit(LogupGkrRound(jnp.array(5, KB)).round_poly).lower(st).as_text()
+        hlo = jax.jit(LogupGkrRound(jnp.array(5, KB))._round_poly).lower(st).as_text()
         self.assertNotIn("gather", hlo)
         self.assertNotIn("dot", hlo)
 
     def test_state_must_have_five_factors(self):
         with self.assertRaises(ValueError):
-            LogupGkrRound(jnp.array(1, KB)).round_poly(_state(70, 8)[:4])
+            LogupGkrRound(jnp.array(1, KB))._round_poly(_state(70, 8)[:4])
 
 
 if __name__ == "__main__":

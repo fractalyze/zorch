@@ -38,8 +38,16 @@ class LogupGkrRound(Round):
                 f"state must hold {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
                 f"got {len(state)}"
             )
+        shape = state[0].shape
         out = []
-        for evals in state:
+        for i, evals in enumerate(state):
+            if evals.shape != shape:
+                raise ValueError(
+                    f"all factors must share a shape; factor {i} is {evals.shape}, "
+                    f"factor 0 is {shape}"
+                )
+            if evals.shape[-1] % 2 != 0:
+                raise ValueError(f"factor width must be even, got {evals.shape[-1]}")
             half = evals.shape[-1] // 2
             out.append((evals[..., :half], evals[..., half:]))
         return out
@@ -47,27 +55,30 @@ class LogupGkrRound(Round):
     def _combine(self, eq, n0, d1, n1, d0):
         return eq * (self.lam * (n0 * d1 + n1 * d0) + d0 * d1)
 
-    def round_poly(self, state) -> Array:
+    def _round_poly(self, state) -> Array:
         """Round polynomial over the domain [0, 1, ..., degree], shape
-        (degree+1,): s[u] = sum_x' combine(f_u for each factor), where
+        (degree+1, *batch): s[u] = sum_x' combine(f_u for each factor), where
         f_u = P0 + u*(P1 - P0).
 
-        The whole u-domain is evaluated at once -- one batched reduction. The
-        u-domain is built with jnp.stack (not jnp.arange, whose iota is
-        unsupported for extension dtypes)."""
+        The whole u-domain is evaluated at once -- one batched reduction. `us` is
+        reshaped to broadcast over any leading batch dims of the factors, and is
+        built with jnp.stack (not jnp.arange, whose iota is unsupported for
+        extension dtypes)."""
         halves = self._split(state)
         dtype = state[0].dtype
         us = jnp.stack([jnp.array(u, dtype) for u in range(_DEGREE + 1)])
-        factors = [p0 + us[:, None] * (p1 - p0) for (p0, p1) in halves]
+        factors = [
+            p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves
+        ]
         return jnp.sum(self._combine(*factors), axis=-1)
 
-    def fold(self, state, r) -> list:
+    def _fold(self, state, r) -> list:
         """Fold each factor at challenge `r`: P0 + r*(P1 - P0). Halves width."""
         return [p0 + r * (p1 - p0) for (p0, p1) in self._split(state)]
 
     def __call__(self, state, transcript):
-        msg = self.round_poly(state)
+        msg = self._round_poly(state)
         transcript = self.commit(transcript, msg)
         transcript, r = self.challenge(transcript, 1)
-        state = self.fold(state, r[0])
+        state = self._fold(state, r[0])
         return state, transcript, msg
