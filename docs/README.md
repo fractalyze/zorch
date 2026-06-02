@@ -8,11 +8,11 @@ ______________________________________________________________________
 
 ## Understanding the design
 
-| Question                                                        | Doc                                          |
-| --------------------------------------------------------------- | -------------------------------------------- |
-| What is `zorch`, and what are the building blocks?              | [`architecture.md`](architecture.md)         |
-| Why "Round", and how does the Fiat-Shamir interface compose?   | [`architecture.md`](architecture.md) §Round  |
-| What is the fusion contract, and why does it exist?            | [`architecture.md`](architecture.md) §Fusion |
+| Question                                                       | Doc                                                  |
+| -------------------------------------------------------------- | ---------------------------------------------------- |
+| What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                      |
+| The fusion contract — why it exists, and the verified findings | [`architecture.md`](architecture.md) §1              |
+| Open design decisions still to be settled                      | [`architecture.md`](architecture.md) §2              |
 
 ## Conventions
 
