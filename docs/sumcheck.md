@@ -37,9 +37,10 @@ prove(SumcheckRound(degree=2), [a, b], StubTranscript(challenges))
 
 - `Round` (`round.py`) is the composable unit, like an `nn.Module`: subclass and
   implement `__call__(state, transcript) -> (state, transcript, msg)`, using the
-  base `commit` (absorb a message) and `challenge` (squeeze `n` challenges). The
+  base `observe` (put a message into the transcript) and `challenge` (sample `n`
+  challenges). The
   transcript is an immutable carry — threaded in and out, never mutated.
-- `SumcheckRound` is one round: `round_poly` (the prover's message) → `commit` →
+- `SumcheckRound` is one round: `round_poly` (the prover's message) → `observe` →
   `challenge` → `fold`. `prove` runs it once per variable; a composite protocol
   is itself a `Round`, so there is no per-protocol `.prove()` chain. State is
   `list[Array]` (one MLE per factor); the round sums their product and folds
@@ -53,8 +54,11 @@ prove(SumcheckRound(degree=2), [a, b], StubTranscript(challenges))
   and drops in without touching any round.
 - **Fusion is by construction, not a decorator.** `round_poly`/`fold` are kept to
   element-wise field ops plus the one inherent `Σ` (no `reduce`/`gather` beyond
-  it), so a round body stays foldable into one kernel. The marker + generic zkx
-  emitter that actually emit it are a later, cross-repo step — there is
+  it), so a round body stays foldable. Measured on ZKX GPU, `round_poly` already
+  lowers to one reduction (`kInput`) kernel and `fold` to one element-wise
+  (`kLoop`) kernel with no marker; a full round is **two** kernels (its message and
+  folded state are disjoint outputs). Collapsing a whole round into one replayed
+  unit is the marker + generic zkx emitter step (Phase 3, cross-repo) — there is
   deliberately no placeholder marker in the tree now.
 - **`jnp.arange(dtype=<extension field>)` raises** (`iota` is unimplemented for
   extension dtypes such as `koalabearx4`). Build index/domain arrays in the base
