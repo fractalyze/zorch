@@ -1,0 +1,30 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "koalabear16",
+    srcs = [
+        "__init__.py",
+        "koalabear16.py",
+    ],
+    visibility = ["//zorch/hash/poseidon2:__subpackages__"],
+    deps = [
+        "//zorch/hash/poseidon2",
+        requirement("jax"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
+    name = "poseidon2_test",
+    size = "small",
+    srcs = ["poseidon2_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = [
+        ":koalabear16",
+        "//zorch/hash/poseidon2",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)

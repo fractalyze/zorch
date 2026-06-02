@@ -1,0 +1,23 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "permutation",
+    srcs = [
+        "__init__.py",
+        "permutation.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [requirement("jax")],
+)
+
+py_test(
+    name = "permutation_test",
+    size = "small",
+    srcs = ["permutation_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = [
+        ":permutation",
+        requirement("jax"),
+    ],
+)

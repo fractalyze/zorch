@@ -1,0 +1,38 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "poseidon2",
+    srcs = [
+        "__init__.py",
+        "params.py",
+        "poseidon2.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/hash:permutation",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+_DEPS = [
+    ":poseidon2",
+    requirement("jax"),
+    requirement("numpy"),
+    requirement("zk_dtypes"),
+]
+
+[
+    py_test(
+        name = t,
+        size = "small",
+        srcs = [t + ".py"],
+        env = {"JAX_PLATFORMS": "cpu"},
+        deps = _DEPS,
+    )
+    for t in [
+        "params_test",
+        "permute_shape_test",
+    ]
+]
