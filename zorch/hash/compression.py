@@ -6,8 +6,9 @@ setting). Width comes from `permutation.width`; `arity` and `chunk` are the only
 free parameters, carried on `CompressionParams` like `Poseidon2Params`. Names no
 field/scheme/zkVM.
 
-`compress` is one function over the permutation, so it inherits the permutation's
-single fused kernel; a `vmap` over a Merkle layer keeps one kernel per layer.
+`compress` is one function over the permutation, so a `vmap` over a Merkle layer
+batches into one permute; that collapses to one GPU kernel once the permutation
+is captured to a kernel (the poseidon2 fusion path, #25).
 """
 
 from __future__ import annotations
@@ -27,12 +28,18 @@ class CompressionParams:
     arity : number of input chunks (the n in n-to-1).
     chunk : field elements per chunk == digest size == output length.
 
-    Contract (validated by ``Compression``): arity * chunk <= permutation.width,
-    so the padded pre-image fits the state.
+    Contract: arity >= 2 and chunk >= 1 (validated here); arity * chunk <=
+    permutation.width (validated by ``Compression``, which knows the width).
     """
 
     arity: int
     chunk: int
+
+    def __post_init__(self):
+        if self.arity < 2:
+            raise ValueError(f"arity ({self.arity}) must be >= 2")
+        if self.chunk < 1:
+            raise ValueError(f"chunk ({self.chunk}) must be >= 1")
 
 
 class Compression:
@@ -56,6 +63,10 @@ class Compression:
 
     def compress(self, inputs: Array) -> Array:
         """Compress `arity` chunks into one: (arity, chunk) over dtype -> (chunk,)."""
+        if inputs.shape != (self.arity, self.chunk):
+            raise ValueError(
+                f"inputs shape must be {(self.arity, self.chunk)}, got {inputs.shape}"
+            )
         pre = jnp.zeros(self._permutation.width, dtype=inputs.dtype)
         pre = pre.at[: self.arity * self.chunk].set(inputs.reshape(-1))
         return self._permutation.permute(pre)[: self.chunk]

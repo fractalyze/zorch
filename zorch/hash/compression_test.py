@@ -56,11 +56,11 @@ def test_compress_2to1_is_full_width_permute_truncated():
 
 
 def test_compress_zero_pads_when_below_width():
-    # arity*chunk < width: input goes in the first lanes, rest stays zero.
+    # arity*chunk (8) < width (16): inputs go in the first lanes, rest stays zero.
     perm = _perm()
-    c = Compression(perm, CompressionParams(arity=1, chunk=4))
-    x = jnp.arange(4, dtype=F).reshape(1, 4)
-    pre = jnp.zeros(perm.width, dtype=F).at[:4].set(jnp.arange(4, dtype=F))
+    c = Compression(perm, CompressionParams(arity=2, chunk=4))
+    x = jnp.arange(8, dtype=F).reshape(2, 4)
+    pre = jnp.zeros(perm.width, dtype=F).at[:8].set(jnp.arange(8, dtype=F))
     expected = perm.permute(pre)[:4]
     assert jnp.array_equal(c.compress(x), expected)
 
@@ -70,6 +70,24 @@ def test_arity_chunk_exceeding_width_raises():
     try:
         Compression(perm, CompressionParams(arity=3, chunk=8))  # 24 > 16
         assert False, "expected ValueError for arity*chunk > width"
+    except ValueError:
+        pass
+
+
+def test_invalid_params_raise():
+    for arity, chunk in ((1, 8), (2, 0)):  # arity < 2, chunk < 1
+        try:
+            CompressionParams(arity=arity, chunk=chunk)
+            assert False, f"expected ValueError for arity={arity}, chunk={chunk}"
+        except ValueError:
+            pass
+
+
+def test_compress_wrong_input_shape_raises():
+    c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
+    try:
+        c.compress(jnp.arange(16, dtype=F))  # flat, not (2, 8)
+        assert False, "expected ValueError for wrong input shape"
     except ValueError:
         pass
 
@@ -94,6 +112,8 @@ if __name__ == "__main__":
     test_compress_2to1_is_full_width_permute_truncated()
     test_compress_zero_pads_when_below_width()
     test_arity_chunk_exceeding_width_raises()
+    test_invalid_params_raise()
+    test_compress_wrong_input_shape_raises()
     test_compress_matches_plonky3_golden()
     test_compress_vmap_matches_unbatched()
     print("ok")

@@ -110,12 +110,32 @@ def test_mismatched_digest_size_raises():
         pass
 
 
-def test_non_power_of_arity_height_raises():
+def test_non_power_of_two_height_raises():
     _, _, tree = _kb16_tree()
     matrix = jnp.arange(24, dtype=F).reshape(3, 8)  # height 3, not a power of 2
     try:
         tree.commit(matrix)
-        assert False, "expected ValueError for non-power-of-arity height"
+        assert False, "expected ValueError for non-power-of-two height"
+    except ValueError:
+        pass
+
+
+def test_non_2d_matrix_raises():
+    _, _, tree = _kb16_tree()
+    try:
+        tree.commit(jnp.arange(8, dtype=F))  # 1-D, not a matrix
+        assert False, "expected ValueError for non-2-D matrix"
+    except ValueError:
+        pass
+
+
+def test_non_binary_compressor_raises():
+    perm = Poseidon2(koalabear16_params())
+    sponge = Sponge(perm, SpongeParams(rate=8, out=8))
+    comp = Compression(perm, CompressionParams(arity=4, chunk=4))  # not 2-to-1
+    try:
+        MerkleTree(sponge, comp)
+        assert False, "expected ValueError for non-binary compressor"
     except ValueError:
         pass
 
@@ -128,5 +148,7 @@ if __name__ == "__main__":
     test_single_row_root_is_its_leaf_digest()
     test_commit_deterministic()
     test_mismatched_digest_size_raises()
-    test_non_power_of_arity_height_raises()
+    test_non_power_of_two_height_raises()
+    test_non_2d_matrix_raises()
+    test_non_binary_compressor_raises()
     print("ok")

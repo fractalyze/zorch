@@ -113,6 +113,24 @@ def test_rate_not_less_than_width_raises():
         pass
 
 
+def test_invalid_params_raise():
+    for rate, out in ((0, 8), (8, 0)):  # rate < 1, out < 1
+        try:
+            SpongeParams(rate=rate, out=out)
+            assert False, f"expected ValueError for rate={rate}, out={out}"
+        except ValueError:
+            pass
+
+
+def test_hash_non_1d_input_raises():
+    s = Sponge(_perm(), SpongeParams(rate=8, out=8))
+    try:
+        s.hash(jnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
+        assert False, "expected ValueError for non-1-D input"
+    except ValueError:
+        pass
+
+
 def test_hash_matches_plonky3_golden():
     s = Sponge(_perm(), SpongeParams(rate=8, out=8))
     for n, golden in _PLONKY3_SPONGE.items():
@@ -134,6 +152,8 @@ if __name__ == "__main__":
     test_hash_two_full_blocks_overwrite_mode()
     test_hash_partial_final_block_overwrites_only_its_lanes()
     test_rate_not_less_than_width_raises()
+    test_invalid_params_raise()
+    test_hash_non_1d_input_raises()
     test_hash_matches_plonky3_golden()
     test_hash_vmap_matches_unbatched()
     print("ok")

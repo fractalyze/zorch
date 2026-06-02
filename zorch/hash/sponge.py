@@ -7,8 +7,9 @@ This is the Merkle leaf hasher (Plonky3 PaddingFreeSponge).
 
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
 `SpongeParams` (capacity = width - rate), like `Poseidon2Params`. The block loop
-unrolls (input length is static), so the body stays straight-line — only the
-permutation carries a loop.
+unrolls (input length is static), so the body stays straight-line; it runs one
+permute per absorbed block (one for a single-block input), each capturable on the
+poseidon2 fusion path (#25).
 """
 
 from __future__ import annotations
@@ -28,12 +29,18 @@ class SpongeParams:
     rate : field elements absorbed per permutation (capacity = width - rate).
     out  : field elements squeezed (the digest size).
 
-    Contract (validated by ``Sponge``): rate < permutation.width and
-    out <= permutation.width.
+    Contract: rate >= 1 and out >= 1 (validated here); rate < permutation.width
+    and out <= permutation.width (validated by ``Sponge``, which knows the width).
     """
 
     rate: int
     out: int
+
+    def __post_init__(self):
+        if self.rate < 1:
+            raise ValueError(f"rate ({self.rate}) must be >= 1")
+        if self.out < 1:
+            raise ValueError(f"out ({self.out}) must be >= 1")
 
 
 class Sponge:
@@ -61,6 +68,8 @@ class Sponge:
 
     def hash(self, input: Array) -> Array:
         """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,)."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         state = jnp.zeros(self._permutation.width, dtype=input.dtype)
         for start in range(0, input.shape[0], self.rate):
             block = input[start : start + self.rate]

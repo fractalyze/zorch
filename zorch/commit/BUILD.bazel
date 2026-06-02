@@ -11,6 +11,7 @@ py_library(
     deps = [
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
+        "//zorch/utils:bits",
         requirement("jax"),
     ],
 )
