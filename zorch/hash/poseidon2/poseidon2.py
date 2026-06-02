@@ -2,8 +2,8 @@
 
 Linear layers are static-Python-sliced add/double trees: they emit no
 `dot`/`reduce`/`gather`, so the permutation lowers as fusion-friendly
-element-wise ops. The permutation class (later task) applies them via
-`lax.fori_loop` over isolated round bodies.
+element-wise ops. The permutation class applies them via `lax.fori_loop` over
+isolated round bodies.
 """
 
 from __future__ import annotations
@@ -11,11 +11,12 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.hash.poseidon2.params import Poseidon2Params, _mds_external_default
+from zorch.hash.poseidon2.params import Poseidon2Params
 
 
 def _pow(x, alpha: int):
-    """S-box x^alpha by repeated multiply (alpha small + static; fusion-friendly)."""
+    """S-box x^alpha. Static repeated-multiply (not jnp.power, which emits a pow
+    HLO) keeps every op element-wise so the round stays fusable; alpha is small."""
     result = x
     for _ in range(alpha - 1):
         result = result * x
@@ -25,8 +26,9 @@ def _pow(x, alpha: int):
 def _external_linear(x: Array, w: int) -> Array:
     """Canonical Poseidon2 external MDS (M4-circulant, 2x diagonal block).
 
-    out[4c+r] = (M4 @ chunk_c)[r] + sum_d (M4 @ chunk_d)[r]. Pure
-    adds/doublings, static slices -> no dot/reduce/gather.
+    out[4c+r] = (M4 @ chunk_c)[r] + sum_d (M4 @ chunk_d)[r]. The per-row sum S[r]
+    over chunks is formed once, so each lane is one extra add rather than a re-sum.
+    Pure adds/doublings, static slices -> no dot/reduce/gather.
     """
     nc = w // 4
 
@@ -50,12 +52,12 @@ def _external_linear(x: Array, w: int) -> Array:
     return jnp.stack(out)
 
 
-def _internal_linear(x: Array, diag_m1: Array, w: int) -> Array:
-    """Internal diffusion J + Diag(V) in normal form: out[i] = full_sum + V[i]*x[i]."""
+def _internal_linear(x: Array, internal_diag: Array, w: int) -> Array:
+    """Internal diffusion J + Diag(internal_diag): out[i] = full_sum + diag[i]*x[i]."""
     full_sum = x[0]
     for j in range(1, w):
         full_sum = full_sum + x[j]  # chained add-tree, not jnp.sum
-    return jnp.stack([full_sum + diag_m1[i] * x[i] for i in range(w)])
+    return jnp.stack([full_sum + internal_diag[i] * x[i] for i in range(w)])
 
 
 class Poseidon2:
@@ -68,13 +70,8 @@ class Poseidon2:
     """
 
     def __init__(self, params: Poseidon2Params):
-        # The normal-form external path is hardcoded for the canonical M4-circulant;
-        # a custom external_matrix override is deferred.
-        canonical = _mds_external_default(params.width, params.dtype)
-        if not bool(jnp.array_equal(params.external_matrix, canonical)):
-            raise NotImplementedError(
-                "custom external_matrix override not supported in the normal-form path"
-            )
+        # external_matrix is validated to be the canonical M4-circulant in
+        # Poseidon2Params (the normal-form external layer supports only that).
         self._p = params
         self.width = params.width
         self.dtype = params.dtype

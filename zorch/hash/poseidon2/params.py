@@ -11,11 +11,13 @@ from jax import Array
 
 
 def _mds_external_default(width: int, dtype: Any) -> Array:
-    """Canonical-for-width Poseidon2 external matrix.
+    """Standard Poseidon2 external matrix for width >= 8 (M4-circulant + 2x block).
 
     M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> jnp.array so
     HLO sees a kConstant. Determined wholly by (width, dtype); carries no
-    field/scheme identity. `width` must be a positive multiple of 4.
+    field/scheme identity. `width` must be a positive multiple of 4. (At width == 4
+    the canonical Poseidon2 external matrix is plain M4; the 2x-diagonal-block form
+    here matches references for width >= 8.)
     """
     if width % 4 != 0:
         raise ValueError(f"external matrix default needs width % 4 == 0, got {width}")
@@ -36,12 +38,18 @@ class Poseidon2Params:
     its only free part, so it is carried as a vector, not a matrix. There is no
     `monty_inverse` knob — R^-1 is a Montgomery storage artifact, not math.
 
+    Conventions baked into this implementation (not yet parameters): the partial
+    round acts on lane 0 (so `internal_constants` must be zero in lanes 1..w-1),
+    and the external layer is the M4-circulant family (width a multiple of 4).
+
     Contract (validated in __post_init__):
-      external_matrix : (width, width) over dtype  (defaults canonical-for-width)
+      external_matrix : (width, width) over dtype; defaults to the canonical
+          M4-circulant. A non-default override is not wired yet (rejected).
       external_constants_initial/terminal : (external_rounds, width)
       internal_constants : (internal_rounds, width); RC in lane 0, zeros elsewhere
       internal_diag : (width,)
-      alpha : S-box exponent; caller guarantees gcd(alpha, p-1)==1 (core can't check).
+      alpha : positive S-box exponent; caller guarantees gcd(alpha, p-1)==1
+          (the core does not know p, so it cannot check).
     """
 
     width: int
@@ -56,11 +64,22 @@ class Poseidon2Params:
     external_matrix: Array | None = None
 
     def __post_init__(self):
+        if self.alpha < 1:
+            raise ValueError(f"alpha must be a positive int, got {self.alpha}")
+        w = self.width
         if self.external_matrix is None:
             object.__setattr__(
-                self, "external_matrix", _mds_external_default(self.width, self.dtype)
+                self, "external_matrix", _mds_external_default(w, self.dtype)
             )
-        w = self.width
+        elif not bool(
+            jnp.array_equal(self.external_matrix, _mds_external_default(w, self.dtype))
+        ):
+            # The normal-form external layer is hardcoded to the canonical
+            # M4-circulant; a genuine override isn't wired yet.
+            raise NotImplementedError(
+                "custom external_matrix override not supported yet; "
+                "omit it for the canonical M4-circulant"
+            )
         checks = {
             "external_matrix": ((w, w), self.external_matrix),
             "external_constants_initial": (

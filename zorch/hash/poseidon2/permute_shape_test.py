@@ -36,27 +36,15 @@ def test_permute_shape_and_vmap():
     assert out.shape == (16,) and out.dtype == F
     batch = jnp.stack([x, x + F(1)])
     bout = jax.vmap(p.permute)(batch)  # thread-per-hash
-    assert bout.shape == (2, 16)
+    assert bout.shape == (2, 16) and bout.dtype == F
     assert jnp.array_equal(bout[0], out)
 
 
 def test_custom_external_matrix_override_is_rejected():
     base = _params()
     bad = base.external_matrix.at[0, 0].add(F(1))  # non-canonical
-    over = Poseidon2Params(
-        width=16,
-        dtype=F,
-        alpha=3,
-        external_rounds=4,
-        internal_rounds=20,
-        external_constants_initial=base.external_constants_initial,
-        external_constants_terminal=base.external_constants_terminal,
-        internal_constants=base.internal_constants,
-        internal_diag=base.internal_diag,
-        external_matrix=bad,
-    )
     try:
-        Poseidon2(over)
+        Poseidon2Params(**{**vars(base), "external_matrix": bad})
     except NotImplementedError:
         pass
     else:
