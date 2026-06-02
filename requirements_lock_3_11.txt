@@ -142,6 +142,7 @@ numpy==2.4.6 \
     #   ml-dtypes
     #   scipy
     #   zk-dtypes
+    #   zkbench
 opt-einsum==3.4.0 \
     --hash=sha256:69bb92469f86a1565195ece4ac0323943e83477171b91d24c35afe028a90d7cd \
     --hash=sha256:96ca72f1b886d148241348783498194c577fa30a8faac108586b14f1ba4473ac
@@ -222,6 +223,9 @@ zk-dtypes==0.0.5 \
     --hash=sha256:f5998c80f707a765aa51f5735f2bd79817bcc7259d5be1fa80d323121f172603 \
     --hash=sha256:f9ebbc31aef5dff5ac9fed404cb5b316ce2077014cca00fced33645df8cb0dde
     # via jax
+zkbench==0.3.0 \
+    --hash=sha256:caac698bd3a386d12245f0ab29eb4452faad6d805eddb8b45aff4a28da7b391e
+    # via -r requirements.in
 zkx-cuda-pjrt==0.0.5.dev20260602054734 \
     --hash=sha256:cb9665e1855f1ac042b66932c5de470fca519a015b79c1242d8cfcdd5caadc43
     # via
