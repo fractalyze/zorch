@@ -1,0 +1,7 @@
+# actionlint.yaml
+
+self-hosted-runner:
+  labels:
+    - cpu
+    - gpu
+    - bench
