@@ -1,0 +1,16 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "koalabear16",
+    srcs = [
+        "__init__.py",
+        "koalabear16.py",
+    ],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        "//zorch/commit:merkle",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+    ],
+)

@@ -12,7 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
 
-from zorch.hash.poseidon2 import Poseidon2Params
+from zorch.hash.poseidon2 import Poseidon2, Poseidon2Params
 
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
@@ -246,3 +246,8 @@ def koalabear16_params() -> Poseidon2Params:
         internal_constants=jnp.array(internal_rc, dtype=F),
         internal_diag=jnp.array(_INTERNAL_DIAG, dtype=F),
     )
+
+
+def koalabear16_perm() -> Poseidon2:
+    """The golden koalabear-16 Poseidon2 permutation instance (width 16)."""
+    return Poseidon2(koalabear16_params())

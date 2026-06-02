@@ -14,13 +14,7 @@ import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2 import Poseidon2
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_params
-
-
-def _perm() -> Poseidon2:
-    return Poseidon2(koalabear16_params())  # width 16
-
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 
 # Plonky3 golden vector (p3_commit=4318eba..., default_koalabear_poseidon2_16):
 # TruncatedPermutation<_, 2, 8, 16> compressing arange(16) as two chunks of 8.
@@ -40,7 +34,7 @@ _PLONKY3_COMPRESS_2X8 = jnp.array(
 
 
 def test_compress_returns_chunk_shape_and_dtype():
-    c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
+    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
     out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
     assert out.shape == (8,)
     assert out.dtype == F
@@ -48,7 +42,7 @@ def test_compress_returns_chunk_shape_and_dtype():
 
 def test_compress_2to1_is_full_width_permute_truncated():
     # arity*chunk == width: no padding; compress == permute(flatten)[:chunk].
-    perm = _perm()
+    perm = koalabear16_perm()
     c = Compression(perm, CompressionParams(arity=2, chunk=8))
     x = jnp.arange(16, dtype=F).reshape(2, 8)
     expected = perm.permute(x.reshape(-1))[:8]
@@ -57,7 +51,7 @@ def test_compress_2to1_is_full_width_permute_truncated():
 
 def test_compress_zero_pads_when_below_width():
     # arity*chunk (8) < width (16): inputs go in the first lanes, rest stays zero.
-    perm = _perm()
+    perm = koalabear16_perm()
     c = Compression(perm, CompressionParams(arity=2, chunk=4))
     x = jnp.arange(8, dtype=F).reshape(2, 4)
     pre = jnp.zeros(perm.width, dtype=F).at[:8].set(jnp.arange(8, dtype=F))
@@ -66,7 +60,7 @@ def test_compress_zero_pads_when_below_width():
 
 
 def test_arity_chunk_exceeding_width_raises():
-    perm = _perm()  # width 16
+    perm = koalabear16_perm()
     try:
         Compression(perm, CompressionParams(arity=3, chunk=8))  # 24 > 16
         assert False, "expected ValueError for arity*chunk > width"
@@ -84,7 +78,7 @@ def test_invalid_params_raise():
 
 
 def test_compress_wrong_input_shape_raises():
-    c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
+    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
     try:
         c.compress(jnp.arange(16, dtype=F))  # flat, not (2, 8)
         assert False, "expected ValueError for wrong input shape"
@@ -93,13 +87,13 @@ def test_compress_wrong_input_shape_raises():
 
 
 def test_compress_matches_plonky3_golden():
-    c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
+    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
     out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
     assert jnp.array_equal(out, _PLONKY3_COMPRESS_2X8)
 
 
 def test_compress_vmap_matches_unbatched():
-    c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
+    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
     a = jnp.arange(16, dtype=F).reshape(2, 8)
     b = (jnp.arange(16, dtype=F) + F(7)).reshape(2, 8)
     batched = jax.vmap(c.compress)(jnp.stack([a, b]))

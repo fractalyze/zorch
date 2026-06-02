@@ -23,7 +23,6 @@ py_test(
     env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         ":koalabear16",
-        "//zorch/hash/poseidon2",
         requirement("jax"),
         requirement("zk_dtypes"),
     ],

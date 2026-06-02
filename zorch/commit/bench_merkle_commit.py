@@ -19,11 +19,7 @@ import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 from zkbench import BenchmarkConfig, BenchmarkOp, JaxBenchmark
 
-from zorch.commit.merkle import MerkleTree
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2 import Poseidon2
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_params
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.commit.testing.koalabear16 import koalabear16_merkle
 
 
 class MerkleCommitBenchmark(JaxBenchmark):
@@ -50,10 +46,10 @@ class MerkleCommitBenchmark(JaxBenchmark):
         parser.add_argument("--chunk", type=int, default=8)
 
     def get_ops(self, args: argparse.Namespace) -> Iterable[BenchmarkOp]:
-        perm = Poseidon2(koalabear16_params())
-        sponge = Sponge(perm, SpongeParams(rate=args.rate, out=args.out))
-        comp = Compression(perm, CompressionParams(arity=args.arity, chunk=args.chunk))
-        commit = jax.jit(MerkleTree(sponge, comp).commit)
+        _, _, tree = koalabear16_merkle(
+            rate=args.rate, out=args.out, arity=args.arity, chunk=args.chunk
+        )
+        commit = jax.jit(tree.commit)
         for d in args.degrees:
             rows = 1 << d
             matrix = jnp.arange(rows * args.cols, dtype=F).reshape(rows, args.cols)

@@ -10,9 +10,9 @@ import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree
+from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2 import Poseidon2
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_params
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.hash.sponge import Sponge, SpongeParams
 
 # Plonky3 golden vector (p3_commit=4318eba..., default_koalabear_poseidon2_16):
@@ -33,13 +33,6 @@ _PLONKY3_MERKLE_ROOT_4X8 = jnp.array(
 )
 
 
-def _kb16_tree(out=8, chunk=8):
-    perm = Poseidon2(koalabear16_params())
-    sponge = Sponge(perm, SpongeParams(rate=8, out=out))
-    comp = Compression(perm, CompressionParams(arity=2, chunk=chunk))
-    return sponge, comp, MerkleTree(sponge, comp)
-
-
 def _reconstruct_root(leaf_digest, leaf_idx, digest_layers, compressor):
     node, idx = leaf_digest, leaf_idx
     for level in range(len(digest_layers) - 1):  # leaf layer up to just below root
@@ -53,7 +46,7 @@ def _reconstruct_root(leaf_digest, leaf_idx, digest_layers, compressor):
 
 
 def test_commit_layer_shapes():
-    _, _, tree = _kb16_tree()
+    _, _, tree = koalabear16_merkle()
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)  # height 4
     raw_root, layers = tree.commit(matrix)
     assert [l.shape for l in layers] == [(4, 8), (2, 8), (1, 8)]
@@ -61,7 +54,7 @@ def test_commit_layer_shapes():
 
 
 def test_leaf_layer_is_per_row_sponge_hash():
-    sponge, _, tree = _kb16_tree()
+    sponge, _, tree = koalabear16_merkle()
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)
     _, layers = tree.commit(matrix)
     for i in range(4):
@@ -69,7 +62,7 @@ def test_leaf_layer_is_per_row_sponge_hash():
 
 
 def test_open_verify_roundtrip_reconstructs_root():
-    _, comp, tree = _kb16_tree()
+    _, comp, tree = koalabear16_merkle()
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)
     raw_root, layers = tree.commit(matrix)
     for i in range(4):
@@ -78,13 +71,13 @@ def test_open_verify_roundtrip_reconstructs_root():
 
 
 def test_commit_root_matches_plonky3_golden():
-    _, _, tree = _kb16_tree()
+    _, _, tree = koalabear16_merkle()
     raw_root, _ = tree.commit(jnp.arange(32, dtype=F).reshape(4, 8))
     assert jnp.array_equal(raw_root, _PLONKY3_MERKLE_ROOT_4X8)
 
 
 def test_single_row_root_is_its_leaf_digest():
-    sponge, _, tree = _kb16_tree()
+    sponge, _, tree = koalabear16_merkle()
     matrix = jnp.arange(8, dtype=F).reshape(1, 8)  # height 1
     raw_root, layers = tree.commit(matrix)
     assert len(layers) == 1
@@ -92,7 +85,7 @@ def test_single_row_root_is_its_leaf_digest():
 
 
 def test_commit_deterministic():
-    _, _, tree = _kb16_tree()
+    _, _, tree = koalabear16_merkle()
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)
     r1, _ = tree.commit(matrix)
     r2, _ = tree.commit(matrix)
@@ -100,7 +93,7 @@ def test_commit_deterministic():
 
 
 def test_mismatched_digest_size_raises():
-    perm = Poseidon2(koalabear16_params())
+    perm = koalabear16_perm()
     sponge = Sponge(perm, SpongeParams(rate=8, out=4))  # out 4
     comp = Compression(perm, CompressionParams(arity=2, chunk=8))  # chunk 8
     try:
@@ -111,7 +104,7 @@ def test_mismatched_digest_size_raises():
 
 
 def test_non_power_of_two_height_raises():
-    _, _, tree = _kb16_tree()
+    _, _, tree = koalabear16_merkle()
     matrix = jnp.arange(24, dtype=F).reshape(3, 8)  # height 3, not a power of 2
     try:
         tree.commit(matrix)
@@ -121,7 +114,7 @@ def test_non_power_of_two_height_raises():
 
 
 def test_non_2d_matrix_raises():
-    _, _, tree = _kb16_tree()
+    _, _, tree = koalabear16_merkle()
     try:
         tree.commit(jnp.arange(8, dtype=F))  # 1-D, not a matrix
         assert False, "expected ValueError for non-2-D matrix"
@@ -130,7 +123,7 @@ def test_non_2d_matrix_raises():
 
 
 def test_non_binary_compressor_raises():
-    perm = Poseidon2(koalabear16_params())
+    perm = koalabear16_perm()
     sponge = Sponge(perm, SpongeParams(rate=8, out=8))
     comp = Compression(perm, CompressionParams(arity=4, chunk=4))  # not 2-to-1
     try:
