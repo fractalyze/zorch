@@ -12,7 +12,7 @@ Prove `Σ_x f(x)` for a multilinear `f` — one degree-1 round per variable:
 import jax.numpy as jnp
 import zk_dtypes
 from zorch.prove import prove
-from zorch.sumcheck import SumcheckRound
+from zorch.sumcheck import ProductSumcheckRound
 from zorch.transcript import StubTranscript
 
 F = zk_dtypes.koalabear
@@ -20,7 +20,7 @@ f = jnp.arange(1, 17, dtype=F)            # 2^4 evals of a multilinear
 challenges = jnp.arange(2, 6, dtype=F)    # one per variable (stubbed transcript)
 
 final, transcript, proof = prove(
-    SumcheckRound(degree=1), [f], StubTranscript(challenges))
+    ProductSumcheckRound(degree=1), [f], StubTranscript(challenges))
 # proof[i] = round i's univariate evaluated on [0..degree];
 # final[0] == f(challenges).
 ```
@@ -30,7 +30,7 @@ state list and `degree = len(factors)` (the round sums the product of the
 state factors):
 
 ```python
-prove(SumcheckRound(degree=2), [a, b], StubTranscript(challenges))
+prove(ProductSumcheckRound(degree=2), [a, b], StubTranscript(challenges))
 ```
 
 ## How it fits together
@@ -43,9 +43,10 @@ prove(SumcheckRound(degree=2), [a, b], StubTranscript(challenges))
 - `SumcheckRound` is one round: `round_poly` (the prover's message) → `observe` →
   `challenge` → `fold`. `prove` runs it once per variable; a composite protocol
   is itself a `Round`, so there is no per-protocol `.prove()` chain. State is
-  `list[Array]` (one MLE per factor); the round sums their product and folds
-  each at the challenge — all inline, with no dependency on a separate polynomial
-  layer.
+  `list[Array]` (one MLE per factor); `ProductSumcheckRound` sums their product
+  and folds each at the challenge — all inline, with no dependency on a separate
+  polynomial layer. A new summand (e.g. LogUp-GKR) is just a `SumcheckRound`
+  subclass supplying its own `round_poly`.
 
 ## Notes for the next reader
 
