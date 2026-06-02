@@ -41,7 +41,7 @@ class ReedSolomon:
         dtype: Any,
         *,
         coset_shift: Array | None = None,
-    ):
+    ) -> None:
         if not is_power_of_two(message_len):
             raise ValueError(f"message_len must be a power of two, got {message_len}")
         if not is_power_of_two(blowup):

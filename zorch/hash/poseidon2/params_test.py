@@ -1,5 +1,9 @@
 """Poseidon2Params: fully-free surface + fail-loud validation."""
 
+from __future__ import annotations
+
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
@@ -7,7 +11,7 @@ from zk_dtypes import koalabear_mont as F
 from zorch.hash.poseidon2.params import Poseidon2Params
 
 
-def _good(**over):
+def _good(**over: Any) -> Poseidon2Params:
     w, er, ir = 16, 4, 20
     base = dict(
         width=w,
@@ -24,13 +28,14 @@ def _good(**over):
     return Poseidon2Params(**base)
 
 
-def test_external_matrix_defaults_to_canonical():
+def test_external_matrix_defaults_to_canonical() -> None:
     p = _good()
+    assert p.external_matrix is not None
     assert p.external_matrix.shape == (16, 16)
     assert p.external_matrix.dtype == F
 
 
-def test_bad_rc_shape_raises():
+def test_bad_rc_shape_raises() -> None:
     try:
         _good(internal_constants=jnp.zeros((19, 16), dtype=F))  # wrong round count
     except ValueError as e:
@@ -39,7 +44,7 @@ def test_bad_rc_shape_raises():
         raise AssertionError("expected ValueError on wrong internal_constants shape")
 
 
-def test_nonzero_internal_lane_raises():
+def test_nonzero_internal_lane_raises() -> None:
     bad = np.zeros((20, 16), dtype=np.int32)
     bad[0, 1] = 1  # lane 1 nonzero
     try:

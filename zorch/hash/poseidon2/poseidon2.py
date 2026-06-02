@@ -26,7 +26,7 @@ class Poseidon2:
               -> external_rounds (terminal RC), as ONE fused region.
     """
 
-    def __init__(self, params: Poseidon2Params):
+    def __init__(self, params: Poseidon2Params) -> None:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
@@ -42,10 +42,12 @@ class Poseidon2:
         ext_term = p.external_constants_terminal
         int_rc = p.internal_constants
 
-        def external_round(s, rc):  # +rc -> sbox(all lanes) -> MDS
+        # +rc -> sbox(all lanes) -> MDS
+        def external_round(s: Array, rc: Array) -> Array:
             return apply_matrix(mds, jnp.power(s + rc, alpha))
 
-        def internal_round(s, rc0):  # +rc(lane0) -> sbox(lane0) -> diffusion
+        # +rc(lane0) -> sbox(lane0) -> diffusion
+        def internal_round(s: Array, rc0: Array) -> Array:
             s0 = jnp.power(s[0] + rc0, alpha)
             # concatenate, not s.at[0].set: a static-index set lowers to scatter,
             # which would split the fused kernel.

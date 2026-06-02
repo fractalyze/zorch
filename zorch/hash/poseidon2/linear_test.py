@@ -9,14 +9,14 @@ from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 
 
-def test_apply_matrix_equals_matmul():
+def test_apply_matrix_equals_matmul() -> None:
     w = 16
     m = rand_field(1, (w, w), F)
     s = rand_field(2, (w,), F)
     assert jnp.array_equal(apply_matrix(m, s), m @ s)
 
 
-def test_apply_internal_equals_jdiag():
+def test_apply_internal_equals_jdiag() -> None:
     w = 16
     d = rand_field(3, (w,), F)
     s = rand_field(4, (w,), F)
@@ -24,7 +24,7 @@ def test_apply_internal_equals_jdiag():
     assert jnp.array_equal(apply_internal(d, s), m_int @ s)
 
 
-def test_normal_form_is_fusion_ready():
+def test_normal_form_is_fusion_ready() -> None:
     w = 16
     m = rand_field(1, (w, w), F)
     d = rand_field(3, (w,), F)

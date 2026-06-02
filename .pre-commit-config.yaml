@@ -19,6 +19,17 @@ repos:
     hooks:
       - id: ruff
         args: [--fix, --exit-non-zero-on-fix, --select=E501, --select=I, --select=F401]
+-   repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v2.1.0
+    hooks:
+      - id: mypy
+        # Enforces the full-annotation convention (disallow_untyped_defs lives
+        # in pyproject). Checks the whole zorch/ + tests/ tree rather than just
+        # changed files, so cross-module inference stays consistent. numpy ships
+        # types; the jax (ZKX fork) / zk_dtypes / zkbench / absl imports are
+        # ignored in pyproject (no usable stubs).
+        pass_filenames: false
+        additional_dependencies: [numpy]
 -   repo: https://github.com/keith/pre-commit-buildifier
     rev: 8.0.1
     hooks:

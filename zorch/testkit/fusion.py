@@ -15,6 +15,8 @@ composite marker (zkx optimizes the dot) -- a different fusion shape.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from typing import Any
 
 import jax
 
@@ -36,7 +38,7 @@ _FUSION_SAFE = frozenset(
 )
 
 
-def assert_fusion_ready(fn, *args, reduces: int = 0) -> None:
+def assert_fusion_ready(fn: Callable[..., Any], *args: Any, reduces: int = 0) -> None:
     """Assert ``fn``'s lowered body is straight-line element-wise plus exactly
     ``reduces`` reduce(s); raise ``AssertionError`` naming offenders otherwise."""
     hlo = jax.jit(fn).lower(*args).as_text()

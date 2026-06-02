@@ -4,3 +4,22 @@
 [tool.pytest.ini_options]
 testpaths = ["zorch"]
 python_files = ["*_test.py", "test_*.py"]
+
+# Every def carries full type annotations (see docs/conventions.md); mypy's
+# disallow_untyped_defs is what enforces it. Run: `mypy` (uses the files below).
+[tool.mypy]
+python_version = "3.11"
+files = ["zorch"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+# Untyped (or, for the ZKX jax fork, statically unresolvable) third parties:
+# jax is an editable build whose own .pyi stubs don't parse under mypy, so its
+# types are unusable here — `jax.Array` collapses to Any. zk_dtypes/zkbench ship
+# no py.typed; absl only stubs part of its surface. disallow_untyped_defs still
+# enforces our own annotations regardless.
+[[tool.mypy.overrides]]
+module = ["jax.*", "jaxlib.*", "zk_dtypes.*", "zkbench.*", "absl.*"]
+ignore_missing_imports = true

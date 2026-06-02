@@ -1,16 +1,21 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 import unittest
 from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 import zk_dtypes
+from jax import Array
 
 from zorch.commit.jagged.poly import (
     _TRANSITION_ROWS,
     NUM_BIT_STATES,
     NUM_MEMORY_STATES,
+    JaggedStaticConfig,
     bp_eval_core,
     build_jagged_layout,
     build_prefix_sums,
@@ -21,7 +26,7 @@ from zorch.testkit.random_field import rand_field
 EF = zk_dtypes.koalabearx4
 
 
-def _field_val(x):
+def _field_val(x: Array) -> bytes:
     """Field scalar → bytes for equality/inequality assertions.
 
     int() does not work for extension field (koalabearx4), so we use
@@ -32,7 +37,7 @@ def _field_val(x):
 
 
 class TransitionTableTest(unittest.TestCase):
-    def test_shape_and_onehot(self):
+    def test_shape_and_onehot(self) -> None:
         # 64 = 4 memory × 16 bit states; each row is one-hot (valid) or zeros (FAIL).
         self.assertEqual(len(_TRANSITION_ROWS), NUM_MEMORY_STATES * NUM_BIT_STATES)
         for row in _TRANSITION_ROWS:
@@ -40,12 +45,12 @@ class TransitionTableTest(unittest.TestCase):
             self.assertIn(sum(row), (0, 1))
 
 
-def _bits_msb(val, nbits, dtype):
+def _bits_msb(val: int, nbits: int, dtype: Any) -> Array:
     return jnp.array([(val >> (nbits - 1 - k)) & 1 for k in range(nbits)], dtype=dtype)
 
 
 class BpEvalCoreTest(unittest.TestCase):
-    def test_single_column_boolean_corner(self):
+    def test_single_column_boolean_corner(self) -> None:
         # One column, range [t_c, t_{c+1}) = [0, 4), n_d=3, n_r=2.
         # At boolean points h=1 iff (i = r AND i<4). i=2,r=2 -> 1; i=2,r=1 -> 0.
         dtype = EF
@@ -74,7 +79,7 @@ class BpEvalCoreTest(unittest.TestCase):
 
 
 class LayoutBuilderTest(unittest.TestCase):
-    def test_shape_and_empty_range_pad(self):
+    def test_shape_and_empty_range_pad(self) -> None:
         # heights [4,2,3] → prefix [0,4,6,9], t_L=9, n_d=log2_ceil(9)+1=5.
         cps, cfg = build_jagged_layout([4, 2, 3], l_max=4, n_r=3, dtype=EF)
         self.assertEqual(cps.shape, (5, 5))  # (l_max+1, n_d)
@@ -82,12 +87,12 @@ class LayoutBuilderTest(unittest.TestCase):
         # Padding column (c=3): row 3 == row 4 == bits(9) -> empty range.
         self.assertEqual(cps[3].tolist(), cps[4].tolist())
 
-    def test_capacity_assert(self):
+    def test_capacity_assert(self) -> None:
         with self.assertRaises(AssertionError):
             build_jagged_layout([4, 2, 3], l_max=2, n_r=3, dtype=EF)  # real_L=3 > 2
 
 
-def _eq_at(z, idx, nbits):
+def _eq_at(z: Array, idx: int, nbits: int) -> Array:
     # eval_eq(MSB-bits(idx), z) = Π_j (1 - z_j - b_j + 2 z_j b_j)
     bits = [(idx >> (nbits - 1 - j)) & 1 for j in range(nbits)]
     factor = jnp.ones([], dtype=z.dtype)
@@ -97,7 +102,13 @@ def _eq_at(z, idx, nbits):
     return factor
 
 
-def _naive_jagged_mle(row_counts, cfg, z_row, z_col, z_index):
+def _naive_jagged_mle(
+    row_counts: list[int],
+    cfg: JaggedStaticConfig,
+    z_row: Array,
+    z_col: Array,
+    z_index: Array,
+) -> Array:
     prefix = build_prefix_sums(row_counts)
     total = jnp.zeros([], dtype=cfg.dtype)
     for c in range(len(row_counts)):
@@ -113,7 +124,7 @@ def _naive_jagged_mle(row_counts, cfg, z_row, z_col, z_index):
 
 
 class EvalJaggedMleTest(unittest.TestCase):
-    def test_matches_oracle_compile_once_many_heights(self):
+    def test_matches_oracle_compile_once_many_heights(self) -> None:
         EF = zk_dtypes.koalabearx4
         # Several height vectors sharing the same (l_max, log-area tier).
         # total_area in [8,16) -> n_d = log2_ceil(area)+1 = 5, same tier.
@@ -134,7 +145,7 @@ class EvalJaggedMleTest(unittest.TestCase):
         # Compiled once: a single cache entry (no re-trace).
         self.assertEqual(fn._cache_size(), 1)
 
-    def test_zero_bit_pad_diverges(self):
+    def test_zero_bit_pad_diverges(self) -> None:
         # Negative test: zero-bit padding (vs empty-range) changes J̃.
         EF = zk_dtypes.koalabearx4
         l_max, n_r = 4, 3

@@ -36,7 +36,7 @@ class SpongeParams:
     rate: int
     out: int
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.rate < 1:
             raise ValueError(f"rate ({self.rate}) must be >= 1")
         if self.out < 1:
@@ -51,7 +51,7 @@ class Sponge:
     fused kernel.
     """
 
-    def __init__(self, permutation: Permutation, params: SpongeParams):
+    def __init__(self, permutation: Permutation, params: SpongeParams) -> None:
         if params.rate >= permutation.width:
             raise ValueError(
                 f"rate ({params.rate}) must be < permutation width "

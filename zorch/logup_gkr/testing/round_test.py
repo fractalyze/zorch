@@ -1,24 +1,27 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+from __future__ import annotations
+
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
+from jax import Array
 
 from zorch.logup_gkr.round import LogupGkrRound
 from zorch.poly import eval_univariate
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import StubTranscript
+from zorch.transcript import StubTranscript, Transcript
 
 KB = zk_dtypes.koalabear
 
 
-def _state(seed, width):
+def _state(seed: int, width: int) -> list[Array]:
     """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
     return [rand_field(seed + i, (width,), KB) for i in range(5)]
 
 
 class LogupGkrRoundTest(absltest.TestCase):
-    def test_round_poly_matches_naive_cubic(self):
+    def test_round_poly_matches_naive_cubic(self) -> None:
         st = _state(20, 8)
         rnd = LogupGkrRound(jnp.array(7, KB))
         msg = rnd._round_poly(st)
@@ -30,14 +33,14 @@ class LogupGkrRoundTest(absltest.TestCase):
             want = jnp.sum(rnd._combine(*folded))
             self.assertTrue(bool(msg[u] == want))
 
-    def test_round_poly_with_batch_dimension(self):
+    def test_round_poly_with_batch_dimension(self) -> None:
         # Leading batch dims must broadcast: msg is (degree+1, *batch).
         batch = 3
         st = [x.reshape(batch, -1) for x in _state(20, 24)]
         msg = LogupGkrRound(jnp.array(7, KB))._round_poly(st)
         self.assertEqual(msg.shape, (4, batch))
 
-    def test_fold_matches_manual(self):
+    def test_fold_matches_manual(self) -> None:
         st = _state(30, 8)
         r = jnp.array(5, KB)
         got = LogupGkrRound(jnp.array(3, KB))._fold(st, r)
@@ -46,23 +49,24 @@ class LogupGkrRoundTest(absltest.TestCase):
             self.assertEqual(g.shape, (4,))  # width halved
             self.assertTrue(bool(jnp.all(g == x[:4] + r * (x[4:] - x[:4]))))
 
-    def test_sumcheck_invariant_s0_plus_s1(self):
+    def test_sumcheck_invariant_s0_plus_s1(self) -> None:
         st = _state(40, 16)
         rnd = LogupGkrRound(jnp.array(9, KB))
         msg = rnd._round_poly(st)
         # s(0)+s(1) == sum over the full hypercube of the combine (the claim)
         self.assertTrue(bool(msg[0] + msg[1] == jnp.sum(rnd._combine(*st))))
 
-    def test_call_threads_state_transcript_msg(self):
+    def test_call_threads_state_transcript_msg(self) -> None:
         st = _state(50, 8)
         t = StubTranscript(jnp.array([4, 0, 0], dtype=KB))
         state, t2, msg = LogupGkrRound(jnp.array(2, KB))(st, t)
         self.assertEqual(msg.shape, (4,))
         self.assertEqual(len(state), 5)
         self.assertEqual(state[0].shape, (4,))  # width halved
+        assert isinstance(t2, StubTranscript)
         self.assertEqual(t2.pos, 1)  # one challenge consumed
 
-    def test_end_to_end_sumcheck_reduction(self):
+    def test_end_to_end_sumcheck_reduction(self) -> None:
         # Drive the round to completion; the running claim must reduce
         # consistently each round and match the final width-1 evaluation.
         from zorch.prove import prove
@@ -76,6 +80,7 @@ class LogupGkrRoundTest(absltest.TestCase):
 
         # Replay round-by-round to check the per-round sumcheck identity.
         claim = jnp.sum(rnd._combine(*st))
+        t: Transcript
         state, t = st, StubTranscript(challenges)
         for i in range(n):
             state, t, msg = rnd(state, t)
@@ -88,13 +93,13 @@ class LogupGkrRoundTest(absltest.TestCase):
         _, _, proof = prove(rnd, st, StubTranscript(challenges))
         self.assertEqual(proof.shape, (n, 4))
 
-    def test_round_poly_is_fusion_ready(self):
+    def test_round_poly_is_fusion_ready(self) -> None:
         # Straight-line element-wise field ops + the one inherent Sigma; see
         # zorch.testkit.fusion (proxy for issue #21's ZorchRoundRewriter).
         st = _state(80, 8)
         assert_fusion_ready(LogupGkrRound(jnp.array(5, KB))._round_poly, st, reduces=1)
 
-    def test_state_must_have_five_factors(self):
+    def test_state_must_have_five_factors(self) -> None:
         with self.assertRaises(ValueError):
             LogupGkrRound(jnp.array(1, KB))._round_poly(_state(70, 8)[:4])
 
