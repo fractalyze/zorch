@@ -1,0 +1,27 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "eq_test",
+    size = "small",
+    srcs = ["eq_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = [
+        "//zorch/poly",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
+    name = "poly_test",
+    size = "small",
+    srcs = ["poly_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = [
+        "//zorch/poly",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
