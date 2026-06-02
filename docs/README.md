@@ -12,7 +12,7 @@ ______________________________________________________________________
 | --------------------------------------------------------------- | --------------------------------------------------------------------- |
 | What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
-| The sumcheck `Round` block — usage, composition, gotchas        | [`sumcheck.md`](sumcheck.md)                                          |
+| The sumcheck block — design rationale & gotchas                 | [`sumcheck.md`](sumcheck.md)                                          |
 | Linear codes — `LinearCode` seam, Reed-Solomon via the native NTT | [`coding.md`](coding.md)                                             |
 
 ## Fusion north star
@@ -34,10 +34,10 @@ emitter are Phase 3 — round bodies are written **fusion-ready**: element-wise
 field ops plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they
 drop into that path unchanged. See [`sumcheck.md`](sumcheck.md).
 
-**Measured (ZKX GPU).** The bodies already lower as intended: `ProductSumcheckRound.round_poly`
+**Measured (ZKX GPU).** The bodies already lower as intended: `ProductSumcheckRound._round_poly`
 compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
-`Σ`, no marker needed — and `fold` to a single element-wise (`kLoop`) kernel. A full round
-(`round_poly` + `fold`) is **two** kernels (its message and folded state are disjoint
+`Σ`, no marker needed — and `_fold` to a single element-wise (`kLoop`) kernel. A full round
+(`_round_poly` + `_fold`) is **two** kernels (its message and folded state are disjoint
 outputs), and with a host-side transcript it is not one traced region at all. So "one round
 = one unit" means **one replayed CUDA graph** over those kernels (enablers (1)+(2)), not one
 mega-fused kernel: a single giant extension-field kernel fights the compiler's field-aware
@@ -47,7 +47,8 @@ a separate axis; rationale on epic #1.
 
 ## Conventions
 
-Coding conventions (`@jit` usage, style) live in [`conventions.md`](conventions.md).
+Coding conventions — `@jit` usage, the WHY-not-WHAT rule for comments and docs,
+and `_`-private naming — live in [`conventions.md`](conventions.md).
 Docs prose is English, and a doc carries what the code cannot show — why a
 thing exists, its background, the design philosophy, and the rules that follow
 from it. What the code already states (the API surface, a usage walkthrough)
