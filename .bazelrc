@@ -1,0 +1,6 @@
+# bazel 9 defaults to bzlmod (WORKSPACE is gone), so no enable flags needed.
+build --announce_rc
+test --test_output=errors
+
+# Local, machine-specific overrides (gitignored).
+try-import %workspace%/.bazelrc.user

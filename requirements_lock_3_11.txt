@@ -1,0 +1,10 @@
+absl-py==2.4.0
+jax==0.0.5.dev20260524000415
+jax-cuda12-plugin==0.0.5.dev20260524000415
+jaxlib==0.0.5.dev20260524000415
+ml_dtypes==0.5.4
+numpy==2.4.6
+opt_einsum==3.4.0
+scipy==1.17.1
+zk_dtypes==0.0.5
+zkx-cuda-pjrt==0.0.5.dev20260524000415
