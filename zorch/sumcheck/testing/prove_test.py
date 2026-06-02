@@ -5,6 +5,7 @@ from absl.testing import absltest
 
 from zorch.prove import prove
 from zorch.sumcheck import SumcheckRound
+from zorch.testkit.poly import eval_univariate
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
@@ -27,23 +28,6 @@ def _eval_mle(evals, point):
     return cur[0]
 
 
-def _eval_univariate(evals, x):
-    """Test oracle: evaluate a univariate given by its values on
-    [0, 1, ..., len-1] at `x` via Lagrange interpolation (small domain)."""
-    d = evals.shape[0]
-    nodes = jnp.arange(d, dtype=KB).astype(evals.dtype)  # arange(EF) is unsupported
-    acc = jnp.zeros((), evals.dtype)
-    for i in range(d):
-        num = jnp.ones((), evals.dtype)
-        den = jnp.ones((), evals.dtype)
-        for j in range(d):
-            if j != i:
-                num = num * (x - nodes[j])
-                den = den * (nodes[i] - nodes[j])
-        acc = acc + evals[i] * (num / den)
-    return acc
-
-
 class SumcheckProveTest(absltest.TestCase):
     def _check_identity(self, factors, degree, n, seed):
         challenges = rand_field(seed, (n,), KB)
@@ -58,13 +42,13 @@ class SumcheckProveTest(absltest.TestCase):
         # round-to-round: s_i(0)+s_i(1) == s_{i-1}(r_{i-1})
         for i in range(1, n):
             lhs = proof[i][0] + proof[i][1]
-            rhs = _eval_univariate(proof[i - 1], challenges[i - 1])
+            rhs = eval_univariate(proof[i - 1], challenges[i - 1])
             self.assertTrue(bool(lhs == rhs))
 
         # final fold == product of the MLEs evaluated at the challenge point
         want = _product([_eval_mle(f, challenges) for f in factors])
         self.assertTrue(bool(_product([s[0] for s in final_state]) == want))
-        last = _eval_univariate(proof[n - 1], challenges[n - 1])
+        last = eval_univariate(proof[n - 1], challenges[n - 1])
         self.assertTrue(bool(last == want))
 
     def test_empty_state_raises(self):
@@ -90,7 +74,7 @@ class SumcheckProveTest(absltest.TestCase):
         self.assertTrue(bool(jnp.sum(f) == proof[0][0] + proof[0][1]))
         for i in range(1, 4):
             lhs = proof[i][0] + proof[i][1]
-            rhs = _eval_univariate(proof[i - 1], challenges[i - 1])
+            rhs = eval_univariate(proof[i - 1], challenges[i - 1])
             self.assertTrue(bool(lhs == rhs))
         self.assertTrue(bool(final_state[0][0] == _eval_mle(f, challenges)))
 

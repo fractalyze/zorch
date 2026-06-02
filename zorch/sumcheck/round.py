@@ -33,7 +33,7 @@ class SumcheckRound(Round):
             out.append((evals[..., :half], evals[..., half:]))
         return out
 
-    def round_poly(self, state) -> Array:
+    def _round_poly(self, state) -> Array:
         """Round polynomial over the domain [0, 1, ..., degree], shape
         (degree+1,): s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)).
 
@@ -47,13 +47,13 @@ class SumcheckRound(Round):
         factors = (p0 + us[:, None] * (p1 - p0) for (p0, p1) in halves)
         return jnp.sum(reduce(operator.mul, factors), axis=-1)
 
-    def fold(self, state, r) -> list:
+    def _fold(self, state, r) -> list:
         """Fold each MLE at challenge `r`: P0 + r*(P1 - P0). Halves width."""
         return [p0 + r * (p1 - p0) for (p0, p1) in self._split(state)]
 
     def __call__(self, state, transcript):
-        msg = self.round_poly(state)
+        msg = self._round_poly(state)
         transcript = self.observe(transcript, msg)
         transcript, r = self.challenge(transcript, 1)
-        state = self.fold(state, r[0])
+        state = self._fold(state, r[0])
         return state, transcript, msg

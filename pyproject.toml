@@ -1,0 +1,6 @@
+# Python tooling config. zorch builds via Bazel (MODULE.bazel); this file only
+# configures pytest, which runs the `*_test.py` module tests (the bazel side
+# covers the toolchain smoke test + the requirements-lock check).
+[tool.pytest.ini_options]
+testpaths = ["zorch"]
+python_files = ["*_test.py", "test_*.py"]
