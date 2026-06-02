@@ -6,11 +6,9 @@ partial rounds, `state ** alpha` for the S-box. This is reference semantics; the
 zkx compiler recognizes the pattern and lowers the whole permutation to a single
 fused kernel.
 
-The explicit marker is a `stablehlo.composite` named `zorch.poseidon2.permute`
-wrapping `permute` — but `jax.lax.composite` does not yet accept zk_dtypes field
-dtypes (it rejects the field's 'V' kind), so for now zorch emits the plain
-matmul/power form and zkx pattern-matches it. Wrapping `permute` in the
-composite is a one-line change once that fork issue is fixed.
+Marking `permute` explicitly with a `stablehlo.composite` is the by-construction
+alternative to that pattern match, but the marker op is not yet wired through the
+zkx/StableHLO-fork lowering.
 """
 
 from __future__ import annotations
