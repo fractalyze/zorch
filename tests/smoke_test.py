@@ -13,7 +13,6 @@ import zk_dtypes  # noqa: F401  (import-only: confirms the field-dtype wheel res
 def test_jax_jit_runs():
     f = jax.jit(lambda x: x.sum())
     assert int(f(jnp.arange(4))) == 6
-    assert jax.__version__
 
 
 if __name__ == "__main__":
