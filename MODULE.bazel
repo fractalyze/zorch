@@ -1,0 +1,28 @@
+"""zorch — JAX-native building blocks for Modern SNARKs.
+
+bzlmod module. bazel 9 dropped WORKSPACE support, so dependencies and the
+hermetic Python toolchain are declared here rather than in WORKSPACE.bazel.
+"""
+
+module(
+    name = "zorch",
+    version = "0.0.0",
+)
+
+bazel_dep(name = "rules_python", version = "1.5.1")
+
+python = use_extension("@rules_python//python/extensions:python.bzl", "python")
+python.toolchain(
+    is_default = True,
+    python_version = "3.11",
+)
+
+pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
+pip.parse(
+    # jax / jaxlib / zkx-cuda-pjrt are published on the Fractalyze index.
+    extra_pip_args = ["--extra-index-url=https://fractalyze.github.io/pypi/simple/"],
+    hub_name = "zorch_pip",
+    python_version = "3.11",
+    requirements_lock = "//:requirements_lock_3_11.txt",
+)
+use_repo(pip, "zorch_pip")

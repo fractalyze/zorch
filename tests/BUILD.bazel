@@ -1,0 +1,12 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "smoke_test",
+    size = "small",
+    srcs = ["smoke_test.py"],
+    deps = [
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
