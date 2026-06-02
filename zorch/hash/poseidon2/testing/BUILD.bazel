@@ -7,7 +7,7 @@ py_library(
         "__init__.py",
         "koalabear16.py",
     ],
-    visibility = ["//zorch/hash/poseidon2:__subpackages__"],
+    visibility = ["//zorch/hash:__subpackages__"],
     deps = [
         "//zorch/hash/poseidon2",
         requirement("jax"),

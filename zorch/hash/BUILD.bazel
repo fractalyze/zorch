@@ -21,3 +21,27 @@ py_test(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "compression",
+    srcs = ["compression.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":permutation",
+        requirement("jax"),
+    ],
+)
+
+py_test(
+    name = "compression_test",
+    size = "small",
+    srcs = ["compression_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = [
+        ":compression",
+        "//zorch/hash/poseidon2",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
