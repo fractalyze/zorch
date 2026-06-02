@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from absl.testing import absltest
 
-from zorch.utils.bits import is_power_of_two, log2_strict_usize
+from zorch.utils.bits import is_power_of_two, log2_ceil_usize, log2_strict_usize
 
 
 class BitsTest(absltest.TestCase):
@@ -18,6 +18,15 @@ class BitsTest(absltest.TestCase):
     def test_log2_strict_rejects_non_pow2(self):
         with self.assertRaises(ValueError):
             log2_strict_usize(6)
+
+
+class Log2CeilTest(absltest.TestCase):
+    def test_exact_and_nonexact(self):
+        self.assertEqual(log2_ceil_usize(1), 0)
+        self.assertEqual(log2_ceil_usize(2), 1)
+        self.assertEqual(log2_ceil_usize(8), 3)
+        self.assertEqual(log2_ceil_usize(9), 4)  # ceil(log2 9) = 4
+        self.assertEqual(log2_ceil_usize(0), 0)
 
 
 if __name__ == "__main__":
