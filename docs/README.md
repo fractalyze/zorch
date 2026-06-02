@@ -8,11 +8,10 @@ ______________________________________________________________________
 
 ## Understanding the design
 
-| Question                                                       | Doc                                                  |
-| -------------------------------------------------------------- | ---------------------------------------------------- |
-| What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                      |
-| The fusion contract — why it exists, and the verified findings | [`architecture.md`](architecture.md) §1              |
-| Open design decisions still to be settled                      | [`architecture.md`](architecture.md) §2              |
+| Question                                                        | Where                                                                 |
+| --------------------------------------------------------------- | --------------------------------------------------------------------- |
+| What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
+| Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
 
 ## Conventions
 

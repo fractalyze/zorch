@@ -5,8 +5,10 @@ this file only carries Claude-Code-specific environment setup that has no other
 home.
 
 - **Project overview & quick start:** [`README.md`](README.md)
-- **Architecture & vocabulary:** [`docs/architecture.md`](docs/architecture.md)
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md)
+- **Detailed design & open decisions:** tracked on GitHub — milestone
+  `spine: core + poseidon2 v1`, epic issue
+  [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Two non-negotiables
 
@@ -16,7 +18,9 @@ home.
 - **Fusion is a correctness-of-design property.** A `Round`, an
   `absorb`/`squeeze`, a `commit`/`open`, a fold step, and a hash permutation
   must each lower to one fused kernel — by construction, never by a
-  per-primitive compiler pattern-match. See `docs/architecture.md`.
+  per-primitive compiler pattern-match. The findings and the open
+  fusion-direction decision live on the epic issue
+  [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Development environment
 
