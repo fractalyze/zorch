@@ -1,32 +1,33 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """LogUp-GKR as a `Round`: one per-variable round of a GKR layer.
 
-A `SumcheckRound` whose summand is the LogUp combine
+A `SumcheckRoundBase` whose summand is the LogUp combine
 
     eq * (lam * (n0 * d1 + n1 * d0) + d0 * d1)
 
 over five MLE factors in order `[eq, n0, d1, n1, d0]`. The round polynomial is
 degree 3 (eq is degree 1, the bracket degree 2). The fold, the Fiat-Shamir loop,
-the halving, and the shape/even-width checks come from `SumcheckRound`; this
+the halving, and the shape/even-width checks come from `SumcheckRoundBase`; this
 class adds only the combine and the five-factor count check.
 
 This is the per-variable round only. The full LogUp-GKR protocol -- fractional-sum
 circuit, cross-layer GKR transitions, jagged/interaction layout, verifier -- is a
 separate, later piece.
 """
+
 from __future__ import annotations
 
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.sumcheck.round import SumcheckRound
+from zorch.sumcheck.prover import SumcheckRoundBase
 
 # eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2).
 _DEGREE = 3
 _NUM_FACTORS = 5  # [eq, n0, d1, n1, d0]
 
 
-class LogupGkrRound(SumcheckRound):
+class LogupGkrRound(SumcheckRoundBase):
     def __init__(self, lam):
         # Batching challenge; fixed across a layer's variable-rounds.
         self.lam = lam

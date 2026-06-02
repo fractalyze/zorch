@@ -5,7 +5,7 @@ from absl.testing import absltest
 
 from zorch.poly import eval_univariate
 from zorch.prove import prove
-from zorch.sumcheck import ProductSumcheckRound
+from zorch.sumcheck import prover
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
@@ -32,7 +32,7 @@ class SumcheckProveTest(absltest.TestCase):
     def _check_identity(self, factors, degree, n, seed):
         challenges = rand_field(seed, (n,), KB)
         final_state, _, proof = prove(
-            ProductSumcheckRound(degree=degree),
+            prover.SumcheckRound(degree=degree),
             list(factors),
             StubTranscript(challenges),
         )
@@ -55,7 +55,7 @@ class SumcheckProveTest(absltest.TestCase):
 
     def test_empty_state_raises(self):
         with self.assertRaises(ValueError):
-            prove(ProductSumcheckRound(degree=1), [], StubTranscript(jnp.zeros(1, KB)))
+            prove(prover.SumcheckRound(degree=1), [], StubTranscript(jnp.zeros(1, KB)))
 
     def test_degree1_single_mle(self):
         f = rand_field(20, (1 << 4,), KB)
@@ -71,7 +71,7 @@ class SumcheckProveTest(absltest.TestCase):
         f = rand_field(30, (1 << 4,), KB).astype(EF)
         challenges = rand_field(31, (4,), KB).astype(EF)
         final_state, _, proof = prove(
-            ProductSumcheckRound(degree=1), [f], StubTranscript(challenges)
+            prover.SumcheckRound(degree=1), [f], StubTranscript(challenges)
         )
         self.assertTrue(bool(jnp.sum(f) == proof[0][0] + proof[0][1]))
         for i in range(1, 4):

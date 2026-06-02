@@ -14,7 +14,7 @@ inside are fine — `jit` unrolls them.
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
 - composes other work in a static loop with host-side steps between — e.g.
-  `zorch.prove` loops the round, and `SumcheckRound.__call__` wraps the
+  `zorch.prove` loops the round, and `prover.SumcheckRoundBase.__call__` wraps the
   round-poly/fold arithmetic around the host-side transcript `observe` /
   `sample`. Decorating these would inline everything into one trace and pull
   the transcript ops in with it.

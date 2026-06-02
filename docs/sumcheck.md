@@ -9,15 +9,28 @@ decisions: epic issue
 
 ## Why the shape
 
-**One prover skeleton, many summands, one verifier.** `SumcheckRound` is the
-abstract folding skeleton (split → round poly → observe → challenge → fold); a
-concrete prover supplies only `_round_poly` — `ProductSumcheckRound` sums a
-product, `LogupGkrRound` the LogUp combine. `prove` and `verify` are generic
-2-to-1 drivers over a `Round`, nothing sumcheck-specific. The verifier is a
-single `SumcheckVerifier` that pairs with all of them: it sees only the round
-polynomials, so the summand is purely the prover's concern. Its observe→challenge
-order mirrors the prover's exactly — that shared ordering is the only thing
-keeping the two Fiat-Shamir transcripts from diverging.
+**One prover skeleton, many summands, one verifier.** `prover.SumcheckRoundBase`
+is the abstract folding skeleton (split → round poly → observe → challenge →
+fold); a concrete prover supplies only `_round_poly` — `prover.SumcheckRound`
+sums a product, `LogupGkrRound` the LogUp combine. `prove` and `verify` are
+generic 2-to-1 drivers over a `Round`, nothing sumcheck-specific. The verifier is
+a single `verifier.SumcheckRound` that pairs with all of them: it sees only the
+round polynomials, so the summand is purely the prover's concern. Its
+observe→challenge order mirrors the prover's exactly — that shared ordering is
+the only thing keeping the two Fiat-Shamir transcripts from diverging.
+
+**Prover and verifier in symmetric namespaces.** Each side is a `Round` in its
+own module — `prover.SumcheckRound` / `verifier.SumcheckRound` — so a caller picks
+the side by namespace, and the shared summand (e.g. `logup_combine`) plus the
+mirrored transcript order keep them from drifting rather than one fused
+description.
+
+**Composing rounds (nn.Sequential).** A composite protocol is itself a `Round`:
+`ProveChain` / `VerifyChain` (in `zorch/round.py`) sequence sub-rounds, threading
+the carry + transcript, so chains nest. `prove` / `verify` are the *homogeneous*
+case — one round repeated per variable, the sumcheck inner loop; the chains are
+the *heterogeneous* case — distinct rounds in sequence, e.g. one GKR layer per
+link.
 
 **The verifier reduces; the PCS closes.** `verify` stops at the point-claim
 `(point, final_claim)`. The final `final_claim == f(point)` check needs the
