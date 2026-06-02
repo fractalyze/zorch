@@ -26,7 +26,7 @@ several kernels. "One fused kernel" is the ideal limit of the same idea, not a
 separate goal.
 
 Two enablers make a round capturable: (1) the **whole round body in one traced
-region** with a **device-side** transcript (so `observe`/`challenge` are device
+region** with a **device-side** transcript (so `observe`/`sample` are device
 ops, not host steps that break the capture), and (2) a `stablehlo.composite`
 marker the emitter lowers as one unit. Until those land — the device transcript
 is [#3](https://github.com/fractalyze/zorch/issues/3); the marker + generic zkx

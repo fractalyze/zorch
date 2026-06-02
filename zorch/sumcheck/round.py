@@ -65,8 +65,8 @@ class SumcheckRound(Round):
 
     def __call__(self, state, transcript):
         msg = self._round_poly(state)
-        transcript = self.observe(transcript, msg)
-        transcript, r = self.challenge(transcript, 1)
+        transcript = transcript.observe(msg)
+        transcript, r = transcript.sample(1)
         state = self._fold(state, r[0])
         return state, transcript, msg
 
@@ -111,6 +111,6 @@ class SumcheckVerifier(Round):
                 f"got {msg.shape[0]}"
             )
         ok = claim == msg[0] + msg[1]
-        transcript = self.observe(transcript, msg)
-        transcript, r = self.challenge(transcript, 1)
+        transcript = transcript.observe(msg)
+        transcript, r = transcript.sample(1)
         return eval_univariate(msg, r[0]), transcript, r[0], ok

@@ -27,8 +27,8 @@ the way deep learning stacks `Layer`s, `zorch` stacks **`Round`s**.
 
 ## Building blocks
 
-- **`Round`** — the composable unit. Carries a Fiat-Shamir interface: `observe`
-  to put a message into the transcript, `challenge` to draw randomness out.
+- **`Round`** — the composable unit (implement `__call__`). It threads the
+  Fiat-Shamir transcript and calls its `observe` / `sample` directly.
 - **Fiat-Shamir / Challenge** — the transcript interface `observe` / `sample`; the
   concrete impl is a duplex sponge (`absorb` / `squeeze`) under the hood.
 - **`Polynomial`** — univariate and multilinear representations.
