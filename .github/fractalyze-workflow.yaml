@@ -1,0 +1,36 @@
+# zorch — board extensions for the fractalyze-plugins workflow.
+#
+# zorch is a building-block library, so the board's primary axis is the
+# Block being worked on (NOT a zkVM/vendor — zorch is zkVM- and
+# proving-scheme-agnostic). The field is derived from the issue's `area:*`
+# label; `none` catches infra / cross-cutting work. Two views: Block lanes
+# for day-to-day, Milestone rollup for week-over-week.
+#
+# Schema lives in `fractalyze/claude-plugins` (workflow plugin).
+
+board_extensions:
+  fields:
+    - name: Block
+      type: single_select
+      options: [Round, FiatShamir, Polynomial, PCS, Fold, ZeroCheck, Fusion, Infra, none]
+      derive_from_labels:
+        Round: area:round
+        FiatShamir: area:fiat-shamir
+        Polynomial: area:polynomial
+        PCS: area:pcs
+        Fold: area:fold
+        ZeroCheck: area:zero-check
+        Fusion: area:fusion
+        Infra: area:infra
+        _fallback: none
+
+  views:
+    - name: Block kanban
+      type: board
+      group_by: Block
+      column_by: Status
+
+    - name: Milestone rollup
+      type: board
+      group_by: Milestone
+      column_by: Status
