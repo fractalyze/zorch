@@ -13,6 +13,7 @@ ______________________________________________________________________
 | What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
 | The sumcheck `Round` block — usage, composition, gotchas        | [`sumcheck.md`](sumcheck.md)                                          |
+| Linear codes — `LinearCode` seam, Reed-Solomon via the native NTT | [`coding.md`](coding.md)                                             |
 
 ## Fusion north star
 
@@ -47,8 +48,10 @@ a separate axis; rationale on epic #1.
 ## Conventions
 
 Coding conventions (`@jit` usage, style) live in [`conventions.md`](conventions.md).
-Design-doc prose under `docs/` is written in Korean; code, symbols,
-file paths, and external citations stay in English.
+Docs prose is English, and a doc carries what the code cannot show — why a
+thing exists, its background, the design philosophy, and the rules that follow
+from it. What the code already states (the API surface, a usage walkthrough)
+stays in the code and its tests, not here.
 
 ______________________________________________________________________
 
