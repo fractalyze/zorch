@@ -19,7 +19,7 @@ inside are fine — `jit` unrolls them.
   `challenge`. Decorating these would inline everything into one trace and pull
   the transcript ops in with it.
 
-`SumcheckRound.round_poly` / `fold` are pure numeric and *could* be `@jit`'d,
+A round's `round_poly` / `fold` are pure numeric and *could* be `@jit`'d,
 but are deliberately left undecorated: they are the bodies a future marked
 fused region (`stablehlo.composite`) + zkx emitter will lower to one kernel
 (see `sumcheck.md`), not blanket-`@jit` candidates.
