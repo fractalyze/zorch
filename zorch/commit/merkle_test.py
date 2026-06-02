@@ -8,13 +8,11 @@ vectors are added in the golden-vector slice.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import jax.numpy as jnp
 from jax import Array
 from zk_dtypes import koalabear_mont as F
 
-from zorch.commit.merkle import MerkleTree
+from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -38,23 +36,6 @@ _PLONKY3_MERKLE_ROOT_4X8 = jnp.array(
 )
 
 
-def _reconstruct_root(
-    leaf_digest: Array,
-    leaf_idx: int,
-    digest_layers: Sequence[Array],
-    compressor: Compression,
-) -> Array:
-    node, idx = leaf_digest, leaf_idx
-    for level in range(len(digest_layers) - 1):  # leaf layer up to just below root
-        sibling = digest_layers[level][idx ^ 1]
-        pair = (
-            jnp.stack([node, sibling]) if idx % 2 == 0 else jnp.stack([sibling, node])
-        )
-        node = compressor.compress(pair)
-        idx //= 2
-    return node
-
-
 def test_commit_layer_shapes() -> None:
     _, _, tree = koalabear16_merkle()
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)  # height 4
@@ -72,12 +53,13 @@ def test_leaf_layer_is_per_row_sponge_hash() -> None:
 
 
 def test_open_verify_roundtrip_reconstructs_root() -> None:
-    _, comp, tree = koalabear16_merkle()
+    _, _, tree = koalabear16_merkle()
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)
-    raw_root, layers = tree.commit(matrix)
+    root, layers = tree.commit(matrix)
     for i in range(4):
-        rebuilt = _reconstruct_root(layers[0][i], i, layers, comp)
-        assert jnp.array_equal(rebuilt, raw_root)
+        op = tree.open(matrix, layers, i)
+        assert jnp.array_equal(op.row, matrix[i])
+        assert tree.verify(root, i, op)
 
 
 def test_commit_root_matches_plonky3_golden() -> None:
@@ -143,6 +125,55 @@ def test_non_binary_compressor_raises() -> None:
         pass
 
 
+def _committed_4x8() -> tuple[MerkleTree, Array, Array, list[Array]]:
+    """Commit a 4x8 koalabear matrix; return (tree, matrix, root, layers)."""
+    _, _, tree = koalabear16_merkle()
+    matrix = jnp.arange(32, dtype=F).reshape(4, 8)
+    root, layers = tree.commit(matrix)
+    return tree, matrix, root, layers
+
+
+def test_verify_rejects_tampered_row() -> None:
+    tree, matrix, root, layers = _committed_4x8()
+    op = tree.open(matrix, layers, 2)
+    bad = Opening(row=op.row.at[0].add(jnp.ones((), F)), path=op.path)
+    assert not tree.verify(root, 2, bad)
+
+
+def test_verify_rejects_tampered_path() -> None:
+    tree, matrix, root, layers = _committed_4x8()
+    op = tree.open(matrix, layers, 1)
+    bad_path = list(op.path)
+    bad_path[0] = bad_path[0].at[0].add(jnp.ones((), F))
+    assert not tree.verify(root, 1, Opening(row=op.row, path=bad_path))
+
+
+def test_verify_rejects_wrong_index() -> None:
+    tree, matrix, root, layers = _committed_4x8()
+    op = tree.open(matrix, layers, 0)  # opening for leaf 0
+    assert not tree.verify(root, 1, op)  # verified at the wrong index -> reject
+
+
+def test_open_verify_single_leaf_empty_path() -> None:
+    # height-1 tree: open's path is empty and verify reduces to leaf == root
+    sponge, _, tree = koalabear16_merkle()
+    matrix = jnp.arange(8, dtype=F).reshape(1, 8)
+    root, layers = tree.commit(matrix)
+    op = tree.open(matrix, layers, 0)
+    assert op.path == []
+    assert tree.verify(root, 0, op)
+
+
+def test_open_rejects_out_of_range_index() -> None:
+    tree, matrix, _, layers = _committed_4x8()  # 4 leaves: valid 0..3
+    for bad in (4, -1):
+        try:
+            tree.open(matrix, layers, bad)
+            assert False, f"expected IndexError for index {bad}"
+        except IndexError:
+            pass
+
+
 if __name__ == "__main__":
     test_commit_layer_shapes()
     test_leaf_layer_is_per_row_sponge_hash()
@@ -154,4 +185,9 @@ if __name__ == "__main__":
     test_non_power_of_two_height_raises()
     test_non_2d_matrix_raises()
     test_non_binary_compressor_raises()
+    test_verify_rejects_tampered_row()
+    test_verify_rejects_tampered_path()
+    test_verify_rejects_wrong_index()
+    test_open_verify_single_leaf_empty_path()
+    test_open_rejects_out_of_range_index()
     print("ok")

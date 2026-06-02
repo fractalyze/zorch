@@ -15,12 +15,24 @@ permutation itself is captured to a kernel (the poseidon2 fusion path, #25).
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import jax
+import jax.numpy as jnp
 from jax import Array
 
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
+
+
+@dataclass(frozen=True)
+class Opening:
+    """A single leaf's authentication path: the committed matrix `row` plus the
+    sibling digest at each level (leaf-first, excluding the root)."""
+
+    row: Array
+    path: list[Array]  # each (digest_elems,)
 
 
 class MerkleTree:
@@ -65,3 +77,30 @@ class MerkleTree:
             layer = jax.vmap(self._compressor.compress)(pairs)
             digest_layers.append(layer)
         return digest_layers[-1][0], digest_layers
+
+    def open(self, matrix: Array, digest_layers: list[Array], index: int) -> Opening:
+        """Authentication path for leaf `index`: its row plus each level's sibling."""
+        if not 0 <= index < matrix.shape[0]:
+            raise IndexError(f"leaf index {index} out of range [0, {matrix.shape[0]})")
+        path = []
+        idx = index
+        for level in range(len(digest_layers) - 1):  # leaf layer up to below root
+            path.append(digest_layers[level][idx ^ 1])
+            idx //= 2
+        return Opening(row=matrix[index], path=path)
+
+    def verify(self, root: Array, index: int, opening: Opening) -> bool:
+        """Rebuild the root from the row + path; compare to the committed root."""
+        if not 0 <= index < (1 << len(opening.path)):
+            return False
+        node = self._leaf_hasher.hash(opening.row)
+        idx = index
+        for sibling in opening.path:
+            pair = (
+                jnp.stack([node, sibling])
+                if idx % 2 == 0
+                else jnp.stack([sibling, node])
+            )
+            node = self._compressor.compress(pair)
+            idx //= 2
+        return bool(jnp.array_equal(node, root))
