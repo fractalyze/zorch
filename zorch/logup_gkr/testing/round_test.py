@@ -4,8 +4,8 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.logup_gkr.round import LogupGkrRound
+from zorch.poly import eval_univariate
 from zorch.testkit.fusion import assert_fusion_ready
-from zorch.testkit.poly import eval_univariate
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
