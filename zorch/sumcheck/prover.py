@@ -81,10 +81,13 @@ class SumcheckRound(SumcheckRoundBase):
 
         The whole u-domain is evaluated at once -- one batched reduction, so it
         lowers toward a single reduction kernel rather than degree+1 separate
-        ones. The u-domain is built with jnp.stack (not jnp.arange, whose iota
-        is unsupported for extension dtypes)."""
+        ones. `us` is reshaped to broadcast over any leading batch dims of the
+        factors, and is built with jnp.stack (not jnp.arange, whose iota is
+        unsupported for extension dtypes)."""
         halves = self._split(state)
         dtype = state[0].dtype
         us = jnp.stack([jnp.array(u, dtype) for u in range(self.degree + 1)])
-        factors = (p0 + us[:, None] * (p1 - p0) for (p0, p1) in halves)
+        factors = (
+            p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves
+        )
         return jnp.sum(reduce(operator.mul, factors), axis=-1)

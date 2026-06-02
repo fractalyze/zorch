@@ -35,6 +35,19 @@ class SumcheckRoundTest(absltest.TestCase):
             fb = b[:4] + uf * (b[4:] - b[:4])
             self.assertTrue(bool(msg[u] == jnp.sum(fa * fb)))
 
+    def test_round_poly_with_batch_dimension(self):
+        # Leading batch dims must broadcast: msg is (degree+1, *batch).
+        batch = 3
+        a = rand_field(18, (batch, 8), KB)
+        b = rand_field(19, (batch, 8), KB)
+        msg = prover.SumcheckRound(degree=2)._round_poly([a, b])
+        self.assertEqual(msg.shape, (3, batch))
+        for u in range(3):
+            uf = jnp.array(u, KB)
+            fa = a[:, :4] + uf * (a[:, 4:] - a[:, :4])
+            fb = b[:, :4] + uf * (b[:, 4:] - b[:, :4])
+            self.assertTrue(bool(jnp.all(msg[u] == jnp.sum(fa * fb, axis=-1))))
+
     def test_fold_matches_manual(self):
         f = rand_field(14, (8,), KB)
         r = jnp.array(6, KB)
