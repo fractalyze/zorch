@@ -5,11 +5,7 @@ py_binary(
     name = "bench_merkle_commit",
     srcs = ["bench_merkle_commit.py"],
     deps = [
-        ":merkle",
-        "//zorch/hash:compression",
-        "//zorch/hash:sponge",
-        "//zorch/hash/poseidon2",
-        "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/commit/testing:koalabear16",
         requirement("jax"),
         requirement("jax_cuda12_plugin"),
         requirement("zk_dtypes"),
@@ -40,9 +36,9 @@ py_test(
     env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         ":merkle",
+        "//zorch/commit/testing:koalabear16",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
-        "//zorch/hash/poseidon2",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("jax"),
         requirement("zk_dtypes"),

@@ -39,7 +39,6 @@ py_test(
     env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         ":compression",
-        "//zorch/hash/poseidon2",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("jax"),
         requirement("zk_dtypes"),
@@ -63,7 +62,6 @@ py_test(
     env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         ":sponge",
-        "//zorch/hash/poseidon2",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("jax"),
         requirement("zk_dtypes"),

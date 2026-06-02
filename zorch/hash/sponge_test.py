@@ -12,14 +12,8 @@ import jax
 import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 
-from zorch.hash.poseidon2 import Poseidon2
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_params
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.hash.sponge import Sponge, SpongeParams
-
-
-def _perm() -> Poseidon2:
-    return Poseidon2(koalabear16_params())  # width 16
-
 
 # Plonky3 golden vectors (p3_commit=4318eba..., default_koalabear_poseidon2_16):
 # PaddingFreeSponge<_, 16, 8, 8> over arange(n). arange(12) exercises the
@@ -68,14 +62,14 @@ _PLONKY3_SPONGE = {
 
 
 def test_hash_returns_out_shape_and_dtype():
-    s = Sponge(_perm(), SpongeParams(rate=8, out=8))
+    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     out = s.hash(jnp.arange(16, dtype=F))
     assert out.shape == (8,)
     assert out.dtype == F
 
 
 def test_hash_single_block_is_permute_truncated():
-    perm = _perm()
+    perm = koalabear16_perm()
     s = Sponge(perm, SpongeParams(rate=8, out=8))
     x = jnp.arange(8, dtype=F)  # exactly one rate block
     expected = perm.permute(jnp.zeros(16, dtype=F).at[:8].set(x))[:8]
@@ -83,7 +77,7 @@ def test_hash_single_block_is_permute_truncated():
 
 
 def test_hash_two_full_blocks_overwrite_mode():
-    perm = _perm()
+    perm = koalabear16_perm()
     s = Sponge(perm, SpongeParams(rate=8, out=8))
     x = jnp.arange(16, dtype=F)  # two rate blocks
     st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
@@ -94,7 +88,7 @@ def test_hash_two_full_blocks_overwrite_mode():
 
 
 def test_hash_partial_final_block_overwrites_only_its_lanes():
-    perm = _perm()
+    perm = koalabear16_perm()
     s = Sponge(perm, SpongeParams(rate=8, out=8))
     x = jnp.arange(12, dtype=F)  # rate + 4: final block is partial
     st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
@@ -105,7 +99,7 @@ def test_hash_partial_final_block_overwrites_only_its_lanes():
 
 
 def test_rate_not_less_than_width_raises():
-    perm = _perm()  # width 16
+    perm = koalabear16_perm()
     try:
         Sponge(perm, SpongeParams(rate=16, out=8))
         assert False, "expected ValueError for rate >= width"
@@ -123,7 +117,7 @@ def test_invalid_params_raise():
 
 
 def test_hash_non_1d_input_raises():
-    s = Sponge(_perm(), SpongeParams(rate=8, out=8))
+    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     try:
         s.hash(jnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
         assert False, "expected ValueError for non-1-D input"
@@ -132,13 +126,13 @@ def test_hash_non_1d_input_raises():
 
 
 def test_hash_matches_plonky3_golden():
-    s = Sponge(_perm(), SpongeParams(rate=8, out=8))
+    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     for n, golden in _PLONKY3_SPONGE.items():
         assert jnp.array_equal(s.hash(jnp.arange(n, dtype=F)), golden), f"len {n}"
 
 
 def test_hash_vmap_matches_unbatched():
-    s = Sponge(_perm(), SpongeParams(rate=8, out=8))
+    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
     a = jnp.arange(16, dtype=F)
     b = jnp.arange(16, dtype=F) + F(3)
     batched = jax.vmap(s.hash)(jnp.stack([a, b]))
