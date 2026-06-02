@@ -40,8 +40,9 @@ the way deep learning stacks `Layer`s, `zorch` stacks **`Round`s**.
 
 Early bootstrap. The first milestone brings up the core spine (`Round`,
 Fiat-Shamir, `Polynomial`, and the fusion contract) and validates it by
-migrating `poseidon2` from `whir-zorch`. See
-[`docs/architecture.md`](docs/architecture.md).
+migrating `poseidon2` from `whir-zorch`. Detailed design and decisions:
+milestone `spine: core + poseidon2 v1`, epic issue
+[#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Development
 
@@ -63,8 +64,8 @@ export ZKX_REPO_ROOT="$HOME/Workspace/zkx"
 
 ## Documentation
 
-- **Architecture & vocabulary:** [`docs/architecture.md`](docs/architecture.md)
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md)
+- **Detailed design & open decisions:** epic issue [#1](https://github.com/fractalyze/zorch/issues/1) (milestone `spine: core + poseidon2 v1`)
 
 ## License
 
