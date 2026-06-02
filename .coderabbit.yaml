@@ -1,0 +1,34 @@
+# CodeRabbit configuration — https://docs.coderabbit.ai/reference/yaml-template
+# zorch's primary AI reviewer (Gemini Code Assist is being sunset 2026-07-17).
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+  path_filters:
+    - "!**/*.lock"
+    - "!MODULE.bazel.lock"
+    - "!requirements_lock_*.txt"
+  path_instructions:
+    - path: "**/*.py"
+      instructions: >-
+        zorch is JAX-native and must stay proving-scheme- and zkVM-agnostic: no
+        vendor/scheme-specific code in a building block (that belongs in the
+        consumer, e.g. whir-zorch). In code meant to fuse (round bodies,
+        permutations, linear layers) flag jnp.dot / lax.reduce / jnp.sum /
+        gather-shaped slicing — they create kInput/gather fusion boundaries on
+        GPU; linear layers (e.g. MDS) must be explicit field add/mul. Prefer
+        functional pytree state. Full rules: CLAUDE.md and .gemini/styleguide.md.
+    - path: "**/*.bzl"
+      instructions: >-
+        Keep BUILD/bzl idiomatic; buildifier already enforces formatting, so
+        focus on target structure and dependency hygiene.
+chat:
+  auto_reply: true

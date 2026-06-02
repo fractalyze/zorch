@@ -1,0 +1,32 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+#
+# Receives a `jax-update` repository_dispatch from the jax repo's
+# notify-downstream workflow and opens a pin-bump PR. zorch must be added to
+# that dispatcher's consumer list for events to arrive.
+
+name: JAX Update
+
+on:
+  repository_dispatch:
+    types: [jax-update]
+
+concurrency:
+  group: jax-update
+  cancel-in-progress: true
+
+jobs:
+  bump:
+    runs-on: [self-hosted, cpu]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.BUMPER_GH_PAT }}
+
+      - name: Bump jax/jaxlib/zkx-cuda-pjrt
+        uses: fractalyze/github-actions/pip-bump@main
+        with:
+          upstream_repo: jax
+          version: ${{ github.event.client_payload.jax_version }}
+          upstream_commit: ${{ github.event.client_payload.commit }}
+          packages: jax jaxlib zkx-cuda-pjrt
+          github_token: ${{ secrets.BUMPER_GH_PAT }}
