@@ -4,6 +4,8 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.logup_gkr.round import LogupGkrRound
+from zorch.testkit.fusion import assert_fusion_ready
+from zorch.testkit.poly import eval_univariate
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
@@ -13,20 +15,6 @@ KB = zk_dtypes.koalabear
 def _state(seed, width):
     """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
     return [rand_field(seed + i, (width,), KB) for i in range(5)]
-
-
-def _eval_cubic_at(evals, r):
-    """Interpolate the degree-3 poly given by `evals` at u=0,1,2,3, eval at r
-    (Lagrange over the field — the sumcheck verifier's per-round check)."""
-    xs = [jnp.array(i, evals.dtype) for i in range(4)]
-    acc = jnp.array(0, evals.dtype)
-    for j in range(4):
-        term = evals[j]
-        for m in range(4):
-            if m != j:
-                term = term * (r - xs[m]) / (xs[j] - xs[m])
-        acc = acc + term
-    return acc
 
 
 class LogupGkrRoundTest(absltest.TestCase):
@@ -92,7 +80,7 @@ class LogupGkrRoundTest(absltest.TestCase):
         for i in range(n):
             state, t, msg = rnd(state, t)
             self.assertTrue(bool(msg[0] + msg[1] == claim))
-            claim = _eval_cubic_at(msg, challenges[i])
+            claim = eval_univariate(msg, challenges[i])
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
         self.assertTrue(bool(rnd._combine(*state)[0] == claim))
 
@@ -100,36 +88,11 @@ class LogupGkrRoundTest(absltest.TestCase):
         _, _, proof = prove(rnd, st, StubTranscript(challenges))
         self.assertEqual(proof.shape, (n, 4))
 
-    def test_round_poly_is_fusion_ready_stablehlo(self):
-        # Fusion contract (authoritatively enforced by zkx's ZorchRoundRewriter,
-        # issue #21): a marked round body must be straight-line element-wise field
-        # ops + the ONE inherent Sigma. This is the cheap zorch-side proxy: assert
-        # the lowered body uses ONLY fusion-safe ops plus exactly one reduce. A
-        # whitelist (not a gather/dot blacklist) so ANY boundary op (gather,
-        # scatter, dot, while, ...) or a second reduce trips it -- and any new op
-        # in the fusion-critical body gets a conscious look.
-        import re
-
-        import jax
-
-        FUSION_SAFE = {
-            "add",
-            "subtract",
-            "multiply",
-            "constant",  # element-wise field + consts
-            "broadcast_in_dim",
-            "reshape",
-            "slice",
-            "concatenate",  # structural
-        }
+    def test_round_poly_is_fusion_ready(self):
+        # Straight-line element-wise field ops + the one inherent Sigma; see
+        # zorch.testkit.fusion (proxy for issue #21's ZorchRoundRewriter).
         st = _state(80, 8)
-        hlo = jax.jit(LogupGkrRound(jnp.array(5, KB))._round_poly).lower(st).as_text()
-        ops = re.findall(r"stablehlo\.([a-z_]+)", hlo)
-        self.assertEqual(ops.count("reduce"), 1)  # the one inherent Sigma, no more
-        offenders = {op for op in ops if op != "reduce" and op not in FUSION_SAFE}
-        self.assertEqual(
-            offenders, set(), f"non-fusion-safe ops in round body: {offenders}"
-        )
+        assert_fusion_ready(LogupGkrRound(jnp.array(5, KB))._round_poly, st, reduces=1)
 
     def test_state_must_have_five_factors(self):
         with self.assertRaises(ValueError):

@@ -4,6 +4,7 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.sumcheck.round import SumcheckRound
+from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
@@ -15,7 +16,7 @@ class SumcheckRoundTest(absltest.TestCase):
         # degree-1, single MLE: s(0)=sum(P0), s(1)=sum(P1)
         f = rand_field(11, (8,), KB)
         rnd = SumcheckRound(degree=1)
-        msg = rnd.round_poly([f])
+        msg = rnd._round_poly([f])
         half = 4
         self.assertEqual(msg.shape, (2,))
         self.assertTrue(bool(msg[0] == jnp.sum(f[:half])))
@@ -26,7 +27,7 @@ class SumcheckRoundTest(absltest.TestCase):
         a = rand_field(12, (8,), KB)
         b = rand_field(13, (8,), KB)
         rnd = SumcheckRound(degree=2)
-        msg = rnd.round_poly([a, b])
+        msg = rnd._round_poly([a, b])
         self.assertEqual(msg.shape, (3,))
         for u in range(3):
             uf = jnp.array(u, KB)
@@ -38,7 +39,7 @@ class SumcheckRoundTest(absltest.TestCase):
         f = rand_field(14, (8,), KB)
         r = jnp.array(6, KB)
         rnd = SumcheckRound(degree=1)
-        got = rnd.fold([f], r)[0]
+        got = rnd._fold([f], r)[0]
         want = f[:4] + r * (f[4:] - f[:4])
         self.assertTrue(bool(jnp.all(got == want)))
 
@@ -50,6 +51,11 @@ class SumcheckRoundTest(absltest.TestCase):
         self.assertEqual(msg.shape, (2,))
         self.assertEqual(state[0].shape, (4,))  # width halved
         self.assertEqual(t2.pos, 1)  # one challenge consumed
+
+    def test_round_poly_is_fusion_ready(self):
+        a = rand_field(16, (8,), KB)
+        b = rand_field(17, (8,), KB)
+        assert_fusion_ready(SumcheckRound(degree=2)._round_poly, [a, b], reduces=1)
 
     def test_degree_must_be_positive(self):
         with self.assertRaises(ValueError):
