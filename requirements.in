@@ -9,7 +9,7 @@
 # (native finite-field dtypes) arrives transitively via jax.
 absl-py
 numpy
-jax==0.0.5.dev20260524000415
-jaxlib==0.0.5.dev20260524000415
+jax==0.0.5.dev20260602054734
+jaxlib==0.0.5.dev20260602054734
 jax-cuda12-plugin==0.0.5.dev20260524000415
-zkx-cuda-pjrt==0.0.5.dev20260524000415
+zkx-cuda-pjrt==0.0.5.dev20260602054734
