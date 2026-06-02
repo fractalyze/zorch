@@ -25,6 +25,13 @@ the side by namespace, and the shared summand (e.g. `logup_combine`) plus the
 mirrored transcript order keep them from drifting rather than one fused
 description.
 
+**Composing rounds (nn.Sequential).** A composite protocol is itself a `Round`:
+`ProveChain` / `VerifyChain` (in `zorch/round.py`) sequence sub-rounds, threading
+the carry + transcript, so chains nest. `prove` / `verify` are the *homogeneous*
+case — one round repeated per variable, the sumcheck inner loop; the chains are
+the *heterogeneous* case — distinct rounds in sequence, e.g. one GKR layer per
+link.
+
 **The verifier reduces; the PCS closes.** `verify` stops at the point-claim
 `(point, final_claim)`. The final `final_claim == f(point)` check needs the
 polynomial's value at `point`, which a PCS opening supplies — keeping it outside
