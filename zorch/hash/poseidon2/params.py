@@ -1,9 +1,11 @@
-"""Poseidon2Params — the fully-free parameter surface (dataclass added in a later task)."""
+"""Poseidon2Params — the fully-free parameter surface."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 import jax.numpy as jnp
+import numpy as np
 from jax import Array
 
 
@@ -19,3 +21,53 @@ def _mds_external_default(width: int, dtype: Any) -> Array:
     mds = [[m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(width)]
            for i in range(width)]
     return jnp.array(mds, dtype=dtype)
+
+
+@dataclass(frozen=True)
+class Poseidon2Params:
+    """Fully-free parameter surface of a Poseidon2 permutation.
+
+    The core treats `dtype` as opaque and names no field/scheme/zkVM. The
+    internal layer is J + Diag(internal_diag); `internal_diag` (the V vector) is
+    its only free part, so it is carried as a vector, not a matrix. There is no
+    `monty_inverse` knob — R^-1 is a Montgomery storage artifact, not math.
+
+    Contract (validated in __post_init__):
+      external_matrix : (width, width) over dtype  (defaults canonical-for-width)
+      external_constants_initial/terminal : (external_rounds, width)
+      internal_constants : (internal_rounds, width); RC in lane 0, zeros elsewhere
+      internal_diag : (width,)
+      alpha : S-box exponent; caller guarantees gcd(alpha, p-1)==1 (core can't check).
+    """
+
+    width: int
+    dtype: Any
+    alpha: int
+    external_rounds: int
+    internal_rounds: int
+    external_constants_initial: Array
+    external_constants_terminal: Array
+    internal_constants: Array
+    internal_diag: Array
+    external_matrix: Array | None = None
+
+    def __post_init__(self):
+        if self.external_matrix is None:
+            object.__setattr__(
+                self, "external_matrix", _mds_external_default(self.width, self.dtype))
+        w = self.width
+        checks = {
+            "external_matrix": ((w, w), self.external_matrix),
+            "external_constants_initial": ((self.external_rounds, w), self.external_constants_initial),
+            "external_constants_terminal": ((self.external_rounds, w), self.external_constants_terminal),
+            "internal_constants": ((self.internal_rounds, w), self.internal_constants),
+            "internal_diag": ((w,), self.internal_diag),
+        }
+        for name, (want, arr) in checks.items():
+            got = tuple(np.shape(arr))
+            if got != want:
+                raise ValueError(f"{name}: expected shape {want}, got {got}")
+            if arr.dtype != self.dtype:
+                raise ValueError(f"{name}: expected dtype {self.dtype}, got {arr.dtype}")
+        if w > 1 and not bool(jnp.all(self.internal_constants[:, 1:] == self.dtype(0))):
+            raise ValueError("internal_constants lanes 1..w-1 must be zero (lane-0 partial round)")
