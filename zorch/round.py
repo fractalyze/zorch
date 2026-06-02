@@ -4,10 +4,15 @@ chains that compose Rounds like `nn.Sequential`.
 
 Subclass `Round` and implement `__call__`, threading the transcript and calling
 its `observe` / `sample` directly. A prover round maps
-`(carry, transcript) -> (carry, transcript, msg)`; its verifier dual maps
+`(carry, transcript) -> (carry, transcript, msg)`; a chain's verifier round maps
 `(carry, msg, transcript) -> (carry, transcript, ok)`. The carry (sumcheck MLE
 state, a GKR layer's running claim, ...) and the transcript thread functionally
 — never hidden mutable state.
+
+(The per-variable sumcheck verifier in `zorch.sumcheck.verifier` is a
+specialized shape — it also returns the sampled challenge, which the
+`zorch.verify` driver collects into the point — so it pairs with that driver,
+not with `VerifyChain`.)
 
 A composite protocol is itself a `Round`: `ProveChain` / `VerifyChain` sequence
 sub-Rounds, threading the carry + transcript, so chains nest (a chain of layer
