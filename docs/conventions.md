@@ -47,6 +47,21 @@ tests and goes stale the first time the API moves — so we don't write one.
   shape, the principles, the non-obvious gotchas. [`sumcheck.md`](sumcheck.md) is
   the intended shape.
 
+### Subsystem doc skeleton
+
+"Design notes" still has a spine. Every block in zorch has to answer the two
+non-negotiables, so its doc must make both explicit:
+
+- **Why this shape** — the concept the block factors, and how it stays
+  proving-scheme- and zkVM-agnostic.
+- **Fusion by construction** — the load-bearing rule that keeps the block one
+  fused unit by design, not by a compiler pattern-match.
+
+Everything else is optional, added only when the block has it — design decisions
+and their rationale, gotchas, what's deliberately out of scope. Don't pad a doc to
+fill a template. [`sumcheck.md`](sumcheck.md) and [`coding.md`](coding.md) are the
+two worked shapes — copy whichever fits.
+
 ## Naming
 
 A leading underscore marks non-public surface. A `Round`'s only public entry is
