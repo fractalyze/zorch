@@ -1,4 +1,5 @@
 """Normal-form linear layers equal the jnp.dot matrix form, any field/diagonal."""
+
 import jax.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
@@ -32,7 +33,7 @@ def test_internal_normal_form_equals_matrix():
             v = jnp.array(v_canon, dtype=F)
             m = np.full((w, w), one)
             for i in range(w):
-                m[i, i] = np.array(F(int(v_canon[i]))) + one     # V[i] + 1 on the diagonal
+                m[i, i] = np.array(F(int(v_canon[i]))) + one  # V[i] + 1 on the diagonal
             m = jnp.array(m, dtype=F)
             x = _rand_vec(w, rng)
             assert jnp.array_equal(_internal_linear(x, v, w), jnp.dot(m, x)), w

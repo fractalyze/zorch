@@ -6,6 +6,7 @@ Fiat-Shamir transcript, Merkle compression) read `width` to size state and
 Poseidon2 is one implementation; any other fixed-width permutation drops in
 unchanged.
 """
+
 from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
@@ -15,8 +16,8 @@ from jax import Array
 
 @runtime_checkable
 class Permutation(Protocol):
-    width: int          # state length (rate + capacity)
-    dtype: Any          # field dtype of each state element
+    width: int  # state length (rate + capacity)
+    dtype: Any  # field dtype of each state element
 
     def permute(self, state: Array) -> Array:
         """Apply the permutation: (width,) over `dtype` -> (width,).

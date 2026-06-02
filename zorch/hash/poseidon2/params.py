@@ -1,4 +1,5 @@
 """Poseidon2Params — the fully-free parameter surface."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,16 +11,19 @@ from jax import Array
 
 
 def _mds_external_default(width: int, dtype: Any) -> Array:
-    """Canonical-for-width Poseidon2 external matrix: M[i][j] = M4[i%4][j%4] * (2 if same 4-block).
+    """Canonical-for-width Poseidon2 external matrix.
 
-    Built list -> jnp.array so HLO sees a kConstant. Determined wholly by (width, dtype);
-    carries no field/scheme identity. `width` must be a positive multiple of 4.
+    M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> jnp.array so
+    HLO sees a kConstant. Determined wholly by (width, dtype); carries no
+    field/scheme identity. `width` must be a positive multiple of 4.
     """
     if width % 4 != 0:
         raise ValueError(f"external matrix default needs width % 4 == 0, got {width}")
     m4 = [[2, 3, 1, 1], [1, 2, 3, 1], [1, 1, 2, 3], [3, 1, 1, 2]]
-    mds = [[m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(width)]
-           for i in range(width)]
+    mds = [
+        [m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(width)]
+        for i in range(width)
+    ]
     return jnp.array(mds, dtype=dtype)
 
 
@@ -54,12 +58,19 @@ class Poseidon2Params:
     def __post_init__(self):
         if self.external_matrix is None:
             object.__setattr__(
-                self, "external_matrix", _mds_external_default(self.width, self.dtype))
+                self, "external_matrix", _mds_external_default(self.width, self.dtype)
+            )
         w = self.width
         checks = {
             "external_matrix": ((w, w), self.external_matrix),
-            "external_constants_initial": ((self.external_rounds, w), self.external_constants_initial),
-            "external_constants_terminal": ((self.external_rounds, w), self.external_constants_terminal),
+            "external_constants_initial": (
+                (self.external_rounds, w),
+                self.external_constants_initial,
+            ),
+            "external_constants_terminal": (
+                (self.external_rounds, w),
+                self.external_constants_terminal,
+            ),
             "internal_constants": ((self.internal_rounds, w), self.internal_constants),
             "internal_diag": ((w,), self.internal_diag),
         }
@@ -68,6 +79,10 @@ class Poseidon2Params:
             if got != want:
                 raise ValueError(f"{name}: expected shape {want}, got {got}")
             if arr.dtype != self.dtype:
-                raise ValueError(f"{name}: expected dtype {self.dtype}, got {arr.dtype}")
+                raise ValueError(
+                    f"{name}: expected dtype {self.dtype}, got {arr.dtype}"
+                )
         if w > 1 and not bool(jnp.all(self.internal_constants[:, 1:] == self.dtype(0))):
-            raise ValueError("internal_constants lanes 1..w-1 must be zero (lane-0 partial round)")
+            raise ValueError(
+                "internal_constants lanes 1..w-1 must be zero (lane-0 partial round)"
+            )
