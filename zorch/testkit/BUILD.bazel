@@ -1,0 +1,28 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "random_field",
+    srcs = [
+        "__init__.py",
+        "random_field.py",
+    ],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+py_test(
+    name = "random_field_test",
+    size = "small",
+    srcs = ["random_field_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = [
+        ":random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)

@@ -1,0 +1,14 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "poly",
+    srcs = [
+        "__init__.py",
+        "eq.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("jax"),
+    ],
+)
