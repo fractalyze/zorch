@@ -53,7 +53,7 @@ class SumcheckRound(Round):
 
     def __call__(self, state, transcript):
         msg = self.round_poly(state)
-        transcript = self.commit(transcript, msg)
+        transcript = self.observe(transcript, msg)
         transcript, r = self.challenge(transcript, 1)
         state = self.fold(state, r[0])
         return state, transcript, msg
