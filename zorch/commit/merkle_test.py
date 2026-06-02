@@ -15,6 +15,23 @@ from zorch.hash.poseidon2 import Poseidon2
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_params
 from zorch.hash.sponge import Sponge, SpongeParams
 
+# Plonky3 golden vector (p3_commit=4318eba..., default_koalabear_poseidon2_16):
+# PaddingFreeSponge<_,16,8,8> leaves + TruncatedPermutation<_,2,8,16> over
+# arange(32) reshaped to a 4x8 matrix (hash rows, fold pairs).
+_PLONKY3_MERKLE_ROOT_4X8 = jnp.array(
+    [
+        1670701318,
+        437280557,
+        23464423,
+        637192971,
+        1642004034,
+        359231982,
+        157670030,
+        587973557,
+    ],
+    dtype=F,
+)
+
 
 def _kb16_tree(out=8, chunk=8):
     perm = Poseidon2(koalabear16_params())
@@ -60,6 +77,12 @@ def test_open_verify_roundtrip_reconstructs_root():
         assert jnp.array_equal(rebuilt, raw_root)
 
 
+def test_commit_root_matches_plonky3_golden():
+    _, _, tree = _kb16_tree()
+    raw_root, _ = tree.commit(jnp.arange(32, dtype=F).reshape(4, 8))
+    assert jnp.array_equal(raw_root, _PLONKY3_MERKLE_ROOT_4X8)
+
+
 def test_single_row_root_is_its_leaf_digest():
     sponge, _, tree = _kb16_tree()
     matrix = jnp.arange(8, dtype=F).reshape(1, 8)  # height 1
@@ -101,6 +124,7 @@ if __name__ == "__main__":
     test_commit_layer_shapes()
     test_leaf_layer_is_per_row_sponge_hash()
     test_open_verify_roundtrip_reconstructs_root()
+    test_commit_root_matches_plonky3_golden()
     test_single_row_root_is_its_leaf_digest()
     test_commit_deterministic()
     test_mismatched_digest_size_raises()

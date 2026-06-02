@@ -21,6 +21,52 @@ def _perm() -> Poseidon2:
     return Poseidon2(koalabear16_params())  # width 16
 
 
+# Plonky3 golden vectors (p3_commit=4318eba..., default_koalabear_poseidon2_16):
+# PaddingFreeSponge<_, 16, 8, 8> over arange(n). arange(12) exercises the
+# partial final block (overwrite-mode, no padding).
+_PLONKY3_SPONGE = {
+    8: jnp.array(
+        [
+            966837595,
+            1699035679,
+            1922113316,
+            2023906830,
+            809021653,
+            1488168764,
+            817789182,
+            1446614690,
+        ],
+        dtype=F,
+    ),
+    16: jnp.array(
+        [
+            2093465132,
+            1938411931,
+            339653216,
+            887899196,
+            588109084,
+            84644453,
+            365237898,
+            96671732,
+        ],
+        dtype=F,
+    ),
+    12: jnp.array(
+        [
+            1283734044,
+            275672105,
+            632916173,
+            1607999122,
+            756879617,
+            175064997,
+            961395546,
+            931537840,
+        ],
+        dtype=F,
+    ),
+}
+
+
 def test_hash_returns_out_shape_and_dtype():
     s = Sponge(_perm(), SpongeParams(rate=8, out=8))
     out = s.hash(jnp.arange(16, dtype=F))
@@ -67,6 +113,12 @@ def test_rate_not_less_than_width_raises():
         pass
 
 
+def test_hash_matches_plonky3_golden():
+    s = Sponge(_perm(), SpongeParams(rate=8, out=8))
+    for n, golden in _PLONKY3_SPONGE.items():
+        assert jnp.array_equal(s.hash(jnp.arange(n, dtype=F)), golden), f"len {n}"
+
+
 def test_hash_vmap_matches_unbatched():
     s = Sponge(_perm(), SpongeParams(rate=8, out=8))
     a = jnp.arange(16, dtype=F)
@@ -82,5 +134,6 @@ if __name__ == "__main__":
     test_hash_two_full_blocks_overwrite_mode()
     test_hash_partial_final_block_overwrites_only_its_lanes()
     test_rate_not_less_than_width_raises()
+    test_hash_matches_plonky3_golden()
     test_hash_vmap_matches_unbatched()
     print("ok")

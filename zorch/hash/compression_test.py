@@ -22,6 +22,23 @@ def _perm() -> Poseidon2:
     return Poseidon2(koalabear16_params())  # width 16
 
 
+# Plonky3 golden vector (p3_commit=4318eba..., default_koalabear_poseidon2_16):
+# TruncatedPermutation<_, 2, 8, 16> compressing arange(16) as two chunks of 8.
+_PLONKY3_COMPRESS_2X8 = jnp.array(
+    [
+        1259554834,
+        663463928,
+        1989430097,
+        476523442,
+        836740795,
+        1803459961,
+        1229318262,
+        2023956904,
+    ],
+    dtype=F,
+)
+
+
 def test_compress_returns_chunk_shape_and_dtype():
     c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
     out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
@@ -57,6 +74,12 @@ def test_arity_chunk_exceeding_width_raises():
         pass
 
 
+def test_compress_matches_plonky3_golden():
+    c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
+    out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
+    assert jnp.array_equal(out, _PLONKY3_COMPRESS_2X8)
+
+
 def test_compress_vmap_matches_unbatched():
     c = Compression(_perm(), CompressionParams(arity=2, chunk=8))
     a = jnp.arange(16, dtype=F).reshape(2, 8)
@@ -71,5 +94,6 @@ if __name__ == "__main__":
     test_compress_2to1_is_full_width_permute_truncated()
     test_compress_zero_pads_when_below_width()
     test_arity_chunk_exceeding_width_raises()
+    test_compress_matches_plonky3_golden()
     test_compress_vmap_matches_unbatched()
     print("ok")
