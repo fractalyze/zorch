@@ -47,7 +47,6 @@ backend too, just slowly.
 import argparse
 import functools
 from collections.abc import Iterable
-from typing import Any
 
 import jax
 from jax import Array
@@ -56,21 +55,11 @@ from zk_dtypes import koalabearx4_mont as EF
 from zkbench import BenchmarkConfig, BenchmarkOp, JaxBenchmark, compute_array_hash
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.logup_gkr.testing import prove_gkr_jitted, prove_gkr_jitted_for
+from zorch.logup_gkr.testing import prove_gkr_jitted, prove_gkr_jitted_with_transcript
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import DuplexTranscript
 
 _SEED = 0
-
-
-@functools.cache
-def _duplex_prove_jitted() -> Any:
-    """The whole prove plus on-device poseidon2 Fiat-Shamir, fused into one
-    program — the real-transcript twin of `prove_gkr_jitted`, over a koalabear16
-    rate-8 duplex sponge. Cached so the sponge + jit build once, and lazy so a
-    stub-only run never constructs a poseidon2 permutation. Base-field sponge; an
-    EF Fiat-Shamir transcript is a follow-on."""
-    return prove_gkr_jitted_for(DuplexTranscript.new(koalabear16_perm(), rate=8))
 
 
 def _first_layer_mles(iv: int, rv: int) -> tuple[Array, ...]:
@@ -153,23 +142,25 @@ class LogupGkrBenchmark(JaxBenchmark):
     def get_ops(self, args: argparse.Namespace) -> Iterable[BenchmarkOp]:
         iv = args.interaction_variables
         duplex = args.transcript == "duplex"
-        # duplex squeezes challenges from the sponge (no stream argument); stub
-        # takes a preset stream. Both fuse into one program with the same .lower.
-        prove = _duplex_prove_jitted() if duplex else prove_gkr_jitted
+        prove = prove_gkr_jitted_with_transcript if duplex else prove_gkr_jitted
+        # Built once (a poseidon2 permutation can't be constructed under trace) and
+        # passed as a traced pytree arg, so the sponge state is a runtime input, not
+        # baked into the executable.
+        transcript = (
+            DuplexTranscript.new(koalabear16_perm(), rate=8) if duplex else None
+        )
         for rv in args.row_variables:
             mles = _first_layer_mles(iv, rv)
-            # duplex squeezes its own challenges; stub splices a preset stream in
-            # before the static `iv`.
-            stream = (
-                ()
+            # duplex threads the sponge; stub splices a preset challenge stream.
+            # Both sit between the MLEs and the static iv, so fn/.lower are uniform.
+            middle = (
+                transcript
                 if duplex
-                else (
-                    _challenges(
-                        args.challenge_field, _SEED + 99, _num_challenges(iv, rv)
-                    ),
+                else _challenges(
+                    args.challenge_field, _SEED + 99, _num_challenges(iv, rv)
                 )
             )
-            op_args = (*mles, *stream, iv)
+            op_args = (*mles, middle, iv)
             yield BenchmarkOp(
                 name="logup_gkr_prove",
                 fn=functools.partial(prove, *op_args),

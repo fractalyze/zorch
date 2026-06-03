@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import functools
-from typing import Any
 
 import jax
 import zk_dtypes
@@ -94,20 +93,30 @@ def prove_gkr_jitted(
     return prove_gkr(first, challenges)[2][-1].round_polys
 
 
-def prove_gkr_jitted_for(transcript: Transcript) -> Any:
-    """`prove_gkr_jitted` for a `transcript` closed over at build time, rather than
-    a preset challenge stream passed as a traced argument. The caller supplies the
-    transcript -- the on-device poseidon2 `DuplexTranscript` can't be constructed
-    under a `@jit` trace, so it must be built outside and captured. Returns a
-    jitted fn `(n0, n1, d0, d1, iv) -> last layer's round polynomials`; `iv` is
-    static. Stays permutation-agnostic -- the concrete sponge lives at the caller."""
-
-    @functools.partial(jax.jit, static_argnums=(4,))
-    def fn(n0: Array, n1: Array, d0: Array, d1: Array, iv: int) -> Array:
-        first = GkrLayer(n0, n1, d0, d1, num_interaction_variables=iv)
-        return prove_gkr_with_transcript(first, transcript)[2][-1].round_polys
-
-    return fn
+@functools.partial(jax.jit, static_argnums=(5,))
+def prove_gkr_jitted_with_transcript(
+    numerator_0: Array,
+    numerator_1: Array,
+    denominator_0: Array,
+    denominator_1: Array,
+    transcript: Transcript,
+    num_interaction_variables: int,
+) -> Array:
+    """`prove_gkr_jitted` with Fiat-Shamir drawn from `transcript` instead of a
+    preset challenge stream. The transcript is a **traced** pytree argument, so its
+    initial state is a runtime input rather than baked into the executable (the
+    permutation rides as static pytree aux). The caller builds it -- the on-device
+    poseidon2 `DuplexTranscript` can't be constructed under a `@jit` trace -- which
+    also keeps this entry permutation-agnostic. `num_interaction_variables` is
+    static; returns the last layer's round polynomials."""
+    first = GkrLayer(
+        numerator_0,
+        numerator_1,
+        denominator_0,
+        denominator_1,
+        num_interaction_variables=num_interaction_variables,
+    )
+    return prove_gkr_with_transcript(first, transcript)[2][-1].round_polys
 
 
 def verify_gkr_with_transcript(
