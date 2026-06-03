@@ -69,6 +69,14 @@ class MerkleTreeTest(absltest.TestCase):
             self.assertTrue(bool(jnp.array_equal(op.row, matrix[i])))
             self.assertTrue(bool(tree.verify(root, i, op)))
 
+    def test_reconstruct_root_returns_committed_root(self) -> None:
+        # reconstruct_root yields the raw root (not a verdict), so a
+        # separator-binding consumer can rebind before comparing.
+        tree, matrix, root, layers = _committed_4x8()
+        for i in range(matrix.shape[0]):
+            op = tree.open(matrix, layers, i)
+            self.assertTrue(bool(jnp.array_equal(tree.reconstruct_root(i, op), root)))
+
     def test_commit_root_matches_plonky3_golden(self) -> None:
         _, _, tree = koalabear16_merkle()
         raw_root, _ = tree.commit(jnp.arange(32, dtype=F).reshape(4, 8))
