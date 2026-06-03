@@ -32,14 +32,14 @@ from zorch.hash.sponge import Sponge, SpongeParams
 # arange(32) reshaped to a 4x8 matrix (hash rows, fold pairs).
 _PLONKY3_MERKLE_ROOT_4X8 = jnp.array(
     [
-        1670701318,
-        437280557,
-        23464423,
-        637192971,
-        1642004034,
-        359231982,
-        157670030,
-        587973557,
+        1344837989,
+        712251909,
+        1580376709,
+        1300452765,
+        381955806,
+        605764342,
+        1581626736,
+        224956088,
     ],
     dtype=F,
 )

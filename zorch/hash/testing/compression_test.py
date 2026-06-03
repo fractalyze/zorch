@@ -23,14 +23,14 @@ from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 # TruncatedPermutation<_, 2, 8, 16> compressing arange(16) as two chunks of 8.
 _PLONKY3_COMPRESS_2X8 = jnp.array(
     [
-        1259554834,
-        663463928,
-        1989430097,
-        476523442,
-        836740795,
-        1803459961,
-        1229318262,
-        2023956904,
+        513655187,
+        1799390467,
+        1159107278,
+        446324778,
+        1835382546,
+        633173899,
+        1271261414,
+        252600328,
     ],
     dtype=F,
 )
