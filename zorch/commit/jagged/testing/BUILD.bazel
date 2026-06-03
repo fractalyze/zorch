@@ -1,16 +1,16 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
     name = "jagged_poly_test",
     size = "small",
     srcs = ["jagged_poly_test.py"],
-    env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         "//zorch/commit/jagged:poly",
         "//zorch/testkit:random_field",
         requirement("jax"),
         requirement("numpy"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
