@@ -7,7 +7,12 @@ its `observe` / `sample` directly. A prover round maps
 `(carry, transcript) -> (carry, transcript, msg)`; a chain's verifier round maps
 `(carry, msg, transcript) -> (carry, transcript, ok)`. The carry (sumcheck MLE
 state, a GKR layer's running claim, ...) and the transcript thread functionally
-— never hidden mutable state.
+— never hidden mutable state. Those two shapes are the `ProverRound` and
+`ChainVerifierRound` Protocols below — the typed contracts `ProveChain` /
+`VerifyChain` (and `fold_rounds`) accept, so a wrong-shaped round is a type error
+rather than a runtime surprise. `Round` stays the nominal base subclasses inherit;
+the Protocols are what the drivers type against (structural, so a round need only
+match the shape).
 
 (The per-variable sumcheck verifier in `zorch.sumcheck.verifier` is a
 specialized shape — it also returns the sampled challenge, which the
@@ -25,7 +30,7 @@ sequence, e.g. GKR layers).
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from jax import Array
 
@@ -39,12 +44,42 @@ class Round:
         raise NotImplementedError
 
 
+class ProverRound(Protocol):
+    """The contract `ProveChain` / `fold_rounds` consume: a prover round maps
+    `(carry, transcript) -> (carry, transcript, msg)`. `carry` and `msg` are
+    scheme-defined (`Any`); what the checker enforces is the arity and the threaded
+    `transcript` — a verifier round (extra `msg` arg) or a 4-tuple return does not
+    satisfy it, so handing one to a prover driver is a type error.
+
+    Parameters are positional-only (`/`): a round names its carry `state` /
+    `claim` / `layer`, so binding the contract to a parameter *name* would reject
+    every real round. Position + arity is the contract."""
+
+    def __call__(
+        self, carry: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Any]: ...
+
+
+class ChainVerifierRound(Protocol):
+    """The dual contract `VerifyChain` consumes: a verifier round maps
+    `(carry, msg, transcript) -> (carry, transcript, ok)`. The per-variable sumcheck
+    verifier returns the sampled challenge too (a 4-tuple) and so pairs with
+    `zorch.verify`, not this — by design it does not satisfy this Protocol.
+
+    Positional-only (`/`) for the same reason as `ProverRound`: rounds name the
+    message `layer_proof` / `msg`, so the contract is position + arity, not names."""
+
+    def __call__(
+        self, carry: Any, msg: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Array]: ...
+
+
 class ProveChain(Round):
     """Sequence prover rounds (nn.Sequential). Threads the carry + transcript
     through each round and collects their messages. Itself a `Round`, so chains
     nest."""
 
-    def __init__(self, rounds: Iterable[Round]) -> None:
+    def __init__(self, rounds: Iterable[ProverRound]) -> None:
         self.rounds = list(rounds)
 
     def __call__(
@@ -62,7 +97,7 @@ class VerifyChain(Round):
     threading the carry, and ANDs every round's `ok`. `msgs` aligns with the
     rounds (one per round, in order)."""
 
-    def __init__(self, rounds: Iterable[Round]) -> None:
+    def __init__(self, rounds: Iterable[ChainVerifierRound]) -> None:
         self.rounds = list(rounds)
 
     def __call__(

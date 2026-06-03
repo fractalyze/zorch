@@ -38,7 +38,7 @@ import jax.numpy as jnp
 from jax import Array, lax
 from jax.tree_util import register_dataclass
 
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.prover import fold_pair, lift_to_domain
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -60,7 +60,7 @@ class RoundMsg:
 
 
 def fold_rounds(
-    round: Round, state: Any, transcript: Transcript, rounds: int
+    round: ProverRound, state: Any, transcript: Transcript, rounds: int
 ) -> tuple[Any, Transcript, list[Any]]:
     """Run `round` exactly `rounds` times; return (state, transcript, list[msg])."""
     msgs: list[Any] = []

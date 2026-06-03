@@ -103,5 +103,40 @@ class ChainTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
 
+class _FourTupleRound(Round):
+    """Verifier-arity round that returns a 4-tuple, like the per-variable sumcheck
+    verifier (which also yields the sampled challenge). Not a `ChainVerifierRound`,
+    which replays a 3-tuple -- the shape `VerifyChain` must reject."""
+
+    def __call__(
+        self, carry: Any, msg: Any, transcript: Transcript
+    ) -> tuple[Any, Any, Any, Any]:
+        return carry, transcript, carry, carry
+
+
+class RoundProtocolContractTest(absltest.TestCase):
+    """`ProveChain` / `VerifyChain` accept the typed `ProverRound` /
+    `ChainVerifierRound` Protocols, so a structurally wrong round is a *mypy* error,
+    not a runtime surprise. These are compile-time assertions: `warn_unused_ignores`
+    (pyproject) makes each `# type: ignore` mean "this line MUST be a type error", so
+    if a Protocol ever stops biting, mypy fails. The chains are only built, never run.
+    The positive direction is covered by `ChainTest` above (it type-checks clean)."""
+
+    def test_prove_chain_rejects_a_verifier_round(self) -> None:
+        # A verifier round takes an extra `msg` arg, so it is not a ProverRound.
+        chain = ProveChain([_ScaleVerifier(2)])  # type: ignore[list-item]
+        self.assertIsInstance(chain, ProveChain)
+
+    def test_verify_chain_rejects_a_prover_round(self) -> None:
+        # A prover round lacks the `msg` arg, so it is not a ChainVerifierRound.
+        chain = VerifyChain([_ScaleProver(2)])  # type: ignore[list-item]
+        self.assertIsInstance(chain, VerifyChain)
+
+    def test_verify_chain_rejects_a_four_tuple_round(self) -> None:
+        # The #103 headline: a 4-tuple return is not the 3-tuple VerifyChain replays.
+        chain = VerifyChain([_FourTupleRound()])  # type: ignore[list-item]
+        self.assertIsInstance(chain, VerifyChain)
+
+
 if __name__ == "__main__":
     absltest.main()
