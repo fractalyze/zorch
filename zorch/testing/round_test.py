@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""ProveChain / VerifyChain composition, exercised with toy rounds.
+"""Round base contract + ProveChain / VerifyChain composition.
 
 The toy round threads a scalar carry and a sampled challenge so the test covers
 what the chains must guarantee: carry threading, lockstep transcript threading
@@ -19,6 +19,12 @@ from zorch.round import ProveChain, Round, VerifyChain
 from zorch.transcript import StubTranscript, Transcript
 
 KB = zk_dtypes.koalabear
+
+
+class RoundBaseTest(absltest.TestCase):
+    def test_call_not_implemented(self) -> None:
+        with self.assertRaises(NotImplementedError):
+            Round()(None, None)
 
 
 class _ScaleProver(Round):

@@ -1,4 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_library(
     name = "koalabear16",
@@ -13,4 +15,22 @@ py_library(
         "//zorch/hash:sponge",
         "//zorch/hash/poseidon2/testing:koalabear16",
     ],
+)
+
+py_test(
+    name = "merkle_test",
+    size = "small",
+    srcs = ["merkle_test.py"],
+    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
+    # CI job covers it); drop the tag after the jax pin bump.
+    tags = ["manual"],
+    deps = [
+        ":koalabear16",
+        "//zorch/commit:merkle",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
 )
