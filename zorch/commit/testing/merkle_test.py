@@ -8,12 +8,20 @@ vectors are added in the golden-vector slice.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 from absl.testing import absltest
 from jax import Array
+from jaxlib.mlir.dialects import stablehlo
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree, Opening
+
+# jit-lowering the batched path emits poseidon2's `lax.composite`, which needs
+# stablehlo.CompositeOp in jaxlib's MLIR bindings — only the self-built jaxlib
+# carries the fork's backport, so the jit roundtrip is skipped on the published
+# wheel (eager + vmap still run, as lax.composite executes its decomposition).
+_HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -77,6 +85,58 @@ class MerkleTreeTest(absltest.TestCase):
             op = tree.open(matrix, layers, i)
             self.assertTrue(bool(jnp.array_equal(tree.reconstruct_root(i, op), root)))
 
+    def test_opening_is_registered_pytree(self) -> None:
+        # Opening must flatten to its leaves (row + each sibling) so vmap/jit can
+        # carry it across the open->reconstruct boundary; an unregistered dataclass
+        # flattens to a single opaque leaf.
+        tree, matrix, _, layers = _committed_4x8()
+        op = tree.open(matrix, layers, 1)  # height 4 -> 2-sibling path
+        leaves, treedef = jax.tree_util.tree_flatten(op)
+        self.assertEqual(len(leaves), 1 + len(op.path))
+        rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+        self.assertTrue(bool(jnp.array_equal(rebuilt.row, op.row)))
+
+    def test_vmap_open_matches_per_index_open(self) -> None:
+        # open is a single-index primitive; batching is jax.vmap over the index
+        # (matrix/layers shared), exactly as commit vmaps the per-row leaf hash.
+        tree, matrix, _, layers = _committed_4x8()
+        indices = jnp.arange(matrix.shape[0])
+        batched = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        self.assertEqual(batched.row.shape, (4, 8))
+        self.assertEqual([p.shape for p in batched.path], [(4, 8), (4, 8)])
+        for q in range(matrix.shape[0]):
+            single = tree.open(matrix, layers, q)
+            self.assertTrue(bool(jnp.array_equal(batched.row[q], single.row)))
+            for lvl, sib in enumerate(single.path):
+                self.assertTrue(bool(jnp.array_equal(batched.path[lvl][q], sib)))
+
+    def test_vmap_reconstruct_root_recovers_committed_root(self) -> None:
+        tree, matrix, root, layers = _committed_4x8()
+        indices = jnp.arange(matrix.shape[0])
+        openings = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        roots = jax.vmap(tree.reconstruct_root)(indices, openings)
+        self.assertEqual(roots.shape, (4, 8))
+        self.assertTrue(
+            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+        )
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_jit_batched_open_reconstruct_roundtrip(self) -> None:
+        # The whole batched open->reconstruct path traces under one jit (static
+        # unroll, single region) — the property the fusion contract relies on.
+        tree, matrix, root, layers = _committed_4x8()
+        indices = jnp.arange(matrix.shape[0])
+
+        @jax.jit
+        def run(matrix: Array, layers: list[Array], indices: Array) -> Array:
+            ops = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+            return jax.vmap(tree.reconstruct_root)(indices, ops)
+
+        roots = run(matrix, layers, indices)
+        self.assertTrue(
+            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+        )
+
     def test_commit_root_matches_plonky3_golden(self) -> None:
         _, _, tree = koalabear16_merkle()
         raw_root, _ = tree.commit(jnp.arange(32, dtype=F).reshape(4, 8))
@@ -139,6 +199,14 @@ class MerkleTreeTest(absltest.TestCase):
         op = tree.open(matrix, layers, 0)  # opening for leaf 0
         self.assertFalse(bool(tree.verify(root, 1, op)))  # wrong index -> reject
 
+    def test_verify_rejects_out_of_range_index(self) -> None:
+        # Traced open no longer bounds-checks, so verify is the sole gate for an
+        # untrusted/out-of-range index: reject below 0 and at >= 2^depth.
+        tree, matrix, root, layers = _committed_4x8()
+        op = tree.open(matrix, layers, 0)
+        self.assertFalse(bool(tree.verify(root, -1, op)))
+        self.assertFalse(bool(tree.verify(root, 1 << len(op.path), op)))
+
     def test_open_verify_single_leaf_empty_path(self) -> None:
         # height-1 tree: open's path is empty and verify reduces to leaf == root
         sponge, _, tree = koalabear16_merkle()
@@ -149,8 +217,11 @@ class MerkleTreeTest(absltest.TestCase):
         self.assertTrue(bool(tree.verify(root, 0, op)))
 
     def test_open_rejects_out_of_range_index(self) -> None:
+        # The eager guard fires for any concrete index — Python int or 0-d Array —
+        # so a bad index raises instead of silently clamping the gather. Only a
+        # tracer (vmap/jit) skips it; there verify owns the verdict.
         tree, matrix, _, layers = _committed_4x8()  # 4 leaves: valid 0..3
-        for bad in (4, -1):
+        for bad in (4, -1, jnp.asarray(4), jnp.asarray(-1)):
             with self.assertRaises(IndexError):
                 tree.open(matrix, layers, bad)
 

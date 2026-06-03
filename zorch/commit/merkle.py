@@ -16,6 +16,7 @@ permutation itself is captured to a kernel (the poseidon2 fusion path, #25).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -26,10 +27,14 @@ from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=["row", "path"], meta_fields=[])
 @dataclass(frozen=True)
 class Opening:
     """A single leaf's authentication path: the committed matrix `row` plus the
-    sibling digest at each level (leaf-first, excluding the root)."""
+    sibling digest at each level (leaf-first, excluding the root).
+
+    A pytree (leaves: `row` and each path sibling) so `open` / `reconstruct_root`
+    batch under `jax.vmap` and trace under `jit`."""
 
     row: Array
     path: list[Array]  # each (digest_elems,)
@@ -78,9 +83,19 @@ class MerkleTree:
             digest_layers.append(layer)
         return digest_layers[-1][0], digest_layers
 
-    def open(self, matrix: Array, digest_layers: list[Array], index: int) -> Opening:
-        """Authentication path for leaf `index`: its row plus each level's sibling."""
-        if not 0 <= index < matrix.shape[0]:
+    def open(
+        self, matrix: Array, digest_layers: list[Array], index: int | Array
+    ) -> Opening:
+        """Authentication path for leaf `index`: its row plus each level's sibling.
+
+        Single-index by construction; batch by `jax.vmap`-ing over `index` (the
+        sibling gather is orchestration outside the fused permute, like `commit`).
+        Index validity is a prover-side precondition — enforced eagerly for any
+        concrete index (Python int or 0-d Array), skipped only under tracing,
+        where the value is unknown and JAX would silently clamp an out-of-range
+        gather; there `verify` owns out-of-range rejection.
+        """
+        if not isinstance(index, jax.core.Tracer) and not 0 <= index < matrix.shape[0]:
             raise IndexError(f"leaf index {index} out of range [0, {matrix.shape[0]})")
         path = []
         idx = index
@@ -89,21 +104,22 @@ class MerkleTree:
             idx //= 2
         return Opening(row=matrix[index], path=path)
 
-    def reconstruct_root(self, index: int, opening: Opening) -> Array:
+    def reconstruct_root(self, index: int | Array, opening: Opening) -> Array:
         """Rebuild the raw root from an `opening`'s row + path (leaf-first).
 
         Returns the root Array, not a verdict — a separator-binding consumer
         (e.g. SP1's SMCS) rebinds the raw root before comparing, which
-        `verify`'s plain equality can't express."""
+        `verify`'s plain equality can't express. Single-index; batch by
+        `jax.vmap`-ing over `(index, opening)`."""
         node = self._leaf_hasher.hash(opening.row)
         idx = index
         for sibling in opening.path:
-            pair = (
-                jnp.stack([node, sibling])
-                if idx % 2 == 0
-                else jnp.stack([sibling, node])
-            )
-            node = self._compressor.compress(pair)
+            # Data-select the sibling order (not a Python branch on idx) so the
+            # fold traces under vmap; idx is the running parity at this level.
+            is_left = idx % 2 == 0
+            left = jnp.where(is_left, node, sibling)
+            right = jnp.where(is_left, sibling, node)
+            node = self._compressor.compress(jnp.stack([left, right]))
             idx //= 2
         return node
 
