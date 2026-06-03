@@ -93,6 +93,10 @@ class BasefoldProver:
         n = codeword.shape[0]
         num_vars = z.shape[0]
         t = transcript
+        # Bind the matrix commitment root into the transcript so every fold/query
+        # challenge depends on it (the FS commit step, mirroring `fri`). `verify`
+        # observes the same root.
+        t = t.observe(prover_data.digest_layers[-1][0])
 
         # 1. Per-column evals, then RLC-batch the K columns into one MLE/codeword.
         values = jnp.stack([eval_mle(mle[:, k], z) for k in range(K)])
@@ -113,6 +117,9 @@ class BasefoldProver:
         for r in range(num_vars):
             last = z[-(r + 1)]
             rest = z[: -(r + 1)] if r + 1 < num_vars else z[:0]
+            # mle_fold(., 0) fixes the bound variable to 0 (the additive fold
+            # coincides with the multilinear partial-eval at beta=0), so zero_val
+            # is the sumcheck s(0); one_val is recovered from the running claim.
             zero_mle = mle_fold(current_mle, jnp.zeros((), dtype))
             zero_val = eval_mle(zero_mle, rest) if rest.shape[0] > 0 else zero_mle[0]
             one_val = (current_claim - zero_val) / last + zero_val

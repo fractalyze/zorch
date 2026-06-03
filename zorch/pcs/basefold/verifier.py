@@ -52,6 +52,8 @@ class BasefoldVerifier:
         n = self.rs.block_len
         num_vars = z.shape[0]
         t = transcript
+        # Bind the commitment root into the transcript (mirrors `open`).
+        t = t.observe(commitment)
 
         # Re-derive the RLC coeffs + batched claim (mirror open).
         t = t.observe(values)
