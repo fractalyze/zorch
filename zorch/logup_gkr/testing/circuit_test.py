@@ -14,7 +14,7 @@ from zorch.logup_gkr.circuit import (
 )
 from zorch.logup_gkr.testing import random_first_layer
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 def _rational_sum(numerators: Array, denominators: Array) -> Array:

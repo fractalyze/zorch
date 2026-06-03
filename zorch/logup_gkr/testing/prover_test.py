@@ -32,7 +32,7 @@ from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript, Transcript
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 def _state(seed: int, width: int) -> list[Array]:

@@ -23,24 +23,21 @@ from zorch.round import ProveChain, VerifyChain
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript, Transcript
 
-_KB = zk_dtypes.koalabear
+_KB = zk_dtypes.koalabear_mont
 
 
 def random_first_layer(
-    seed: int,
-    num_interaction_variables: int,
-    num_row_variables: int,
-    dtype: Any = _KB,
+    seed: int, num_interaction_variables: int, num_row_variables: int
 ) -> GkrLayer:
-    """A random dense first GKR layer, 2^(int+row) wide per MLE. `dtype` picks the
-    field representation -- the real-transcript path needs it to match the
-    poseidon2 sponge's field (e.g. `koalabear_mont`)."""
+    """A random dense first GKR layer, 2^(int+row) wide per MLE. Montgomery field
+    -- it matches the poseidon2 sponge and the prove's production field; the
+    standard domain is too slow to be worth a second representation."""
     width = 1 << (num_interaction_variables + num_row_variables)
     return GkrLayer(
-        numerator_0=rand_field(seed, (width,), dtype),
-        numerator_1=rand_field(seed + 1, (width,), dtype),
-        denominator_0=rand_field(seed + 2, (width,), dtype),
-        denominator_1=rand_field(seed + 3, (width,), dtype),
+        numerator_0=rand_field(seed, (width,), _KB),
+        numerator_1=rand_field(seed + 1, (width,), _KB),
+        denominator_0=rand_field(seed + 2, (width,), _KB),
+        denominator_1=rand_field(seed + 3, (width,), _KB),
         num_interaction_variables=num_interaction_variables,
     )
 

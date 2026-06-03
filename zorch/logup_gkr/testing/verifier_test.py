@@ -29,8 +29,7 @@ from zorch.poly.multilinear import eval_mle
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import DuplexTranscript
 
-KB = zk_dtypes.koalabear
-MONT = zk_dtypes.koalabear_mont
+KB = zk_dtypes.koalabear_mont
 
 # A poseidon2 permute is impractically slow to compile on the ZKX CPU backend, so
 # the real-transcript e2e is GPU-only. transcript_test gates its DuplexTranscript
@@ -90,9 +89,7 @@ class GkrDuplexRoundtripTest(absltest.TestCase):
         return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
     def test_self_verifies_with_duplex_transcript(self) -> None:
-        # The sponge samples koalabear_mont and the prove is field-generic, so the
-        # whole prove must share that representation -- hence a mont first layer.
-        first = random_first_layer(7, 1, 2, dtype=MONT)
+        first = random_first_layer(7, 1, 2)
         _, output, proofs, prover_final = prove_gkr_with_transcript(
             first, self._transcript()
         )
