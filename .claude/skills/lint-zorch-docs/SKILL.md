@@ -39,8 +39,9 @@ stop and point the user at `/workflow:lint-docs`.
 ## Auto-detect the subsystem list
 
 A *subsystem* is a top-level directory under `zorch/` that ships a design block —
-it holds a non-`__init__`, non-`_test` `.py` with a module docstring. Exclude the
-support dirs `testing/`, `testkit/`, `utils/`, and every `__pycache__`. Walk
+it holds a non-`__init__`, non-`_test`, non-`bench_*` `.py` with a module
+docstring (a benchmark script is not a primitive). Exclude the support dirs
+`testing/`, `testkit/`, `utils/`, and every `__pycache__`. Walk
 `zorch/*/` — never hard-code that set, so a new block is checked the moment it
 lands. Map a subsystem to its doc by replacing `_` with `-`: `logup_gkr` →
 `docs/logup-gkr.md`.
@@ -60,10 +61,10 @@ For every detected subsystem, verify both:
 - `docs/<subsystem>.md` exists.
 - `docs/README.md`'s hub table has a row linking it.
 
-Flag a subsystem missing either. Softer (Medium): a source module that grew a
-module docstring but is named in no `docs/*.md` — a new primitive landed without
-a doc home (e.g. a fold helper added beside an encoder). Name it; the user
-decides the home.
+Flag a subsystem missing either. Softer (Medium): a non-`bench_*` source module
+that grew a module docstring but is named in no `docs/*.md` — a new primitive
+landed without a doc home (e.g. a fold helper added beside an encoder). Name it;
+the user decides the home.
 
 ### Z2. Subsystem skeleton (High)
 
