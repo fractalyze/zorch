@@ -131,7 +131,7 @@ class BasefoldOpenTest(absltest.TestCase):
         prover, verifier, root, pdata, mle, log_s = self._commit(log_s=3, K=4)
         z = _rand_ef(5, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
-        for val, col in zip(values, mle.T):
+        for val, col in zip(values, mle.T, strict=True):
             self.assertEqual(val.tolist(), eval_mle(col, z).tolist())
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
@@ -161,6 +161,17 @@ class BasefoldOpenTest(absltest.TestCase):
             proof, component_opening=dataclasses.replace(comp, lo=bad_lo)
         )
         ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        self.assertFalse(bool(ok))
+
+    def test_verify_rejects_wrong_root(self) -> None:
+        # Directly exercises the commitment-root binding: verifying a valid proof
+        # against a different root must fail (the FS challenges diverge and the
+        # Merkle root reconstruction mismatches).
+        prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
+        z = _rand_ef(9, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        wrong_root = root + jnp.ones_like(root)
+        ok, _ = verifier.verify(wrong_root, [z], values, proof, _transcript())
         self.assertFalse(bool(ok))
 
     def test_open_compiles_once_per_shape(self) -> None:
