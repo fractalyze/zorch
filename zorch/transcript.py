@@ -9,7 +9,7 @@ observations.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any, Protocol, Self
 
@@ -26,18 +26,26 @@ class Transcript(Protocol):
     def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
 
 
+@partial(register_dataclass, data_fields=["challenges", "pos"], meta_fields=[])
 @dataclass(frozen=True)
 class StubTranscript:
-    """Preset challenge stream; `observe` is a no-op. Test/dev only."""
+    """Preset challenge stream; `observe` is a no-op. Test/dev only.
+
+    A registered pytree so it rides a `lax.scan` carry like the real
+    `DuplexTranscript` -- the `prove` / `verify` drivers scan it (issue #58). `pos`
+    is an int32 leaf, not a static field, so the carry structure stays invariant as
+    it advances each round."""
 
     challenges: Array  # (k,) preset challenge values
-    pos: int = 0  # index of the next challenge
+    # index of the next challenge; factory, not a bare literal -- a frozen
+    # dataclass rejects an Array as a default value.
+    pos: Array = field(default_factory=lambda: jnp.int32(0))
 
     def observe(self, values: Array) -> "StubTranscript":
         return self
 
     def sample(self, n: int = 1) -> tuple["StubTranscript", Array]:
-        out = self.challenges[self.pos : self.pos + n]
+        out = lax.dynamic_slice_in_dim(self.challenges, self.pos, n)
         return StubTranscript(self.challenges, self.pos + n), out
 
     def observe_and_sample(

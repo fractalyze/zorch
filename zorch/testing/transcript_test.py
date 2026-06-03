@@ -5,7 +5,7 @@ import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import tree_util
+from jax import Array, tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
@@ -47,6 +47,27 @@ class StubTranscriptTest(absltest.TestCase):
         t_fused, fused = StubTranscript(ch).observe_and_sample(v, 2)
         self.assertTrue(bool(jnp.all(ref == fused)))
         self.assertEqual(t_ref.pos, t_fused.pos)
+
+    def test_is_pytree(self) -> None:
+        # challenges + pos are the two leaves (pos a leaf, not static, so the
+        # transcript survives as a lax.scan carry); flatten/unflatten round-trips.
+        t = StubTranscript(jnp.array([10, 20, 30], dtype=KB))
+        leaves, treedef = tree_util.tree_flatten(t)
+        self.assertEqual(len(leaves), 2)
+        _, a = tree_util.tree_unflatten(treedef, leaves).sample(1)
+        self.assertTrue(bool(a[0] == jnp.array(10, KB)))
+
+    def test_threads_through_jit_as_a_scan_carry(self) -> None:
+        # The capability registration buys: sample under a lax.scan that carries
+        # the stub, advancing pos each step. Backend-agnostic (no field scatter).
+        ch = jnp.array([10, 20, 30, 40], dtype=KB)
+
+        def step(t: StubTranscript, _: Array) -> tuple[StubTranscript, Array]:
+            t, x = t.sample(1)
+            return t, x[0]
+
+        _, got = jax.lax.scan(step, StubTranscript(ch), xs=None, length=4)
+        self.assertTrue(bool(jnp.all(got == ch)))
 
 
 @absltest.skipIf(
