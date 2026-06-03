@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_library(
     name = "poseidon2",
@@ -29,17 +30,15 @@ py_test(
     name = "params_test",
     size = "small",
     srcs = ["params_test.py"],
-    env = {"JAX_PLATFORMS": "cpu"},
-    deps = _DEPS,
+    deps = _DEPS + GPU_PLUGIN_DEPS,
 )
 
 py_test(
     name = "permute_shape_test",
     size = "small",
     srcs = ["permute_shape_test.py"],
-    env = {"JAX_PLATFORMS": "cpu"},
     # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
     # CI job covers it); drop the tag after the jax pin bump.
     tags = ["manual"],
-    deps = _DEPS,
+    deps = _DEPS + GPU_PLUGIN_DEPS,
 )

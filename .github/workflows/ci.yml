@@ -14,15 +14,44 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Both test jobs run a CPU leg and (when a GPU runner exists) a GPU leg on
+# self-hosted runners. Label runners by capability, not role: a CPU-only box is
+# `[self-hosted, cpu]`; a GPU box is `[self-hosted, cpu, gpu]` (it serves CPU
+# work too), so the CPU leg never starves when the CPU-only box is busy/offline.
+# The `setup` job adds the GPU leg only when the `HAS_GPU_RUNNER` repo variable
+# is `true`, so without GPU hardware the leg is absent, not queued forever. (A
+# job-level `if` can't read `matrix`, hence the dynamic matrix.)
 jobs:
-  build-and-test:
+  setup:
     runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set.outputs.matrix }}
+    steps:
+      - id: set
+        # Strict `cuda` (no cpu fallback) on the GPU leg so a green run means it
+        # really ran on GPU; a GPU init failure fails loudly instead of silently
+        # passing on CPU.
+        run: |
+          cpu='{"backend":"cpu","runs_on":["self-hosted","cpu"],"jax_platforms":"cpu"}'
+          gpu='{"backend":"gpu","runs_on":["self-hosted","gpu"],"jax_platforms":"cuda"}'
+          include="${cpu}"
+          if [ "${{ vars.HAS_GPU_RUNNER }}" = "true" ]; then
+            include="${cpu},${gpu}"
+          fi
+          echo "matrix={\"include\":[${include}]}" >> "$GITHUB_OUTPUT"
+
+  build-and-test:
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.runs_on }}
     steps:
       - uses: actions/checkout@v4
       - uses: bazel-contrib/setup-bazel@0.9.1
         with:
           bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}
+          disk-cache: ${{ github.workflow }}-${{ matrix.backend }}
           repository-cache: true
       # The tests that vmap poseidon2's zorch.fused_region composite carry
       # `tags = ["manual"]`, so `//...` skips them here — they need
@@ -30,10 +59,14 @@ jobs:
       # bazel's hermetic pip resolves. The pytest job runs them against the fork
       # branch. Drop those tags after the jax pin bump.
       - name: Run bazel test
-        run: bazel test //...
+        run: bazel test --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
 
   pytest:
-    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.runs_on }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -60,7 +93,7 @@ jobs:
             | tar -xz --strip-components=1 -C "${RUNNER_TEMP}/jax-src"
           pip install --no-deps --force-reinstall "${RUNNER_TEMP}/jax-src"
       - name: Run module tests
-        run: JAX_PLATFORMS=cpu PYTHONPATH=. pytest
+        run: JAX_PLATFORMS=${{ matrix.jax_platforms }} PYTHONPATH=. pytest
 
   pre-commit:
     if: github.actor != 'fractalyze-dev'
