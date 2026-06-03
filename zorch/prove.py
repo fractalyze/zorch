@@ -39,5 +39,10 @@ def prove(
     if not state:
         raise ValueError("prove requires a non-empty state (one Array per factor)")
     rounds = log2_strict_usize(state[0].shape[-1])
+    if rounds == 0:
+        raise ValueError(
+            "prove requires a state width >= 2 (at least one round), got "
+            f"width {state[0].shape[-1]}"
+        )
     state, transcript, msgs = fold_rounds(round, state, transcript, rounds)
     return state, transcript, jnp.stack(msgs)
