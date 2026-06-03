@@ -29,7 +29,6 @@ py_binary(
     name = "bench_logup_gkr",
     srcs = ["bench_logup_gkr.py"],
     deps = [
-        ":logup_gkr",
         "//zorch/logup_gkr/testing",
         "//zorch/testkit:random_field",
         requirement("jax"),

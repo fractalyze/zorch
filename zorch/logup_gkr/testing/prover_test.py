@@ -24,7 +24,7 @@ from zorch.logup_gkr.prover import (
     bind_output,
     logup_combine,
 )
-from zorch.logup_gkr.testing import prove_gkr, random_first_layer
+from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
 from zorch.prove import fold_rounds
 from zorch.round import ProveChain
@@ -214,6 +214,24 @@ class GkrProverTest(absltest.TestCase):
         _, _, b, _ = prove_gkr(first, ch)
         for pa, pb in zip(a, b):
             self.assertTrue(bool(jnp.all(pa.round_polys == pb.round_polys)))
+
+    def test_prove_under_jit_matches_eager(self) -> None:
+        # The benchmark's jit mode fuses the whole prove into one program via
+        # prove_gkr_jitted; guard that fusing changes nothing — GkrLayer /
+        # StubTranscript / fold_rounds are all jit-traceable and the round
+        # polynomials are bit-identical to the eager prove_gkr.
+        first = random_first_layer(23, 2, 3)
+        ch = rand_field(5, (64,), KB)
+        eager = prove_gkr(first, ch)[2][-1].round_polys
+        jitted = prove_gkr_jitted(
+            first.numerator_0,
+            first.numerator_1,
+            first.denominator_0,
+            first.denominator_1,
+            ch,
+            first.num_interaction_variables,
+        )
+        self.assertTrue(bool(jnp.all(eager == jitted)))
 
 
 if __name__ == "__main__":
