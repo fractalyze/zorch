@@ -1,12 +1,12 @@
 """Poseidon2 permutation — scheme-agnostic, single-kernel by construction.
 
 The permutation is one function (all rounds) wrapped in a `jax.lax.composite`
-named `zorch.round` (`fused_region`): zkx's `ZorchRoundRewriter` turns that
-marker into a single custom-fusion kernel — one kernel by construction, not via
-a per-hash compiler pattern match. The body is kept straight-line: rounds are
-unrolled (fixed, small counts) and the linear layers use the normal-form helpers
-(`apply_matrix`, `apply_internal`) so nothing lowers to a reduce/dot/gather that
-would split the kernel.
+named `zorch.fused_region` (`fused_region`): zkx's `ZorchFusedRegionRewriter`
+turns that marker into a single custom-fusion kernel — one kernel by
+construction, not via a per-hash compiler pattern match. The body is kept
+straight-line: rounds are unrolled (fixed, small counts) and the linear layers
+use the normal-form helpers (`apply_matrix`, `apply_internal`) so nothing lowers
+to a reduce/dot/gather that would split the kernel.
 """
 
 from __future__ import annotations
