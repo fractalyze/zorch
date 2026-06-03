@@ -32,6 +32,7 @@ py_test(
     size = "small",
     srcs = ["prover_test.py"],
     deps = [
+        "//zorch:prove",
         "//zorch:transcript",
         "//zorch/sumcheck",
         "//zorch/testkit:fusion",
