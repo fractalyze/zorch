@@ -1,0 +1,18 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "kzg",
+    srcs = [
+        "__init__.py",
+        "prover.py",
+        "setup.py",
+        "verifier.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
