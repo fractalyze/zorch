@@ -27,6 +27,7 @@ from zorch.logup_gkr.testing import prove_gkr, random_first_layer
 from zorch.poly import eval_univariate
 from zorch.prove import fold_rounds
 from zorch.round import ProveChain
+from zorch.sumcheck.prover import fold
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript, Transcript
@@ -62,7 +63,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
     def test_fold_matches_manual(self) -> None:
         st = _state(30, 8)
         r = jnp.array(5, KB)
-        got = LogupSumcheckRound(jnp.array(3, KB))._fold(st, r)
+        got = fold(st, r)
         self.assertEqual(len(got), 5)
         for x, g in zip(st, got):
             self.assertEqual(g.shape, (4,))  # width halved

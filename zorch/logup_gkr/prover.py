@@ -41,7 +41,7 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.prover import SumcheckRoundBase
+from zorch.sumcheck.prover import fold, split_halves
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -74,7 +74,7 @@ class RoundMsg:
     challenge: Array
 
 
-class LogupSumcheckRound(SumcheckRoundBase):
+class LogupSumcheckRound(Round):
     """Per-variable sumcheck round for the LogUp combine (sibling of the product
     `zorch.sumcheck.prover.SumcheckRound`); emits a `RoundMsg`."""
 
@@ -83,13 +83,14 @@ class LogupSumcheckRound(SumcheckRoundBase):
         self.lam = lam
 
     def _split(self, state: Sequence[Array]) -> list[tuple[Array, Array]]:
-        # Factor count is LogUp-specific; shape/even-width checks come from base.
+        # Factor count is LogUp-specific; shape/even-width checks come from
+        # split_halves.
         if len(state) != _NUM_FACTORS:
             raise ValueError(
                 f"state must hold {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
                 f"got {len(state)}"
             )
-        return super()._split(state)
+        return split_halves(state)
 
     def _combine(self, eq: Array, n0: Array, d1: Array, n1: Array, d0: Array) -> Array:
         return logup_combine(self.lam, eq, n0, d1, n1, d0)
@@ -116,7 +117,7 @@ class LogupSumcheckRound(SumcheckRoundBase):
         msg = self._round_poly(state)
         transcript = transcript.observe(msg)
         transcript, r = transcript.sample(1)
-        state = self._fold(state, r[0])
+        state = fold(state, r[0])
         return state, transcript, RoundMsg(msg, r[0])
 
 
