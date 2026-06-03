@@ -196,11 +196,13 @@ def build_jagged_layout(
     injects a phantom range that corrupts J̃, so it is forbidden.
     """
     real_L = len(row_counts)
-    assert real_L <= l_max, f"real_L={real_L} > l_max={l_max}"
+    if real_L > l_max:
+        raise ValueError(f"real_L={real_L} > l_max={l_max}")
     prefix = build_prefix_sums(row_counts)  # length real_L+1
     total_area = prefix[-1]
     n_d = log2_ceil_usize(total_area) + 1
-    assert total_area < (1 << n_d), f"total_area={total_area} >= 2^{n_d}"
+    if total_area >= (1 << n_d):
+        raise ValueError(f"total_area={total_area} >= 2^{n_d}")
     n_c = log2_ceil_usize(l_max)
     padded = prefix + [prefix[-1]] * (l_max - real_L)  # length l_max+1, empty-range pad
     cps = jnp.asarray(msb_first_bits(padded, n_d), dtype=dtype)

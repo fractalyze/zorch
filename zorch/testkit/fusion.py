@@ -45,8 +45,10 @@ def assert_fusion_ready(fn: Callable[..., Any], *args: Any, reduces: int = 0) ->
     hlo = jax.jit(fn).lower(*args).as_text()
     ops = re.findall(r"stablehlo\.([a-z_]+)", hlo)
     n = ops.count("reduce")
-    assert (
-        n == reduces
-    ), f"expected {reduces} reduce(s), got {n} (ops: {sorted(set(ops))})"
+    if n != reduces:
+        raise AssertionError(
+            f"expected {reduces} reduce(s), got {n} (ops: {sorted(set(ops))})"
+        )
     offenders = sorted({o for o in ops if o != "reduce" and o not in _FUSION_SAFE})
-    assert not offenders, f"non-fusion-safe ops in body: {offenders}"
+    if offenders:
+        raise AssertionError(f"non-fusion-safe ops in body: {offenders}")
