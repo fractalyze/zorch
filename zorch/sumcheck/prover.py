@@ -52,23 +52,32 @@ def split_halves(state: Sequence[Array]) -> list[tuple[Array, Array]]:
     return out
 
 
-def fold(state: Sequence[Array], r: Array) -> list[Array]:
-    """Fold each MLE at challenge `r`: P0 + r*(P1 - P0). Halves width."""
-    return [p0 + r * (p1 - p0) for (p0, p1) in split_halves(state)]
+def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
+    """Fold one split pair at challenge `r`: P0 + r*(P1 - P0)."""
+    return p0 + r * (p1 - p0)
 
 
-def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
-    """Lift each split factor to the round's evaluation domain [0..degree]:
-    f_k[u] = P0_k + u*(P1_k - P0_k), one array of shape (degree+1, *batch) each.
+def lift_to_domain(p0: Array, p1: Array, degree: int) -> Array:
+    """Lift one split pair to the evaluation domain [0..degree]:
+    f[u] = P0 + u*(P1 - P0), shape (degree+1, *P0.shape).
 
     The whole u-domain is built at once so the round poly stays one batched
     reduction (not degree+1 separate ones). `us` uses jnp.stack (not jnp.arange,
     whose iota is unsupported for extension dtypes) and is reshaped to broadcast
-    over any leading batch dims of the factors."""
-    halves = split_halves(state)
-    dtype = state[0].dtype
-    us = jnp.stack([jnp.array(u, dtype) for u in range(degree + 1)])
-    return [p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves]
+    over any leading batch dims of the factor."""
+    us = jnp.stack([jnp.array(u, p0.dtype) for u in range(degree + 1)])
+    return p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0)
+
+
+def fold(state: Sequence[Array], r: Array) -> list[Array]:
+    """Fold each MLE at challenge `r`: P0 + r*(P1 - P0). Halves width."""
+    return [fold_pair(p0, p1, r) for (p0, p1) in split_halves(state)]
+
+
+def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
+    """Lift each split factor to the round's evaluation domain [0..degree]:
+    f_k[u] = P0_k + u*(P1_k - P0_k), one array of shape (degree+1, *batch) each."""
+    return [lift_to_domain(p0, p1, degree) for (p0, p1) in split_halves(state)]
 
 
 @partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
