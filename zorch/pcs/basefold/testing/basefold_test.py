@@ -47,7 +47,7 @@ class BasefoldTest(absltest.TestCase):
         bf, *_ = _basefold()
         stub = StubTranscript(jnp.zeros(1, dtype=F))
         with self.assertRaises(NotImplementedError):
-            bf.open(BasefoldProverData([], (0,)), [], stub)
+            bf.open(BasefoldProverData([], None, None, (0,)), [], stub)
 
     def test_prover_data_pytree_round_trips(self) -> None:
         bf, rs, tree, S = _basefold()
@@ -58,6 +58,9 @@ class BasefoldTest(absltest.TestCase):
         self.assertEqual(restored.widths, pdata.widths)
         for a, b in zip(restored.digest_layers, pdata.digest_layers):
             self.assertTrue(bool(jnp.array_equal(a, b)))
+        # mle/codeword are data leaves -> must survive the round-trip too.
+        self.assertTrue(bool(jnp.array_equal(restored.mle, pdata.mle)))
+        self.assertTrue(bool(jnp.array_equal(restored.codeword, pdata.codeword)))
 
     def test_verify_not_implemented(self) -> None:
         _, rs, tree, _ = _basefold()
@@ -66,6 +69,33 @@ class BasefoldTest(absltest.TestCase):
             BasefoldVerifier(rs, tree).verify(
                 jnp.zeros((), dtype=F), [], jnp.zeros(0, dtype=F), None, stub
             )
+
+    def test_proof_pytree_round_trips(self) -> None:
+        from zorch.commit.merkle import Opening
+        from zorch.pcs.basefold.config import BasefoldProof
+        from zorch.pcs.fri.config import LayerOpening
+
+        op = Opening(row=jnp.zeros((2, 3), dtype=F), path=[jnp.zeros((2, 8), dtype=F)])
+        proof = BasefoldProof(
+            univariate_messages=[(jnp.array(1, F), jnp.array(2, F))],
+            fri_roots=[jnp.zeros(8, dtype=F)],
+            final_poly=jnp.zeros(2, dtype=F),
+            component_opening=LayerOpening(op, op),
+            query_openings=[LayerOpening(op, op)],
+        )
+        leaves, treedef = jax.tree_util.tree_flatten(proof)
+        restored = jax.tree_util.tree_unflatten(treedef, leaves)
+        self.assertEqual(len(restored.univariate_messages), 1)
+        self.assertEqual(restored.final_poly.shape, (2,))
+
+    def test_commit_retains_mle_and_codeword(self) -> None:
+        bf, rs, _tree, S = _basefold()
+        K = 3
+        mle = jnp.arange(S * K, dtype=F).reshape(S, K)
+        _, pdata = bf.commit(_columns(mle))
+        self.assertEqual(pdata.mle.shape, (S, K))
+        self.assertEqual(pdata.codeword.shape, (rs.block_len, K))
+        self.assertEqual(pdata.mle.tolist(), mle.tolist())
 
 
 if __name__ == "__main__":

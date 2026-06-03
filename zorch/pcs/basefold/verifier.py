@@ -25,6 +25,8 @@ class BasefoldVerifier:
 
     rs: ReedSolomon
     tree: MerkleTree
+    # Must match the prover's; placeholder count, not soundness-calibrated.
+    num_queries: int = 4
 
     def verify(
         self,

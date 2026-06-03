@@ -29,19 +29,19 @@ from zorch.transcript import Transcript
 
 @partial(
     jax.tree_util.register_dataclass,
-    data_fields=["digest_layers"],
+    data_fields=["digest_layers", "mle", "codeword"],
     meta_fields=["widths"],
 )
 @dataclass(frozen=True)
 class BasefoldProverData:
-    """Retained witness from `BasefoldProver.commit`: the Merkle digest layers over
-    the RS codeword, plus per-column widths. Consumed by `open` (P3).
-
-    A pytree (digest_layers = leaves, widths = static meta) so a `commit` call can
-    return it from inside a `@jit` zone.
-    """
+    """Retained witness from `BasefoldProver.commit`: the Merkle digest layers
+    over the RS codeword, the message-domain MLE `[S, K]` (the sumcheck folds
+    it), the codeword `[S*blowup, K]` (the FRI folds it and Merkle-opens it),
+    plus per-column widths. A pytree so `commit`/`open` ride a `@jit` zone."""
 
     digest_layers: list[Array]
+    mle: Array  # [S, K] message-domain columns
+    codeword: Array  # [S*blowup, K] RS codeword (Merkle leaves = its rows)
     # len-1 today (one MLE per commit); reserved for batch-commit in P3.
     widths: tuple[int, ...]
 
@@ -53,6 +53,7 @@ class BasefoldProver:
 
     rs: ReedSolomon
     tree: MerkleTree
+    num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
 
     def commit(self, polys: Sequence[Array]) -> tuple[Array, BasefoldProverData]:
         # The columns share one RS message length S, so stack them into the [S, K]
@@ -61,7 +62,9 @@ class BasefoldProver:
         mle = jnp.stack(polys, axis=1)
         codeword = self.rs.encode(mle.T).T
         root, layers = self.tree.commit(codeword)
-        return root, BasefoldProverData(digest_layers=layers, widths=(len(polys),))
+        return root, BasefoldProverData(
+            digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
+        )
 
     def open(
         self,
