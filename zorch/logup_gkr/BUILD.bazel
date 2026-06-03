@@ -29,6 +29,8 @@ py_binary(
     name = "bench_logup_gkr",
     srcs = ["bench_logup_gkr.py"],
     deps = [
+        "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/logup_gkr/testing",
         "//zorch/testkit:random_field",
         requirement("jax"),

@@ -57,6 +57,8 @@ py_test(
     srcs = ["verifier_test.py"],
     deps = [
         ":testing",
+        "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/logup_gkr",
         "//zorch/poly",
         "//zorch/testkit:random_field",

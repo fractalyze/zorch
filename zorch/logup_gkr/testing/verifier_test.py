@@ -11,16 +11,31 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr.circuit import GkrLayer, _interleave
-from zorch.logup_gkr.testing import prove_gkr, random_first_layer, verify_gkr
+from zorch.logup_gkr.testing import (
+    prove_gkr,
+    prove_gkr_with_transcript,
+    random_first_layer,
+    verify_gkr,
+    verify_gkr_with_transcript,
+)
 from zorch.poly.multilinear import eval_mle
 from zorch.testkit.random_field import rand_field
+from zorch.transcript import DuplexTranscript
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
+
+# A poseidon2 permute is impractically slow to compile on the ZKX CPU backend, so
+# the real-transcript e2e is GPU-only. transcript_test gates its DuplexTranscript
+# cases on the same CPU-backend check (for its own reason), so neither runs in the
+# CPU CI lane.
+_CPU_BACKEND = jax.default_backend() == "cpu"
 
 
 class GkrRoundtripTest(absltest.TestCase):
@@ -60,6 +75,30 @@ class GkrRoundtripTest(absltest.TestCase):
         )
         _, ok = verify_gkr(output, proofs, ch)
         self.assertFalse(bool(ok))
+
+
+@absltest.skipIf(_CPU_BACKEND, "poseidon2 compile is impractically slow on ZKX CPU")
+class GkrDuplexRoundtripTest(absltest.TestCase):
+    """Self-verification through the real on-device poseidon2 DuplexTranscript:
+    challenges are squeezed from the sponge (no preset stream), and the verifier
+    re-derives the same stream from a fresh transcript with the same permutation.
+    """
+
+    @staticmethod
+    def _transcript() -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+    def test_self_verifies_with_duplex_transcript(self) -> None:
+        first = random_first_layer(7, 1, 2)
+        _, output, proofs, prover_final = prove_gkr_with_transcript(
+            first, self._transcript()
+        )
+        verifier_final, ok = verify_gkr_with_transcript(
+            output, proofs, self._transcript()
+        )
+        self.assertTrue(bool(ok))
+        for pe, ve in zip(prover_final, verifier_final, strict=True):
+            self.assertTrue(bool(jnp.all(pe == ve)))
 
 
 if __name__ == "__main__":
