@@ -97,3 +97,12 @@ mypy can't see through the ZKX `jax` fork (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value
 is catching a missing or malformed annotation, not deep array-shape checking —
 write the precise type regardless; it is documentation that outlives the stubs.
+
+## Testing
+
+Tests subclass `absltest.TestCase` and assert through `self.assert*` /
+`self.assertRaises` — never a bare `def test_*` + `assert`. A bare `assert` is a
+statement Python drops under `-O`, so under optimization a positive check or an
+`assert False` negative silently no-ops and a broken invariant passes unnoticed;
+`self.assert*` are method calls that always run. CI invokes the suite via
+`pytest`; each file stays runnable standalone through `absltest.main()`.
