@@ -102,8 +102,7 @@ class LogupSumcheckRound(Round):
         self, state: Sequence[Array], transcript: Transcript
     ) -> tuple[list[Array], Transcript, RoundMsg]:
         msg = self._round_poly(state)
-        transcript = transcript.observe(msg)
-        transcript, r = transcript.sample(1)
+        transcript, r = transcript.observe_and_sample(msg, 1)
         state = fold(state, r[0])
         return state, transcript, RoundMsg(msg, r[0])
 
@@ -168,8 +167,7 @@ class GkrLayerRound(Round):
         point = jnp.stack([m.challenge for m in msgs])
 
         _, n0, d1, n1, d0 = (factor[0] for factor in final_state)
-        transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
-        transcript, r = transcript.sample(1)
+        transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
         num_eval = n0 + (n1 - n0) * r
         den_eval = d0 + (d1 - d0) * r

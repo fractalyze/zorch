@@ -51,8 +51,7 @@ class GkrLayerRound(Round):
         combined = logup_combine(lam, eq_eval, n0, d1, n1, d0)
         ok = ok_sc & (combined == final_claim)
 
-        transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
-        transcript, r = transcript.sample(1)
+        transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
         num_eval = n0 + (n1 - n0) * r
         den_eval = d0 + (d1 - d0) * r

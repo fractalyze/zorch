@@ -41,6 +41,5 @@ class SumcheckRound(Round):
                 f"got {msg.shape[0]}"
             )
         ok = claim == msg[0] + msg[1]
-        transcript = transcript.observe(msg)
-        transcript, r = transcript.sample(1)
+        transcript, r = transcript.observe_and_sample(msg, 1)
         return eval_univariate(msg, r[0]), transcript, r[0], ok

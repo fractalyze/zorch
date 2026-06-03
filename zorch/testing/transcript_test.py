@@ -40,6 +40,14 @@ class StubTranscriptTest(absltest.TestCase):
         # original transcript is unchanged (pos still 0)
         self.assertEqual(t0.pos, 0)
 
+    def test_observe_and_sample_matches_observe_then_sample(self) -> None:
+        ch = jnp.array([10, 20, 30], dtype=KB)
+        v = jnp.array([1, 2, 3], dtype=KB)
+        t_ref, ref = StubTranscript(ch).observe(v).sample(2)
+        t_fused, fused = StubTranscript(ch).observe_and_sample(v, 2)
+        self.assertTrue(bool(jnp.all(ref == fused)))
+        self.assertEqual(t_ref.pos, t_fused.pos)
+
 
 @absltest.skipIf(
     _CPU_BACKEND,
@@ -85,6 +93,24 @@ class DuplexTranscriptTest(absltest.TestCase):
         # can later live in a lax.scan carry, issue #58).
         v = rand_field(4, (5,), F)
         got = jax.jit(lambda t, x: t.observe(x).sample(2)[1])(self._new(), v)
+        _, want = self._new().observe(v).sample(2)
+        self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_observe_and_sample_matches_observe_then_sample(self) -> None:
+        # The fused per-round primitive is a drop-in for observe-then-sample:
+        # identical challenges and identical resulting transcript state.
+        v = rand_field(7, (5,), F)
+        t_ref, ref = self._new().observe(v).sample(2)
+        t_fused, fused = self._new().observe_and_sample(v, 2)
+        self.assertTrue(bool(jnp.all(ref == fused)))
+        for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_fused)):
+            self.assertTrue(bool(jnp.all(a == b)))
+
+    def test_observe_and_sample_fuses_under_one_jit(self) -> None:
+        # Acceptance: absorb+squeeze are one @jit computation (fused by
+        # construction), matching the eager observe-then-sample reference.
+        v = rand_field(8, (5,), F)
+        got = jax.jit(lambda t, x: t.observe_and_sample(x, 2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
         self.assertTrue(bool(jnp.all(got == want)))
 
