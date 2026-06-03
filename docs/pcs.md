@@ -55,9 +55,15 @@ setup, all field/NTT arithmetic.
 
 ### basefold (transparent, multilinear)
 
-The multilinear-evaluation PCS: `commit` is the RS low-degree extension of each
-column followed by a Merkle commit of the codeword rows; `open` (P3) is the FRI
-query phase over the folded layers, reusing [`fri`](#fri-transparent)'s machinery.
+The multilinear-evaluation PCS. `commit` is the RS low-degree extension of each
+column followed by a Merkle commit of the codeword rows. `open` opens the matrix
+at one shared point `z ∈ F^{log S}` — returning the `K` per-column evals — by
+RLC-batching the columns into a single codeword and running an interleaved sumcheck
+that folds the MLE and the codeword by the same per-round challenge, then a
+natural-order FRI query phase whose layer 0 is the RLC of the opened original rows
+(reusing [`fri`](#fri-transparent)'s machinery); `verify` is the dual. Fidelity is
+mathematical (prover↔verifier round-trip); the query phase carries no proof-of-work
+grind yet — a known soundness gap shared with [`fri`](#fri-transparent).
 The one structural difference from `kzg`/`fri` is that BaseFold is a **matrix
 commitment** — the columns of an MLE `[2^v, w]` share one RS domain and the Merkle
 leaves are codeword *rows* spanning every column, so the whole batch binds under a
