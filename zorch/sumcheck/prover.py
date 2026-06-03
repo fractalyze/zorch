@@ -95,7 +95,6 @@ class SumcheckRound(Round):
         self, state: Sequence[Array], transcript: Transcript
     ) -> tuple[list[Array], Transcript, Array]:
         msg = self._round_poly(state)
-        transcript = transcript.observe(msg)
-        transcript, r = transcript.sample(1)
+        transcript, r = transcript.observe_and_sample(msg, 1)
         state = fold(state, r[0])
         return state, transcript, msg

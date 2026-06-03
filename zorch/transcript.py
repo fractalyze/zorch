@@ -23,6 +23,7 @@ from zorch.hash.permutation import Permutation
 class Transcript(Protocol):
     def observe(self, values: Array) -> Self: ...
     def sample(self, n: int = 1) -> tuple[Self, Array]: ...
+    def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,11 @@ class StubTranscript:
     def sample(self, n: int = 1) -> tuple["StubTranscript", Array]:
         out = self.challenges[self.pos : self.pos + n]
         return StubTranscript(self.challenges, self.pos + n), out
+
+    def observe_and_sample(
+        self, values: Array, n: int = 1
+    ) -> tuple["StubTranscript", Array]:
+        return self.observe(values).sample(n)
 
 
 @register_dataclass
@@ -173,3 +179,12 @@ class DuplexTranscript:
             t, x = t._sample_one()
             outs.append(x.reshape(()))
         return t, jnp.stack(outs)
+
+    def observe_and_sample(
+        self, values: Array, n: int = 1
+    ) -> tuple[DuplexTranscript, Array]:
+        """Absorb `values`, then squeeze `n` challenges — the per-round
+        Fiat-Shamir primitive (commit -> challenge). One method so the absorb and
+        squeeze fuse into a single kernel under `@jit` by construction, never by a
+        per-primitive pattern-match (the repo's fusion contract)."""
+        return self.observe(values).sample(n)
