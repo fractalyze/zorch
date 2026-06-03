@@ -133,8 +133,8 @@ class ProveCompositeTest(absltest.TestCase):
         # challenges (the last round's is never used by a message), both replayed
         # from the same stream, so the messages match.
         got = prover.prove_composite(round, factors, challenges[:-1])
-        _, _, proof = prove(round, list(factors), StubTranscript(challenges))
-        want = proof.reshape(-1)  # flat round-major, matching the marker layout
+        _, _, msgs = prove(round, list(factors), StubTranscript(challenges))
+        want = msgs.round_poly.reshape(-1)  # flat round-major, matches the marker
         self.assertEqual(got.shape, want.shape)
         self.assertTrue(bool(jnp.all(got == want)))
 
