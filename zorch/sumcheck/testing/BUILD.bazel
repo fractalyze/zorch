@@ -1,0 +1,60 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# Shared reference oracles (product, eval_mle_oracle) the prove/verifier tests
+# cross-check the production sumcheck against.
+py_library(
+    name = "testing",
+    srcs = ["__init__.py"],
+    deps = [requirement("jax")],
+)
+
+py_test(
+    name = "prove_test",
+    size = "small",
+    srcs = ["prove_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:prove",
+        "//zorch:transcript",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "prover_test",
+    size = "small",
+    srcs = ["prover_test.py"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/sumcheck",
+        "//zorch/testkit:fusion",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "verifier_test",
+    size = "small",
+    srcs = ["verifier_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:prove",
+        "//zorch:transcript",
+        "//zorch:verify",
+        "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

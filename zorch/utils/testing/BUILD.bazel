@@ -1,0 +1,13 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+# Pure-Python bit helpers — no jax, hence no GPU_PLUGIN_DEPS.
+py_test(
+    name = "bits_test",
+    size = "small",
+    srcs = ["bits_test.py"],
+    deps = [
+        "//zorch/utils:bits",
+        requirement("absl_py"),
+    ],
+)

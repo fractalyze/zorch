@@ -144,6 +144,23 @@ write the precise type regardless; it is documentation that outlives the stubs.
 
 ## Testing
 
+A module's tests live in its package's `testing/` dir, named `<module>_test.py`
+for the `<module>.py` they exercise — `zorch/sumcheck/prover.py` →
+`zorch/sumcheck/testing/prover_test.py`. The mirrored name makes a module's test
+findable by name; the `testing/` split keeps the source dir to shippable
+surface. Each `testing/` dir carries a `BUILD.bazel` registering every test as a
+`py_test`, so `bazel test //...` — not the `pytest` job alone — is the single
+source of truth for "all tests pass" (`pytest` adds only the jax-fork coverage
+for the `manual`-tagged tests).
+
+`__init__.py` is header-only — the copyright line, nothing more. A consumer
+imports from the submodule (`from zorch.sumcheck.prover import ...`), never the
+package, so the package surface is whatever the submodules export and never
+drifts from a hand-maintained re-export list. The one exception is a
+`testing/__init__.py`, which may host shared fixtures the package's tests import
+— e.g. `zorch/sumcheck/testing`'s `product` / `eval_mle_oracle` reference
+oracles.
+
 Tests subclass `absltest.TestCase` and assert through `self.assert*` /
 `self.assertRaises` — never a bare `def test_*` + `assert`. A bare `assert` is a
 statement Python drops under `-O`, so under optimization a positive check or an
