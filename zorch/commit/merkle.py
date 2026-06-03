@@ -89,10 +89,12 @@ class MerkleTree:
             idx //= 2
         return Opening(row=matrix[index], path=path)
 
-    def verify(self, root: Array, index: int, opening: Opening) -> bool:
-        """Rebuild the root from the row + path; compare to the committed root."""
-        if not 0 <= index < (1 << len(opening.path)):
-            return False
+    def reconstruct_root(self, index: int, opening: Opening) -> Array:
+        """Rebuild the raw root from an `opening`'s row + path (leaf-first).
+
+        Returns the root Array, not a verdict — a separator-binding consumer
+        (e.g. SP1's SMCS) rebinds the raw root before comparing, which
+        `verify`'s plain equality can't express."""
         node = self._leaf_hasher.hash(opening.row)
         idx = index
         for sibling in opening.path:
@@ -103,4 +105,10 @@ class MerkleTree:
             )
             node = self._compressor.compress(pair)
             idx //= 2
-        return bool(jnp.array_equal(node, root))
+        return node
+
+    def verify(self, root: Array, index: int, opening: Opening) -> bool:
+        """Rebuild the root from the row + path; compare to the committed root."""
+        if not 0 <= index < (1 << len(opening.path)):
+            return False
+        return bool(jnp.array_equal(self.reconstruct_root(index, opening), root))
