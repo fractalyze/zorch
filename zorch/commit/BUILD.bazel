@@ -27,3 +27,10 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "pcs",
+    srcs = ["pcs.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("jax")],
+)

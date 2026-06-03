@@ -34,3 +34,19 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "pcs_test",
+    size = "small",
+    srcs = ["pcs_test.py"],
+    deps = [
+        "//zorch/commit:pcs",
+        requirement("absl_py"),
+        requirement("jax"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# basefold_test (and the jagged commit_test) are pytest-only: basefold/jagged
+# commit depend on //zorch/coding (no BUILD file; ReedSolomon is pytest-only) and
+# vmap the poseidon2 fused_region composite the opt wheel lacks (jax#164, same
+# reason merkle_test is manual). They run under pytest only.

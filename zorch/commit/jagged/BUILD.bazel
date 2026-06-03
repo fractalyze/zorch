@@ -15,3 +15,13 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+py_library(
+    name = "dense",
+    srcs = ["dense.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)
