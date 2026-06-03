@@ -3,8 +3,9 @@
 load("@zorch_pip//:requirements.bzl", "requirement")
 
 # GPU runtime plugins (ZKX PJRT + the CUDA libs it loads). Carried by every
-# py_test — CI's GPU leg (JAX_PLATFORMS=cuda) initializes the device; the CPU leg
-# never initializes the plugin, so they are inert there — and by the GPU bench.
+# jax-using py_test — CI's GPU leg (JAX_PLATFORMS=cuda) initializes the device;
+# the CPU leg never initializes the plugin, so they are inert there — and by the
+# GPU bench.
 # Ungated (no select): two self-contained wheels already in the build graph via
 # the bench, so the CPU leg pays no extra download. Revisit if a heavier CUDA
 # wheel set ever lands in the lock.
