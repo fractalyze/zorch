@@ -29,6 +29,13 @@ extension-field eval-point/``lam``, the EF register/HBM pressure this benchmark
 exists to measure — and needs a ZKX plugin carrying prime-ir#332; ``bf`` is a
 cheaper upper-bound baseline. Run one field per invocation for an A/B.
 
+``--transcript`` selects the Fiat-Shamir source: ``stub`` (default) feeds a preset
+challenge stream — a floor that elides the sponge — while ``duplex`` runs the real
+on-device poseidon2 ``DuplexTranscript`` (base field), the honest full e2e. The
+duplex path needs a ZKX plugin that fuses the ``poseidon2:`` composite via the
+``Poseidon2Fusion`` emitter; without it the unrolled permute hits the
+generic-codegen compile cliff.
+
 ``output_hash`` is zorch's own deterministic prove output — a self-anchored,
 scheme-agnostic regression guard (not a cross-impl golden).
 
@@ -40,6 +47,7 @@ backend too, just slowly.
 import argparse
 import functools
 from collections.abc import Iterable
+from typing import Any
 
 import jax
 from jax import Array
@@ -47,10 +55,22 @@ from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 from zkbench import BenchmarkConfig, BenchmarkOp, JaxBenchmark, compute_array_hash
 
-from zorch.logup_gkr.testing import prove_gkr_jitted
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.logup_gkr.testing import prove_gkr_jitted, prove_gkr_jitted_for
 from zorch.testkit.random_field import rand_field
+from zorch.transcript import DuplexTranscript
 
 _SEED = 0
+
+
+@functools.cache
+def _duplex_prove_jitted() -> Any:
+    """The whole prove plus on-device poseidon2 Fiat-Shamir, fused into one
+    program — the real-transcript twin of `prove_gkr_jitted`, over a koalabear16
+    rate-8 duplex sponge. Cached so the sponge + jit build once, and lazy so a
+    stub-only run never constructs a poseidon2 permutation. Base-field sponge; an
+    EF Fiat-Shamir transcript is a follow-on."""
+    return prove_gkr_jitted_for(DuplexTranscript.new(koalabear16_perm(), rate=8))
 
 
 def _first_layer_mles(iv: int, rv: int) -> tuple[Array, ...]:
@@ -121,28 +141,50 @@ class LogupGkrBenchmark(JaxBenchmark):
             default="ef",
             help="Fiat-Shamir field: ef (koalabearx4, faithful) or bf (upper bound)",
         )
+        parser.add_argument(
+            "--transcript",
+            choices=["stub", "duplex"],
+            default="stub",
+            help="stub: preset challenge stream (a floor). duplex: real on-device "
+            "poseidon2 Fiat-Shamir, the full e2e (base-field; ignores "
+            "--challenge-field). Needs a plugin that fuses the poseidon2 composite.",
+        )
 
     def get_ops(self, args: argparse.Namespace) -> Iterable[BenchmarkOp]:
         iv = args.interaction_variables
+        duplex = args.transcript == "duplex"
+        # duplex squeezes challenges from the sponge (no stream argument); stub
+        # takes a preset stream. Both fuse into one program with the same .lower.
+        prove = _duplex_prove_jitted() if duplex else prove_gkr_jitted
         for rv in args.row_variables:
             mles = _first_layer_mles(iv, rv)
-            challenges = _challenges(
-                args.challenge_field, _SEED + 99, _num_challenges(iv, rv)
+            # duplex squeezes its own challenges; stub splices a preset stream in
+            # before the static `iv`.
+            stream = (
+                ()
+                if duplex
+                else (
+                    _challenges(
+                        args.challenge_field, _SEED + 99, _num_challenges(iv, rv)
+                    ),
+                )
             )
-            args_ = (*mles, challenges, iv)
+            op_args = (*mles, *stream, iv)
             yield BenchmarkOp(
                 name="logup_gkr_prove",
-                fn=functools.partial(prove_gkr_jitted, *args_),
-                lower=functools.partial(prove_gkr_jitted.lower, *args_),
+                fn=functools.partial(prove, *op_args),
+                lower=functools.partial(prove.lower, *op_args),
                 metadata={
                     "degree": str(iv + rv),
                     "interaction_variables": str(iv),
                     "row_variables": str(rv),
                     "field": "koalabear",
-                    "challenge_field": args.challenge_field,
+                    "transcript": args.transcript,
+                    # duplex Fiat-Shamir is base-field; --challenge-field is moot.
+                    "challenge_field": "bf" if duplex else args.challenge_field,
                 },
-                output_hash_fn=lambda a=args_: compute_array_hash(
-                    _hashable(jax.block_until_ready(prove_gkr_jitted(*a)))
+                output_hash_fn=lambda a=op_args: compute_array_hash(
+                    _hashable(jax.block_until_ready(prove(*a)))
                 ),
                 throughput_unit="evals/s",
                 throughput_count=1 << (iv + rv),
