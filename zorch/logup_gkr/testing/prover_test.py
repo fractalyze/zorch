@@ -26,7 +26,7 @@ from zorch.logup_gkr.prover import (
 )
 from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
-from zorch.prove import fold_rounds
+from zorch.prove import fold_rounds, prove
 from zorch.round import ProveChain
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
@@ -100,12 +100,31 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
         self.assertTrue(bool(rnd._combine(*state)[0] == claim))
 
-        # `fold_rounds` collects the same round polys and the bound point.
+        # `fold_rounds` collects the same round polys and the bound point, and the
+        # homogeneous scan driver `prove` (what GkrLayerRound uses) is byte-identical
+        # to that loop -- same Fiat-Shamir order, so same round polys + point.
         _, _, msgs = fold_rounds(rnd, st, StubTranscript(challenges), n)
         round_polys = jnp.stack([m.round_poly for m in msgs])
         point = jnp.stack([m.challenge for m in msgs])
         self.assertEqual(round_polys.shape, (n, 4))
         self.assertTrue(bool(jnp.all(point == challenges)))
+        _, _, scan_msgs = prove(rnd, st, StubTranscript(challenges))
+        self.assertTrue(bool(jnp.all(scan_msgs.round_poly == round_polys)))
+        self.assertTrue(bool(jnp.all(scan_msgs.challenge == point)))
+
+    def test_scan_prove_is_flat_in_variable_count(self) -> None:
+        # The per-variable LogUp loop scans rather than unrolls: the prove jaxpr
+        # equation count is invariant under the variable count (#58), the compile
+        # win the scan driver buys over the old unrolled fold_rounds. Trace only,
+        # no execution, so it runs on any backend.
+        def eqn_count(num_vars: int) -> int:
+            st = _state(7, 1 << num_vars)
+            jaxpr = jax.make_jaxpr(
+                lambda s, t: prove(LogupSumcheckRound(jnp.array(3, KB)), s, t)
+            )(st, StubTranscript(jnp.zeros(num_vars, KB)))
+            return len(jaxpr.jaxpr.eqns)
+
+        self.assertEqual(eqn_count(3), eqn_count(5))
 
     def test_round_poly_is_fusion_ready(self) -> None:
         # Straight-line element-wise field ops + the one inherent Sigma; see
@@ -116,8 +135,13 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         )
 
     def test_state_must_have_five_factors(self) -> None:
+        rnd = LogupSumcheckRound(jnp.array(1, KB))
+        # The summand guards arity; the scan driver reaches _combine directly, so
+        # the guard lives there and _round_poly inherits it by delegation.
         with self.assertRaises(ValueError):
-            LogupSumcheckRound(jnp.array(1, KB))._round_poly(_state(70, 8)[:4])
+            rnd._combine(*_state(70, 8)[:4])
+        with self.assertRaises(ValueError):
+            rnd._round_poly(_state(70, 8)[:4])
 
     def test_combine_delegates_to_shared_logup_combine(self) -> None:
         # The round's _combine and the module-level logup_combine (which the GKR

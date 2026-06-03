@@ -1,19 +1,19 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Dense LogUp-GKR prover.
 
-`LogupSumcheckRound` is one per-variable sumcheck round whose summand is the
-LogUp combine `eq * (lam*(n0*d1 + n1*d0) + d0*d1)` over five MLE factors
+`LogupSumcheckRound` is one per-variable sumcheck round whose summand (`_combine`)
+is the LogUp combine `eq * (lam*(n0*d1 + n1*d0) + d0*d1)` over five MLE factors
 `[eq, n0, d1, n1, d0]` -- the sibling of the product `zorch.sumcheck.prover.
-SumcheckRound`. Its message is a `RoundMsg(round_poly, challenge)`: the challenge
-the round sampled rides in the message so the message-agnostic `fold_rounds`
-driver collects the evaluation point alongside the round polynomials, in one
-forward pass (the verifier re-derives the same point from the round polys).
+SumcheckRound`. Its `__call__` emits a `RoundMsg(round_poly, challenge)` for the
+generic `fold_rounds` driver; the homogeneous scan driver `prove` (which
+`GkrLayerRound` uses) reads only `degree` + `_combine` and stacks that same
+`RoundMsg`, so the evaluation point is `msgs.challenge`.
 
 `GkrLayerRound` is one GKR layer: it runs the layer's per-variable LogUp sumcheck
-(via `fold_rounds` over `LogupSumcheckRound`), then reduces the numerator and
-denominator claims across the child selector. The whole GKR prover is
-`ProveChain([GkrLayerRound(l) for l in reversed(layers[:-1])])` -- the interaction
-floor outward to the input, one bound variable per layer.
+(via the homogeneous scan driver `prove` over `LogupSumcheckRound`), then reduces
+the numerator and denominator claims across the child selector. The whole GKR
+prover is `ProveChain([GkrLayerRound(l) for l in reversed(layers[:-1])])` -- the
+interaction floor outward to the input, one bound variable per layer.
 
 The carry threaded through the chain is `(num_eval, den_eval, eval_point)`. The
 points follow the MSB-first convention of `zorch.poly.eq` (the sumcheck binds the
@@ -41,7 +41,7 @@ from jax import Array
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
-from zorch.prove import fold_rounds
+from zorch.prove import RoundMsg, prove
 from zorch.round import Round
 from zorch.sumcheck.prover import factors_on_domain, fold
 from zorch.transcript import Transcript
@@ -64,18 +64,6 @@ def logup_combine(
     return eq * (lam * (n0 * d1 + n1 * d0) + d0 * d1)
 
 
-@dataclass(frozen=True)
-class RoundMsg:
-    """One per-variable round's output: the round polynomial plus the challenge
-    it induced. The challenge is the prover's own Fiat-Shamir randomness (the
-    verifier re-derives it from `round_poly`); bundling it lets `fold_rounds`
-    collect the evaluation point without a separate channel or a transcript
-    replay."""
-
-    round_poly: Array
-    challenge: Array
-
-
 @partial(jax.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
 @dataclass(frozen=True)
 class LogupSumcheckRound(Round):
@@ -85,17 +73,26 @@ class LogupSumcheckRound(Round):
     # Batching challenge; fixed across a layer's variable-rounds.
     lam: Array
 
-    def _combine(self, eq: Array, n0: Array, d1: Array, n1: Array, d0: Array) -> Array:
-        return logup_combine(self.lam, eq, n0, d1, n1, d0)
+    @property
+    def degree(self) -> int:
+        return _DEGREE
+
+    def _combine(self, *factors: Array) -> Array:
+        """LogUp summand over [eq, n0, d1, n1, d0]; delegates to the module-level
+        `logup_combine` the verifier oracle also calls, so prover and verifier
+        cannot drift. Guards the factor count at this summand seam -- both
+        `_round_poly` and the scan driver reach it, so neither rechecks (arg count
+        is static, so the guard is trace-safe)."""
+        if len(factors) != _NUM_FACTORS:
+            raise ValueError(
+                f"LogUp combine needs {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
+                f"got {len(factors)}"
+            )
+        return logup_combine(self.lam, *factors)
 
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """Round polynomial over [0..degree], shape (degree+1, *batch):
         s[u] = sum_x' combine(f_u for each factor). One batched reduction."""
-        if len(state) != _NUM_FACTORS:
-            raise ValueError(
-                f"state must hold {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
-                f"got {len(state)}"
-            )
         return jnp.sum(self._combine(*factors_on_domain(state, _DEGREE)), axis=-1)
 
     def __call__(
@@ -160,11 +157,10 @@ class GkrLayerRound(Round):
             self.layer.numerator_1,
             self.layer.denominator_0,
         ]
-        final_state, transcript, msgs = fold_rounds(
-            LogupSumcheckRound(lam), state, transcript, self.layer.num_variables
+        final_state, transcript, msgs = prove(
+            LogupSumcheckRound(lam), state, transcript
         )
-        round_polys = jnp.stack([m.round_poly for m in msgs])
-        point = jnp.stack([m.challenge for m in msgs])
+        round_polys, point = msgs.round_poly, msgs.challenge
 
         _, n0, d1, n1, d0 = (factor[0] for factor in final_state)
         transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)

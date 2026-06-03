@@ -45,8 +45,9 @@ class FoldRoundsTest(absltest.TestCase):
     def test_prove_still_stacks_sumcheck_messages(self) -> None:
         f = jnp.arange(1, 17, dtype=KB)
         ch = jnp.arange(2, 6, dtype=KB)
-        _, _, proof = prove(prover.SumcheckRound(degree=1), [f], StubTranscript(ch))
-        self.assertEqual(proof.shape, (4, 2))  # n rounds × (degree+1)
+        _, _, msgs = prove(prover.SumcheckRound(degree=1), [f], StubTranscript(ch))
+        self.assertEqual(msgs.round_poly.shape, (4, 2))  # n rounds × (degree+1)
+        self.assertEqual(msgs.challenge.shape, (4,))  # one challenge per round
 
 
 if __name__ == "__main__":

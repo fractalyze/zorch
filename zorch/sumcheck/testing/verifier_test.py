@@ -26,9 +26,10 @@ class SumcheckRoundtripTest(absltest.TestCase):
     ) -> None:
         challenges = rand_field(seed, (n,), KB)
         claimed = jnp.sum(product(list(factors)))
-        _, _, proof = prove(
+        _, _, msgs = prove(
             prover.SumcheckRound(degree), list(factors), StubTranscript(challenges)
         )
+        proof = msgs.round_poly
         point, final_claim, _, ok = verify(
             verifier.SumcheckRound(degree), claimed, proof, StubTranscript(challenges)
         )
@@ -56,7 +57,8 @@ class SumcheckRoundtripTest(absltest.TestCase):
         f = rand_field(52, (1 << 4,), KB).astype(EF)
         challenges = rand_field(53, (4,), KB).astype(EF)
         claimed = jnp.sum(f)
-        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, msgs = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        proof = msgs.round_poly
         point, final_claim, _, ok = verify(
             verifier.SumcheckRound(1), claimed, proof, StubTranscript(challenges)
         )
@@ -68,9 +70,10 @@ class SumcheckRoundtripTest(absltest.TestCase):
         b = rand_field(46, (1 << 3,), KB)
         challenges = rand_field(47, (3,), KB)
         claimed = jnp.sum(a * b)
-        final_state, _, proof = prove(
+        final_state, _, msgs = prove(
             prover.SumcheckRound(2), [a, b], StubTranscript(challenges)
         )
+        proof = msgs.round_poly
         _, final_claim, _, ok = verify(
             verifier.SumcheckRound(2), claimed, proof, StubTranscript(challenges)
         )
@@ -97,7 +100,8 @@ class SumcheckRoundtripTest(absltest.TestCase):
     def test_wrong_claimed_sum_rejected(self) -> None:
         f = rand_field(48, (1 << 4,), KB)
         challenges = rand_field(49, (4,), KB)
-        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, msgs = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        proof = msgs.round_poly
         bad = jnp.sum(f) + jnp.array(1, KB)
         _, _, _, ok = verify(
             verifier.SumcheckRound(1), bad, proof, StubTranscript(challenges)
@@ -110,7 +114,8 @@ class SumcheckRoundtripTest(absltest.TestCase):
         f = rand_field(50, (1 << 4,), KB)
         challenges = rand_field(51, (4,), KB)
         claimed = jnp.sum(f)
-        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, msgs = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        proof = msgs.round_poly
         proof = proof.at[2, 0].add(jnp.array(1, KB))
         _, _, _, ok = verify(
             verifier.SumcheckRound(1), claimed, proof, StubTranscript(challenges)
@@ -140,7 +145,8 @@ class SumcheckRoundtripTest(absltest.TestCase):
         # (degree-1) proof is a malformed input, not a soundness failure.
         f = rand_field(54, (1 << 2,), KB)
         challenges = rand_field(55, (2,), KB)
-        _, _, proof = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        _, _, msgs = prove(prover.SumcheckRound(1), [f], StubTranscript(challenges))
+        proof = msgs.round_poly
         with self.assertRaises(ValueError):
             verify(
                 verifier.SumcheckRound(2), jnp.sum(f), proof, StubTranscript(challenges)

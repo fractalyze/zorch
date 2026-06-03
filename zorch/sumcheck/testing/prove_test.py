@@ -25,11 +25,12 @@ class SumcheckProveTest(absltest.TestCase):
         self, factors: Sequence[Array], degree: int, n: int, seed: int
     ) -> None:
         challenges = rand_field(seed, (n,), KB)
-        final_state, _, proof = prove(
+        final_state, _, msgs = prove(
             prover.SumcheckRound(degree=degree),
             list(factors),
             StubTranscript(challenges),
         )
+        proof = msgs.round_poly
 
         # claimed sum == s_0(0) + s_0(1)
         claimed = jnp.sum(product(list(factors)))
@@ -69,9 +70,10 @@ class SumcheckProveTest(absltest.TestCase):
         EF = zk_dtypes.koalabearx4
         f = rand_field(30, (1 << 4,), KB).astype(EF)
         challenges = rand_field(31, (4,), KB).astype(EF)
-        final_state, _, proof = prove(
+        final_state, _, msgs = prove(
             prover.SumcheckRound(degree=1), [f], StubTranscript(challenges)
         )
+        proof = msgs.round_poly
         self.assertTrue(bool(jnp.sum(f) == proof[0][0] + proof[0][1]))
         for i in range(1, 4):
             lhs = proof[i][0] + proof[i][1]
