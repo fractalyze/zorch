@@ -61,6 +61,13 @@ class Compression:
         self.arity = params.arity
         self.chunk = params.chunk
 
+    @property
+    def has_dedicated_fusion(self) -> bool:
+        """Whether the permutation lowers to a hash-dedicated fusion marker, so a
+        consumer can wrap a whole region using this hash (e.g. a Merkle commit) in
+        an expandable composite. Delegates to the permutation; names no hash."""
+        return self._permutation.has_dedicated_fusion
+
     def compress(self, inputs: Array) -> Array:
         """Compress `arity` chunks into one: (arity, chunk) over dtype -> (chunk,)."""
         if inputs.shape != (self.arity, self.chunk):

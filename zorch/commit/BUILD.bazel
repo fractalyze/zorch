@@ -21,6 +21,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:fusion",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/utils:bits",
