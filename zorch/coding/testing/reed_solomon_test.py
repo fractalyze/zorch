@@ -16,7 +16,8 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array, lax
 
-from zorch.coding import LinearCode, ReedSolomon
+from zorch.coding.linear_code import LinearCode
+from zorch.coding.reed_solomon import ReedSolomon
 from zorch.testkit.random_field import rand_field
 
 F = zk_dtypes.koalabear

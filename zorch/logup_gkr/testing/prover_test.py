@@ -24,7 +24,7 @@ from zorch.logup_gkr.prover import (
     logup_combine,
 )
 from zorch.logup_gkr.testing import prove_gkr, random_first_layer
-from zorch.poly import eval_univariate
+from zorch.poly.univariate import eval_univariate
 from zorch.prove import fold_rounds
 from zorch.round import ProveChain
 from zorch.testkit.fusion import assert_fusion_ready

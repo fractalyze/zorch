@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from jax import Array
 
-from zorch.poly import eval_univariate
+from zorch.poly.univariate import eval_univariate
 from zorch.round import Round
 from zorch.transcript import Transcript
 

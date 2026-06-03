@@ -8,7 +8,7 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.poly import eval_univariate
+from zorch.poly.univariate import eval_univariate
 from zorch.prove import prove
 from zorch.sumcheck import prover
 from zorch.sumcheck.testing import eval_mle_oracle, product

@@ -8,7 +8,8 @@ from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.permutation import Permutation
-from zorch.hash.poseidon2 import Poseidon2, Poseidon2Params
+from zorch.hash.poseidon2.params import Poseidon2Params
+from zorch.hash.poseidon2.poseidon2 import Poseidon2
 
 
 def _params() -> Poseidon2Params:
