@@ -88,7 +88,7 @@ class LayoutBuilderTest(absltest.TestCase):
         self.assertEqual(cps[3].tolist(), cps[4].tolist())
 
     def test_capacity_assert(self) -> None:
-        with self.assertRaises(AssertionError):
+        with self.assertRaises(ValueError):
             build_jagged_layout([4, 2, 3], l_max=2, n_r=3, dtype=EF)  # real_L=3 > 2
 
 
