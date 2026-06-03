@@ -19,7 +19,11 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
-from zorch.hash.poseidon2.linear import apply_internal, apply_matrix
+from zorch.hash.poseidon2.linear import (
+    apply_external_standard,
+    apply_internal,
+    apply_matrix,
+)
 from zorch.hash.poseidon2.params import Poseidon2Params
 
 
@@ -34,6 +38,10 @@ class Poseidon2:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
+        # Decided once here (eager): the matrix compare would stage into the
+        # jaxpr if done inside the traced `permute` body. Gates both the marker
+        # name and the const-free external layer.
+        self._uses_standard_external = params.uses_standard_external_matrix
         self._fused_region_name = self._select_fused_region_name()
 
     def _select_fused_region_name(self) -> str:
@@ -41,12 +49,9 @@ class Poseidon2:
         matrix — its GPU emitter hardcodes the M4-circulant MDS, so a custom
         matrix would be silently ignored there; otherwise keep the generic marker
         (LoopFusion lowers the real body, staying correct).
-
-        Decided once here (eager) so `permute` stays jit-safe — the matrix compare
-        would stage into the jaxpr if done inside the traced body.
         """
         p = self._p
-        if p.uses_standard_external_matrix:
+        if self._uses_standard_external:
             return (
                 f"poseidon2:{p.width}:{p.external_rounds}:{p.internal_rounds}:{p.alpha}"
             )
@@ -58,12 +63,29 @@ class Poseidon2:
                 f"state must be a 1-D array of shape ({self.width},), got {state.shape}"
             )
         p = self._p
-        mds, alpha = p.external_matrix, p.alpha
+        alpha = p.alpha
         w, e_rounds, i_rounds = self.width, p.external_rounds, p.internal_rounds
+
+        # The external MDS must not be a closed-over array on the named-emitter
+        # path: jax.lax.composite lifts closed-over consts to leading operands, so
+        # the matrix would leak in as a 7th operand and break the Poseidon2Fusion
+        # 6-operand ABI. The standard matrix applies via integer literals (no
+        # capture); a custom matrix takes the generic LoopFusion fallback, which
+        # lowers the real body, so the closed array is harmless there.
+        if self._uses_standard_external:
+
+            def apply_external(s: Array) -> Array:
+                return apply_external_standard(s)
+
+        else:
+            mds = p.external_matrix
+
+            def apply_external(s: Array) -> Array:
+                return apply_matrix(mds, s)
 
         # +rc -> sbox(all lanes) -> MDS
         def external_round(s: Array, rc: Array) -> Array:
-            return apply_matrix(mds, jnp.power(s + rc, alpha))
+            return apply_external(jnp.power(s + rc, alpha))
 
         # +rc(lane0) -> sbox(lane0) -> diffusion (off_diag scales the J term)
         def internal_round(s: Array, rc0: Array, diag: Array, off_diag: Array) -> Array:
@@ -86,7 +108,7 @@ class Poseidon2:
         ) -> Array:
             ext_init = ext_init_rc.reshape(e_rounds, w)
             ext_term = ext_term_rc.reshape(e_rounds, w)
-            s = apply_matrix(mds, s)  # initial pre-MDS
+            s = apply_external(s)  # initial pre-MDS
             for i in range(e_rounds):
                 s = external_round(s, ext_init[i])
             for i in range(i_rounds):

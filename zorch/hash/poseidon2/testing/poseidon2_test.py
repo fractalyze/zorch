@@ -51,6 +51,15 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         self.assertIn("poseidon2:16:4:20:3", txt)
+        # Exactly the 6 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
+        # diag, off_diag]. A closed-over external matrix is lifted to a leading
+        # 7th operand (jax.lax.composite prepends consts) and breaks the
+        # Poseidon2Fusion operand ABI — the e2e GPU failure this guards against.
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        operands = composite_line.split('"poseidon2:16:4:20:3"')[1].split("{")[0]
+        self.assertEqual(operands.count("%"), 6, composite_line)
 
     @absltest.skipUnless(fusion._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_custom_external_matrix_uses_generic_marker(self) -> None:
