@@ -25,6 +25,18 @@ express the algebra in its natural form and let zkx lower it, rather than
 fighting the compiler with a pattern it must re-discover. Any future code that
 needs a transform follows this rule.
 
+## The fold rides the encoder's domain
+
+`fri_fold` is the FRI-family codeword fold every FRI-style scheme (FRI, Basefold,
+WHIR, STARK) shares. It lives here, not in [`poly`](poly.md#why-the-shape),
+because its x-coordinates must be the *same* `lax.fft` evaluation domain the
+encoder used: `eval_domain` reads them off the NTT itself, so there is still no
+field-generator table — the same stance as `encode`. It is distinct from
+`poly.mle_fold` (the additive multilinear combine over the hypercube), folding a
+*codeword* over the RS evaluation domain instead. The natural-order conjugate
+layout makes `f(x)` / `f(−x)` a slice, not a gather, so the fold stays
+fusion-friendly.
+
 ## Design rules
 
 - **A code is an object, not a call.** `ReedSolomon` is a class, not a function,
@@ -58,11 +70,9 @@ needs a transform follows this rule.
 
 ## Gotcha
 
-`jnp.arange(dtype=<extension field>)` raises (iota is unimplemented for extension
-dtypes) and `jnp.power(field, int_array)` hits a type-promotion error. The coset
-power ramp `[1, h, h², …]` is therefore built with `jnp.cumprod`, not an
-arange/power. Same iota constraint as the sumcheck domain — see
-[`sumcheck.md`](sumcheck.md).
+The coset power ramp `[1, h, h², …]` is built with `jnp.cumprod` — `jnp.arange` /
+`jnp.power` over a field dtype both fail (see the
+[ZKX field-dtype gotchas](poly.md#zkx-field-dtype-gotchas)).
 
 ## Deliberately out of scope
 

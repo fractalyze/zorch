@@ -12,8 +12,13 @@ ______________________________________________________________________
 | --------------------------------------------------------------- | --------------------------------------------------------------------- |
 | What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
+| Polynomial primitives — `eq`, multilinear eval/fold, and the ZKX field-dtype gotchas | [`poly.md`](poly.md)                                  |
+| Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2 | [`hash.md`](hash.md)                                          |
+| Merkle commitment — binary tree on Sponge + Compression         | [`commit.md`](commit.md)                                             |
+| Jagged Little Polynomial — verifier point-eval (branching program) | [`jagged.md`](jagged.md)                                          |
+| Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT | [`coding.md`](coding.md)                                  |
 | The sumcheck block — design rationale & gotchas                 | [`sumcheck.md`](sumcheck.md)                                          |
-| Linear codes — `LinearCode` seam, Reed-Solomon via the native NTT | [`coding.md`](coding.md)                                             |
+| LogUp-GKR — fractional-sum circuit, prover/verifier round duals | [`logup-gkr.md`](logup-gkr.md)                                       |
 
 ## Fusion north star
 
