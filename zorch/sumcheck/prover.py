@@ -10,10 +10,9 @@ sums a product of factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums
 the LogUp combine.
 
 The round body is element-wise field ops plus the one inherent Sigma (no
-reduce/gather beyond it), so it stays wrappable by the single-kernel marker
-without restructuring; `prove_composite` wraps a whole protocol in a
-`zorch.sumcheck` composite that zkx fuses, reusing the round's own summand. The
-verifier dual lives in `zorch.sumcheck.verifier`.
+reduce/gather beyond it), so each round stays wrappable by a single-kernel
+marker without restructuring. The verifier dual lives in
+`zorch.sumcheck.verifier`.
 """
 
 from __future__ import annotations
@@ -25,16 +24,10 @@ from functools import partial, reduce
 
 import jax
 import jax.numpy as jnp
-from jax import Array, lax
+from jax import Array
 
 from zorch.round import Round
 from zorch.transcript import Transcript
-from zorch.utils.bits import log2_strict_usize
-
-# composite.name / composite.version of zorch's product-sumcheck marker; zkx's
-# SumcheckStrategySelector keys recognition off this exact pair.
-SUMCHECK_MARKER = "zorch.sumcheck"
-SUMCHECK_MARKER_VERSION = 1
 
 
 def split_halves(state: Sequence[Array]) -> list[tuple[Array, Array]]:
@@ -117,72 +110,3 @@ class SumcheckRound(Round):
         transcript, r = transcript.observe_and_sample(msg, 1)
         state = fold(state, r[0])
         return state, transcript, msg
-
-
-def prove_composite(
-    round: SumcheckRound,
-    factors: Sequence[Array],
-    challenges: Array,
-    *,
-    eq_poly_index: int = -1,
-    small_value: bool = False,
-) -> Array:
-    """Wrap a whole sumcheck in a `zorch.sumcheck` composite marker.
-
-    A thin wrapper over `round`, not a second prover: the marker body runs the
-    round's own `_round_poly` summand and the shared `fold` once per variable, so
-    it stays correct for any summand when the marker inlines. zkx's
-    `SumcheckStrategySelector` recognizes the marker and lowers the whole protocol
-    to one fused `sumcheck_rounds:`/`sumcheck_svo:` kernel; unrecognized it inlines
-    to the same round messages `prove` produces, flattened round-major to
-    `[num_vars*(degree+1)]` -- the layout the fusion writes.
-
-    Fiat-Shamir stays *outside* the marker: the `num_vars-1` already-sampled fold
-    `challenges` are operands (so the region is pure round arithmetic), which is
-    why this takes challenges rather than a transcript. Operand layout is the
-    recognition contract `[factor tables][fold challenges]`; the
-    `degree`/`num_vars`/`num_factors`/`eq_poly_index`/`small_value` attributes gate
-    the compiler's baseline-vs-SVO choice -- zorch stays optimization-agnostic and
-    just reports the structure. The selector fuses the product case where the
-    factor-table count equals `degree`, eq (if any) carried as one of the factors.
-    """
-    if not factors:
-        raise ValueError("prove_composite needs at least one factor table")
-    if challenges.ndim != 1:
-        raise ValueError(
-            f"challenges must be a 1-D vector of fold scalars, got rank "
-            f"{challenges.ndim}"
-        )
-    num_vars = log2_strict_usize(factors[0].shape[-1])
-    if challenges.shape[0] != num_vars - 1:
-        raise ValueError(
-            f"need num_vars-1={num_vars - 1} fold challenges, "
-            f"got {challenges.shape[0]}"
-        )
-    # Shared shape / even width are validated fail-loud by `split_halves` when the
-    # marker body traces below -- not re-checked here, to keep one validator.
-
-    def body(
-        *operands: Array,
-        degree: int,
-        num_vars: int,
-        num_factors: int,
-        eq_poly_index: int,
-        small_value: bool,
-    ) -> Array:
-        tables = list(operands[:num_factors])
-        msgs = [round._round_poly(tables)]
-        for r in operands[num_factors:]:  # one fold challenge per inter-round step
-            tables = fold(tables, r)
-            msgs.append(round._round_poly(tables))
-        return jnp.concatenate(msgs)  # round-major [num_vars*(degree+1)]
-
-    return lax.composite(body, name=SUMCHECK_MARKER, version=SUMCHECK_MARKER_VERSION)(
-        *factors,
-        *challenges,
-        degree=round.degree,
-        num_vars=num_vars,
-        num_factors=len(factors),
-        eq_poly_index=eq_poly_index,
-        small_value=small_value,
-    )
