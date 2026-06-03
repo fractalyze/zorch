@@ -23,6 +23,12 @@ as separate invocations (one ``--row-variables`` per process):
     bazel run //zorch/logup_gkr:bench_logup_gkr -- --phase runtime --row-variables 16
     bazel run //zorch/logup_gkr:bench_logup_gkr -- --phase compile --row-variables 16
 
+``--challenge-field`` selects the Fiat-Shamir field: ``ef`` (default,
+``koalabearx4``) is the faithful LogUp-GKR workload — a base-field trace under an
+extension-field eval-point/``lam``, the EF register/HBM pressure this benchmark
+exists to measure — and needs a ZKX plugin carrying prime-ir#332; ``bf`` is a
+cheaper upper-bound baseline. Run one field per invocation for an A/B.
+
 ``output_hash`` is zorch's own deterministic prove output — a self-anchored,
 scheme-agnostic regression guard (not a cross-impl golden).
 
@@ -38,6 +44,7 @@ from collections.abc import Iterable
 import jax
 from jax import Array
 from zk_dtypes import koalabear_mont as F
+from zk_dtypes import koalabearx4_mont as EF
 from zkbench import BenchmarkConfig, BenchmarkOp, JaxBenchmark, compute_array_hash
 
 from zorch.logup_gkr.testing import prove_gkr_jitted
@@ -63,6 +70,28 @@ def _num_challenges(iv: int, rv: int) -> int:
     return (iv + 1) + rv * (iv + rv + 2)
 
 
+def _challenges(field: str, seed: int, n: int) -> Array:
+    """The Fiat-Shamir challenge stream that drives the prove.
+
+    The faithful LogUp-GKR workload draws challenges from the *extension* field
+    (``koalabearx4``) over a base-field (``koalabear``) trace: the EF eval-point
+    and batching ``lam`` are exactly the register/HBM pressure this benchmark
+    exists to measure, and EF needs a ZKX plugin carrying prime-ir#332 (the EF
+    ``.sum()`` reduction SIGABRTed before it). ``bf`` keeps the whole prove in the
+    base field -- a cheaper upper-bound baseline that elides the EF expansion."""
+    if field == "ef":
+        # An EF element is four BF limbs; rand_field emits only base fields.
+        return rand_field(seed, (n, 4), F).view(EF).reshape(n)
+    return rand_field(seed, (n,), F)
+
+
+def _hashable(out: Array) -> Array:
+    """``compute_array_hash`` casts to u4 limbs; an EF prove output is flattened
+    and viewed as its base-field limbs first (a BF output passes through). The
+    ``ravel`` (zero-copy) guarantees a contiguous 1-D array for the dtype view."""
+    return out.ravel().view(F) if out.dtype == EF else out
+
+
 class LogupGkrBenchmark(JaxBenchmark):
     def get_config(self) -> BenchmarkConfig:
         return BenchmarkConfig(
@@ -86,12 +115,20 @@ class LogupGkrBenchmark(JaxBenchmark):
             default=4,
             help="log2 interactions at the floor",
         )
+        parser.add_argument(
+            "--challenge-field",
+            choices=["bf", "ef"],
+            default="ef",
+            help="Fiat-Shamir field: ef (koalabearx4, faithful) or bf (upper bound)",
+        )
 
     def get_ops(self, args: argparse.Namespace) -> Iterable[BenchmarkOp]:
         iv = args.interaction_variables
         for rv in args.row_variables:
             mles = _first_layer_mles(iv, rv)
-            challenges = rand_field(_SEED + 99, (_num_challenges(iv, rv),), F)
+            challenges = _challenges(
+                args.challenge_field, _SEED + 99, _num_challenges(iv, rv)
+            )
             args_ = (*mles, challenges, iv)
             yield BenchmarkOp(
                 name="logup_gkr_prove",
@@ -102,9 +139,10 @@ class LogupGkrBenchmark(JaxBenchmark):
                     "interaction_variables": str(iv),
                     "row_variables": str(rv),
                     "field": "koalabear",
+                    "challenge_field": args.challenge_field,
                 },
                 output_hash_fn=lambda a=args_: compute_array_hash(
-                    jax.block_until_ready(prove_gkr_jitted(*a))
+                    _hashable(jax.block_until_ready(prove_gkr_jitted(*a)))
                 ),
                 throughput_unit="evals/s",
                 throughput_count=1 << (iv + rv),
