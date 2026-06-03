@@ -10,6 +10,9 @@ invariants.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import zk_dtypes
@@ -23,6 +26,7 @@ from zorch.logup_gkr.prover import (
     LogupSumcheckRound,
     bind_output,
     logup_combine,
+    prove_logup_composite,
 )
 from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
@@ -256,6 +260,67 @@ class GkrProverTest(absltest.TestCase):
             first.num_interaction_variables,
         )
         self.assertTrue(bool(jnp.all(eager == jitted)))
+
+
+def _composite_eqn(fn: Callable[..., Array], *args: Array) -> Any:
+    """The `composite` primitive eqn from `fn`'s jaxpr -- reads the marker
+    envelope without lowering to MLIR (runs on a jaxlib lacking CompositeOp)."""
+    jaxpr = jax.make_jaxpr(fn)(*args).jaxpr
+    return next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+
+
+def _composite_attrs(eqn: Any) -> dict[str, Any]:
+    """Composite attributes as a plain dict; each scalar flattens to one leaf."""
+    return {key: leaves[0] for key, leaves, _ in eqn.params["attributes"]}
+
+
+class ProveLogupCompositeTest(absltest.TestCase):
+    """`prove_logup_composite` emits the combine="logup" marker; here,
+    unrecognized, it inlines to its body, so it is bit-equal to the unfused
+    `prove` on plain JAX (the recognized->fused GPU path is exercised in zkx)."""
+
+    def test_inline_equals_prove(self) -> None:
+        # The marker takes the num_vars-1 fold challenges; `prove` samples num_vars
+        # from the same stub stream, so the round messages match.
+        num_vars = 4
+        factors = _state(70, 1 << num_vars)
+        round = LogupSumcheckRound(rand_field(80, (), KB))
+        challenges = rand_field(81, (num_vars,), KB)
+        got = prove_logup_composite(round, factors, challenges[:-1])
+        _, _, msgs = prove(round, list(factors), StubTranscript(challenges))
+        want = msgs.round_poly.reshape(-1)  # flat round-major, matches the marker
+        self.assertEqual(got.shape, want.shape)
+        self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_marker_envelope_is_logup(self) -> None:
+        # Operand ABI [5 factor tables][lambda][num_vars-1 challenges] and the
+        # logup recognition attributes -- degree (3) is decoupled from the 5
+        # factors, so `combine` (not the count) selects the path.
+        num_vars = 4
+        factors = _state(82, 1 << num_vars)
+        lam = rand_field(90, (), KB)
+        ch = rand_field(91, (num_vars - 1,), KB)
+        eqn = _composite_eqn(
+            lambda fs, l, c: prove_logup_composite(LogupSumcheckRound(l), list(fs), c),
+            factors,
+            lam,
+            ch,
+        )
+        self.assertEqual(eqn.params["name"], "zorch.sumcheck")
+        self.assertEqual(len(eqn.invars), 5 + 1 + (num_vars - 1))
+        attrs = _composite_attrs(eqn)
+        self.assertEqual(attrs["combine"], "logup")
+        self.assertEqual(attrs["num_factors"], 5)
+        self.assertEqual(attrs["degree"], _DEGREE)
+        self.assertEqual(attrs["num_vars"], num_vars)
+
+    def test_wrong_factor_count_raises(self) -> None:
+        # The combine binds exactly [eq, n0, d1, n1, d0]; fail loud otherwise.
+        round = LogupSumcheckRound(rand_field(92, (), KB))
+        with self.assertRaises(ValueError):
+            prove_logup_composite(
+                round, _state(93, 1 << 4)[:4], rand_field(94, (3,), KB)
+            )
 
 
 if __name__ == "__main__":

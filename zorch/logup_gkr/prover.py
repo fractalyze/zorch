@@ -36,14 +36,19 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import RoundMsg, prove
 from zorch.round import Round
-from zorch.sumcheck.prover import factors_on_domain, fold
+from zorch.sumcheck.prover import (
+    SUMCHECK_MARKER,
+    SUMCHECK_MARKER_VERSION,
+    factors_on_domain,
+    fold,
+)
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -102,6 +107,75 @@ class LogupSumcheckRound(Round):
         transcript, r = transcript.observe_and_sample(msg, 1)
         state = fold(state, r[0])
         return state, transcript, RoundMsg(msg, r[0])
+
+
+def prove_logup_composite(
+    round: LogupSumcheckRound,
+    factors: Sequence[Array],
+    challenges: Array,
+) -> Array:
+    """Wrap a whole LogUp sumcheck in a `zorch.sumcheck` composite marker.
+
+    The LogUp sibling of `zorch.sumcheck.prover.prove_composite`: same marker
+    name/version and flat round-major `[num_vars*(degree+1)]` output, but the
+    summand is the LogUp combine and a `combine="logup"` attribute tells zkx's
+    `SumcheckStrategySelector` to lower it to a `sumcheck_logup:` kernel -- the
+    product path keys off factor-count == degree, which LogUp breaks (degree 3
+    over 5 factors).
+
+    The per-layer batching scalar lambda is an *operand*, not closed over: the
+    body rebuilds the round from it so the region stays pure round arithmetic and
+    leaks no hoisted const, with the recognition ABI
+    `[eq, n0, d1, n1, d0][lambda][num_vars-1 fold challenges]`. Fiat-Shamir stays
+    outside the marker (the already-sampled fold challenges are operands), like
+    the product wrapper.
+    """
+    if len(factors) != _NUM_FACTORS:
+        raise ValueError(
+            f"prove_logup_composite needs {_NUM_FACTORS} factor tables "
+            f"[eq, n0, d1, n1, d0], got {len(factors)}"
+        )
+    if challenges.ndim != 1:
+        raise ValueError(
+            f"challenges must be a 1-D vector of fold scalars, got rank "
+            f"{challenges.ndim}"
+        )
+    num_vars = log2_strict_usize(factors[0].shape[-1])
+    if challenges.shape[0] != num_vars - 1:
+        raise ValueError(
+            f"need num_vars-1={num_vars - 1} fold challenges, "
+            f"got {challenges.shape[0]}"
+        )
+    # Shared shape / even width are validated fail-loud by `split_halves` when the
+    # marker body traces below -- not re-checked here, to keep one validator.
+
+    def body(
+        *operands: Array,
+        degree: int,
+        num_vars: int,
+        num_factors: int,
+        combine: str,
+    ) -> Array:
+        tables = list(operands[:num_factors])
+        # Rebuild the round from the lambda *operand* (operands[num_factors]) so
+        # the body closes over no array leaf -- a closed-over lambda would hoist
+        # as a leading operand and break the recognition ABI.
+        step_round = LogupSumcheckRound(operands[num_factors])
+        msgs = [step_round._round_poly(tables)]
+        for r in operands[num_factors + 1 :]:  # one fold challenge per inter-round step
+            tables = fold(tables, r)
+            msgs.append(step_round._round_poly(tables))
+        return jnp.concatenate(msgs)  # round-major [num_vars*(degree+1)]
+
+    return lax.composite(body, name=SUMCHECK_MARKER, version=SUMCHECK_MARKER_VERSION)(
+        *factors,
+        round.lam,
+        *challenges,
+        degree=_DEGREE,
+        num_vars=num_vars,
+        num_factors=_NUM_FACTORS,
+        combine="logup",
+    )
 
 
 @dataclass(frozen=True)
