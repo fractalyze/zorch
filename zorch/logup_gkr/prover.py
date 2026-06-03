@@ -32,7 +32,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -74,13 +76,14 @@ class RoundMsg:
     challenge: Array
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
+@dataclass(frozen=True)
 class LogupSumcheckRound(Round):
     """Per-variable sumcheck round for the LogUp combine (sibling of the product
     `zorch.sumcheck.prover.SumcheckRound`); emits a `RoundMsg`."""
 
-    def __init__(self, lam: Array) -> None:
-        # Batching challenge; fixed across a layer's variable-rounds.
-        self.lam = lam
+    # Batching challenge; fixed across a layer's variable-rounds.
+    lam: Array
 
     def _combine(self, eq: Array, n0: Array, d1: Array, n1: Array, d0: Array) -> Array:
         return logup_combine(self.lam, eq, n0, d1, n1, d0)

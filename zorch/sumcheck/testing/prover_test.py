@@ -4,8 +4,9 @@ from __future__ import annotations
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
+from jax import tree_util
 
-from zorch.sumcheck import prover
+from zorch.sumcheck import prover, verifier
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
@@ -90,6 +91,15 @@ class SumcheckRoundTest(absltest.TestCase):
         b = rand_field(2, (4,), KB)
         with self.assertRaises(ValueError):
             prover.SumcheckRound(degree=2)._round_poly([a, b])
+
+
+class SumcheckRoundPytreeTest(absltest.TestCase):
+    def test_config_is_static_pytree(self) -> None:
+        # degree is config, not data: prover and verifier rounds carry zero array
+        # leaves, so each threads through jit/vmap as a fully-static pytree.
+        for rnd in (prover.SumcheckRound(degree=2), verifier.SumcheckRound(degree=2)):
+            leaves, _ = tree_util.tree_flatten(rnd)
+            self.assertEqual(leaves, [])
 
 
 if __name__ == "__main__":

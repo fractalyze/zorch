@@ -14,7 +14,7 @@ inside are fine — `jit` unrolls them.
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
 - composes other work in a static loop with host-side steps between — e.g.
-  `zorch.prove` loops the round, and `prover.SumcheckRoundBase.__call__` wraps the
+  `zorch.prove` loops the round, and `prover.SumcheckRound.__call__` wraps the
   round-poly/fold arithmetic around the host-side transcript `observe` /
   `sample`. Decorating these would inline everything into one trace and pull
   the transcript ops in with it.
@@ -23,6 +23,50 @@ A round's `_round_poly` / `_fold` are pure numeric and *could* be `@jit`'d,
 but are deliberately left undecorated: they are the bodies a future marked
 fused region (`stablehlo.composite`) + zkx emitter will lower to one kernel
 (see `sumcheck.md`), not blanket-`@jit` candidates.
+
+## Pytree registration
+
+A `Round` — or any object — that crosses a `jax` transform boundary (passed to or
+returned from `jit` / `vmap` / `scan`, or threaded as a `scan` carry) must be a
+registered JAX **pytree**. Register the concrete class as a frozen dataclass:
+
+```python
+@partial(jax.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
+@dataclass(frozen=True)
+class LogupSumcheckRound(Round):
+    lam: Array
+```
+
+- **`data_fields`** are the `Array` leaves the transform traces over (a round's
+  challenge `lam`). **`meta_fields`** are static config the trace bakes in
+  (`degree`, a permutation instance) — they must be hashable and compare by value.
+- Validate in `__post_init__`, never `__init__`, and only on shapes / static
+  fields — `__post_init__` reruns on **tracers** during `unflatten`, so branching
+  on an `Array` *value* there breaks under `jit`/`vmap`.
+- Every registered class gets a `*PytreeTest`: a `tree_flatten`/`unflatten`
+  round-trip that asserts the **leaf count** (so a field misclassified as
+  meta-vs-data is caught), plus a "threads through `jit` as an argument" check.
+  The `vmap`-over-a-leaf case (one `vmap` over a batch of `lam`s) is the
+  capability registration buys that closing the object into a constant cannot —
+  test it where it applies.
+
+**Which classes.** The per-variable sumcheck rounds —
+`sumcheck.prover.SumcheckRound`, `sumcheck.verifier.SumcheckRound`,
+`logup_gkr.prover.LogupSumcheckRound` — are registered: the `prove` / `verify` /
+`fold_rounds` drivers loop them, a future `lax.scan` carries them (issue #58), and
+they are `vmap`-able over their config. A device-side transcript threaded as a
+`scan` carry falls under the same rule when it lands (issue #58).
+
+Do **not** pre-register what no transform threads yet — registration that buys no
+capability is noise:
+
+- **Heterogeneous-chain rounds** — `logup_gkr`'s `GkrLayerRound` and the
+  `ProveChain` / `VerifyChain` wrappers. The GKR pyramid halves every layer, so
+  the layers carry different shapes; the chain cannot be `vmap`/`scan`-ed and is
+  composed in plain Python. Register only if a transform later threads one.
+- **Plain data records** — `RoundMsg`, `LayerProof`, `GkrLayer`,
+  `LogUpGkrOutput`. They pass between un-`jit`-ed calls today. Register the moment
+  one becomes `jit`/`scan` I/O, not before.
 
 ## Comments & documentation
 

@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import operator
 from collections.abc import Sequence
-from functools import reduce
+from dataclasses import dataclass
+from functools import partial, reduce
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -69,13 +71,16 @@ def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
     return [p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves]
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@dataclass(frozen=True)
 class SumcheckRound(Round):
     """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry."""
 
-    def __init__(self, degree: int) -> None:
-        if degree < 1:
+    degree: int
+
+    def __post_init__(self) -> None:
+        if self.degree < 1:
             raise ValueError("degree must be >= 1")
-        self.degree = degree
 
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)), shape (degree+1, *batch).

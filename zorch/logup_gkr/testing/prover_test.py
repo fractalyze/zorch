@@ -10,10 +10,11 @@ invariants.
 
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from jax import Array, tree_util
 
 from zorch.logup_gkr.circuit import build_pyramid, extract_outputs
 from zorch.logup_gkr.prover import (
@@ -129,6 +130,37 @@ class LogupSumcheckRoundTest(absltest.TestCase):
                 == logup_combine(lam, eq, n0, d1, n1, d0)
             )
         )
+
+
+class LogupSumcheckRoundPytreeTest(absltest.TestCase):
+    """The round is a JAX pytree, so it threads through jit/vmap as an ARGUMENT
+    rather than being closed over -- the `lam` leaf is what lets a layer's
+    batching challenge be vmapped, which baking it into a constant cannot do."""
+
+    def test_flatten_roundtrip(self) -> None:
+        rnd = LogupSumcheckRound(jnp.array(7, KB))
+        leaves, treedef = tree_util.tree_flatten(rnd)
+        self.assertEqual(len(leaves), 1)  # lam is the only leaf
+        self.assertTrue(bool(leaves[0] == jnp.array(7, KB)))
+        self.assertTrue(bool(tree_util.tree_unflatten(treedef, leaves).lam == rnd.lam))
+
+    def test_threads_through_jit_as_argument(self) -> None:
+        rnd = LogupSumcheckRound(jnp.array(7, KB))
+        st = _state(20, 8)
+        got = jax.jit(lambda r, s: r._round_poly(s))(rnd, st)
+        self.assertTrue(bool(jnp.all(got == rnd._round_poly(st))))
+
+    def test_vmap_over_lam_batches_layers(self) -> None:
+        # One vmap over distinct batching challenges, sharing the MLE state.
+        st = _state(30, 8)
+        lams = rand_field(99, (4,), KB)
+        got = jax.vmap(lambda r, s: r._round_poly(s), in_axes=(0, None))(
+            LogupSumcheckRound(lams), st
+        )
+        self.assertEqual(got.shape, (4, 4))  # (batch, degree+1)
+        for i in range(4):
+            want = LogupSumcheckRound(lams[i])._round_poly(st)
+            self.assertTrue(bool(jnp.all(got[i] == want)))
 
 
 class BindOutputTest(absltest.TestCase):
