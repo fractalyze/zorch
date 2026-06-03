@@ -11,6 +11,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:fusion",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/poly",

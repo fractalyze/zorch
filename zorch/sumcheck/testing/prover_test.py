@@ -10,11 +10,12 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array, tree_util
 
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.prove import prove
 from zorch.sumcheck import prover, verifier
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import StubTranscript
+from zorch.transcript import DuplexTranscript, StubTranscript
 
 KB = zk_dtypes.koalabear_mont
 
@@ -133,8 +134,8 @@ class ProveCompositeTest(absltest.TestCase):
         # challenges (the last round's is never used by a message), both replayed
         # from the same stream, so the messages match.
         got = prover.prove_composite(round, factors, challenges[:-1])
-        _, _, proof = prove(round, list(factors), StubTranscript(challenges))
-        want = proof.reshape(-1)  # flat round-major, matching the marker layout
+        _, _, msgs = prove(round, list(factors), StubTranscript(challenges))
+        want = msgs.round_poly.reshape(-1)  # flat round-major, marker layout
         self.assertEqual(got.shape, want.shape)
         self.assertTrue(bool(jnp.all(got == want)))
 
@@ -240,6 +241,61 @@ class ProveCompositeTest(absltest.TestCase):
         ch2d = rand_field(63, (3, 1), KB)
         with self.assertRaises(ValueError):
             prover.prove_composite(prover.SumcheckRound(degree=1), [f], ch2d)
+
+
+class ProveFsTest(absltest.TestCase):
+    """`prove_fs` marks the whole sumcheck with Fiat-Shamir sampled INSIDE -- the
+    duplex sponge threads through the marker as an operand. Unrecognized it inlines
+    to the same `(proof, transcript)` `prove` produces (the recognized->fused GPU
+    path is exercised e2e separately)."""
+
+    def _transcript(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+    def test_marker_envelope(self) -> None:
+        # The recognition contract: name carries degree/num_vars, operands are
+        # [factors][5 transcript leaves][5 poseidon2 rc], results are
+        # [proof][5 transcript leaves]. make_jaxpr reads it without lowering.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._transcript()
+        eqn = _composite_eqn(lambda x, y: prover.prove_fs(rnd, [x, y], t0), a, b)
+        self.assertEqual(eqn.params["name"], "sumcheck_fs:2:4")
+        self.assertEqual(len(eqn.invars), 2 + 5 + 5)
+        self.assertEqual(len(eqn.outvars), 1 + 5)
+
+    def _assert_inline_equals_prove(
+        self, round: prover.SumcheckRound, factors: list[Array]
+    ) -> None:
+        # FS-internal samples its own challenges from the threaded transcript, so
+        # both the proof AND the advanced transcript must match `prove` driven from
+        # an identical fresh transcript.
+        got_proof, got_t = prover.prove_fs(round, list(factors), self._transcript())
+        _, want_t, msgs = prove(round, list(factors), self._transcript())
+        want_proof = msgs.round_poly.reshape(-1)  # flat round-major, marker layout
+        self.assertEqual(got_proof.shape, want_proof.shape)
+        self.assertTrue(bool(jnp.all(got_proof == want_proof)))
+        if not isinstance(want_t, DuplexTranscript):
+            raise AssertionError("prove should thread the DuplexTranscript back")
+        g, w = got_t.state, want_t.state
+        for got_leaf, want_leaf in (
+            (g.input_buffer, w.input_buffer),
+            (g.output_buffer, w.output_buffer),
+            (g.sponge_state, w.sponge_state),
+        ):
+            self.assertTrue(bool(jnp.all(got_leaf == want_leaf)))
+        self.assertEqual(int(g.in_pos), int(w.in_pos))
+        self.assertEqual(int(g.out_pos), int(w.out_pos))
+
+    def test_inline_equals_prove_degree2(self) -> None:
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        self._assert_inline_equals_prove(prover.SumcheckRound(degree=2), [a, b])
+
+    def test_inline_equals_prove_degree1_single_mle(self) -> None:
+        f = rand_field(43, (1 << 5,), KB)
+        self._assert_inline_equals_prove(prover.SumcheckRound(degree=1), [f])
 
 
 if __name__ == "__main__":

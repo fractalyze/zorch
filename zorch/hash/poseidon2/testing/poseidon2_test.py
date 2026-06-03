@@ -24,6 +24,15 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         out = p.permute(jnp.arange(16, dtype=F))
         self.assertTrue(bool(jnp.array_equal(out, KOALABEAR16_EXPECTED)))
 
+    def test_permute_decomposition_matches_permute(self) -> None:
+        # The unmarked decomposition + the RC-operand accessor reproduce the
+        # marked permute, so a larger composite (e.g. sumcheck_fs) can embed the
+        # permutation without nesting a fused_region marker.
+        p = koalabear16_perm()
+        state = jnp.arange(16, dtype=F)
+        got = p.permute_decomposition(state, *p.rc_operands())
+        self.assertTrue(bool(jnp.array_equal(got, KOALABEAR16_EXPECTED)))
+
     def test_vmap_batch_matches(self) -> None:
         p = koalabear16_perm()
         x = jnp.arange(16, dtype=F)

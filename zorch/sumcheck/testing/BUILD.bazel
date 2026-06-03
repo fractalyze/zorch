@@ -34,6 +34,7 @@ py_test(
     deps = [
         "//zorch:prove",
         "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/sumcheck",
         "//zorch/testkit:fusion",
         "//zorch/testkit:random_field",

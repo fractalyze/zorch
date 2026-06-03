@@ -15,6 +15,8 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import jax.numpy as jnp
 from jax import Array
 
@@ -62,6 +64,60 @@ class Poseidon2:
             raise ValueError(
                 f"state must be a 1-D array of shape ({self.width},), got {state.shape}"
             )
+        return fused_region(
+            self._decomposition(),
+            state,
+            *self.rc_operands(),
+            name=self._fused_region_name,
+        )
+
+    def permute_decomposition(
+        self,
+        state: Array,
+        ext_init_rc: Array,
+        int_rc: Array,
+        ext_term_rc: Array,
+        diag: Array,
+        off_diag: Array,
+    ) -> Array:
+        """Run the permutation UNMARKED -- `permute`'s body with the round
+        constants supplied as explicit operands and no `fused_region` wrapper.
+
+        For embedding the permutation inside a *larger* composite (the
+        `sumcheck_fs` Fiat-Shamir sponge): a nested `fused_region` would lift its
+        operands into the outer marker in JAX trace order and break the outer
+        operand ABI, so the sponge runs this unmarked while the outer marker
+        carries `rc_operands()` explicitly."""
+        return self._decomposition()(
+            state, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
+        )
+
+    def rc_operands(self) -> tuple[Array, ...]:
+        """The round-constant operands `[ext_init_rc, int_rc, ext_term_rc, diag,
+        off_diag]` in Poseidon2Fusion ABI order (state is passed separately).
+        Round constants are flattened row-major, `int_rc` is the lane-0 column,
+        and the internal matrix is J + Diag(diag) so `off_diag = 1`."""
+        p = self._p
+        return (
+            p.external_constants_initial.reshape(-1),
+            p.internal_constants[:, 0],
+            p.external_constants_terminal.reshape(-1),
+            p.internal_diag,
+            jnp.array(1, dtype=self.dtype),
+        )
+
+    def unmarked(self, rc: tuple[Array, ...]) -> _UnmarkedPoseidon2:
+        """A `Permutation` running this poseidon2 UNMARKED with `rc` (from
+        `rc_operands()`) supplied as explicit operands -- for threading a duplex
+        sponge inside a larger composite without a nested `fused_region`. See
+        `permute_decomposition`."""
+        return _UnmarkedPoseidon2(self, rc)
+
+    def _decomposition(self) -> Callable[..., Array]:
+        """Build the permutation closure over the
+        `[state, ext_init_rc, int_rc, ext_term_rc, diag, off_diag]` operands --
+        the single body shared by `permute` (wrapped in the marker) and
+        `permute_decomposition` (embedded raw in a larger marker)."""
         p = self._p
         alpha = p.alpha
         w, e_rounds, i_rounds = self.width, p.external_rounds, p.internal_rounds
@@ -95,9 +151,6 @@ class Poseidon2:
             s = jnp.concatenate([s0[None], s[1:]])
             return apply_internal(diag, s, off_diag)
 
-        # The decomposition takes the Poseidon2Fusion ABI operands explicitly so
-        # the marked region carries them in order: round constants flattened
-        # row-major, int_rc the lane-0 column, off_diag scaling the J term.
         def permutation(
             s: Array,
             ext_init_rc: Array,
@@ -117,15 +170,23 @@ class Poseidon2:
                 s = external_round(s, ext_term[i])
             return s
 
-        # ABI operands [state, ext_init_rc, int_rc, ext_term_rc, diag, off_diag].
-        # zorch's internal matrix is J + Diag(internal_diag), so off_diag = 1.
-        operands = (
-            state,
-            p.external_constants_initial.reshape(-1),
-            p.internal_constants[:, 0],
-            p.external_constants_terminal.reshape(-1),
-            p.internal_diag,
-            jnp.array(1, dtype=self.dtype),
-        )
+        return permutation
 
-        return fused_region(permutation, *operands, name=self._fused_region_name)
+
+class _UnmarkedPoseidon2:
+    """A `Permutation` whose `permute` runs `base`'s decomposition with `rc`
+    supplied as explicit operands and NO `fused_region` marker.
+
+    Lets a duplex sponge run inside a larger composite (the `sumcheck_fs` marker)
+    without nesting a `fused_region`: a nested marker would lift its round
+    constants into the outer marker in JAX trace order and break the outer operand
+    ABI. Here the outer marker carries `rc` explicitly and the sponge runs raw."""
+
+    def __init__(self, base: Poseidon2, rc: tuple[Array, ...]) -> None:
+        self.width = base.width
+        self.dtype = base.dtype
+        self._base = base
+        self._rc = rc
+
+    def permute(self, state: Array) -> Array:
+        return self._base.permute_decomposition(state, *self._rc)

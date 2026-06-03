@@ -22,13 +22,15 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
+from typing import Any, Protocol, cast
 
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
+from zorch.fusion import fused_region
 from zorch.round import Round
-from zorch.transcript import Transcript
+from zorch.transcript import DuplexState, DuplexTranscript, Transcript
 from zorch.utils.bits import log2_strict_usize
 
 # composite.name / composite.version of zorch's product-sumcheck marker; zkx's
@@ -186,3 +188,98 @@ def prove_composite(
         eq_poly_index=eq_poly_index,
         small_value=small_value,
     )
+
+
+class _SpongePermutation(Protocol):
+    """A `Permutation` embeddable UNMARKED inside a larger fusion marker: it
+    surfaces its round constants as explicit operands (`rc_operands`) and an
+    unmarked variant bound to them (`unmarked`), so `prove_fs`'s sponge runs
+    without a nested marker. The whole FS-internal marker is sponge-backed by
+    construction, so the transcript handed to `prove_fs` must carry one of these
+    (Poseidon2 does); the generic `Permutation` seam stays free of marker
+    concerns."""
+
+    width: int
+    dtype: Any
+
+    def permute(self, state: Array) -> Array: ...
+    def rc_operands(self) -> tuple[Array, ...]: ...
+    def unmarked(self, rc: tuple[Array, ...]) -> Any: ...
+
+
+def prove_fs(
+    round: SumcheckRound,
+    factors: Sequence[Array],
+    transcript: DuplexTranscript,
+) -> tuple[Array, DuplexTranscript]:
+    """Wrap a whole sumcheck in a `sumcheck_fs:` composite, Fiat-Shamir sampled
+    INSIDE the marker.
+
+    The transparent sibling of `prove_composite`: the transcript threads through
+    the marker as an operand and each round's challenge is squeezed from the duplex
+    sponge in-body, so the signature matches `prove` -- no pre-sampled challenge
+    operands. zkx's `sumcheck_fs:` emitter runs the sponge in-kernel and lowers the
+    whole protocol to one fused kernel; unrecognized it inlines to the same
+    `(proof, transcript)` `prove` produces. Returns the flat round-major proof
+    `[num_vars*(degree+1)]` and the advanced transcript.
+
+    Operand ABI (the recognition contract) is `[factor tables][transcript state:
+    in_buffer, out_buffer, sponge_state, in_pos, out_pos][poseidon2 rc: ext_init,
+    int_rc, ext_term, diag, off_diag]`. The round constants ride as *explicit*
+    operands (not closed-over) so the layout stays stable across JAX versions, and
+    the sponge runs the permutation unmarked (`Poseidon2.unmarked`) so no nested
+    marker lifts them out of order; the standard MDS is hardcoded in the emitter.
+    Poseidon2-backed: the transcript's permutation must expose `rc_operands()` /
+    `unmarked()`.
+    """
+    if not factors:
+        raise ValueError("prove_fs needs at least one factor table")
+    num_vars = log2_strict_usize(factors[0].shape[-1])
+    if num_vars == 0:
+        raise ValueError("prove_fs needs a factor width >= 2 (at least one round)")
+    num_factors = len(factors)
+    perm = cast(_SpongePermutation, transcript.permutation)
+    rate = transcript.rate
+    rc = perm.rc_operands()
+    st = transcript.state
+    state_leaves = (
+        st.input_buffer,
+        st.output_buffer,
+        st.sponge_state,
+        st.in_pos,
+        st.out_pos,
+    )
+    n_leaves = len(state_leaves)
+
+    def body(*operands: Array) -> tuple[Array, ...]:
+        tables = list(operands[:num_factors])
+        leaves = operands[num_factors : num_factors + n_leaves]
+        rc_ops = operands[num_factors + n_leaves :]
+        t = DuplexTranscript(perm.unmarked(rc_ops), rate, DuplexState(*leaves))
+        msgs = []
+        for _ in range(num_vars):
+            # one round: round-poly -> observe + squeeze the challenge -> fold.
+            # Inlined (not `round(state, t)`) to keep `t` typed DuplexTranscript;
+            # SumcheckRound.__call__ returns the generic Transcript.
+            msg = round._round_poly(tables)
+            t, r = t.observe_and_sample(msg, 1)
+            tables = fold(tables, r[0])
+            msgs.append(msg)
+        s = t.state
+        return (
+            jnp.concatenate(msgs),  # round-major [num_vars*(degree+1)]
+            s.input_buffer,
+            s.output_buffer,
+            s.sponge_state,
+            s.in_pos,
+            s.out_pos,
+        )
+
+    proof, *out_leaves = fused_region(
+        body,
+        *factors,
+        *state_leaves,
+        *rc,
+        name=f"sumcheck_fs:{round.degree}:{num_vars}",
+    )
+    return proof, DuplexTranscript(perm, rate, DuplexState(*out_leaves))
