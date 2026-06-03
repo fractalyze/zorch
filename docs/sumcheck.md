@@ -55,11 +55,12 @@ step (Phase 3, cross-repo).
 
 ## Gotchas
 
-- **`jnp.arange` raises on an extension dtype.** `iota` is unimplemented for
-  extension fields (`koalabearx4`), so build index/domain arrays in the base
-  field and `.astype(EF)` (or `jnp.stack` / per-element `jnp.array`). Extension
-  arithmetic and base→extension embedding otherwise work, so a base-field MLE
-  folds correctly against extension-field challenges.
+- **The sumcheck domain is built in the base field, not via `jnp.arange`.** Iota
+  is unimplemented for extension dtypes, so index/domain arrays are built in the
+  base field and `.astype(EF)` (or `jnp.stack`) — one of the
+  [ZKX field-dtype gotchas](poly.md#zkx-field-dtype-gotchas). Extension arithmetic
+  and base→extension embedding otherwise work, so a base-field MLE folds correctly
+  against extension-field challenges.
 - **Prover and verifier must start the transcript in the same state.** That
   shared initial state is the block's entire local soundness assumption.
   `StubTranscript` replays preset challenges; the real duplex-sponge transcript
