@@ -30,11 +30,15 @@ def apply_matrix(matrix: Array, state: Array) -> Array:
     return _unrolled_sum([matrix[:, j] * state[j] for j in range(w)])
 
 
-def apply_internal(internal_diag: Array, state: Array) -> Array:
-    """`(J + Diag(internal_diag)) @ state` = `sum(state) + internal_diag * state`.
+def apply_internal(
+    internal_diag: Array, state: Array, off_diag: Array | None = None
+) -> Array:
+    """The internal diffusion layer `(off_diag*J + Diag(internal_diag)) @ state`.
 
-    `J @ state` is the all-lanes sum broadcast to every lane; unrolling it keeps
-    the layer reduction-free.
+    Equals `off_diag*sum(state) + internal_diag*state`. `J @ state` is the
+    all-lanes sum broadcast to every lane; unrolling it keeps the layer
+    reduction-free. `off_diag` scales the all-ones (J) part; when None it is the
+    identity, i.e. the plain `J + Diag(internal_diag)` form.
     """
     if state.ndim != 1 or internal_diag.shape != state.shape:
         raise ValueError(
@@ -43,4 +47,6 @@ def apply_internal(internal_diag: Array, state: Array) -> Array:
         )
     w = state.shape[0]
     total = _unrolled_sum([state[j] for j in range(w)])
+    if off_diag is not None:
+        total = off_diag * total
     return total + internal_diag * state
