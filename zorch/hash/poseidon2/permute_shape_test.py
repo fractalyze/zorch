@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+import pytest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.permutation import Permutation
@@ -55,8 +56,17 @@ def test_custom_external_matrix_is_applied() -> None:
     assert not jnp.array_equal(over.permute(x), Poseidon2(base).permute(x))
 
 
+def test_permute_rejects_wrong_shape() -> None:
+    p = Poseidon2(_params())
+    with pytest.raises(ValueError):
+        p.permute(jnp.zeros((15,), dtype=F))  # width != 16
+    with pytest.raises(ValueError):
+        p.permute(jnp.zeros((2, 16), dtype=F))  # batched, not a 1-D state
+
+
 if __name__ == "__main__":
     test_is_a_permutation()
     test_permute_shape_and_vmap()
     test_custom_external_matrix_is_applied()
+    test_permute_rejects_wrong_shape()
     print("ok")
