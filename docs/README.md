@@ -15,6 +15,7 @@ ______________________________________________________________________
 | Polynomial primitives — `eq`, multilinear eval/fold, and the ZKX field-dtype gotchas | [`poly.md`](poly.md)                                  |
 | Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2 | [`hash.md`](hash.md)                                          |
 | Merkle commitment — binary tree on Sponge + Compression         | [`commit.md`](commit.md)                                             |
+| PCS — the `Pcs` interface, `(commitment, prover_data)` contract & design rules | [`pcs.md`](pcs.md)                                       |
 | Jagged Little Polynomial — verifier point-eval (branching program) | [`jagged.md`](jagged.md)                                          |
 | Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT | [`coding.md`](coding.md)                                  |
 | The sumcheck block — design rationale & gotchas                 | [`sumcheck.md`](sumcheck.md)                                          |

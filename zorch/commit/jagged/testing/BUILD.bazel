@@ -15,3 +15,15 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "dense_test",
+    size = "small",
+    srcs = ["dense_test.py"],
+    deps = [
+        "//zorch/commit/jagged:dense",
+        requirement("jax"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
