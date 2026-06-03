@@ -4,6 +4,7 @@ reconstruction of the same codeword + root."""
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -161,6 +162,27 @@ class BasefoldOpenTest(absltest.TestCase):
         )
         ok, _ = verifier.verify(root, [z], values, bad, _transcript())
         self.assertFalse(bool(ok))
+
+    def test_open_compiles_once_per_shape(self) -> None:
+        log_s, K = 3, 2  # message_len = 1<<log_s = 8 rows; z has log_s vars
+        S = 1 << log_s
+        rs = ReedSolomon(message_len=S, blowup=2, dtype=EF)
+        _, _, tree = koalabear16_merkle()
+        prover = BasefoldProver(rs, tree, num_queries=4)
+        t0 = _transcript()  # built eagerly; closed over as a pytree constant
+
+        @functools.partial(jax.jit, static_argnums=())
+        def run(mle: jnp.ndarray, z: jnp.ndarray) -> jnp.ndarray:
+            cols = [mle[:, k] for k in range(K)]
+            _, pdata = prover.commit(cols)
+            values, proof, _ = prover.open(pdata, [z], t0)
+            return values
+
+        for seed in (1, 2, 3):
+            run(
+                _rand_ef(seed, (S, K)), _rand_ef(seed + 100, (log_s,))
+            ).block_until_ready()
+        self.assertEqual(run._cache_size(), 1)
 
 
 if __name__ == "__main__":
