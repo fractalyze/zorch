@@ -31,3 +31,45 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "params_test",
+    size = "small",
+    srcs = ["params_test.py"],
+    deps = [
+        "//zorch/hash/poseidon2",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "permute_shape_test",
+    size = "small",
+    srcs = ["permute_shape_test.py"],
+    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
+    # CI job covers it); drop the tag after the jax pin bump.
+    tags = ["manual"],
+    deps = [
+        "//zorch/hash/poseidon2",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "linear_test",
+    size = "small",
+    srcs = ["linear_test.py"],
+    deps = [
+        "//zorch/hash/poseidon2",
+        "//zorch/testkit:fusion",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
