@@ -20,7 +20,10 @@ py_library(
         "transcript.py",
     ],
     visibility = ["//visibility:public"],
-    deps = [requirement("jax")],
+    deps = [
+        "//zorch/hash:permutation",
+        requirement("jax"),
+    ],
 )
 
 py_library(
