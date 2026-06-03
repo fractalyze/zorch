@@ -5,7 +5,7 @@
 variable, send the round polynomial over the domain [0..degree], fold every MLE
 at the verifier's challenge (P0 + r*(P1 - P0)). A subclass supplies only its
 summand via `_round_poly`: `SumcheckRound` (here) sums a product of factors,
-`LogupGkrRound` (in zorch.logup_gkr) sums the LogUp combine. The fold, the
+`LogupSumcheckRound` (in zorch.logup_gkr.prover) sums the LogUp combine. The fold, the
 Fiat-Shamir loop, and `_split` (which validates then halves) are inherited; a
 subclass overrides `_split` only for extra input checks (e.g. LogUp's factor
 count).
