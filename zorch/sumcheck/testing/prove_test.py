@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
@@ -16,6 +17,7 @@ from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
 KB = zk_dtypes.koalabear
+_GPU_BACKEND = jax.default_backend() == "gpu"
 
 
 class SumcheckProveTest(absltest.TestCase):
@@ -58,6 +60,11 @@ class SumcheckProveTest(absltest.TestCase):
         b = rand_field(23, (1 << 4,), KB)
         self._check_identity((a, b), degree=2, n=4, seed=24)
 
+    @absltest.skipIf(
+        _GPU_BACKEND,
+        "cuda-pjrt aborts compiling koalabearx4 EF reductions; "
+        "remove when fractalyze/prime-ir#332 lands",
+    )
     def test_degree1_extension_challenges(self) -> None:
         EF = zk_dtypes.koalabearx4
         f = rand_field(30, (1 << 4,), KB).astype(EF)
