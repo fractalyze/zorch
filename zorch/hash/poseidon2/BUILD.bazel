@@ -25,16 +25,21 @@ _DEPS = [
     requirement("zk_dtypes"),
 ]
 
-[
-    py_test(
-        name = t,
-        size = "small",
-        srcs = [t + ".py"],
-        env = {"JAX_PLATFORMS": "cpu"},
-        deps = _DEPS,
-    )
-    for t in [
-        "params_test",
-        "permute_shape_test",
-    ]
-]
+py_test(
+    name = "params_test",
+    size = "small",
+    srcs = ["params_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    deps = _DEPS,
+)
+
+py_test(
+    name = "permute_shape_test",
+    size = "small",
+    srcs = ["permute_shape_test.py"],
+    env = {"JAX_PLATFORMS": "cpu"},
+    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
+    # CI job covers it); drop the tag after the jax pin bump.
+    tags = ["manual"],
+    deps = _DEPS,
+)

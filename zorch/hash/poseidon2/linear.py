@@ -21,6 +21,11 @@ def _unrolled_sum(terms: list[Array]) -> Array:
 
 def apply_matrix(matrix: Array, state: Array) -> Array:
     """`matrix @ state`, as the sum of each column scaled by its lane."""
+    if state.ndim != 1 or matrix.shape != (state.shape[0], state.shape[0]):
+        raise ValueError(
+            f"need a square matrix matching 1-D state, got matrix {matrix.shape}, "
+            f"state {state.shape}"
+        )
     w = state.shape[0]
     return _unrolled_sum([matrix[:, j] * state[j] for j in range(w)])
 
@@ -31,6 +36,11 @@ def apply_internal(internal_diag: Array, state: Array) -> Array:
     `J @ state` is the all-lanes sum broadcast to every lane; unrolling it keeps
     the layer reduction-free.
     """
+    if state.ndim != 1 or internal_diag.shape != state.shape:
+        raise ValueError(
+            f"internal_diag and state must be matching 1-D vectors, got "
+            f"internal_diag {internal_diag.shape}, state {state.shape}"
+        )
     w = state.shape[0]
     total = _unrolled_sum([state[j] for j in range(w)])
     return total + internal_diag * state

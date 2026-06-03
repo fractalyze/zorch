@@ -21,6 +21,9 @@ py_test(
     size = "small",
     srcs = ["poseidon2_test.py"],
     env = {"JAX_PLATFORMS": "cpu"},
+    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
+    # CI job covers it); drop the tag after the jax pin bump.
+    tags = ["manual"],
     deps = [
         ":koalabear16",
         requirement("jax"),

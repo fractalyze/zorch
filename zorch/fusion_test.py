@@ -1,4 +1,4 @@
-"""fused_region runs its decomposition and emits one zorch.round composite."""
+"""fused_region runs its decomposition and emits one zorch.fused_region composite."""
 
 import jax
 import jax.numpy as jnp
@@ -23,16 +23,16 @@ def test_runs_the_decomposition() -> None:
 
 
 @pytest.mark.skipif(not _HAS_COMPOSITE_OP, reason="jaxlib lacks stablehlo.CompositeOp")
-def test_emits_one_zorch_round_composite() -> None:
+def test_emits_one_zorch_fused_region_composite() -> None:
     s0 = rand_field(1, (8,), F)
     decomp = lambda s: s + s
     txt = jax.jit(lambda v: fused_region(decomp, v)).lower(s0).as_text()
     assert txt.count("stablehlo.composite") == 1, txt
-    assert "zorch.round" in txt
+    assert "zorch.fused_region" in txt
 
 
 if __name__ == "__main__":
     test_runs_the_decomposition()
     if _HAS_COMPOSITE_OP:
-        test_emits_one_zorch_round_composite()
+        test_emits_one_zorch_fused_region_composite()
     print("ok")

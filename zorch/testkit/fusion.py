@@ -7,10 +7,11 @@ one inherent Sigma -- no gather/scatter/dot/while/... boundary, no extra reduce.
 fusion-safe ops plus exactly ``reduces`` reduce(s). It's a whitelist (not a
 gather/dot blacklist), so ANY boundary op or extra reduce trips it -- and any
 new op in the fusion-critical body gets a conscious look. Cheap proxy for zkx's
-``ZorchRoundRewriter`` (issue #21), the authoritative compiler gate.
+``ZorchFusedRegionRewriter`` (issue #21), the authoritative compiler gate.
 
-Not for the hash permutation: poseidon2 is readable ``matmul + power`` inside a
-composite marker (zkx optimizes the dot) -- a different fusion shape.
+Not for the hash permutation: poseidon2 fuses via the ``zorch.fused_region``
+marker and normal-form linear layers (no dot for zkx to optimize) -- a different
+fusion shape.
 """
 from __future__ import annotations
 

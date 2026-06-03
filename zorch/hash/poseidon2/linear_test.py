@@ -24,6 +24,22 @@ def test_apply_internal_equals_jdiag() -> None:
     assert jnp.array_equal(apply_internal(d, s), m_int @ s)
 
 
+def test_apply_matrix_rejects_mismatched_state() -> None:
+    w = 16
+    m = rand_field(1, (w, w), F)
+    with pytest.raises(ValueError):
+        apply_matrix(m, rand_field(2, (w, w), F))  # 2-D, not a lane vector
+    with pytest.raises(ValueError):
+        apply_matrix(m, rand_field(2, (w + 1,), F))  # length mismatches matrix
+
+
+def test_apply_internal_rejects_mismatched_state() -> None:
+    w = 16
+    d = rand_field(3, (w,), F)
+    with pytest.raises(ValueError):
+        apply_internal(d, rand_field(4, (w + 1,), F))  # length mismatches diag
+
+
 def test_normal_form_is_fusion_ready() -> None:
     w = 16
     m = rand_field(1, (w, w), F)
@@ -40,5 +56,7 @@ def test_normal_form_is_fusion_ready() -> None:
 if __name__ == "__main__":
     test_apply_matrix_equals_matmul()
     test_apply_internal_equals_jdiag()
+    test_apply_matrix_rejects_mismatched_state()
+    test_apply_internal_rejects_mismatched_state()
     test_normal_form_is_fusion_ready()
     print("ok")
