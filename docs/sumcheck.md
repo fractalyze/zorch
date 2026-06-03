@@ -9,15 +9,18 @@ decisions: epic issue
 
 ## Why the shape
 
-**One prover skeleton, many summands, one verifier.** `prover.SumcheckRoundBase`
-is the abstract folding skeleton (split → round poly → observe → challenge →
-fold); a concrete prover supplies only `_round_poly` — `prover.SumcheckRound`
-sums a product, `LogupGkrRound` the LogUp combine. `prove` and `verify` are
-generic 2-to-1 drivers over a `Round`, nothing sumcheck-specific. The verifier is
-a single `verifier.SumcheckRound` that pairs with all of them: it sees only the
-round polynomials, so the summand is purely the prover's concern. Its
-observe→challenge order mirrors the prover's exactly — that shared ordering is
-the only thing keeping the two Fiat-Shamir transcripts from diverging.
+**One summand seam, many summands, one verifier.** The folding skeleton is shared
+as free functions — `split_halves` / `factors_on_domain` / `fold` — and each round
+supplies only its summand `_combine`: `prover.SumcheckRound` multiplies a product,
+`logup_gkr.prover.LogupSumcheckRound` evaluates the LogUp combine. `prove` is the
+homogeneous scan driver, generic over that summand — it reads a round's `degree` +
+`_combine` (the `SumcheckSummand` seam in `prove.py`) and owns the split / fold /
+scan, so the product and LogUp per-variable loops share one driver; `verify` is the
+dual, generic over any verifier `Round`. The verifier is a single
+`verifier.SumcheckRound` that pairs with all of them: it sees only the round
+polynomials, so the summand is purely the prover's concern. Its observe→challenge
+order mirrors the prover's exactly — that shared ordering is the only thing keeping
+the two Fiat-Shamir transcripts from diverging.
 
 **Prover and verifier in symmetric namespaces.** Each side is a `Round` in its
 own module — `prover.SumcheckRound` / `verifier.SumcheckRound` — so a caller picks

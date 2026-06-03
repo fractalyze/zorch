@@ -49,7 +49,13 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   round poly has the same shape. A `scan` carry must keep a **fixed shape**, so a
   halving MLE state rides in a full-width buffer with the live prefix packed at the
   front and the dead tail masked (see [`prove.py`](../zorch/prove.py)). The round
-  is the carry, so it must be a registered pytree.
+  is the carry, so it must be a registered pytree. `prove` is **generic over the
+  round's summand**: it reads only `degree` + `_combine` (the `SumcheckSummand`
+  Protocol in `prove.py`) and owns the buffer / mask / fold / scan, so the product
+  `SumcheckRound` and the LogUp `LogupSumcheckRound` share one scan — a new
+  sumcheck rides it by supplying a `_combine`, not by re-deriving the scan
+  machinery. Only this per-variable inner loop scans; the heterogeneous chain over
+  it (`fold_rounds`, the GKR `ProveChain`) stays a Python `for` (next bullet).
 
 - **Python `for` — heterogeneous / non-round-invariant per-round loop.** When the
   per-round message or committed artifact changes shape across rounds it is not
@@ -102,7 +108,9 @@ class LogupSumcheckRound(Round):
 `prove` / `verify` carry them through a `lax.scan` (the per-variable loop is one
 traced region), and they are `vmap`-able over their config. Both transcripts —
 `DuplexTranscript` and the test `StubTranscript` — are registered for the same
-reason: the `scan` threads the transcript as part of its carry.
+reason: the `scan` threads the transcript as part of its carry. `prove.RoundMsg`
+(round poly + challenge) is registered too — `prove` returns it as the `lax.scan`'s
+stacked per-round output.
 
 Do **not** pre-register what no transform threads yet — registration that buys no
 capability is noise:
@@ -111,9 +119,9 @@ capability is noise:
   `ProveChain` / `VerifyChain` wrappers. The GKR pyramid halves every layer, so
   the layers carry different shapes; the chain cannot be `vmap`/`scan`-ed and is
   composed in plain Python. Register only if a transform later threads one.
-- **Plain data records** — `RoundMsg`, `LayerProof`, `GkrLayer`,
-  `LogUpGkrOutput`. They pass between un-`jit`-ed calls today. Register the moment
-  one becomes `jit`/`scan` I/O, not before.
+- **Plain data records** — `LayerProof`, `GkrLayer`, `LogUpGkrOutput`. They pass
+  between un-`jit`-ed calls today. Register the moment one becomes `jit`/`scan`
+  I/O, not before — as `prove.RoundMsg` now is.
 
 ## Comments & documentation
 
@@ -159,6 +167,9 @@ A leading underscore marks non-public surface. A `Round`'s only public entry is
 `__call__` (plus `__init__`); its internal steps are `_`-prefixed (`_split`,
 `_round_poly`, `_fold`, `_combine`). Same-package tests may still reach in and
 exercise them by name — the prefix marks intent, it doesn't lock the door.
+`_combine` (a per-variable round's summand) is the one such step the `prove` scan
+driver also reads — the `_` marks it internal to the sumcheck machinery, not that
+only the class itself may call it.
 
 ## Type annotations
 

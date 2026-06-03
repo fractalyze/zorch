@@ -98,14 +98,17 @@ class SumcheckRound(Round):
         if self.degree < 1:
             raise ValueError("degree must be >= 1")
 
+    def _combine(self, *factors: Array) -> Array:
+        """Product summand `prod_k f_k`; the scan driver reads only this, so the
+        round owns its summand and the driver stays summand-generic."""
+        return reduce(operator.mul, factors)
+
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)), shape (degree+1, *batch).
 
         One batched reduction over the whole u-domain, so it lowers toward a
         single reduction kernel rather than degree+1 separate ones."""
-        return jnp.sum(
-            reduce(operator.mul, factors_on_domain(state, self.degree)), axis=-1
-        )
+        return jnp.sum(self._combine(*factors_on_domain(state, self.degree)), axis=-1)
 
     def __call__(
         self, state: Sequence[Array], transcript: Transcript
