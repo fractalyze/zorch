@@ -21,6 +21,7 @@ py_library(
 
 _DEPS = [
     ":poseidon2",
+    requirement("absl_py"),
     requirement("jax"),
     requirement("numpy"),
     requirement("zk_dtypes"),

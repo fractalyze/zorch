@@ -60,7 +60,8 @@ class ChainTest(absltest.TestCase):
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(vcarry == final))  # lockstep carries agree
-        assert isinstance(vt, StubTranscript)
+        if not isinstance(vt, StubTranscript):
+            raise AssertionError("expected StubTranscript")
         self.assertEqual(vt.pos, 3)  # one challenge per round
 
     def test_chain_is_a_round_so_chains_nest(self) -> None:
@@ -70,7 +71,8 @@ class ChainTest(absltest.TestCase):
         final, t, msgs = outer(jnp.array(4, KB), StubTranscript(ch))
         self.assertEqual(len(msgs), 2)  # [inner's message list, scale-5's message]
         self.assertEqual(len(msgs[0]), 2)  # inner ran two rounds
-        assert isinstance(t, StubTranscript)
+        if not isinstance(t, StubTranscript):
+            raise AssertionError("expected StubTranscript")
         self.assertEqual(t.pos, 3)  # 2 inner + 1 outer challenges
 
     def test_verify_rejects_message_count_mismatch(self) -> None:

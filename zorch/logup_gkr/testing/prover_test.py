@@ -83,7 +83,8 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         self.assertTrue(bool(msg.challenge == jnp.array(4, KB)))  # the sampled r
         self.assertEqual(len(state), 5)
         self.assertEqual(state[0].shape, (4,))  # width halved
-        assert isinstance(t2, StubTranscript)
+        if not isinstance(t2, StubTranscript):
+            raise AssertionError("expected StubTranscript")
         self.assertEqual(t2.pos, 1)  # one challenge consumed
 
     def test_end_to_end_sumcheck_reduction(self) -> None:

@@ -18,6 +18,7 @@ py_test(
     srcs = ["permutation_test.py"],
     deps = [
         ":permutation",
+        requirement("absl_py"),
         requirement("jax"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -42,6 +43,7 @@ py_test(
     deps = [
         ":compression",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -67,6 +69,7 @@ py_test(
     deps = [
         ":sponge",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,

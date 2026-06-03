@@ -95,7 +95,8 @@ class SumcheckVerifyTest(absltest.TestCase):
         next_claim, t2, r, ok = v_round(
             msg[0] + msg[1], msg, StubTranscript(jnp.array([5, 0], KB))
         )
-        assert isinstance(t2, StubTranscript)  # verifier threads the concrete stub
+        if not isinstance(t2, StubTranscript):  # verifier threads the concrete stub
+            raise AssertionError("expected StubTranscript")
         self.assertTrue(bool(ok))
         self.assertTrue(bool(r == jnp.array(5, KB)))
         self.assertEqual(t2.pos, 1)

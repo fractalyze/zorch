@@ -8,6 +8,7 @@ py_test(
     srcs = ["eq_test.py"],
     deps = [
         "//zorch/poly",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,

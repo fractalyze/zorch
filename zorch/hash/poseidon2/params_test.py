@@ -6,6 +6,7 @@ from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
+from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.poseidon2.params import Poseidon2Params
@@ -28,35 +29,27 @@ def _good(**over: Any) -> Poseidon2Params:
     return Poseidon2Params(**base)
 
 
-def test_external_matrix_defaults_to_canonical() -> None:
-    p = _good()
-    assert p.external_matrix is not None
-    assert p.external_matrix.shape == (16, 16)
-    assert p.external_matrix.dtype == F
+class Poseidon2ParamsTest(absltest.TestCase):
+    def test_external_matrix_defaults_to_canonical(self) -> None:
+        p = _good()
+        ext = p.external_matrix
+        if ext is None:
+            raise AssertionError("external_matrix should default to canonical")
+        self.assertEqual(ext.shape, (16, 16))
+        self.assertEqual(ext.dtype, F)
 
+    def test_bad_rc_shape_raises(self) -> None:
+        with self.assertRaises(ValueError) as cm:
+            _good(internal_constants=jnp.zeros((19, 16), dtype=F))  # wrong round count
+        self.assertIn("internal_constants", str(cm.exception))
 
-def test_bad_rc_shape_raises() -> None:
-    try:
-        _good(internal_constants=jnp.zeros((19, 16), dtype=F))  # wrong round count
-    except ValueError as e:
-        assert "internal_constants" in str(e)
-    else:
-        raise AssertionError("expected ValueError on wrong internal_constants shape")
-
-
-def test_nonzero_internal_lane_raises() -> None:
-    bad = np.zeros((20, 16), dtype=np.int32)
-    bad[0, 1] = 1  # lane 1 nonzero
-    try:
-        _good(internal_constants=jnp.array(bad, dtype=F))
-    except ValueError as e:
-        assert "lane" in str(e).lower()
-    else:
-        raise AssertionError("expected ValueError on nonzero internal lane 1..w-1")
+    def test_nonzero_internal_lane_raises(self) -> None:
+        bad = np.zeros((20, 16), dtype=np.int32)
+        bad[0, 1] = 1  # lane 1 nonzero
+        with self.assertRaises(ValueError) as cm:
+            _good(internal_constants=jnp.array(bad, dtype=F))
+        self.assertIn("lane", str(cm.exception).lower())
 
 
 if __name__ == "__main__":
-    test_external_matrix_defaults_to_canonical()
-    test_bad_rc_shape_raises()
-    test_nonzero_internal_lane_raises()
-    print("ok")
+    absltest.main()

@@ -26,6 +26,7 @@ py_test(
     tags = ["manual"],
     deps = [
         ":koalabear16",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
