@@ -10,6 +10,10 @@ the prover's and verifier's Fiat-Shamir transcripts cannot diverge.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from functools import partial
+
+import jax
 from jax import Array
 
 from zorch.poly.univariate import eval_univariate
@@ -17,13 +21,16 @@ from zorch.round import Round
 from zorch.transcript import Transcript
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@dataclass(frozen=True)
 class SumcheckRound(Round):
     """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`."""
 
-    def __init__(self, degree: int) -> None:
-        if degree < 1:
+    degree: int
+
+    def __post_init__(self) -> None:
+        if self.degree < 1:
             raise ValueError("degree must be >= 1")
-        self.degree = degree
 
     def __call__(
         self, claim: Array, msg: Array, transcript: Transcript
