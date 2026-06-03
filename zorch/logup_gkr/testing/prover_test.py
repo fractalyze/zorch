@@ -1,0 +1,196 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+"""Tests for the LogUp-GKR prover module.
+
+`LogupSumcheckRound` -- the per-variable LogUp sumcheck round -- and
+`GkrLayerRound` -- one GKR layer -- both live in `prover.py`, so both are
+exercised here. Full correctness (per-layer oracle + reduction to the input leaf
+MLE) is the prove->verify roundtrip in verifier_test; this pins the prover's own
+invariants.
+"""
+
+from __future__ import annotations
+
+import jax.numpy as jnp
+import zk_dtypes
+from absl.testing import absltest
+from jax import Array
+
+from zorch.logup_gkr.circuit import build_pyramid, extract_outputs
+from zorch.logup_gkr.prover import (
+    _DEGREE,
+    GkrLayerRound,
+    LogupSumcheckRound,
+    bind_output,
+    logup_combine,
+)
+from zorch.logup_gkr.testing import prove_gkr, random_first_layer
+from zorch.poly import eval_univariate
+from zorch.prove import fold_rounds
+from zorch.round import ProveChain
+from zorch.testkit.fusion import assert_fusion_ready
+from zorch.testkit.random_field import rand_field
+from zorch.transcript import StubTranscript, Transcript
+
+KB = zk_dtypes.koalabear
+
+
+def _state(seed: int, width: int) -> list[Array]:
+    """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
+    return [rand_field(seed + i, (width,), KB) for i in range(5)]
+
+
+class LogupSumcheckRoundTest(absltest.TestCase):
+    def test_round_poly_matches_naive_cubic(self) -> None:
+        st = _state(20, 8)
+        rnd = LogupSumcheckRound(jnp.array(7, KB))
+        msg = rnd._round_poly(st)
+        self.assertEqual(msg.shape, (4,))  # degree 3 -> 4 evals
+        half = 4
+        for u in range(4):
+            uf = jnp.array(u, KB)
+            folded = [x[:half] + uf * (x[half:] - x[:half]) for x in st]
+            want = jnp.sum(rnd._combine(*folded))
+            self.assertTrue(bool(msg[u] == want))
+
+    def test_round_poly_with_batch_dimension(self) -> None:
+        # Leading batch dims must broadcast: msg is (degree+1, *batch).
+        batch = 3
+        st = [x.reshape(batch, -1) for x in _state(20, 24)]
+        msg = LogupSumcheckRound(jnp.array(7, KB))._round_poly(st)
+        self.assertEqual(msg.shape, (4, batch))
+
+    def test_fold_matches_manual(self) -> None:
+        st = _state(30, 8)
+        r = jnp.array(5, KB)
+        got = LogupSumcheckRound(jnp.array(3, KB))._fold(st, r)
+        self.assertEqual(len(got), 5)
+        for x, g in zip(st, got):
+            self.assertEqual(g.shape, (4,))  # width halved
+            self.assertTrue(bool(jnp.all(g == x[:4] + r * (x[4:] - x[:4]))))
+
+    def test_sumcheck_invariant_s0_plus_s1(self) -> None:
+        st = _state(40, 16)
+        rnd = LogupSumcheckRound(jnp.array(9, KB))
+        msg = rnd._round_poly(st)
+        # s(0)+s(1) == sum over the full hypercube of the combine (the claim)
+        self.assertTrue(bool(msg[0] + msg[1] == jnp.sum(rnd._combine(*st))))
+
+    def test_call_returns_round_msg_with_challenge(self) -> None:
+        st = _state(50, 8)
+        t = StubTranscript(jnp.array([4, 0, 0], dtype=KB))
+        state, t2, msg = LogupSumcheckRound(jnp.array(2, KB))(st, t)
+        self.assertEqual(msg.round_poly.shape, (4,))
+        self.assertTrue(bool(msg.challenge == jnp.array(4, KB)))  # the sampled r
+        self.assertEqual(len(state), 5)
+        self.assertEqual(state[0].shape, (4,))  # width halved
+        assert isinstance(t2, StubTranscript)
+        self.assertEqual(t2.pos, 1)  # one challenge consumed
+
+    def test_end_to_end_sumcheck_reduction(self) -> None:
+        # Drive the round to completion; the running claim must reduce
+        # consistently each round and match the final width-1 evaluation.
+        width = 16
+        st = _state(60, width)
+        lam = jnp.array(11, KB)
+        rnd = LogupSumcheckRound(lam)
+        n = 4  # log2(16)
+        challenges = rand_field(99, (n,), KB)
+
+        # Replay round-by-round to check the per-round sumcheck identity.
+        claim = jnp.sum(rnd._combine(*st))
+        state = st
+        t: Transcript = StubTranscript(challenges)
+        for i in range(n):
+            state, t, msg = rnd(state, t)
+            self.assertTrue(bool(msg.round_poly[0] + msg.round_poly[1] == claim))
+            claim = eval_univariate(msg.round_poly, challenges[i])
+        self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
+        self.assertTrue(bool(rnd._combine(*state)[0] == claim))
+
+        # `fold_rounds` collects the same round polys and the bound point.
+        _, _, msgs = fold_rounds(rnd, st, StubTranscript(challenges), n)
+        round_polys = jnp.stack([m.round_poly for m in msgs])
+        point = jnp.stack([m.challenge for m in msgs])
+        self.assertEqual(round_polys.shape, (n, 4))
+        self.assertTrue(bool(jnp.all(point == challenges)))
+
+    def test_round_poly_is_fusion_ready(self) -> None:
+        # Straight-line element-wise field ops + the one inherent Sigma; see
+        # zorch.testkit.fusion (proxy for issue #21's ZorchRoundRewriter).
+        st = _state(80, 8)
+        assert_fusion_ready(
+            LogupSumcheckRound(jnp.array(5, KB))._round_poly, st, reduces=1
+        )
+
+    def test_state_must_have_five_factors(self) -> None:
+        with self.assertRaises(ValueError):
+            LogupSumcheckRound(jnp.array(1, KB))._round_poly(_state(70, 8)[:4])
+
+    def test_combine_delegates_to_shared_logup_combine(self) -> None:
+        # The round's _combine and the module-level logup_combine (which the GKR
+        # verifier oracle also calls) must stay identical.
+        lam = jnp.array(6, KB)
+        eq, n0, d1, n1, d0 = (jnp.array(v, KB) for v in (2, 3, 4, 5, 7))
+        self.assertTrue(
+            bool(
+                LogupSumcheckRound(lam)._combine(eq, n0, d1, n1, d0)
+                == logup_combine(lam, eq, n0, d1, n1, d0)
+            )
+        )
+
+
+class BindOutputTest(absltest.TestCase):
+    def test_initial_carry_shapes(self) -> None:
+        first = random_first_layer(7, 2, 3)
+        output = extract_outputs(build_pyramid(first)[-1])
+        ch = rand_field(1, (32,), KB)
+        (num_eval, den_eval, point), _ = bind_output(output, StubTranscript(ch))
+        self.assertEqual(num_eval.shape, ())
+        self.assertEqual(den_eval.shape, ())
+        # The output layer has num_interaction_variables + 1 variables.
+        self.assertEqual(point.shape, (first.num_interaction_variables + 1,))
+
+
+class GkrProverTest(absltest.TestCase):
+    def test_chain_emits_one_proof_per_non_floor_layer(self) -> None:
+        first = random_first_layer(11, 1, 2)
+        layers, _, proofs, _ = prove_gkr(first, rand_field(2, (64,), KB))
+        self.assertEqual(len(proofs), len(layers) - 1)
+        for lp, layer in zip(proofs, reversed(layers[:-1]), strict=True):
+            self.assertEqual(lp.round_polys.shape, (layer.num_variables, _DEGREE + 1))
+            openings = (
+                lp.numerator_0,
+                lp.numerator_1,
+                lp.denominator_0,
+                lp.denominator_1,
+            )
+            for opening in openings:
+                self.assertEqual(opening.shape, ())  # final width-1 openings
+
+    def test_first_layer_sumcheck_identity(self) -> None:
+        # s(0) + s(1) of the first round equals the layer's claim lam*num + den.
+        first = random_first_layer(13, 2, 2)
+        layers = build_pyramid(first)
+        output = extract_outputs(layers[-1])
+        ch = rand_field(3, (64,), KB)
+        carry, transcript = bind_output(output, StubTranscript(ch))
+        # The first layer round samples lam off this same transcript position;
+        # peeking is non-destructive (StubTranscript is immutable).
+        _, lam = transcript.sample(1)
+        claim = lam[0] * carry[0] + carry[1]
+        chain = ProveChain([GkrLayerRound(layer) for layer in reversed(layers[:-1])])
+        _, _, proofs = chain(carry, transcript)
+        first_round = proofs[0].round_polys[0]
+        self.assertTrue(bool(first_round[0] + first_round[1] == claim))
+
+    def test_deterministic_under_fixed_transcript(self) -> None:
+        first = random_first_layer(17, 1, 3)
+        ch = rand_field(4, (64,), KB)
+        _, _, a, _ = prove_gkr(first, ch)
+        _, _, b, _ = prove_gkr(first, ch)
+        for pa, pb in zip(a, b):
+            self.assertTrue(bool(jnp.all(pa.round_polys == pb.round_polys)))
+
+
+if __name__ == "__main__":
+    absltest.main()
