@@ -6,7 +6,7 @@ import unittest
 import jax.numpy as jnp
 import zk_dtypes
 
-from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 
 KB = zk_dtypes.koalabear
 
@@ -28,3 +28,19 @@ class ExpandEqTest(unittest.TestCase):
             jnp.array(1, dtype=KB) - jnp.array(3, dtype=KB)
         )
         self.assertEqual(int(out[2]), int(expected))
+
+
+class EvalEqTest(unittest.TestCase):
+    def test_matches_hypercube_inner_product(self) -> None:
+        # eq is the reproducing kernel: eq(w,x) == Σ_v eq(v,w)·eq(v,x).
+        w = jnp.array([3, 5, 7], dtype=KB)
+        x = jnp.array([2, 9, 4], dtype=KB)
+        ew = expand_eq_to_hypercube(w, jnp.ones([], dtype=KB))
+        ex = expand_eq_to_hypercube(x, jnp.ones([], dtype=KB))
+        self.assertEqual(int(eval_eq(w, x)), int((ew * ex).sum()))
+
+    def test_one_on_equal_boolean_points(self) -> None:
+        a = jnp.array([1, 0, 1], dtype=KB)
+        self.assertEqual(int(eval_eq(a, a)), 1)
+        b = jnp.array([1, 1, 1], dtype=KB)
+        self.assertEqual(int(eval_eq(a, b)), 0)
