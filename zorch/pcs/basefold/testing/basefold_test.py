@@ -7,13 +7,17 @@ import jax
 import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
+from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import MerkleTree
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
 from zorch.pcs.basefold.verifier import BasefoldVerifier
-from zorch.transcript import StubTranscript
+from zorch.poly.multilinear import eval_mle
+from zorch.testkit.random_field import rand_field
+from zorch.transcript import DuplexTranscript
 
 
 def _basefold(
@@ -43,12 +47,6 @@ class BasefoldTest(absltest.TestCase):
         self.assertIsInstance(pdata, BasefoldProverData)
         self.assertEqual(pdata.widths, (K,))
 
-    def test_open_not_implemented(self) -> None:
-        bf, *_ = _basefold()
-        stub = StubTranscript(jnp.zeros(1, dtype=F))
-        with self.assertRaises(NotImplementedError):
-            bf.open(BasefoldProverData([], None, None, (0,)), [], stub)
-
     def test_prover_data_pytree_round_trips(self) -> None:
         bf, rs, tree, S = _basefold()
         mle = jnp.arange(S * 3, dtype=F).reshape(S, 3)
@@ -61,14 +59,6 @@ class BasefoldTest(absltest.TestCase):
         # mle/codeword are data leaves -> must survive the round-trip too.
         self.assertTrue(bool(jnp.array_equal(restored.mle, pdata.mle)))
         self.assertTrue(bool(jnp.array_equal(restored.codeword, pdata.codeword)))
-
-    def test_verify_not_implemented(self) -> None:
-        _, rs, tree, _ = _basefold()
-        stub = StubTranscript(jnp.zeros(1, dtype=F))
-        with self.assertRaises(NotImplementedError):
-            BasefoldVerifier(rs, tree).verify(
-                jnp.zeros((), dtype=F), [], jnp.zeros(0, dtype=F), None, stub
-            )
 
     def test_proof_pytree_round_trips(self) -> None:
         from zorch.commit.merkle import Opening
@@ -96,6 +86,43 @@ class BasefoldTest(absltest.TestCase):
         self.assertEqual(pdata.mle.shape, (S, K))
         self.assertEqual(pdata.codeword.shape, (rs.block_len, K))
         self.assertEqual(pdata.mle.tolist(), mle.tolist())
+
+
+def _transcript() -> DuplexTranscript:
+    return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+
+def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
+    # EF element = 4 base-field limbs; rand_field emits base fields.
+    return rand_field(seed, (*shape, 4), F).view(EF).reshape(shape)
+
+
+class BasefoldOpenTest(absltest.TestCase):
+    def _commit(self, log_s: int, K: int, blowup: int = 2) -> tuple[
+        BasefoldProver,
+        BasefoldVerifier,
+        jnp.ndarray,
+        BasefoldProverData,
+        jnp.ndarray,
+        int,
+    ]:
+        S = 1 << log_s
+        rs = ReedSolomon(message_len=S, blowup=blowup, dtype=EF)
+        _, _, tree = koalabear16_merkle()
+        prover = BasefoldProver(rs, tree, num_queries=4)
+        verifier = BasefoldVerifier(rs, tree, num_queries=4)
+        mle = _rand_ef(1, (S, K))  # [S, K]
+        cols = [mle[:, k] for k in range(K)]
+        root, pdata = prover.commit(cols)
+        return prover, verifier, root, pdata, mle, log_s
+
+    def test_open_verify_round_trip_k1(self) -> None:
+        prover, verifier, root, pdata, mle, log_s = self._commit(log_s=3, K=1)
+        z = _rand_ef(2, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        self.assertEqual(values[0].tolist(), eval_mle(mle[:, 0], z).tolist())
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
 
 
 if __name__ == "__main__":
