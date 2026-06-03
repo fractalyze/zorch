@@ -39,6 +39,13 @@ class FriValuesTest(absltest.TestCase):
 
 
 class FriFoldCommuteTest(absltest.TestCase):
+    def test_fri_fold_rejects_length_one_codeword(self) -> None:
+        # n=1 has no conjugate pair to fold: half=0 broadcasts the empty
+        # first-half against the length-1 second-half to a silent empty result.
+        # Reject it so misuse fails loudly instead of returning garbage.
+        with self.assertRaises(ValueError):
+            fri_fold(jnp.ones(1, F), jnp.array(6, dtype=F))
+
     def test_fold_encode_commute(self) -> None:
         # fold(encode(p), β) == encode(p_even + β·p_odd) on the squared domain.
         k = 4

@@ -52,6 +52,8 @@ def fri_fold(codeword: Array, beta: Array) -> Array:
     f(−x)=codeword[half:], x=domain[:half]. Result is the fold over the order-(n/2)
     subgroup (=squared domain), again in natural order."""
     n = codeword.shape[0]
+    if n < 2:
+        raise ValueError(f"fri_fold requires a codeword of length >= 2, got {n}")
     half = n // 2
     domain = eval_domain(_base_dtype(codeword.dtype), n)
     return fri_fold_values(codeword[:half], codeword[half:], beta, domain[:half])
