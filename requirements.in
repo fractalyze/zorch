@@ -16,4 +16,4 @@ zkx-cuda-pjrt==0.0.5.dev20260602231953
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
-zkbench==0.3.0
+zkbench==0.4.0
