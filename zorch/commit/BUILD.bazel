@@ -34,6 +34,9 @@ py_test(
     size = "small",
     srcs = ["merkle_test.py"],
     env = {"JAX_PLATFORMS": "cpu"},
+    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
+    # CI job covers it); drop the tag after the jax pin bump.
+    tags = ["manual"],
     deps = [
         ":merkle",
         "//zorch/commit/testing:koalabear16",
