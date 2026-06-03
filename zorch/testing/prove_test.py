@@ -33,11 +33,11 @@ class FoldRoundsTest(absltest.TestCase):
         self.assertEqual(len(msgs), 3)
 
     def test_prove_rejects_zero_round_state(self) -> None:
-        # A width-1 carry derives 0 rounds, so jnp.stack would choke on an empty
-        # message list; fail fast with a clear message instead.
+        # A width-1 carry derives 0 rounds: the scan would yield no round polys.
+        # Fail fast with a clear message instead.
         with self.assertRaisesRegex(ValueError, "at least one round"):
             prove(
-                _CollectRound(),
+                prover.SumcheckRound(1),
                 [jnp.arange(1, dtype=KB)],
                 StubTranscript(jnp.zeros(0, KB)),
             )

@@ -13,11 +13,12 @@ inside are fine — `jit` unrolls them.
 **Do not `@jit`** when the function:
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
-- composes other work in a static loop with host-side steps between — e.g.
-  `zorch.prove` loops the round, and `prover.SumcheckRound.__call__` wraps the
-  round-poly/fold arithmetic around the host-side transcript `observe` /
-  `sample`. Decorating these would inline everything into one trace and pull
-  the transcript ops in with it.
+- composes sub-rounds in a static Python loop over heterogeneous shapes — e.g.
+  `fold_rounds` and the GKR `ProveChain` / `VerifyChain` thread the carry +
+  transcript through rounds whose message shapes vary round to round. `@jit`
+  would unroll the composition into one trace; the per-round numeric bodies are
+  the fusion target, not the driver. (`prove` / `verify` are the deliberate
+  exception — their per-variable loop is homogeneous, so it *is* one `lax.scan`.)
 
 A round's `_round_poly` / `_fold` are pure numeric and *could* be `@jit`'d,
 but are deliberately left undecorated: they are the bodies a future marked
@@ -52,10 +53,11 @@ class LogupSumcheckRound(Round):
 
 **Which classes.** The per-variable sumcheck rounds —
 `sumcheck.prover.SumcheckRound`, `sumcheck.verifier.SumcheckRound`,
-`logup_gkr.prover.LogupSumcheckRound` — are registered: the `prove` / `verify` /
-`fold_rounds` drivers loop them, a future `lax.scan` carries them (issue #58), and
-they are `vmap`-able over their config. A device-side transcript threaded as a
-`scan` carry falls under the same rule when it lands (issue #58).
+`logup_gkr.prover.LogupSumcheckRound` — are registered: `fold_rounds` loops them,
+`prove` / `verify` carry them through a `lax.scan` (the per-variable loop is one
+traced region), and they are `vmap`-able over their config. Both transcripts —
+`DuplexTranscript` and the test `StubTranscript` — are registered for the same
+reason: the `scan` threads the transcript as part of its carry.
 
 Do **not** pre-register what no transform threads yet — registration that buys no
 capability is noise:

@@ -20,7 +20,8 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.sumcheck import verifier
+from zorch.prove import prove
+from zorch.sumcheck import prover, verifier
 from zorch.transcript import StubTranscript
 from zorch.verify import verify
 
@@ -39,6 +40,14 @@ def _verify_eqn_count(rounds: int) -> int:
     return len(jaxpr.jaxpr.eqns)
 
 
+def _prove_eqn_count(rounds: int) -> int:
+    f = jnp.arange(1, (1 << rounds) + 1, dtype=KB)
+    jaxpr = jax.make_jaxpr(lambda s, t: prove(prover.SumcheckRound(1), s, t))(
+        [f], StubTranscript(jnp.zeros(rounds, KB))
+    )
+    return len(jaxpr.jaxpr.eqns)
+
+
 class VerifyScanShapeTest(absltest.TestCase):
     def test_verify_jaxpr_is_flat_in_trip_count(self) -> None:
         # Unrolled: eqn count grows with rounds. Scanned: one while-region, flat.
@@ -49,6 +58,19 @@ class VerifyScanShapeTest(absltest.TestCase):
         jaxpr = jax.make_jaxpr(
             lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t)
         )(jnp.array(0, KB), proof, StubTranscript(jnp.zeros(4, KB)))
+        self.assertIn("scan", _top_primitives(jaxpr))
+
+
+class ProveScanShapeTest(absltest.TestCase):
+    def test_prove_jaxpr_is_flat_in_trip_count(self) -> None:
+        # 8 vs 32 leaves -> 3 vs 5 rounds; a fixed-width scan body is flat.
+        self.assertEqual(_prove_eqn_count(3), _prove_eqn_count(5))
+
+    def test_prove_lowers_to_a_scan(self) -> None:
+        f = jnp.arange(1, 17, dtype=KB)
+        jaxpr = jax.make_jaxpr(lambda s, t: prove(prover.SumcheckRound(1), s, t))(
+            [f], StubTranscript(jnp.zeros(4, KB))
+        )
         self.assertIn("scan", _top_primitives(jaxpr))
 
 
