@@ -7,3 +7,51 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [requirement("jax")],
 )
+
+# The folding spine: the `Round`/chain base, the Fiat-Shamir transcript, and the
+# generic 2-to-1 `prove` driver. Wired for Bazel so the benchmark py_binary
+# targets (and downstream consumers via @zorch) can depend on them; the round
+# bodies themselves are exercised under pytest.
+
+py_library(
+    name = "transcript",
+    srcs = [
+        "__init__.py",
+        "transcript.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [requirement("jax")],
+)
+
+py_library(
+    name = "round",
+    srcs = ["round.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":transcript",  # also the package-init carrier for this dir
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "prove",
+    srcs = ["prove.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":round",
+        ":transcript",
+        "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "verify",
+    srcs = ["verify.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":round",
+        ":transcript",
+        requirement("jax"),
+    ],
+)
