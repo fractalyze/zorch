@@ -131,3 +131,8 @@ Flag a subsystem that ships source but no tests.
 - **`jnp.sum` ambiguity (S3).** One trailing `axis=-1` sum is the inherent `Σ`;
   the check flags a *second* reduction or a gather. A genuinely batched single
   reduction is not a split.
+- **Helper-hidden ops escape the body grep (S3).** The op scan is lexical — the
+  fused body only, not the helpers it calls (`apply_matrix`, `_combine`,
+  `factors_on_domain`). A split factored into a helper won't match. Helpers
+  self-enforce element-wise via `linear.py`'s no-`dot`/`reduce`/`gather`
+  contract; a periodic manual check of them is the backstop.
