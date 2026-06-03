@@ -1,0 +1,56 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_test(
+    name = "fusion_test",
+    size = "small",
+    srcs = ["fusion_test.py"],
+    deps = [
+        "//zorch:fusion",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "prove_test",
+    size = "small",
+    srcs = ["prove_test.py"],
+    deps = [
+        "//zorch:prove",
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/sumcheck",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "round_test",
+    size = "small",
+    srcs = ["round_test.py"],
+    deps = [
+        "//zorch:round",
+        "//zorch:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "transcript_test",
+    size = "small",
+    srcs = ["transcript_test.py"],
+    deps = [
+        "//zorch:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
