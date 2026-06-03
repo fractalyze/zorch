@@ -1,5 +1,6 @@
-load("@rules_python//python:defs.bzl", "py_library")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 # Shared LogUp-GKR fixtures + chain runners (random_first_layer, prove_gkr,
 # verify_gkr) — used by the package tests and the benchmark.
@@ -15,4 +16,65 @@ py_library(
         requirement("jax"),
         requirement("zk_dtypes"),
     ],
+)
+
+py_test(
+    name = "circuit_test",
+    size = "small",
+    srcs = ["circuit_test.py"],
+    deps = [
+        ":testing",
+        "//zorch/logup_gkr",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "prover_test",
+    size = "small",
+    srcs = ["prover_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:prove",
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/testkit:fusion",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "verifier_test",
+    size = "small",
+    srcs = ["verifier_test.py"],
+    deps = [
+        ":testing",
+        "//zorch/logup_gkr",
+        "//zorch/poly",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "golden_vector_test",
+    size = "small",
+    srcs = ["golden_vector_test.py"],
+    deps = [
+        ":testing",
+        "//zorch/logup_gkr",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
 )

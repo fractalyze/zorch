@@ -15,6 +15,13 @@ py_library(
     ],
 )
 
+py_library(
+    name = "fusion",
+    srcs = ["fusion.py"],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [requirement("jax")],
+)
+
 py_test(
     name = "random_field_test",
     size = "small",
