@@ -5,11 +5,13 @@ design and open decisions: epic issue
 [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 A Modern SNARK is IOP + PCS, and the PCS is the axis schemes vary on. `pcs` is the
-one seam every scheme's commitment plugs into, with two concrete instances that
-sit at opposite ends of the design space: [`kzg`](#kzg-pairing-based) (pairing,
-trusted setup) and [`fri`](#fri-transparent) (transparent, hash-based). That both
-satisfy the same two protocols is the evidence the seam is not shaped after one
-family.
+one seam every scheme's commitment plugs into, with three concrete instances
+spanning the design space: [`kzg`](#kzg-pairing-based) (pairing, trusted setup),
+[`fri`](#fri-transparent) (transparent, hash-based), and
+[`basefold`](#basefold-transparent-multilinear) (transparent, the multilinear
+*matrix* commitment the [jagged PCS](#jagged-a-consumer-on-the-seam) builds on).
+That schemes at opposite ends of the space satisfy the same two protocols is the
+evidence the seam is not shaped after one family.
 
 ## Why the shape
 
@@ -28,8 +30,8 @@ form the scheme needs — KZG the coefficient basis (a powers-of-τ MSM), the FR
 family evaluations over a domain. No `PolynomialSpace` and no AIR/quotient
 commitment index lives on the seam; those are FRI-implementation or consumer
 concerns, kept out so no scheme's shape ossifies into the interface. A scheme is
-named only on its instance (`kzg`, `fri`), never on the seam — the agnostic
-non-negotiable, the same way `poseidon2` names a `Permutation` instance.
+named only on its instance (`kzg`, `fri`, `basefold`), never on the seam — the
+agnostic non-negotiable, the same way `poseidon2` names a `Permutation` instance.
 
 ### kzg (pairing-based)
 
@@ -51,6 +53,30 @@ Structurally the opposite of KZG on the same seam: interactive, Merkle-backed
 ([commit](commit.md) + [coding](coding.md)'s RS encode and FRI fold), no trusted
 setup, all field/NTT arithmetic.
 
+### basefold (transparent, multilinear)
+
+The multilinear-evaluation PCS: `commit` is the RS low-degree extension of each
+column followed by a Merkle commit of the codeword rows; `open` (P3) is the FRI
+query phase over the folded layers, reusing [`fri`](#fri-transparent)'s machinery.
+The one structural difference from `kzg`/`fri` is that BaseFold is a **matrix
+commitment** — the columns of an MLE `[2^v, w]` share one RS domain and the Merkle
+leaves are codeword *rows* spanning every column, so the whole batch binds under a
+**single** root, where `kzg`/`fri` return one root per polynomial. The seam permits
+this because `commitment` is scheme-defined; the input convention stays uniform
+(`commit` takes a `Sequence` of 1D column MLEs, like the other instances).
+
+## Jagged: a consumer on the seam
+
+The jagged PCS (`zorch/commit/jagged/`) is the first `basefold` consumer: it
+densifies variable-height columns into one MLE and commits it, then binds the
+jagged structure (row/column counts, hashed) into the single root. The layering is
+deliberate — `chip → blocks` is the *consumer's* concern (e.g. whir-zorch), while
+`blocks → dense MLE` is zorch's, because the layout must match the `t_c`
+prefix-sum convention the jagged indicator (`zorch/commit/jagged/poly.py`) reads.
+The structure bind lives in the jagged layer, not the generic seam — it is why
+BaseFold's single-root commitment matters: there is exactly one root to hash the
+structure against.
+
 ## Fusion by construction
 
 The PCS seam is agnostic; each instance's `commit`/`open`/`verify` lowers down one
@@ -60,7 +86,8 @@ of three tiers, and which tier an op takes is the only thing that varies:
   portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT.
 - **GPU blessed primitive** — a dedicated `stablehlo` op or custom emitter
   (run-fast): KZG's `lax.msm` (commit and the opening proof), the
-  [poseidon2](hash.md) permutation behind FRI's Merkle layers, the NTT.
+  [poseidon2](hash.md) permutation behind FRI's and BaseFold's Merkle layers, the
+  NTT (the RS LDE in both FRI and BaseFold commit).
 - **CPU-legalized primitive** — `lax.pairing_check` for KZG `verify`, which has no
   GPU kernel; the verifier is O(1), so the host round-trip (MSM on GPU →
   materialize → pairing on CPU) is irrelevant.

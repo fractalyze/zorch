@@ -9,16 +9,16 @@ import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 
 from zorch.coding.reed_solomon import ReedSolomon
-from zorch.commit.basefold import Basefold
 from zorch.commit.jagged.commit import JaggedPcs
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
+from zorch.pcs.basefold.prover import BasefoldProver
 
 
 def _jagged_pcs(log_s: int = 2, blowup: int = 2) -> JaggedPcs:
     S = 1 << log_s
     rs = ReedSolomon(message_len=S, blowup=blowup, dtype=F)
     sponge, comp, tree = koalabear16_merkle()
-    return JaggedPcs(Basefold(rs, tree), sponge, comp)
+    return JaggedPcs(BasefoldProver(rs, tree), sponge, comp)
 
 
 def _blocks(heights: list[int]) -> list[jnp.ndarray]:

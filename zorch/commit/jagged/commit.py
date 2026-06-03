@@ -20,9 +20,9 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.commit.jagged.dense import JaggedLayout, from_blocks
-from zorch.commit.pcs import Pcs
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
+from zorch.pcs.protocol import PcsProver
 
 
 def _structure_vec(layout: JaggedLayout) -> Array:
@@ -36,12 +36,12 @@ def _structure_vec(layout: JaggedLayout) -> Array:
 
 
 class JaggedPcs:
-    """Commits variable-height blocks via an injected multilinear `Pcs`, binding
-    the jagged structure (row/column counts) into the returned commitment.
+    """Commits variable-height blocks via an injected multilinear `PcsProver`,
+    binding the jagged structure (row/column counts) into the returned commitment.
 
     `sponge` / `compressor` perform the structure bind (the jagged layer owns it,
     not the PCS). The jit'd device zone is built once in `__init__`, capturing
-    `pcs` / `sponge` / `compressor` constants, and exposed as `self._commit`. It
+    `prover` / `sponge` / `compressor` constants, and exposed as `self._commit`. It
     is keyed on the MLE + structure shapes, so it compiles once per **(area tier,
     block count)** and reuses the artifact as block heights vary within a tier;
     making it strictly block-count-invariant would need a fixed-length structure
@@ -50,7 +50,9 @@ class JaggedPcs:
 
     _commit: Any  # jax.jit-wrapped device-commit closure, built in __init__
 
-    def __init__(self, pcs: Pcs, sponge: Sponge, compressor: Compression) -> None:
+    def __init__(
+        self, prover: PcsProver, sponge: Sponge, compressor: Compression
+    ) -> None:
         if sponge.out != compressor.chunk:
             raise ValueError(
                 f"sponge digest ({sponge.out}) must equal compressor chunk "
@@ -61,13 +63,17 @@ class JaggedPcs:
                 f"compressor.arity must be 2 for the (root, structure_hash) "
                 f"bind, got {compressor.arity}"
             )
-        self.pcs = pcs
+        self.prover = prover
         self.sponge = sponge
         self.compressor = compressor
 
         @jax.jit
         def _commit(mle: Array, structure: Array) -> tuple[Array, Any]:
-            root, prover_data = pcs.commit(mle)
+            # The seam commits a Sequence of column MLEs; BaseFold binds them
+            # jointly under one root (a matrix commitment), which the structure
+            # bind below hashes against.
+            columns = [mle[:, j] for j in range(mle.shape[1])]
+            root, prover_data = prover.commit(columns)
             structure_hash = sponge.hash(structure)
             bound = compressor.compress(jnp.stack([root, structure_hash]))
             return bound, prover_data
