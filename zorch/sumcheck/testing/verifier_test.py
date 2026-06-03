@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
@@ -16,6 +17,7 @@ from zorch.transcript import StubTranscript
 from zorch.verify import verify
 
 KB = zk_dtypes.koalabear
+_GPU_BACKEND = jax.default_backend() == "gpu"
 
 
 class SumcheckRoundtripTest(absltest.TestCase):
@@ -44,6 +46,11 @@ class SumcheckRoundtripTest(absltest.TestCase):
         b = rand_field(43, (1 << 4,), KB)
         self._roundtrip((a, b), degree=2, n=4, seed=44)
 
+    @absltest.skipIf(
+        _GPU_BACKEND,
+        "cuda-pjrt aborts compiling koalabearx4 EF reductions; "
+        "remove when fractalyze/prime-ir#332 lands",
+    )
     def test_extension_challenges_roundtrip(self) -> None:
         EF = zk_dtypes.koalabearx4
         f = rand_field(52, (1 << 4,), KB).astype(EF)
