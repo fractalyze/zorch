@@ -25,6 +25,51 @@ but are deliberately left undecorated: they are the bodies a future marked
 fused region (`stablehlo.composite`) + zkx emitter will lower to one kernel
 (see `sumcheck.md`), not blanket-`@jit` candidates.
 
+## Loops: `for` vs `lax.scan` vs `vmap`
+
+Three ways to repeat work; the **shape of the per-iteration output** picks one.
+
+- **`jax.vmap` — independent items, no carry.** A batch whose elements are
+  independent (open N FRI queries' Merkle paths, hash N rows) is one `vmap` over
+  the batch axis — on device, no Python loop and no `scan`. What is mapped must be
+  a registered pytree (see [Pytree registration](#pytree-registration)): `Opening`
+  is registered so `tree.open` / `reconstruct_root` `vmap` over a query batch.
+
+- **Python `for` — static-size straight-line arithmetic.** A small,
+  compile-time-known count of pure field ops (Horner, synthetic division, a
+  permutation's rounds, a Merkle fold's layers) is unrolled with a Python `for`.
+  It traces to straight-line element-wise IR that fuses; `lax.scan` would lower to
+  `stablehlo.while`, a GPU control-flow boundary that breaks fusion and adds loop
+  overhead for a tiny trip count.
+
+- **`lax.scan` — homogeneous per-round loop inside one traced region.** When a
+  round repeats with a **round-invariant output shape** and the loop is (or will
+  be) one `jit`'d region, scan it: unrolling many rounds inflates the graph past
+  the ZKX PTX cliff (#58). `prove` / `verify` are the case — every variable's
+  round poly has the same shape. A `scan` carry must keep a **fixed shape**, so a
+  halving MLE state rides in a full-width buffer with the live prefix packed at the
+  front and the dead tail masked (see [`prove.py`](../zorch/prove.py)). The round
+  is the carry, so it must be a registered pytree.
+
+- **Python `for` — heterogeneous / non-round-invariant per-round loop.** When the
+  per-round message or committed artifact changes shape across rounds it is not
+  `scan`-shaped — keep it a Python loop (`fold_rounds`, the FRI fold phase, the GKR
+  `ProveChain`). FRI's fold halves the codeword and commits a half-size Merkle
+  layer each round; the GKR pyramid halves each layer. This is safe as a
+  **host-orchestrated** loop (separate dispatches, not one giant traced graph) —
+  which is also why it stays a Python loop while the transcript is host-side (the
+  device-side transcript is [#3](https://github.com/fractalyze/zorch/issues/3)).
+
+The per-round Fiat-Shamir `observe` / `sample` is wrapped in a `Round` (the
+composable unit) by design, so a round loop is one of the two `Round` forms above:
+`fold_rounds` (heterogeneous → Python `for`) or `prove` / `verify` (homogeneous →
+`lax.scan`).
+
+Decision, in order: independent with no carry → `vmap`; static small straight-line
+arithmetic → `for`; sequential carry with a round-invariant shape in one traced
+region → `lax.scan`; sequential carry whose per-round shape varies, or that is
+host-orchestrated → `for`.
+
 ## Pytree registration
 
 A `Round` — or any object — that crosses a `jax` transform boundary (passed to or
