@@ -18,6 +18,7 @@ py_test(
     env = {"JAX_PLATFORMS": "cpu"},
     deps = [
         ":permutation",
+        requirement("absl_py"),
         requirement("jax"),
     ],
 )
@@ -43,6 +44,7 @@ py_test(
     deps = [
         ":compression",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ],
@@ -69,6 +71,7 @@ py_test(
     deps = [
         ":sponge",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ],

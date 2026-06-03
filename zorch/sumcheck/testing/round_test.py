@@ -65,7 +65,8 @@ class SumcheckRoundTest(absltest.TestCase):
         state, t2, msg = rnd([f], t)
         self.assertEqual(msg.shape, (2,))
         self.assertEqual(state[0].shape, (4,))  # width halved
-        assert isinstance(t2, StubTranscript)
+        if not isinstance(t2, StubTranscript):
+            raise AssertionError("expected StubTranscript")
         self.assertEqual(t2.pos, 1)  # one challenge consumed
 
     def test_round_poly_is_fusion_ready(self) -> None:

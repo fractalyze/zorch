@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import jax.numpy as jnp
+from absl.testing import absltest
 from jax import Array
 
 from zorch.hash.permutation import Permutation
@@ -16,18 +17,16 @@ class _Id:
         return state
 
 
-def test_duck_typed_impl_satisfies_protocol() -> None:
-    assert isinstance(_Id(), Permutation)
+class PermutationProtocolTest(absltest.TestCase):
+    def test_duck_typed_impl_satisfies_protocol(self) -> None:
+        self.assertIsInstance(_Id(), Permutation)
 
-
-def test_consumer_reads_width_and_dtype_without_naming_a_hash() -> None:
-    p = _Id()
-    state = jnp.zeros(p.width, dtype=p.dtype)  # sponge-style allocation
-    assert state.shape == (3,)
-    assert jnp.array_equal(p.permute(state), state)
+    def test_consumer_reads_width_and_dtype_without_naming_a_hash(self) -> None:
+        p = _Id()
+        state = jnp.zeros(p.width, dtype=p.dtype)  # sponge-style allocation
+        self.assertEqual(state.shape, (3,))
+        self.assertTrue(bool(jnp.array_equal(p.permute(state), state)))
 
 
 if __name__ == "__main__":
-    test_duck_typed_impl_satisfies_protocol()
-    test_consumer_reads_width_and_dtype_without_naming_a_hash()
-    print("ok")
+    absltest.main()

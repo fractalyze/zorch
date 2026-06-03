@@ -1,7 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import unittest
 from functools import partial
 from typing import Any
 
@@ -9,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import zk_dtypes
+from absl.testing import absltest
 from jax import Array
 
 from zorch.commit.jagged.poly import (
@@ -36,7 +36,7 @@ def _field_val(x: Array) -> bytes:
     return np.array(x).tobytes()
 
 
-class TransitionTableTest(unittest.TestCase):
+class TransitionTableTest(absltest.TestCase):
     def test_shape_and_onehot(self) -> None:
         # 64 = 4 memory × 16 bit states; each row is one-hot (valid) or zeros (FAIL).
         self.assertEqual(len(_TRANSITION_ROWS), NUM_MEMORY_STATES * NUM_BIT_STATES)
@@ -49,7 +49,7 @@ def _bits_msb(val: int, nbits: int, dtype: Any) -> Array:
     return jnp.array([(val >> (nbits - 1 - k)) & 1 for k in range(nbits)], dtype=dtype)
 
 
-class BpEvalCoreTest(unittest.TestCase):
+class BpEvalCoreTest(absltest.TestCase):
     def test_single_column_boolean_corner(self) -> None:
         # One column, range [t_c, t_{c+1}) = [0, 4), n_d=3, n_r=2.
         # At boolean points h=1 iff (i = r AND i<4). i=2,r=2 -> 1; i=2,r=1 -> 0.
@@ -78,7 +78,7 @@ class BpEvalCoreTest(unittest.TestCase):
         self.assertEqual(_field_val(oor), _field_val(EF0))
 
 
-class LayoutBuilderTest(unittest.TestCase):
+class LayoutBuilderTest(absltest.TestCase):
     def test_shape_and_empty_range_pad(self) -> None:
         # heights [4,2,3] → prefix [0,4,6,9], t_L=9, n_d=log2_ceil(9)+1=5.
         cps, cfg = build_jagged_layout([4, 2, 3], l_max=4, n_r=3, dtype=EF)
@@ -123,7 +123,7 @@ def _naive_jagged_mle(
     return total
 
 
-class EvalJaggedMleTest(unittest.TestCase):
+class EvalJaggedMleTest(absltest.TestCase):
     def test_matches_oracle_compile_once_many_heights(self) -> None:
         EF = zk_dtypes.koalabearx4
         # Several height vectors sharing the same (l_max, log-area tier).
@@ -157,3 +157,7 @@ class EvalJaggedMleTest(unittest.TestCase):
         bad_cps = cps.at[3].set(jnp.zeros(cfg.n_d, dtype=EF))  # padding row -> t=0
         bad = eval_jagged_mle(bad_cps, z_row, z_col, z_index, cfg=cfg)
         self.assertNotEqual(_field_val(good), _field_val(bad))
+
+
+if __name__ == "__main__":
+    absltest.main()

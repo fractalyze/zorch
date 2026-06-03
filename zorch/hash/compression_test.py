@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.compression import Compression, CompressionParams
@@ -35,81 +36,58 @@ _PLONKY3_COMPRESS_2X8 = jnp.array(
 )
 
 
-def test_compress_returns_chunk_shape_and_dtype() -> None:
-    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-    out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
-    assert out.shape == (8,)
-    assert out.dtype == F
+class CompressionTest(absltest.TestCase):
+    def test_compress_returns_chunk_shape_and_dtype(self) -> None:
+        c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
+        self.assertEqual(out.shape, (8,))
+        self.assertEqual(out.dtype, F)
 
+    def test_compress_2to1_is_full_width_permute_truncated(self) -> None:
+        # arity*chunk == width: no padding; compress == permute(flatten)[:chunk].
+        perm = koalabear16_perm()
+        c = Compression(perm, CompressionParams(arity=2, chunk=8))
+        x = jnp.arange(16, dtype=F).reshape(2, 8)
+        expected = perm.permute(x.reshape(-1))[:8]
+        self.assertTrue(bool(jnp.array_equal(c.compress(x), expected)))
 
-def test_compress_2to1_is_full_width_permute_truncated() -> None:
-    # arity*chunk == width: no padding; compress == permute(flatten)[:chunk].
-    perm = koalabear16_perm()
-    c = Compression(perm, CompressionParams(arity=2, chunk=8))
-    x = jnp.arange(16, dtype=F).reshape(2, 8)
-    expected = perm.permute(x.reshape(-1))[:8]
-    assert jnp.array_equal(c.compress(x), expected)
+    def test_compress_zero_pads_when_below_width(self) -> None:
+        # arity*chunk (8) < width (16): inputs go in the first lanes, rest stays zero.
+        perm = koalabear16_perm()
+        c = Compression(perm, CompressionParams(arity=2, chunk=4))
+        x = jnp.arange(8, dtype=F).reshape(2, 4)
+        pre = jnp.zeros(perm.width, dtype=F).at[:8].set(jnp.arange(8, dtype=F))
+        expected = perm.permute(pre)[:4]
+        self.assertTrue(bool(jnp.array_equal(c.compress(x), expected)))
 
+    def test_arity_chunk_exceeding_width_raises(self) -> None:
+        perm = koalabear16_perm()
+        with self.assertRaises(ValueError):
+            Compression(perm, CompressionParams(arity=3, chunk=8))  # 24 > 16
 
-def test_compress_zero_pads_when_below_width() -> None:
-    # arity*chunk (8) < width (16): inputs go in the first lanes, rest stays zero.
-    perm = koalabear16_perm()
-    c = Compression(perm, CompressionParams(arity=2, chunk=4))
-    x = jnp.arange(8, dtype=F).reshape(2, 4)
-    pre = jnp.zeros(perm.width, dtype=F).at[:8].set(jnp.arange(8, dtype=F))
-    expected = perm.permute(pre)[:4]
-    assert jnp.array_equal(c.compress(x), expected)
+    def test_invalid_params_raise(self) -> None:
+        for arity, chunk in ((1, 8), (2, 0)):  # arity < 2, chunk < 1
+            with self.assertRaises(ValueError):
+                CompressionParams(arity=arity, chunk=chunk)
 
+    def test_compress_wrong_input_shape_raises(self) -> None:
+        c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        with self.assertRaises(ValueError):
+            c.compress(jnp.arange(16, dtype=F))  # flat, not (2, 8)
 
-def test_arity_chunk_exceeding_width_raises() -> None:
-    perm = koalabear16_perm()
-    try:
-        Compression(perm, CompressionParams(arity=3, chunk=8))  # 24 > 16
-        assert False, "expected ValueError for arity*chunk > width"
-    except ValueError:
-        pass
+    def test_compress_matches_plonky3_golden(self) -> None:
+        c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
+        self.assertTrue(bool(jnp.array_equal(out, _PLONKY3_COMPRESS_2X8)))
 
-
-def test_invalid_params_raise() -> None:
-    for arity, chunk in ((1, 8), (2, 0)):  # arity < 2, chunk < 1
-        try:
-            CompressionParams(arity=arity, chunk=chunk)
-            assert False, f"expected ValueError for arity={arity}, chunk={chunk}"
-        except ValueError:
-            pass
-
-
-def test_compress_wrong_input_shape_raises() -> None:
-    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-    try:
-        c.compress(jnp.arange(16, dtype=F))  # flat, not (2, 8)
-        assert False, "expected ValueError for wrong input shape"
-    except ValueError:
-        pass
-
-
-def test_compress_matches_plonky3_golden() -> None:
-    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-    out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
-    assert jnp.array_equal(out, _PLONKY3_COMPRESS_2X8)
-
-
-def test_compress_vmap_matches_unbatched() -> None:
-    c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-    a = jnp.arange(16, dtype=F).reshape(2, 8)
-    b = (jnp.arange(16, dtype=F) + F(7)).reshape(2, 8)
-    batched = jax.vmap(c.compress)(jnp.stack([a, b]))
-    assert jnp.array_equal(batched[0], c.compress(a))
-    assert jnp.array_equal(batched[1], c.compress(b))
+    def test_compress_vmap_matches_unbatched(self) -> None:
+        c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        a = jnp.arange(16, dtype=F).reshape(2, 8)
+        b = (jnp.arange(16, dtype=F) + F(7)).reshape(2, 8)
+        batched = jax.vmap(c.compress)(jnp.stack([a, b]))
+        self.assertTrue(bool(jnp.array_equal(batched[0], c.compress(a))))
+        self.assertTrue(bool(jnp.array_equal(batched[1], c.compress(b))))
 
 
 if __name__ == "__main__":
-    test_compress_returns_chunk_shape_and_dtype()
-    test_compress_2to1_is_full_width_permute_truncated()
-    test_compress_zero_pads_when_below_width()
-    test_arity_chunk_exceeding_width_raises()
-    test_invalid_params_raise()
-    test_compress_wrong_input_shape_raises()
-    test_compress_matches_plonky3_golden()
-    test_compress_vmap_matches_unbatched()
-    print("ok")
+    absltest.main()

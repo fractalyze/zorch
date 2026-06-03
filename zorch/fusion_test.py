@@ -2,7 +2,7 @@
 
 import jax
 import jax.numpy as jnp
-import pytest
+from absl.testing import absltest
 from jaxlib.mlir.dialects import stablehlo
 from zk_dtypes import koalabear_mont as F
 
@@ -16,23 +16,20 @@ from zorch.testkit.random_field import rand_field
 _HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 
 
-def test_runs_the_decomposition() -> None:
-    s0 = rand_field(1, (8,), F)
-    decomp = lambda s: s + s + s  # straight-line
-    assert jnp.array_equal(fused_region(decomp, s0), decomp(s0))
+class FusedRegionTest(absltest.TestCase):
+    def test_runs_the_decomposition(self) -> None:
+        s0 = rand_field(1, (8,), F)
+        decomp = lambda s: s + s + s  # straight-line
+        self.assertTrue(bool(jnp.array_equal(fused_region(decomp, s0), decomp(s0))))
 
-
-@pytest.mark.skipif(not _HAS_COMPOSITE_OP, reason="jaxlib lacks stablehlo.CompositeOp")
-def test_emits_one_zorch_fused_region_composite() -> None:
-    s0 = rand_field(1, (8,), F)
-    decomp = lambda s: s + s
-    txt = jax.jit(lambda v: fused_region(decomp, v)).lower(s0).as_text()
-    assert txt.count("stablehlo.composite") == 1, txt
-    assert "zorch.fused_region" in txt
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_emits_one_zorch_fused_region_composite(self) -> None:
+        s0 = rand_field(1, (8,), F)
+        decomp = lambda s: s + s
+        txt = jax.jit(lambda v: fused_region(decomp, v)).lower(s0).as_text()
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        self.assertIn("zorch.fused_region", txt)
 
 
 if __name__ == "__main__":
-    test_runs_the_decomposition()
-    if _HAS_COMPOSITE_OP:
-        test_emits_one_zorch_fused_region_composite()
-    print("ok")
+    absltest.main()

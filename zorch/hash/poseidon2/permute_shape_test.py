@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
-import pytest
+from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.permutation import Permutation
@@ -26,47 +26,46 @@ def _params() -> Poseidon2Params:
     )
 
 
-def test_is_a_permutation() -> None:
-    p = Poseidon2(_params())
-    assert isinstance(p, Permutation)
-    assert p.width == 16 and p.dtype == F
+class Poseidon2PermuteShapeTest(absltest.TestCase):
+    def test_is_a_permutation(self) -> None:
+        p = Poseidon2(_params())
+        self.assertIsInstance(p, Permutation)
+        self.assertEqual(p.width, 16)
+        self.assertEqual(p.dtype, F)
 
+    def test_permute_shape_and_vmap(self) -> None:
+        p = Poseidon2(_params())
+        x = jnp.arange(16, dtype=F)
+        out = p.permute(x)
+        self.assertEqual(out.shape, (16,))
+        self.assertEqual(out.dtype, F)
+        batch = jnp.stack([x, x + F(1)])
+        bout = jax.vmap(p.permute)(batch)  # thread-per-hash
+        self.assertEqual(bout.shape, (2, 16))
+        self.assertEqual(bout.dtype, F)
+        self.assertTrue(bool(jnp.array_equal(bout[0], out)))
 
-def test_permute_shape_and_vmap() -> None:
-    p = Poseidon2(_params())
-    x = jnp.arange(16, dtype=F)
-    out = p.permute(x)
-    assert out.shape == (16,) and out.dtype == F
-    batch = jnp.stack([x, x + F(1)])
-    bout = jax.vmap(p.permute)(batch)  # thread-per-hash
-    assert bout.shape == (2, 16) and bout.dtype == F
-    assert jnp.array_equal(bout[0], out)
+    def test_custom_external_matrix_is_applied(self) -> None:
+        base = _params()
+        ext = base.external_matrix
+        if ext is None:
+            raise AssertionError("external_matrix should default to canonical")
+        custom = ext.at[0, 0].add(F(1))  # a different valid MDS-shaped matrix
+        over = Poseidon2(Poseidon2Params(**{**vars(base), "external_matrix": custom}))
+        x = jnp.arange(16, dtype=F)
+        # external_matrix is an operand (external_matrix @ state), so a different
+        # matrix produces a different permutation — the override is genuinely used.
+        self.assertFalse(
+            bool(jnp.array_equal(over.permute(x), Poseidon2(base).permute(x)))
+        )
 
-
-def test_custom_external_matrix_is_applied() -> None:
-    base = _params()
-    assert base.external_matrix is not None
-    custom = base.external_matrix.at[0, 0].add(
-        F(1)
-    )  # a different valid MDS-shaped matrix
-    over = Poseidon2(Poseidon2Params(**{**vars(base), "external_matrix": custom}))
-    x = jnp.arange(16, dtype=F)
-    # external_matrix is an operand (external_matrix @ state), so a different
-    # matrix produces a different permutation — the override is genuinely used.
-    assert not jnp.array_equal(over.permute(x), Poseidon2(base).permute(x))
-
-
-def test_permute_rejects_wrong_shape() -> None:
-    p = Poseidon2(_params())
-    with pytest.raises(ValueError):
-        p.permute(jnp.zeros((15,), dtype=F))  # width != 16
-    with pytest.raises(ValueError):
-        p.permute(jnp.zeros((2, 16), dtype=F))  # batched, not a 1-D state
+    def test_permute_rejects_wrong_shape(self) -> None:
+        p = Poseidon2(_params())
+        with self.assertRaises(ValueError):
+            p.permute(jnp.zeros((15,), dtype=F))  # width != 16
+        with self.assertRaises(ValueError):
+            p.permute(jnp.zeros((2, 16), dtype=F))  # batched, not a 1-D state
 
 
 if __name__ == "__main__":
-    test_is_a_permutation()
-    test_permute_shape_and_vmap()
-    test_custom_external_matrix_is_applied()
-    test_permute_rejects_wrong_shape()
-    print("ok")
+    absltest.main()

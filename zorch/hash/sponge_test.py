@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import jax
 import jax.numpy as jnp
+from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -63,93 +64,71 @@ _PLONKY3_SPONGE = {
 }
 
 
-def test_hash_returns_out_shape_and_dtype() -> None:
-    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-    out = s.hash(jnp.arange(16, dtype=F))
-    assert out.shape == (8,)
-    assert out.dtype == F
+class SpongeTest(absltest.TestCase):
+    def test_hash_returns_out_shape_and_dtype(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        out = s.hash(jnp.arange(16, dtype=F))
+        self.assertEqual(out.shape, (8,))
+        self.assertEqual(out.dtype, F)
 
+    def test_hash_single_block_is_permute_truncated(self) -> None:
+        perm = koalabear16_perm()
+        s = Sponge(perm, SpongeParams(rate=8, out=8))
+        x = jnp.arange(8, dtype=F)  # exactly one rate block
+        expected = perm.permute(jnp.zeros(16, dtype=F).at[:8].set(x))[:8]
+        self.assertTrue(bool(jnp.array_equal(s.hash(x), expected)))
 
-def test_hash_single_block_is_permute_truncated() -> None:
-    perm = koalabear16_perm()
-    s = Sponge(perm, SpongeParams(rate=8, out=8))
-    x = jnp.arange(8, dtype=F)  # exactly one rate block
-    expected = perm.permute(jnp.zeros(16, dtype=F).at[:8].set(x))[:8]
-    assert jnp.array_equal(s.hash(x), expected)
+    def test_hash_two_full_blocks_overwrite_mode(self) -> None:
+        perm = koalabear16_perm()
+        s = Sponge(perm, SpongeParams(rate=8, out=8))
+        x = jnp.arange(16, dtype=F)  # two rate blocks
+        st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
+        st = perm.permute(st)
+        st = st.at[:8].set(x[8:16])  # overwrite (not XOR) the rate lanes
+        st = perm.permute(st)
+        self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])))
 
+    def test_hash_partial_final_block_overwrites_only_its_lanes(self) -> None:
+        perm = koalabear16_perm()
+        s = Sponge(perm, SpongeParams(rate=8, out=8))
+        x = jnp.arange(12, dtype=F)  # rate + 4: final block is partial
+        st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
+        st = perm.permute(st)
+        st = st.at[:4].set(x[8:12])  # only 4 lanes overwritten; lanes 4..7 keep value
+        st = perm.permute(st)
+        self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])))
 
-def test_hash_two_full_blocks_overwrite_mode() -> None:
-    perm = koalabear16_perm()
-    s = Sponge(perm, SpongeParams(rate=8, out=8))
-    x = jnp.arange(16, dtype=F)  # two rate blocks
-    st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
-    st = perm.permute(st)
-    st = st.at[:8].set(x[8:16])  # overwrite (not XOR) the rate lanes
-    st = perm.permute(st)
-    assert jnp.array_equal(s.hash(x), st[:8])
+    def test_rate_not_less_than_width_raises(self) -> None:
+        perm = koalabear16_perm()
+        with self.assertRaises(ValueError):
+            Sponge(perm, SpongeParams(rate=16, out=8))
 
+    def test_invalid_params_raise(self) -> None:
+        for rate, out in ((0, 8), (8, 0)):  # rate < 1, out < 1
+            with self.assertRaises(ValueError):
+                SpongeParams(rate=rate, out=out)
 
-def test_hash_partial_final_block_overwrites_only_its_lanes() -> None:
-    perm = koalabear16_perm()
-    s = Sponge(perm, SpongeParams(rate=8, out=8))
-    x = jnp.arange(12, dtype=F)  # rate + 4: final block is partial
-    st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
-    st = perm.permute(st)
-    st = st.at[:4].set(x[8:12])  # only 4 lanes overwritten; lanes 4..7 keep value
-    st = perm.permute(st)
-    assert jnp.array_equal(s.hash(x), st[:8])
+    def test_hash_non_1d_input_raises(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        with self.assertRaises(ValueError):
+            s.hash(jnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
 
+    def test_hash_matches_plonky3_golden(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        for n, golden in _PLONKY3_SPONGE.items():
+            self.assertTrue(
+                bool(jnp.array_equal(s.hash(jnp.arange(n, dtype=F)), golden)),
+                f"len {n}",
+            )
 
-def test_rate_not_less_than_width_raises() -> None:
-    perm = koalabear16_perm()
-    try:
-        Sponge(perm, SpongeParams(rate=16, out=8))
-        assert False, "expected ValueError for rate >= width"
-    except ValueError:
-        pass
-
-
-def test_invalid_params_raise() -> None:
-    for rate, out in ((0, 8), (8, 0)):  # rate < 1, out < 1
-        try:
-            SpongeParams(rate=rate, out=out)
-            assert False, f"expected ValueError for rate={rate}, out={out}"
-        except ValueError:
-            pass
-
-
-def test_hash_non_1d_input_raises() -> None:
-    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-    try:
-        s.hash(jnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
-        assert False, "expected ValueError for non-1-D input"
-    except ValueError:
-        pass
-
-
-def test_hash_matches_plonky3_golden() -> None:
-    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-    for n, golden in _PLONKY3_SPONGE.items():
-        assert jnp.array_equal(s.hash(jnp.arange(n, dtype=F)), golden), f"len {n}"
-
-
-def test_hash_vmap_matches_unbatched() -> None:
-    s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-    a = jnp.arange(16, dtype=F)
-    b = jnp.arange(16, dtype=F) + F(3)
-    batched = jax.vmap(s.hash)(jnp.stack([a, b]))
-    assert jnp.array_equal(batched[0], s.hash(a))
-    assert jnp.array_equal(batched[1], s.hash(b))
+    def test_hash_vmap_matches_unbatched(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        a = jnp.arange(16, dtype=F)
+        b = jnp.arange(16, dtype=F) + F(3)
+        batched = jax.vmap(s.hash)(jnp.stack([a, b]))
+        self.assertTrue(bool(jnp.array_equal(batched[0], s.hash(a))))
+        self.assertTrue(bool(jnp.array_equal(batched[1], s.hash(b))))
 
 
 if __name__ == "__main__":
-    test_hash_returns_out_shape_and_dtype()
-    test_hash_single_block_is_permute_truncated()
-    test_hash_two_full_blocks_overwrite_mode()
-    test_hash_partial_final_block_overwrites_only_its_lanes()
-    test_rate_not_less_than_width_raises()
-    test_invalid_params_raise()
-    test_hash_non_1d_input_raises()
-    test_hash_matches_plonky3_golden()
-    test_hash_vmap_matches_unbatched()
-    print("ok")
+    absltest.main()
