@@ -1,0 +1,15 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "protocol",
+    srcs = [
+        "__init__.py",
+        "protocol.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        requirement("jax"),
+    ],
+)

@@ -1,43 +1,85 @@
-# Polynomial commitment schemes
+# pcs — polynomial commitment seam
 
-The `Pcs` seam (`zorch/commit/pcs.py`) is zorch's multilinear-evaluation
-commitment interface. `Basefold` (`zorch/commit/basefold.py`) is the first
-implementation; the jagged PCS (`zorch/commit/jagged/`) is the first consumer.
+The *why* behind `zorch/pcs/`. The *what* lives in the code and its tests. Full
+design and open decisions: epic issue
+[fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
-## The interface
+A Modern SNARK is IOP + PCS, and the PCS is the axis schemes vary on. `pcs` is the
+one seam every scheme's commitment plugs into, with two concrete instances that
+sit at opposite ends of the design space: [`kzg`](#kzg-pairing-based) (pairing,
+trusted setup) and [`fri`](#fri-transparent) (transparent, hash-based). That both
+satisfy the same two protocols is the evidence the seam is not shaped after one
+family.
 
-`commit(mle: [2^v, w]) -> (commitment, prover_data)`. `open` / `verify`
-complete the evaluation argument (P3).
+## Why the shape
 
-- **`commitment`** — the succinct public value (a Merkle root). It enters the
-  Fiat-Shamir transcript and is what the verifier receives.
-- **`prover_data`** — the retained witness `open` consumes (full Merkle tree /
-  codeword + metadata). Never sent to the verifier.
+**Two protocols, `PcsProver` and `PcsVerifier`, not one `Pcs`.** `commit` / `open`
+are the prover's; `verify` is the verifier's. They are split for the same two
+reasons the [sumcheck](sumcheck.md) block splits prover and verifier: `open` is an
+interactive sub-protocol threading the [Fiat-Shamir transcript](hash.md), and the
+two sides hold **asymmetric keys** — a KZG prover key is O(degree) (the SRS
+powers) while its verifier key is three fixed group elements. A deployed verifier
+must never carry the prover's key, so the boundary is a type. A static commitment
+primitive like the Merkle [`commit`](commit.md) has neither property and stays a
+single unified building block; the split lives in the PCS layer that *uses* it.
 
-The split is the contract: it makes `commit` transcript-observable and `open`
-a pure function of retained prover state. Every PCS family in the ecosystem
-(SP1, plonky3, whir) uses this shape.
+**Representation is the scheme's business.** The seam takes polynomials in whatever
+form the scheme needs — KZG the coefficient basis (a powers-of-τ MSM), the FRI
+family evaluations over a domain. No `PolynomialSpace` and no AIR/quotient
+commitment index lives on the seam; those are FRI-implementation or consumer
+concerns, kept out so no scheme's shape ossifies into the interface. A scheme is
+named only on its instance (`kzg`, `fri`), never on the seam — the agnostic
+non-negotiable, the same way `poseidon2` names a `Permutation` instance.
 
-## Design rules
+### kzg (pairing-based)
 
-1. **A `Pcs` receives an MLE, nothing else.** No scheme- or zkVM-specific
-   structure leaks in. A consumer that has variable-height columns, chips, or
-   any domain layout densifies to an MLE *before* calling `commit`. (Repo
-   non-negotiable #1: scheme/zkVM-agnostic.)
-2. **One device zone, host layout outside.** The device commit (RS-LDE →
-   Merkle → any structure bind) is one `@jit` region — a single
-   CUDA-graph-capturable dispatch (see the fusion north star in
-   `docs/README.md`). Value-independent layout (sizes, padding tiers, prefix
-   sums) is computed host-side before the zone, never as a mid-zone host sync.
-3. **AOT: shapes are a function of input shapes, not values.** Data-dependent
-   extents (e.g. a jagged region's total area) are padded to a static `2^tier`
-   capacity derived host-side, so `commit` compiles once per tier (and per
-   structural block count). Mirrors the jagged eval's log-area tiers.
+`commit` is `C = Σ aᵢ·[τⁱ]₁`, one `lax.msm`; `open` at `z` is the same MSM over the
+quotient `(f(x) − f(z))/(x − z)`, with `f(z)` the division remainder. There are no
+fold rounds — KZG's single-point opening is non-interactive — so the transcript
+only feeds a batching challenge when more than one opening is bundled. The SRS is
+split by `setup` into the O(degree) `KzgProvingKey` and the O(1) `KzgVerifierKey`,
+both from one `τ`; that shared `τ` is the soundness invariant binding the two.
 
-## Layering for jagged
+### fri (transparent)
 
-`chip → blocks` is the consumer's (e.g. whir-zorch); `blocks → dense MLE
-layout` is zorch's, because the layout must match the `t_c` prefix-sum
-convention the jagged indicator (`zorch/commit/jagged/poly.py`) reads. The structure
-binding (row/column counts hashed into the commitment) lives in the jagged
-layer, not the generic PCS.
+The DEEP quotient trick turns a point opening into a low-degree test: to open `f`
+at `z` with claim `v`, show `g(x) = (f(x) − v)/(x − z)` is low degree, which holds
+exactly when `v = f(z)`. `g` is never committed — the verifier rebuilds its
+codeword from the already-committed `f` at queried points — so `open` Merkle-commits
+only the folded layers and threads the transcript through the fold challenges.
+Structurally the opposite of KZG on the same seam: interactive, Merkle-backed
+([commit](commit.md) + [coding](coding.md)'s RS encode and FRI fold), no trusted
+setup, all field/NTT arithmetic.
+
+## Fusion by construction
+
+The PCS seam is agnostic; each instance's `commit`/`open`/`verify` lowers down one
+of three tiers, and which tier an op takes is the only thing that varies:
+
+- **GPU normal-form** — element-wise field ops + the inherent `Σ`/NTT (compile-fast,
+  portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT.
+- **GPU blessed primitive** — a dedicated `stablehlo` op or custom emitter
+  (run-fast): KZG's `lax.msm` (commit and the opening proof), the
+  [poseidon2](hash.md) permutation behind FRI's Merkle layers, the NTT.
+- **CPU-legalized primitive** — `lax.pairing_check` for KZG `verify`, which has no
+  GPU kernel; the verifier is O(1), so the host round-trip (MSM on GPU →
+  materialize → pairing on CPU) is irrelevant.
+
+This is why "one fused kernel" is a property of an *instance's* lowering, not of the
+seam: MSM is a GPU-only kernel, pairing is CPU-only, and the FRI fold/NTT lower on
+both. See the hub [fusion north star](README.md#fusion-north-star).
+
+## AOT and the host/device boundary
+
+Two rules every instance inherits from zorch being AOT, orthogonal to the lowering
+tiers above:
+
+- **One device zone, host layout outside.** An instance's `commit`/`open`/`verify`
+  is one `@jit` region — a single CUDA-graph-capturable dispatch. Value-independent
+  layout (sizes, padding tiers, prefix sums) is computed host-side *before* the
+  zone, never as a mid-zone host sync.
+- **Shapes are a function of input shapes, not values.** Data-dependent extents are
+  padded to a static `2^tier` capacity derived host-side, so a scheme compiles once
+  per tier (and per batch shape) rather than per input. This is what lets an
+  evaluation PCS over variable-height data stay AOT — it mirrors the jagged eval's
+  log-area tiers.
