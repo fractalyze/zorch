@@ -1,0 +1,20 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+# Sumcheck prover + verifier rounds. The package __init__ imports both, so a
+# consumer of the package gets the verifier too.
+py_library(
+    name = "sumcheck",
+    srcs = [
+        "__init__.py",
+        "prover.py",
+        "verifier.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/poly",
+        requirement("jax"),
+    ],
+)

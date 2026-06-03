@@ -1,0 +1,18 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+# Shared LogUp-GKR fixtures + chain runners (random_first_layer, prove_gkr,
+# verify_gkr) — used by the package tests and the benchmark.
+py_library(
+    name = "testing",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/testkit:random_field",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)

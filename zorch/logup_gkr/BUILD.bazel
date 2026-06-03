@@ -1,0 +1,41 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+# Dense LogUp-GKR: fractional-sum circuit, prover (per-variable LogUp sumcheck
+# round, one GKR layer, the layer chain), and verifier. The package's testing
+# runners import all three, so the verifier rides along here.
+py_library(
+    name = "logup_gkr",
+    srcs = [
+        "__init__.py",
+        "circuit.py",
+        "prover.py",
+        "verifier.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:prove",
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch:verify",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)
+
+py_binary(
+    name = "bench_logup_gkr",
+    srcs = ["bench_logup_gkr.py"],
+    deps = [
+        ":logup_gkr",
+        "//zorch/logup_gkr/testing",
+        "//zorch/testkit:random_field",
+        requirement("jax"),
+        requirement("jax_cuda12_plugin"),
+        requirement("zk_dtypes"),
+        requirement("zkbench"),
+        requirement("zkx_cuda_pjrt"),
+    ],
+)
