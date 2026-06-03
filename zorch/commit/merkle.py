@@ -11,6 +11,14 @@ static), so no host-driven loop appears. An internal layer batches one
 `compress` = one permute; the leaf layer batches one `hash` = one permute per
 absorbed block. Those collapse to one GPU kernel per permute once the
 permutation itself is captured to a kernel (the poseidon2 fusion path, #25).
+
+When both blocks lower to a hash-dedicated fusion marker (`has_dedicated_fusion`),
+`commit` wraps the whole tree in one `zorch.merkle_commit` composite — a
+hash-agnostic, whole-tree boundary a vendor expands into the per-layer hash
+kernels (the nested permute markers carry the hash identity). The wrapping passes
+only `matrix`; the round constants ride in as auto-lifted composite operands, so
+this stays scheme-agnostic (no permutation/hash is named here). Otherwise (or on a
+jaxlib without `stablehlo.CompositeOp`) the plain vmap path runs unchanged.
 """
 
 from __future__ import annotations
@@ -22,9 +30,16 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
+from zorch.fusion import fused_region
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
+
+# Hash-agnostic whole-tree boundary: `commit` wraps the entire tree in one
+# composite under this name (never a per-hash name). A vendor expander reads the
+# hash identity from the nested `permute` marker, so adding a hash never touches
+# this marker or MerkleTree — see the module docstring.
+MERKLE_COMMIT_MARKER = "zorch.merkle_commit"
 
 
 @partial(jax.tree_util.register_dataclass, data_fields=["row", "path"], meta_fields=[])
@@ -62,6 +77,12 @@ class MerkleTree:
         self._leaf_hasher = leaf_hasher
         self._compressor = compressor
         self.digest_elems = compressor.chunk
+        # Wrap the whole commit in the agnostic composite only when both blocks
+        # lower to a hash-dedicated marker the vendor can expand; otherwise the
+        # marker would be unexpandable, so fall back to the plain vmap path.
+        self._fused = (
+            leaf_hasher.has_dedicated_fusion and compressor.has_dedicated_fusion
+        )
 
     def commit(self, matrix: Array) -> tuple[Array, list[Array]]:
         """Commit a (height, width) matrix, height a power of two.
@@ -75,6 +96,15 @@ class MerkleTree:
             raise ValueError(
                 f"matrix height ({matrix.shape[0]}) must be a power of two"
             )
+        # The validation above guards eagerly, so it stays outside the marked
+        # region; only `matrix` is an explicit operand (constants auto-lift).
+        if self._fused:
+            return fused_region(self._build, matrix, name=MERKLE_COMMIT_MARKER)
+        return self._build(matrix)
+
+    def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
+        """The traced commit body: vmap the leaf hash, fold pairs per layer down
+        to the root. Wrapped by `commit` as one `zorch.merkle_commit` region."""
         layer = jax.vmap(self._leaf_hasher.hash)(matrix)
         digest_layers = [layer]
         while layer.shape[0] > 1:

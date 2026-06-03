@@ -26,6 +26,7 @@ composite-capable wheel ships.
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TypeVar
 
 from jax import Array, lax
 
@@ -38,24 +39,33 @@ except ImportError:  # pragma: no cover - jaxlib MLIR bindings unavailable
 
 FUSED_REGION_MARKER = "zorch.fused_region"
 
+# The region's output: a single Array for a one-kernel marker, or a pytree of
+# Arrays for a name-routed region a vendor expands (e.g. a whole-tree commit
+# returning (root, layers)). lax.composite preserves it either way.
+_Region = TypeVar("_Region")
+
 
 def fused_region(
-    decomposition: Callable[..., Array],
+    decomposition: Callable[..., _Region],
     *operands: Array,
     name: str = FUSED_REGION_MARKER,
-) -> Array:
-    """Mark a straight-line region (`decomposition`) as one fused kernel.
+) -> _Region:
+    """Mark a region (`decomposition`) as one fused kernel — or, under a
+    name-routed marker, a boundary a vendor expands into a kernel chain.
 
-    `decomposition` must be straight-line element-wise — no loops, reductions, or
-    gathers — so the marked region lowers to a single kernel. It is called with
-    `operands`, which become the composite's operands in order. On a jaxlib
+    Under the default marker the region must be straight-line element-wise — no
+    loops, reductions, or gathers — so it lowers to a single kernel. It is called
+    with `operands`, which become the composite's operands in order. On a jaxlib
     without `stablehlo.CompositeOp` the marker is dropped and `decomposition` runs
     inline (see the module docstring).
 
     A non-default `name` routes the region to a dedicated zkx emitter instead of
     the generic one — e.g. a `poseidon2:W:E:I:S` region goes to `Poseidon2Fusion`
     rather than the generic `LoopFusion` (unusable for a full hash permutation).
-    The `operands` must then follow that emitter's ABI.
+    The `operands` must then follow that emitter's ABI. Such a region need not be
+    single-kernel: a vendor may expand it into a chain (e.g. `zorch.merkle_commit`
+    → per-layer hash kernels), so `decomposition` may return a pytree, not just an
+    Array.
     """
     if not _HAS_COMPOSITE_OP:
         return decomposition(*operands)

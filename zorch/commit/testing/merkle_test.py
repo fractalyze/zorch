@@ -8,6 +8,8 @@ vectors are added in the golden-vector slice.
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 from absl.testing import absltest
@@ -15,7 +17,7 @@ from jax import Array
 from jaxlib.mlir.dialects import stablehlo
 from zk_dtypes import koalabear_mont as F
 
-from zorch.commit.merkle import MerkleTree, Opening
+from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
 
 # jit-lowering the batched path emits poseidon2's `lax.composite`, which needs
 # stablehlo.CompositeOp in jaxlib's MLIR bindings — only the self-built jaxlib
@@ -24,8 +26,23 @@ from zorch.commit.merkle import MerkleTree, Opening
 _HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.hash.poseidon2.params import default_external_matrix
+from zorch.hash.poseidon2.poseidon2 import Poseidon2
+from zorch.hash.poseidon2.testing.koalabear16 import (
+    koalabear16_params,
+    koalabear16_perm,
+)
 from zorch.hash.sponge import Sponge, SpongeParams
+
+
+def _non_standard_perm() -> Poseidon2:
+    """A Poseidon2 whose external matrix is NOT the standard M4-circulant, so its
+    permute carries only the generic fusion marker — hence `commit` cannot wrap
+    in `zorch.merkle_commit` (the expander couldn't identify the hash)."""
+    params = koalabear16_params()
+    perturbed = default_external_matrix(16, F).at[0, 0].add(jnp.ones((), F))
+    return Poseidon2(dataclasses.replace(params, external_matrix=perturbed))
+
 
 # Plonky3 golden vector (p3_commit=4318eba..., default_koalabear_poseidon2_16):
 # PaddingFreeSponge<_,16,8,8> leaves + TruncatedPermutation<_,2,8,16> over
@@ -224,6 +241,57 @@ class MerkleTreeTest(absltest.TestCase):
         for bad in (4, -1, jnp.asarray(4), jnp.asarray(-1)):
             with self.assertRaises(IndexError):
                 tree.open(matrix, layers, bad)
+
+    def test_blocks_expose_dedicated_fusion_capability(self) -> None:
+        # The whole-commit composite gate: a block fuses to a dedicated kernel iff
+        # its permutation lowers permute to a hash-named marker. Standard koalabear
+        # poseidon2 qualifies; a non-standard external matrix does not.
+        sponge, comp, _ = koalabear16_merkle()
+        self.assertTrue(sponge.has_dedicated_fusion)
+        self.assertTrue(comp.has_dedicated_fusion)
+        perm = _non_standard_perm()
+        self.assertFalse(Sponge(perm, SpongeParams(rate=8, out=8)).has_dedicated_fusion)
+        self.assertFalse(
+            Compression(perm, CompressionParams(arity=2, chunk=8)).has_dedicated_fusion
+        )
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_commit_lowers_to_merkle_commit_composite(self) -> None:
+        # commit wraps the whole tree in one hash-agnostic zorch.merkle_commit
+        # composite; the leaf/fold permutes survive as nested poseidon2: markers
+        # the vendor expander reads to pick the per-block emitters.
+        _, _, tree = koalabear16_merkle()
+        matrix = jnp.arange(32, dtype=F).reshape(4, 8)
+        text = jax.jit(tree.commit).lower(matrix).as_text()
+        self.assertIn(MERKLE_COMMIT_MARKER, text)
+        self.assertIn("poseidon2:", text)
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_commit_skips_composite_when_not_dedicated(self) -> None:
+        # A non-standard external matrix => generic permute marker => no
+        # zorch.merkle_commit (an unexpandable marker); commit takes the vmap path.
+        perm = _non_standard_perm()
+        tree = MerkleTree(
+            Sponge(perm, SpongeParams(rate=8, out=8)),
+            Compression(perm, CompressionParams(arity=2, chunk=8)),
+        )
+        matrix = jnp.arange(32, dtype=F).reshape(4, 8)
+        text = jax.jit(tree.commit).lower(matrix).as_text()
+        self.assertNotIn(MERKLE_COMMIT_MARKER, text)
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_commit_skips_composite_when_only_one_block_dedicated(self) -> None:
+        # The gate is AND, not OR: a mixed tree (one block dedicated, one not) is
+        # unexpandable, so commit must take the vmap path. true/true + false/false
+        # alone would still pass under an and->or regression; this asymmetric case
+        # catches it.
+        tree = MerkleTree(
+            Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8)),
+            Compression(_non_standard_perm(), CompressionParams(arity=2, chunk=8)),
+        )
+        matrix = jnp.arange(32, dtype=F).reshape(4, 8)
+        text = jax.jit(tree.commit).lower(matrix).as_text()
+        self.assertNotIn(MERKLE_COMMIT_MARKER, text)
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ py_test(
         "//zorch/commit:merkle",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
+        "//zorch/hash/poseidon2",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("jax"),
         requirement("zk_dtypes"),

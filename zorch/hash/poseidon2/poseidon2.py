@@ -43,6 +43,11 @@ class Poseidon2:
         # name and the const-free external layer.
         self._uses_standard_external = params.uses_standard_external_matrix
         self._fused_region_name = self._select_fused_region_name()
+        # Dedicated == permute lowers to a hash-named marker, not the generic
+        # region one (which a vendor can't route, so a whole-region composite
+        # around it is unexpandable). Derived from the marker choice itself so the
+        # two can't drift if `_select_fused_region_name` grows another case.
+        self.has_dedicated_fusion = self._fused_region_name != FUSED_REGION_MARKER
 
     def _select_fused_region_name(self) -> str:
         """Route to the dedicated Poseidon2Fusion only with the standard external

@@ -12,6 +12,7 @@ from zorch.hash.permutation import Permutation
 class _Id:
     width = 3
     dtype = jnp.int32
+    has_dedicated_fusion = False  # no dedicated marker -> consumers use a fallback
 
     def permute(self, state: Array) -> Array:
         return state

@@ -18,6 +18,11 @@ from jax import Array
 class Permutation(Protocol):
     width: int  # state length (rate + capacity)
     dtype: Any  # field dtype of each state element
+    # Whether `permute` lowers to a hash-dedicated fusion marker (vs the generic
+    # region marker). When true, a vendor can expand a whole-region composite —
+    # e.g. a Merkle commit — by reading this hash's marker; consumers gate that
+    # wrapping on it without naming a concrete hash.
+    has_dedicated_fusion: bool
 
     def permute(self, state: Array) -> Array:
         """Apply the permutation: (width,) over `dtype` -> (width,).

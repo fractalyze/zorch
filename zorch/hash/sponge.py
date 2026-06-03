@@ -66,6 +66,13 @@ class Sponge:
         self.rate = params.rate
         self.out = params.out
 
+    @property
+    def has_dedicated_fusion(self) -> bool:
+        """Whether the permutation lowers to a hash-dedicated fusion marker, so a
+        consumer can wrap a whole region using this hash (e.g. a Merkle commit) in
+        an expandable composite. Delegates to the permutation; names no hash."""
+        return self._permutation.has_dedicated_fusion
+
     def hash(self, input: Array) -> Array:
         """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,)."""
         if input.ndim != 1:
