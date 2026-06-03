@@ -11,26 +11,11 @@ from jax import Array
 from zorch.poly import eval_univariate
 from zorch.prove import prove
 from zorch.sumcheck import prover
+from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 
 KB = zk_dtypes.koalabear
-
-
-def _product(factors: Sequence[Array]) -> Array:
-    out = factors[0]
-    for f in factors[1:]:
-        out = out * f
-    return out
-
-
-def _eval_mle(evals: Array, point: Array) -> Array:
-    """Test oracle: evaluate a multilinear (2^n evals) at `point` (MSB-first)."""
-    cur = evals
-    for r in point:
-        half = cur.shape[-1] // 2
-        cur = cur[..., :half] + r * (cur[..., half:] - cur[..., :half])
-    return cur[0]
 
 
 class SumcheckProveTest(absltest.TestCase):
@@ -45,7 +30,7 @@ class SumcheckProveTest(absltest.TestCase):
         )
 
         # claimed sum == s_0(0) + s_0(1)
-        claimed = jnp.sum(_product(list(factors)))
+        claimed = jnp.sum(product(list(factors)))
         self.assertTrue(bool(claimed == proof[0][0] + proof[0][1]))
 
         # round-to-round: s_i(0)+s_i(1) == s_{i-1}(r_{i-1})
@@ -55,8 +40,8 @@ class SumcheckProveTest(absltest.TestCase):
             self.assertTrue(bool(lhs == rhs))
 
         # final fold == product of the MLEs evaluated at the challenge point
-        want = _product([_eval_mle(f, challenges) for f in factors])
-        self.assertTrue(bool(_product([s[0] for s in final_state]) == want))
+        want = product([eval_mle_oracle(f, challenges) for f in factors])
+        self.assertTrue(bool(product([s[0] for s in final_state]) == want))
         last = eval_univariate(proof[n - 1], challenges[n - 1])
         self.assertTrue(bool(last == want))
 
@@ -85,7 +70,7 @@ class SumcheckProveTest(absltest.TestCase):
             lhs = proof[i][0] + proof[i][1]
             rhs = eval_univariate(proof[i - 1], challenges[i - 1])
             self.assertTrue(bool(lhs == rhs))
-        self.assertTrue(bool(final_state[0][0] == _eval_mle(f, challenges)))
+        self.assertTrue(bool(final_state[0][0] == eval_mle_oracle(f, challenges)))
 
 
 if __name__ == "__main__":

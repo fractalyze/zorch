@@ -41,7 +41,7 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.prover import fold, split_halves
+from zorch.sumcheck.prover import factors_on_domain, fold
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -82,34 +82,18 @@ class LogupSumcheckRound(Round):
         # Batching challenge; fixed across a layer's variable-rounds.
         self.lam = lam
 
-    def _split(self, state: Sequence[Array]) -> list[tuple[Array, Array]]:
-        # Factor count is LogUp-specific; shape/even-width checks come from
-        # split_halves.
+    def _combine(self, eq: Array, n0: Array, d1: Array, n1: Array, d0: Array) -> Array:
+        return logup_combine(self.lam, eq, n0, d1, n1, d0)
+
+    def _round_poly(self, state: Sequence[Array]) -> Array:
+        """Round polynomial over [0..degree], shape (degree+1, *batch):
+        s[u] = sum_x' combine(f_u for each factor). One batched reduction."""
         if len(state) != _NUM_FACTORS:
             raise ValueError(
                 f"state must hold {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
                 f"got {len(state)}"
             )
-        return split_halves(state)
-
-    def _combine(self, eq: Array, n0: Array, d1: Array, n1: Array, d0: Array) -> Array:
-        return logup_combine(self.lam, eq, n0, d1, n1, d0)
-
-    def _round_poly(self, state: Sequence[Array]) -> Array:
-        """Round polynomial over [0, 1, ..., degree], shape (degree+1, *batch):
-        s[u] = sum_x' combine(f_u for each factor), where f_u = P0 + u*(P1 - P0).
-
-        The whole u-domain is evaluated at once -- one batched reduction. `us` is
-        reshaped to broadcast over any leading batch dims of the factors, and is
-        built with jnp.stack (not jnp.arange, whose iota is unsupported for
-        extension dtypes)."""
-        halves = self._split(state)
-        dtype = state[0].dtype
-        us = jnp.stack([jnp.array(u, dtype) for u in range(_DEGREE + 1)])
-        factors = [
-            p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves
-        ]
-        return jnp.sum(self._combine(*factors), axis=-1)
+        return jnp.sum(self._combine(*factors_on_domain(state, _DEGREE)), axis=-1)
 
     def __call__(
         self, state: Sequence[Array], transcript: Transcript

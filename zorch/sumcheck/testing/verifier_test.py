@@ -10,6 +10,7 @@ from jax import Array
 
 from zorch.prove import prove
 from zorch.sumcheck import prover, verifier
+from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import StubTranscript
 from zorch.verify import verify
@@ -17,28 +18,12 @@ from zorch.verify import verify
 KB = zk_dtypes.koalabear
 
 
-def _product(factors: Sequence[Array]) -> Array:
-    out = factors[0]
-    for f in factors[1:]:
-        out = out * f
-    return out
-
-
-def _eval_mle(evals: Array, point: Array) -> Array:
-    """Oracle: evaluate a multilinear (2^n evals) at `point` (MSB-first)."""
-    cur = evals
-    for r in point:
-        half = cur.shape[-1] // 2
-        cur = cur[..., :half] + r * (cur[..., half:] - cur[..., :half])
-    return cur[0]
-
-
-class SumcheckVerifyTest(absltest.TestCase):
+class SumcheckRoundtripTest(absltest.TestCase):
     def _roundtrip(
         self, factors: Sequence[Array], degree: int, n: int, seed: int
     ) -> None:
         challenges = rand_field(seed, (n,), KB)
-        claimed = jnp.sum(_product(list(factors)))
+        claimed = jnp.sum(product(list(factors)))
         _, _, proof = prove(
             prover.SumcheckRound(degree), list(factors), StubTranscript(challenges)
         )
@@ -47,7 +32,7 @@ class SumcheckVerifyTest(absltest.TestCase):
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(jnp.all(point == challenges)))
-        want = _product([_eval_mle(f, point) for f in factors])
+        want = product([eval_mle_oracle(f, point) for f in factors])
         self.assertTrue(bool(final_claim == want))
 
     def test_degree1_single_mle_roundtrip(self) -> None:
@@ -69,7 +54,7 @@ class SumcheckVerifyTest(absltest.TestCase):
             verifier.SumcheckRound(1), claimed, proof, StubTranscript(challenges)
         )
         self.assertTrue(bool(ok))
-        self.assertTrue(bool(final_claim == _eval_mle(f, point)))
+        self.assertTrue(bool(final_claim == eval_mle_oracle(f, point)))
 
     def test_final_claim_matches_prover_final_state(self) -> None:
         a = rand_field(45, (1 << 3,), KB)
@@ -83,7 +68,7 @@ class SumcheckVerifyTest(absltest.TestCase):
             verifier.SumcheckRound(2), claimed, proof, StubTranscript(challenges)
         )
         self.assertTrue(bool(ok))
-        self.assertTrue(bool(final_claim == _product([s[0] for s in final_state])))
+        self.assertTrue(bool(final_claim == product([s[0] for s in final_state])))
 
     def test_single_round_reduces_and_threads(self) -> None:
         # The verifier's claim reduction must equal the prover's folded sum at
