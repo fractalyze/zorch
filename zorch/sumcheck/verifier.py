@@ -4,7 +4,7 @@
 `SumcheckRound` checks the round-poly identity and reduces the claim. It is
 summand-agnostic: it sees only the round polynomials, so one verifier serves
 every prover summand (product, LogUp, ...) at a given `degree`. The
-observe -> sample order matches `prover.SumcheckRoundBase.__call__` exactly, so
+observe -> sample order matches `prover.SumcheckRound.__call__` exactly, so
 the prover's and verifier's Fiat-Shamir transcripts cannot diverge.
 """
 

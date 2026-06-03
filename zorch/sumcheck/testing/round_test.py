@@ -53,8 +53,7 @@ class SumcheckRoundTest(absltest.TestCase):
     def test_fold_matches_manual(self) -> None:
         f = rand_field(14, (8,), KB)
         r = jnp.array(6, KB)
-        rnd = prover.SumcheckRound(degree=1)
-        got = rnd._fold([f], r)[0]
+        got = prover.fold([f], r)[0]
         want = f[:4] + r * (f[4:] - f[:4])
         self.assertTrue(bool(jnp.all(got == want)))
 
@@ -84,21 +83,13 @@ class SumcheckRoundTest(absltest.TestCase):
         # Fail loud instead of dropping the odd element on `// 2`.
         r = jnp.array(1, KB)
         with self.assertRaises(ValueError):
-            prover.SumcheckRound(degree=1)._fold([rand_field(1, (7,), KB)], r)
+            prover.fold([rand_field(1, (7,), KB)], r)
 
     def test_split_rejects_mismatched_shapes(self) -> None:
         a = rand_field(1, (8,), KB)
         b = rand_field(2, (4,), KB)
         with self.assertRaises(ValueError):
             prover.SumcheckRound(degree=2)._round_poly([a, b])
-
-
-class SumcheckRoundBaseTest(absltest.TestCase):
-    def test_round_poly_is_abstract(self) -> None:
-        # The base owns the fold + Fiat-Shamir loop; the summand (_round_poly)
-        # is a subclass responsibility, not callable on the bare skeleton.
-        with self.assertRaises(NotImplementedError):
-            prover.SumcheckRoundBase()._round_poly([rand_field(1, (8,), KB)])
 
 
 if __name__ == "__main__":
