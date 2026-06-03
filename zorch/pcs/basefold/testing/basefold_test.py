@@ -3,6 +3,8 @@
 reconstruction of the same codeword + root."""
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 from absl.testing import absltest
@@ -132,6 +134,33 @@ class BasefoldOpenTest(absltest.TestCase):
             self.assertEqual(val.tolist(), eval_mle(col, z).tolist())
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
+
+    def test_verify_rejects_tampered_univariate_message(self) -> None:
+        prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
+        z = _rand_ef(7, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        z0, o0 = proof.univariate_messages[0]
+        bad = dataclasses.replace(
+            proof,
+            univariate_messages=[
+                (z0 + jnp.array(1, EF), o0),
+                *proof.univariate_messages[1:],
+            ],
+        )
+        ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        self.assertFalse(bool(ok))
+
+    def test_verify_rejects_tampered_query_opening(self) -> None:
+        prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
+        z = _rand_ef(8, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        comp = proof.component_opening
+        bad_lo = dataclasses.replace(comp.lo, row=comp.lo.row + jnp.array(1, EF))
+        bad = dataclasses.replace(
+            proof, component_opening=dataclasses.replace(comp, lo=bad_lo)
+        )
+        ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        self.assertFalse(bool(ok))
 
 
 if __name__ == "__main__":
