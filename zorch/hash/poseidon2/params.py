@@ -10,7 +10,7 @@ import numpy as np
 from jax import Array
 
 
-def _mds_external_default(width: int, dtype: Any) -> Array:
+def default_external_matrix(width: int, dtype: Any) -> Array:
     """Standard Poseidon2 external matrix for width >= 8 (M4-circulant + 2x block).
 
     M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> jnp.array so
@@ -68,7 +68,7 @@ class Poseidon2Params:
         w = self.width
         if self.external_matrix is None:
             object.__setattr__(
-                self, "external_matrix", _mds_external_default(w, self.dtype)
+                self, "external_matrix", default_external_matrix(w, self.dtype)
             )
         checks = {
             "external_matrix": ((w, w), self.external_matrix),
@@ -97,3 +97,19 @@ class Poseidon2Params:
             raise ValueError(
                 "internal_constants lanes 1..w-1 must be zero (lane-0 partial round)"
             )
+
+    @property
+    def uses_standard_external_matrix(self) -> bool:
+        """Whether `external_matrix` is the standard M4-circulant default.
+
+        zkx's params-driven Poseidon2Fusion GPU emitter hardcodes this matrix, so
+        it is the gate for taking that dedicated route over the generic fallback.
+        """
+        if self.width % 4 != 0:
+            return False
+        return bool(
+            jnp.array_equal(
+                self.external_matrix,
+                default_external_matrix(self.width, self.dtype),
+            )
+        )

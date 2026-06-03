@@ -40,18 +40,23 @@ FUSED_REGION_MARKER = "zorch.fused_region"
 
 
 def fused_region(
-    decomposition: Callable[[Array], Array],
-    init: Array,
-    *,
+    decomposition: Callable[..., Array],
+    *operands: Array,
     name: str = FUSED_REGION_MARKER,
 ) -> Array:
     """Mark a straight-line region (`decomposition`) as one fused kernel.
 
     `decomposition` must be straight-line element-wise — no loops, reductions, or
-    gathers — so the marked region lowers to a single kernel. On a jaxlib without
-    `stablehlo.CompositeOp` the marker is dropped and `decomposition` runs inline
-    (see the module docstring).
+    gathers — so the marked region lowers to a single kernel. It is called with
+    `operands`, which become the composite's operands in order. On a jaxlib
+    without `stablehlo.CompositeOp` the marker is dropped and `decomposition` runs
+    inline (see the module docstring).
+
+    A non-default `name` routes the region to a dedicated zkx emitter instead of
+    the generic one — e.g. a `poseidon2:W:E:I:S` region goes to `Poseidon2Fusion`
+    rather than the generic `LoopFusion` (unusable for a full hash permutation).
+    The `operands` must then follow that emitter's ABI.
     """
     if not _HAS_COMPOSITE_OP:
-        return decomposition(init)
-    return lax.composite(decomposition, name=name)(init)
+        return decomposition(*operands)
+    return lax.composite(decomposition, name=name)(*operands)
