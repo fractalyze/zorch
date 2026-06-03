@@ -4,9 +4,10 @@
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial over the domain [0..degree], then folds every MLE at the verifier's
 challenge (P0 + r*(P1 - P0)). The split/validate and fold steps are summand-
-independent, so they live as `split_halves` / `fold` and each round supplies
-only its summand via `_round_poly`: `SumcheckRound` (here) sums a product of
-factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums the LogUp combine.
+independent, so they live as `split_halves` / `factors_on_domain` / `fold` and
+each round supplies only its summand via `_round_poly`: `SumcheckRound` (here)
+sums a product of factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums
+the LogUp combine.
 
 The round body is element-wise field ops plus the one inherent Sigma (no
 reduce/gather beyond it), so it stays wrappable by the Phase-3 single-kernel
@@ -54,6 +55,20 @@ def fold(state: Sequence[Array], r: Array) -> list[Array]:
     return [p0 + r * (p1 - p0) for (p0, p1) in split_halves(state)]
 
 
+def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
+    """Lift each split factor to the round's evaluation domain [0..degree]:
+    f_k[u] = P0_k + u*(P1_k - P0_k), one array of shape (degree+1, *batch) each.
+
+    The whole u-domain is built at once so the round poly stays one batched
+    reduction (not degree+1 separate ones). `us` uses jnp.stack (not jnp.arange,
+    whose iota is unsupported for extension dtypes) and is reshaped to broadcast
+    over any leading batch dims of the factors."""
+    halves = split_halves(state)
+    dtype = state[0].dtype
+    us = jnp.stack([jnp.array(u, dtype) for u in range(degree + 1)])
+    return [p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves]
+
+
 class SumcheckRound(Round):
     """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry."""
 
@@ -65,18 +80,11 @@ class SumcheckRound(Round):
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)), shape (degree+1, *batch).
 
-        The whole u-domain is evaluated at once -- one batched reduction, so it
-        lowers toward a single reduction kernel rather than degree+1 separate
-        ones. `us` is reshaped to broadcast over any leading batch dims of the
-        factors, and is built with jnp.stack (not jnp.arange, whose iota is
-        unsupported for extension dtypes)."""
-        halves = split_halves(state)
-        dtype = state[0].dtype
-        us = jnp.stack([jnp.array(u, dtype) for u in range(self.degree + 1)])
-        factors = (
-            p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0) for (p0, p1) in halves
+        One batched reduction over the whole u-domain, so it lowers toward a
+        single reduction kernel rather than degree+1 separate ones."""
+        return jnp.sum(
+            reduce(operator.mul, factors_on_domain(state, self.degree)), axis=-1
         )
-        return jnp.sum(reduce(operator.mul, factors), axis=-1)
 
     def __call__(
         self, state: Sequence[Array], transcript: Transcript

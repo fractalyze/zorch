@@ -15,9 +15,9 @@ py_test(
 )
 
 py_test(
-    name = "poly_test",
+    name = "univariate_test",
     size = "small",
-    srcs = ["poly_test.py"],
+    srcs = ["univariate_test.py"],
     deps = [
         "//zorch/poly",
         requirement("absl_py"),
