@@ -124,6 +124,15 @@ class BasefoldOpenTest(absltest.TestCase):
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
+    def test_open_verify_round_trip_multi_column(self) -> None:
+        prover, verifier, root, pdata, mle, log_s = self._commit(log_s=3, K=4)
+        z = _rand_ef(5, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        for val, col in zip(values, mle.T):
+            self.assertEqual(val.tolist(), eval_mle(col, z).tolist())
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+
 
 if __name__ == "__main__":
     absltest.main()
