@@ -18,11 +18,9 @@ from jax import Array
 from zorch.coding.fri import eval_domain, fri_fold_values
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.pcs.basefold.config import BasefoldProof
+from zorch.pcs.basefold.config import BasefoldProof, sample_rlc_coeffs
 from zorch.pcs.fri.config import query_layer_indices, sample_positions
-from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.transcript import Transcript
-from zorch.utils.bits import log2_ceil_usize
 
 
 @dataclass(frozen=True)
@@ -51,18 +49,31 @@ class BasefoldVerifier:
         K = values.shape[0]
         n = self.rs.block_len
         num_vars = z.shape[0]
+        # Fail loud on a structurally malformed proof — a short message/layer list
+        # would otherwise let the round loop silently skip checks (cf. the same
+        # guard in `round.VerifyChain`).
+        if self.rs.message_len != (1 << num_vars):
+            raise ValueError(
+                f"point dimension {num_vars} doesn't match message_len "
+                f"{self.rs.message_len} (expected 2^{num_vars})"
+            )
+        if (
+            len(proof.univariate_messages) != num_vars
+            or len(proof.fri_roots) != num_vars - 1
+            or len(proof.query_openings) != num_vars - 1
+        ):
+            raise ValueError(
+                f"malformed proof: expected {num_vars} sumcheck messages and "
+                f"{num_vars - 1} fold layers, got {len(proof.univariate_messages)} / "
+                f"{len(proof.fri_roots)} / {len(proof.query_openings)}"
+            )
         t = transcript
         # Bind the commitment root into the transcript (mirrors `open`).
         t = t.observe(commitment)
 
         # Re-derive the RLC coeffs + batched claim (mirror open).
         t = t.observe(values)
-        nbv = log2_ceil_usize(K)
-        if nbv > 0:
-            t, s = t.sample(nbv)
-            coeffs = expand_eq_to_hypercube(s, jnp.ones((), dtype))[:K]
-        else:
-            coeffs = jnp.ones(1, dtype)
+        t, coeffs = sample_rlc_coeffs(t, K, dtype)
         current_claim = (values * coeffs).sum()
 
         # Replay the sumcheck reduction + fold challenges.

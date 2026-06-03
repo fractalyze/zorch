@@ -28,12 +28,10 @@ from jax import Array
 from zorch.coding.fri import fri_fold
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.pcs.basefold.config import BasefoldProof
+from zorch.pcs.basefold.config import BasefoldProof, sample_rlc_coeffs
 from zorch.pcs.fri.config import LayerOpening, query_layer_indices, sample_positions
-from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle, mle_fold
 from zorch.transcript import Transcript
-from zorch.utils.bits import log2_ceil_usize
 
 
 @partial(
@@ -92,28 +90,28 @@ class BasefoldProver:
         K = mle.shape[1]
         n = codeword.shape[0]
         num_vars = z.shape[0]
+        if mle.shape[0] != (1 << num_vars):
+            raise ValueError(
+                f"point dimension {num_vars} doesn't match MLE height "
+                f"{mle.shape[0]} (expected 2^{num_vars})"
+            )
         t = transcript
         # Bind the matrix commitment root into the transcript so every fold/query
         # challenge depends on it (the FS commit step, mirroring `fri`). `verify`
         # observes the same root.
         t = t.observe(prover_data.digest_layers[-1][0])
 
-        # 1. Per-column evals, then RLC-batch the K columns into one MLE/codeword.
-        values = jnp.stack([eval_mle(mle[:, k], z) for k in range(K)])
+        # 1. Per-column evals (one eq-expansion, batched over the K columns), then
+        #    RLC-batch the K columns into one MLE/codeword.
+        values = eval_mle(mle, z, axis=0)  # (K,)
         t = t.observe(values)
-        nbv = log2_ceil_usize(K)
-        if nbv > 0:
-            t, s = t.sample(nbv)
-            coeffs = expand_eq_to_hypercube(s, jnp.ones((), dtype))[:K]
-        else:
-            coeffs = jnp.ones(1, dtype)
+        t, coeffs = sample_rlc_coeffs(t, K, dtype)
         current_mle = (mle * coeffs).sum(axis=1)  # (S,)
         cw = (codeword * coeffs).sum(axis=1)  # (n,)
         current_claim = (values * coeffs).sum()
 
         # 2. Interleaved sumcheck + codeword fold (num_vars rounds).
         uni_msgs, layer_roots, layer_mats, layer_dls = [], [], [], []
-        final_layer = cw
         for r in range(num_vars):
             last = z[-(r + 1)]
             rest = z[: -(r + 1)] if r + 1 < num_vars else z[:0]

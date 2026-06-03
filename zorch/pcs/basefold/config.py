@@ -1,16 +1,37 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""BaseFold proof type. Co-located with the scheme like `FriProof` in
-`fri/config.py` (kzg needs no proof dataclass) — there is no `proof.py` in
-`pcs/`, so this keeps the three schemes consistent."""
+"""BaseFold proof type and the shared RLC-batching helper. Co-located with the
+scheme like `FriProof` in `fri/config.py` (kzg needs no proof dataclass) — there
+is no `proof.py` in `pcs/`, so this keeps the three schemes consistent. The
+`sample_rlc_coeffs` helper lives here so `open` and `verify` derive the column
+weights from one definition and cannot drift, the same way `fri/config` shares
+its query-index derivation."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 
 import jax
+import jax.numpy as jnp
 from jax import Array
 
 from zorch.pcs.fri.config import LayerOpening
+from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.transcript import Transcript
+from zorch.utils.bits import log2_ceil_usize
+
+
+def sample_rlc_coeffs(
+    transcript: Transcript, k: int, dtype: Any
+) -> tuple[Transcript, Array]:
+    """RLC weights `(k,)` that batch `k` columns into one codeword, from
+    `log2_ceil(k)` squeezed challenges (`k == 1` -> `[1]`, no squeeze). Called by
+    both `open` and `verify` so the two sides sample identically."""
+    nbv = log2_ceil_usize(k)
+    if nbv == 0:
+        return transcript, jnp.ones(1, dtype)
+    transcript, s = transcript.sample(nbv)
+    return transcript, expand_eq_to_hypercube(s, jnp.ones((), dtype))[:k]
 
 
 @partial(
