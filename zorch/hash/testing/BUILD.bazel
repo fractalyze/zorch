@@ -17,9 +17,6 @@ py_test(
     name = "compression_test",
     size = "small",
     srcs = ["compression_test.py"],
-    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
-    # CI job covers it); drop the tag after the jax pin bump.
-    tags = ["manual"],
     deps = [
         "//zorch/hash:compression",
         "//zorch/hash/poseidon2/testing:koalabear16",
@@ -33,9 +30,6 @@ py_test(
     name = "sponge_test",
     size = "small",
     srcs = ["sponge_test.py"],
-    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
-    # CI job covers it); drop the tag after the jax pin bump.
-    tags = ["manual"],
     deps = [
         "//zorch/hash:sponge",
         "//zorch/hash/poseidon2/testing:koalabear16",

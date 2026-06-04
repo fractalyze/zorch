@@ -11,6 +11,7 @@ py_library(
     deps = [
         "//zorch/utils:bits",
         requirement("jax"),
+        requirement("zk_dtypes"),
     ],
 )
 
@@ -20,6 +21,15 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "linear_code",
+    srcs = ["linear_code.py"],
+    visibility = ["//visibility:public"],
+    deps = [
         requirement("jax"),
     ],
 )
