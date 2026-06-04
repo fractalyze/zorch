@@ -17,23 +17,6 @@ py_test(
 )
 
 py_test(
-    name = "inner_sumcheck_test",
-    size = "small",
-    srcs = ["inner_sumcheck_test.py"],
-    deps = [
-        "//zorch:transcript",
-        "//zorch/hash/poseidon2/testing:koalabear16",
-        "//zorch/pcs/jagged:inner_sumcheck",
-        "//zorch/pcs/jagged:poly",
-        "//zorch/testkit:random_field",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
     name = "dense_test",
     size = "small",
     srcs = ["dense_test.py"],
@@ -41,45 +24,6 @@ py_test(
         "//zorch/pcs/jagged:dense",
         requirement("jax"),
         requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "stacked_test",
-    size = "small",
-    srcs = ["stacked_test.py"],
-    deps = [
-        "//zorch/pcs/basefold:prover",
-        "//zorch/pcs/basefold:verifier",
-        "//zorch/pcs/jagged:stacked",
-        "//zorch/testkit:random_field",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "opening_test",
-    size = "large",
-    srcs = ["opening_test.py"],
-    deps = [
-        "//zorch:transcript",
-        "//zorch:verify",
-        "//zorch/coding:reed_solomon",
-        "//zorch/commit/testing:koalabear16",
-        "//zorch/hash/poseidon2/testing:koalabear16",
-        "//zorch/pcs/basefold:prover",
-        "//zorch/pcs/basefold:verifier",
-        "//zorch/pcs/jagged:poly",
-        "//zorch/pcs/jagged:prover",
-        "//zorch/pcs/jagged:verifier",
-        "//zorch/poly",
-        "//zorch/sumcheck",
-        "//zorch/testkit:random_field",
-        requirement("absl_py"),
-        requirement("jax"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

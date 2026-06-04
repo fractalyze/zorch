@@ -1,0 +1,20 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "fri",
+    srcs = [
+        "__init__.py",
+        "config.py",
+        "prover.py",
+        "verifier.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/coding:fri",
+        "//zorch/coding:reed_solomon",
+        "//zorch/commit:merkle",
+        requirement("jax"),
+    ],
+)
