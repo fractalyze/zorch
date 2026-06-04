@@ -21,10 +21,12 @@ py_library(
     deps = [requirement("jax")],
 )
 
+# Public: consumers' IOP tests reuse the same cheap test transcript as
+# zorch's own tests (promoted per-target, like logup_gkr/testing).
 py_library(
     name = "transcript",
     srcs = ["transcript.py"],
-    visibility = ["//zorch:__subpackages__"],
+    visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
         requirement("jax"),
