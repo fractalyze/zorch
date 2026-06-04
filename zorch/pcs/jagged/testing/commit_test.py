@@ -1,6 +1,7 @@
 # zorch/pcs/jagged/testing/commit_test.py
-"""JaggedPcs.commit — e2e commit, the AOT compile-once property, and that
+"""JaggedPcsProver.commit — e2e commit, the AOT compile-once property, and that
 the structure binding actually moves the root."""
+
 from __future__ import annotations
 
 import unittest
@@ -11,14 +12,14 @@ from zk_dtypes import koalabear_mont as F
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.basefold.prover import BasefoldProver
-from zorch.pcs.jagged.commit import JaggedPcs
+from zorch.pcs.jagged.prover import JaggedPcsProver
 
 
-def _jagged_pcs(log_s: int = 2, blowup: int = 2) -> JaggedPcs:
+def _jagged_pcs(log_s: int = 2, blowup: int = 2) -> JaggedPcsProver:
     S = 1 << log_s
     rs = ReedSolomon(message_len=S, blowup=blowup, dtype=F)
     sponge, comp, tree = koalabear16_merkle()
-    return JaggedPcs(BasefoldProver(rs, tree), sponge, comp)
+    return JaggedPcsProver(BasefoldProver(rs, tree), sponge, comp)
 
 
 def _blocks(heights: list[int]) -> list[jnp.ndarray]:
@@ -30,7 +31,7 @@ class JaggedPcsTest(unittest.TestCase):
         c = _jagged_pcs()
         commitment, pdata = c.commit(_blocks([2, 2]), log_stacking_height=2)
         self.assertEqual(commitment.shape, (8,))  # koalabear16 digest width
-        self.assertTrue(hasattr(pdata, "digest_layers"))
+        self.assertTrue(hasattr(pdata.basefold_prover_data, "digest_layers"))
 
     def test_compile_once_per_tier(self) -> None:
         c = _jagged_pcs()

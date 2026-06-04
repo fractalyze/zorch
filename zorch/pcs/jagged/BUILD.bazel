@@ -53,3 +53,60 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "config",
+    srcs = ["config.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/pcs/basefold:config",
+        "//zorch/pcs/jagged:inner_sumcheck",
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "prover",
+    srcs = [
+        "commit.py",
+        "prover.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:prove",
+        "//zorch:transcript",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/pcs/basefold:prover",
+        "//zorch/pcs/jagged:config",
+        "//zorch/pcs/jagged:dense",
+        "//zorch/pcs/jagged:inner_sumcheck",
+        "//zorch/pcs/jagged:poly",
+        "//zorch/pcs/jagged:stacked",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/utils:bits",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "verifier",
+    srcs = ["verifier.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch:verify",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/pcs/basefold:verifier",
+        "//zorch/pcs/jagged:config",
+        "//zorch/pcs/jagged:dense",
+        "//zorch/pcs/jagged:inner_sumcheck",
+        "//zorch/pcs/jagged:prover",
+        "//zorch/pcs/jagged:stacked",
+        "//zorch/sumcheck",
+        requirement("jax"),
+    ],
+)
