@@ -1,4 +1,4 @@
-# zorch/commit/jagged/commit.py
+# zorch/pcs/jagged/commit.py
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Jagged commit: pack blocks into the stacked MLE -> `pcs.commit` -> bind the
 row/column structure into the commitment.
@@ -19,7 +19,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.commit.jagged.dense import JaggedLayout, from_blocks
+from zorch.pcs.jagged.dense import JaggedLayout, from_blocks
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.pcs.protocol import PcsProver

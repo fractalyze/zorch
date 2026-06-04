@@ -11,7 +11,7 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.commit.jagged.poly import (
+from zorch.pcs.jagged.poly import (
     _TRANSITION_ROWS,
     NUM_BIT_STATES,
     NUM_MEMORY_STATES,

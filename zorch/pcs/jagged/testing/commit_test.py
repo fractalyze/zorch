@@ -1,4 +1,4 @@
-# zorch/commit/jagged/testing/commit_test.py
+# zorch/pcs/jagged/testing/commit_test.py
 """JaggedPcs.commit — e2e commit, the AOT compile-once property, and that
 the structure binding actually moves the root."""
 from __future__ import annotations
@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 
 from zorch.coding.reed_solomon import ReedSolomon
-from zorch.commit.jagged.commit import JaggedPcs
+from zorch.pcs.jagged.commit import JaggedPcs
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.basefold.prover import BasefoldProver
 

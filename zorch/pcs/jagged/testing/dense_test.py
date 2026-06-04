@@ -1,4 +1,4 @@
-# zorch/commit/jagged/testing/dense_test.py
+# zorch/pcs/jagged/testing/dense_test.py
 """from_blocks — column-major pack to a static M_max=2^tier dense buffer."""
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
 
-from zorch.commit.jagged.dense import from_blocks
+from zorch.pcs.jagged.dense import from_blocks
 from zorch.utils.bits import log2_ceil_usize
 
 
