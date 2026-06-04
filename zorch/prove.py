@@ -26,22 +26,33 @@ is a `RoundMsg` (round poly + sampled challenge); the scan stacks them, so `prov
 hands back one `msgs` whose `.round_poly` is the proof and whose `.challenge` is
 the evaluation point — the prover's per-round message stream, the dual of what
 `verify` consumes.
+
+`prove_fs` is the register-resident sibling: it wraps `prove`'s scan — unchanged,
+Fiat-Shamir already inside it — in a hash-agnostic `zorch.sumcheck` composite a
+vendor codegens as one on-chip kernel. The duplex sponge threads through as
+operands and the FS permutation rides as a nested `poseidon2:` marker (round
+constants auto-lift), so the marker names no hash; unrecognized it inlines
+bit-equal to `prove`.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 import jax.numpy as jnp
 from jax import Array, lax
 from jax.tree_util import register_dataclass
 
+from zorch.fusion import fused_region
 from zorch.round import Round
 from zorch.sumcheck.prover import fold_pair, lift_to_domain
-from zorch.transcript import Transcript
+from zorch.transcript import DuplexState, DuplexTranscript, Transcript
 from zorch.utils.bits import log2_strict_usize
+
+SUMCHECK_MARKER = "zorch.sumcheck"
 
 
 @partial(register_dataclass, data_fields=["round_poly", "challenge"], meta_fields=[])
@@ -135,3 +146,69 @@ def prove(
     init = (list(state), transcript, jnp.int32(half_max))
     (state, transcript, _), msgs = lax.scan(step, init, xs=None, length=rounds)
     return [buf[..., :1] for buf in state], transcript, msgs
+
+
+def prove_fs(
+    round: SumcheckSummand,
+    state: Sequence[Array],
+    transcript: DuplexTranscript,
+) -> tuple[Array, DuplexTranscript]:
+    """Wrap `prove`'s scan in a `zorch.sumcheck` composite, Fiat-Shamir INSIDE.
+
+    The register-resident sibling of `prove`: the body is `prove` itself, so the
+    `lax.scan` (FS sampled in-step) and the proof are bit-identical — no second
+    prover, no unrolled copy. A vendor codegens the marker as one on-chip kernel
+    (state never round-trips HBM between rounds); unrecognized, the composite
+    inlines to the same `(proof, transcript)` `prove` produces.
+
+    The duplex sponge threads through the marker as its five state leaves (the
+    mutable carry), and the FS permutation rides as a *nested* `poseidon2:` marker
+    whose round constants auto-lift into this composite's operands — so the marker
+    carries no hash identity (the vendor reads it from the nested marker) and no
+    pre-sampled challenges. Operand ABI: `[factor tables][transcript leaves]` plus
+    the auto-lifted round constants; results are `[proof][transcript leaves]`. The
+    proof is the flat round-major `[num_vars*(degree+1)]`; `degree`/`num_vars` ride
+    in the name, the only sumcheck structure the emitter needs.
+    """
+    if not state:
+        raise ValueError("prove_fs requires a non-empty state (one Array per factor)")
+    num_vars = log2_strict_usize(state[0].shape[-1])
+    if num_vars == 0:
+        raise ValueError("prove_fs requires a state width >= 2 (at least one round)")
+    perm = transcript.permutation
+    rate = transcript.rate
+    num_factors = len(state)
+    st = transcript.state
+    leaves = (
+        st.input_buffer,
+        st.output_buffer,
+        st.sponge_state,
+        st.in_pos,
+        st.out_pos,
+    )
+    n_leaves = len(leaves)
+
+    def body(*operands: Array) -> tuple[Array, ...]:
+        tables = list(operands[:num_factors])
+        lv = operands[num_factors : num_factors + n_leaves]
+        # Rebuild the transcript from its leaves so the body closes over no sponge
+        # state; `prove`'s scan does the per-round FS, so this stays the one prover.
+        _, t, msgs = prove(
+            round, tables, DuplexTranscript(perm, rate, DuplexState(*lv))
+        )
+        # prove threads the same DuplexTranscript back, but it is typed as the
+        # generic `Transcript` protocol; recover the sponge leaves for the result.
+        s = cast(DuplexTranscript, t).state
+        return (
+            msgs.round_poly.reshape(-1),  # round-major [num_vars*(degree+1)]
+            s.input_buffer,
+            s.output_buffer,
+            s.sponge_state,
+            s.in_pos,
+            s.out_pos,
+        )
+
+    proof, *out_leaves = fused_region(
+        body, *state, *leaves, name=f"{SUMCHECK_MARKER}:{round.degree}:{num_vars}"
+    )
+    return proof, DuplexTranscript(perm, rate, DuplexState(*out_leaves))

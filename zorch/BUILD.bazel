@@ -41,6 +41,7 @@ py_library(
     srcs = ["prove.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         ":round",
         ":transcript",
         "//zorch/sumcheck",
