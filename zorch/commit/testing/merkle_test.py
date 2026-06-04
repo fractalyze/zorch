@@ -14,16 +14,10 @@ import jax
 import jax.numpy as jnp
 from absl.testing import absltest
 from jax import Array
-from jaxlib.mlir.dialects import stablehlo
 from zk_dtypes import koalabear_mont as F
 
+from zorch._composite import _HAS_COMPOSITE_OP
 from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
-
-# jit-lowering the batched path emits poseidon2's `lax.composite`, which needs
-# stablehlo.CompositeOp in jaxlib's MLIR bindings — only the self-built jaxlib
-# carries the fork's backport, so the jit roundtrip is skipped on the published
-# wheel (eager + vmap still run, as lax.composite executes its decomposition).
-_HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix

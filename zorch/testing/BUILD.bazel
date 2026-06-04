@@ -3,10 +3,22 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
+    name = "_composite_test",
+    size = "small",
+    srcs = ["_composite_test.py"],
+    deps = [
+        "//zorch:_composite",
+        requirement("absl_py"),
+        requirement("jax"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "fusion_test",
     size = "small",
     srcs = ["fusion_test.py"],
     deps = [
+        "//zorch:_composite",
         "//zorch:fusion",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
@@ -20,6 +32,7 @@ py_test(
     size = "small",
     srcs = ["constraint_eval_test.py"],
     deps = [
+        "//zorch:_composite",
         "//zorch:constraint_eval",
         "//zorch/testkit:random_field",
         requirement("absl_py"),

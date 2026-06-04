@@ -11,10 +11,10 @@ result.
 
 Agnostic: `eval_fn` is opaque — its body belongs to the caller — and the marker
 and fold carry no proving-scheme or zkVM knowledge. Sibling of
-`zorch.fusion::fused_region`, and shares its `stablehlo.CompositeOp` fallback:
-on a jaxlib without the composite backport, lowering a composite under `@jit`
-fails, so the decomposition runs inline instead — numerically identical, only
-the fusion marker is dropped.
+`zorch.fusion::fused_region`, and shares the `stablehlo.CompositeOp` fallback in
+`zorch._composite.composite_or_inline`: absent the composite backport, the
+decomposition runs inline instead — numerically identical, only the marker is
+dropped.
 
 The RLC is emitted as an unrolled fold (`acc += alpha_k * C_k`), not `jnp.dot`
 / `@`: a reduction in the marked body would split the region under the
@@ -27,14 +27,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from jax import Array, lax
+from jax import Array
 
-try:
-    from jaxlib.mlir.dialects import stablehlo as _stablehlo
-
-    _HAS_COMPOSITE_OP = hasattr(_stablehlo, "CompositeOp")
-except ImportError:  # pragma: no cover - jaxlib MLIR bindings unavailable
-    _HAS_COMPOSITE_OP = False
+from zorch._composite import composite_or_inline
 
 CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
@@ -69,11 +64,11 @@ def constraint_eval(
             acc = acc + constraints[..., k] * alpha[..., k]
         return acc
 
-    if not _HAS_COMPOSITE_OP:
-        return decomposition(trace, alpha)
-    return lax.composite(decomposition, name=name)(
+    return composite_or_inline(
+        decomposition,
         trace,
         alpha,
+        name=name,
         num_constraints=num_constraints,
         alpha_operand_idx=1,
     )

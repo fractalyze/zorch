@@ -10,7 +10,7 @@ import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
-import zorch.fusion as fusion
+import zorch._composite as _composite
 from zorch.fusion import fused_region
 from zorch.testkit.random_field import rand_field
 
@@ -34,17 +34,19 @@ class FusedRegionTest(absltest.TestCase):
         # the result still equals the decomposition.
         s0 = rand_field(3, (8,), F)
         decomp = lambda s: s + s
-        orig = fusion._HAS_COMPOSITE_OP
+        orig = _composite._HAS_COMPOSITE_OP
         try:
-            fusion._HAS_COMPOSITE_OP = False
+            _composite._HAS_COMPOSITE_OP = False
             txt = jax.jit(lambda v: fused_region(decomp, v)).lower(s0).as_text()
             self.assertEqual(txt.count("stablehlo.composite"), 0, txt)
             out = jax.jit(lambda v: fused_region(decomp, v))(s0)
             self.assertTrue(bool(jnp.array_equal(out, decomp(s0))))
         finally:
-            fusion._HAS_COMPOSITE_OP = orig
+            _composite._HAS_COMPOSITE_OP = orig
 
-    @absltest.skipUnless(fusion._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    @absltest.skipUnless(
+        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
+    )
     def test_emits_one_zorch_fused_region_composite(self) -> None:
         s0 = rand_field(1, (8,), F)
         decomp = lambda s: s + s
