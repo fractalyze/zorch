@@ -33,6 +33,19 @@ py_test(
 )
 
 py_test(
+    name = "jagged_circuit_test",
+    size = "small",
+    srcs = ["jagged_circuit_test.py"],
+    deps = [
+        "//zorch/logup_gkr",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "prover_test",
     size = "small",
     srcs = ["prover_test.py"],
