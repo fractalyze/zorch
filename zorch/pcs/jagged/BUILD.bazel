@@ -9,6 +9,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":dense",
         "//zorch/poly",
         "//zorch/utils:bits",
         requirement("jax"),

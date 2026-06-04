@@ -35,7 +35,7 @@ class JaggedPcsTest(unittest.TestCase):
 
     def test_compile_once_per_tier(self) -> None:
         c = _jagged_pcs()
-        # Three height vectors, all total_area == 14 -> same tier log_m=4,
+        # Three height vectors, all total_area == 14 -> same tier log_m=5,
         # and all have the same block count (2), so only heights vary within
         # the tier — confirming that height variation alone does not retrace.
         for hv in ([5, 9], [7, 7], [10, 4]):

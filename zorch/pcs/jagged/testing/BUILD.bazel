@@ -22,6 +22,7 @@ py_test(
     srcs = ["dense_test.py"],
     deps = [
         "//zorch/pcs/jagged:dense",
+        "//zorch/pcs/jagged:poly",
         requirement("jax"),
         requirement("numpy"),
         requirement("zk_dtypes"),

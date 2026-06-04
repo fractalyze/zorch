@@ -19,8 +19,10 @@ count: `layout.log_m == cfg.n_d`. The dense buffer `D` is `2^log_m`; the
 indicator `J̃` from `partial_eval` is `2^n_d`; the outer sumcheck Hadamard-pairs
 them index-for-index (the `from_blocks` column-major packing puts column `c`'s
 row `r` at flat index `t_c + r`, exactly where `J̃` is nonzero), so they must be
-the same length. `open` asserts the match; the consumer picks
-`log_stacking_height` to satisfy it (with this convention `K == 1`).
+the same length. `from_blocks` derives its tier with the same `log_area_tier`
+the indicator uses, so the match holds by construction for any
+`log_stacking_height <= n_d` (`K = 2^(n_d - log_s)`); `open` still asserts it
+to reject an over-tall stacking height.
 """
 
 from __future__ import annotations
@@ -459,8 +461,9 @@ class JaggedPcsProver:
         if cfg.n_d != layout.log_m:
             raise ValueError(
                 f"jagged open requires cfg.n_d == layout.log_m; got n_d={cfg.n_d}, "
-                f"log_m={layout.log_m}. Choose log_stacking_height so the dense MLE "
-                f"and the jagged indicator share a variable count (log_m == n_d)."
+                f"log_m={layout.log_m}. Choose log_stacking_height <= n_d (the "
+                f"log-area tier) so the dense MLE and the jagged indicator share "
+                f"a variable count."
             )
 
         # S1: sample z_col. The transcript squeezes base-field scalars; embed them

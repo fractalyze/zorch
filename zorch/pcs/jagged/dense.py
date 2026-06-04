@@ -22,6 +22,15 @@ from jax import Array
 from zorch.utils.bits import log2_ceil_usize
 
 
+def log_area_tier(total_area: int) -> int:
+    """Log-area tier shared by the dense buffer (`log_m`) and the jagged
+    indicator (`n_d`). The +1 keeps `t_L < 2^tier` strict (a power-of-two area
+    would otherwise need t_L == 2^tier), so prefix sums always fit the bit
+    width. One definition site: the opening seam requires `log_m == n_d`, so
+    both sides must derive the tier identically."""
+    return log2_ceil_usize(total_area) + 1
+
+
 @dataclass(frozen=True)
 class JaggedLayout:
     """Static shape key + structure metadata for one committable region.
@@ -75,8 +84,8 @@ def from_blocks(
     total_area = sum(h * w for h, w in zip(heights, widths))
 
     log_s = log_stacking_height
-    log_m = max(log2_ceil_usize(total_area), log_s)
-    m_max = 1 << log_m  # >= total_area by construction (log_m >= log2_ceil(area))
+    log_m = max(log_area_tier(total_area), log_s)
+    m_max = 1 << log_m  # > total_area by construction (log_area_tier is strict)
 
     flats = [b.T.reshape(-1) for b in blocks]  # column-major per block
     if m_max > total_area:
