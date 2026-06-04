@@ -210,6 +210,63 @@ def build_jagged_layout(
 
 
 @partial(jax.jit, static_argnames=("cfg",))
+def partial_eval(
+    col_prefix_sums: Array,
+    z_row: Array,
+    z_col: Array,
+    *,
+    cfg: JaggedStaticConfig,
+) -> Array:
+    """J̃(z_row, z_col, ·) materialized over the dense hypercube.
+
+    Returns indicator[i] = Σ_c eq(z_col, c) · eq(z_row, i−t_c) · [t_c ≤ i < t_{c+1}]
+    for every i in {0,…,2^n_d − 1}, holding (z_row, z_col) fixed.
+
+    col_prefix_sums: (l_max+1, n_d) field bit tensor (same as eval_jagged_mle).
+    Output shape: (2^n_d,).
+
+    Each column c scatters col_eq[c]·row_eq[0..h−1] into the output at offset t_c
+    via lax.fori_loop (AOT-clean, fusion-ready). Padding columns (t_c == t_{c+1})
+    contribute a zero-width write and are handled uniformly (no special case).
+    """
+    dtype = z_row.dtype
+    n_r = cfg.n_r
+    n_d = cfg.n_d
+    row_len = 1 << n_r  # static
+
+    # Derive integer scatter offsets on-device via bitcast (no host numpy).
+    # Reshape normalizes the limb axis: base field (4B→1 int32) gets shape
+    # (l_max+1, n_d, 1); EF (16B→4 int32) gets (l_max+1, n_d, 4). Both cases
+    # then take limb 0 correctly — without the reshape, base-field bitcast omits
+    # the trailing axis and [..,,0] would index the n_d axis instead.
+    limbs = jax.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
+    limbs = limbs.reshape(col_prefix_sums.shape[0], n_d, -1)  # (l_max+1, n_d, L)
+    bit_vals = limbs[..., 0]  # (l_max+1, n_d) — canonical 0/1 representative
+    powers = jnp.array([1 << (n_d - 1 - k) for k in range(n_d)], dtype=jnp.int32)
+    prefix_sums_int = jnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
+
+    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # [2^n_c]
+    row_eq = expand_eq_to_hypercube(z_row, jnp.ones([], dtype=dtype))  # [2^n_r]
+
+    out = jnp.zeros(1 << n_d, dtype=dtype)
+    row_indices = jnp.arange(row_len, dtype=jnp.int32)
+
+    def body(c: Array, out: Array) -> Array:
+        t_c = prefix_sums_int[c]
+        h = prefix_sums_int[c + 1] - t_c  # column height (0 for padding columns)
+
+        # Mask row entries beyond this column's actual height.
+        mask = row_indices < h  # (2^n_r,) bool
+        contrib = col_eq[c] * jnp.where(mask, row_eq, jnp.zeros([], dtype=dtype))
+
+        # Read-modify-write: add contrib into out[t_c : t_c + row_len].
+        old = jax.lax.dynamic_slice(out, (t_c,), (row_len,))
+        return jax.lax.dynamic_update_slice(out, old + contrib, (t_c,))
+
+    return jax.lax.fori_loop(0, cfg.l_max, body, out)
+
+
+@partial(jax.jit, static_argnames=("cfg",))
 def eval_jagged_mle(
     col_prefix_sums: Array,
     z_row: Array,

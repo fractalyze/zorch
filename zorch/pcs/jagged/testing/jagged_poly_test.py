@@ -1,7 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from functools import partial
+import operator
+from functools import partial, reduce
 from typing import Any
 
 import jax
@@ -20,7 +21,9 @@ from zorch.pcs.jagged.poly import (
     build_jagged_layout,
     build_prefix_sums,
     eval_jagged_mle,
+    partial_eval,
 )
+from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.testkit.random_field import rand_field
 
 EF = zk_dtypes.koalabearx4
@@ -157,6 +160,45 @@ class EvalJaggedMleTest(absltest.TestCase):
         bad_cps = cps.at[3].set(jnp.zeros(cfg.n_d, dtype=EF))  # padding row -> t=0
         bad = eval_jagged_mle(bad_cps, z_row, z_col, z_index, cfg=cfg)
         self.assertNotEqual(_field_val(good), _field_val(bad))
+
+
+class PartialEvalTest(absltest.TestCase):
+    def test_partial_eval_matches_eval_jagged_mle(self) -> None:
+        heights = [4, 2, 3]
+        l_max, n_r = 4, 3
+        cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)
+        z_row = rand_field(10, (cfg.n_r,), EF)
+        z_col = rand_field(11, (cfg.n_c,), EF)
+        z_index = rand_field(12, (cfg.n_d,), EF)
+        indicator = partial_eval(cps, z_row, z_col, cfg=cfg)
+        self.assertEqual(indicator.shape, (2**cfg.n_d,))
+        eq_idx = expand_eq_to_hypercube(z_index, jnp.array(1, EF))
+        # jnp.sum aborts on EF (koalabearx4) — unroll at trace time.
+        n = 2**cfg.n_d
+        got = reduce(operator.add, [indicator[i] * eq_idx[i] for i in range(n)])
+        want = eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg)
+        self.assertEqual(_field_val(got), _field_val(want))
+
+    def test_partial_eval_jits_and_compiles_once_across_heights(self) -> None:
+        # Two height vectors in the same tier produce the same compiled artifact.
+        # col_prefix_sums is a traced argument — no ConcretizationError, cache_size==1.
+        l_max, n_r = 4, 3
+        heights_a = [4, 2, 3]  # area 9, n_d=5
+        heights_b = [1, 5, 3]  # area 9, n_d=5 (same tier)
+        cps_a, cfg = build_jagged_layout(heights_a, l_max, n_r, EF)
+        cps_b, cfg_b = build_jagged_layout(heights_b, l_max, n_r, EF)
+        self.assertEqual((cfg.n_d, cfg.n_c), (cfg_b.n_d, cfg_b.n_c))  # same tier
+        z_row = rand_field(20, (cfg.n_r,), EF)
+        z_col = rand_field(21, (cfg.n_c,), EF)
+        run = jax.jit(lambda cps, zr, zc: partial_eval(cps, zr, zc, cfg=cfg))
+        out1 = run(cps_a, z_row, z_col)
+        out1.block_until_ready()
+        out2 = run(cps_b, z_row, z_col)
+        out2.block_until_ready()
+        # Compiled once: a single cache entry (no re-trace across height vectors).
+        self.assertEqual(run._cache_size(), 1)
+        # Sanity: the two height vectors produce different indicators.
+        self.assertNotEqual(out1.tobytes(), out2.tobytes())
 
 
 if __name__ == "__main__":
