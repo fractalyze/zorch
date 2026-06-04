@@ -41,9 +41,8 @@ from jax import Array
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
-from zorch.prove import RoundMsg, prove
 from zorch.round import Round
-from zorch.sumcheck.prover import factors_on_domain, fold
+from zorch.sumcheck.prover import RoundMsg, factors_on_domain, fold, prove
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 

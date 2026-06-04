@@ -20,6 +20,8 @@ from zorch.hash.permutation import Permutation
 
 
 class Transcript(Protocol):
+    @property
+    def has_dedicated_fusion(self) -> bool: ...
     def observe(self, values: Array) -> Self: ...
     def sample(self, n: int = 1) -> tuple[Self, Array]: ...
     def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
@@ -63,6 +65,15 @@ class DuplexTranscript:
     permutation: Permutation
     rate: int
     state: DuplexState
+
+    @property
+    def has_dedicated_fusion(self) -> bool:
+        """Whether the Fiat-Shamir permutation lowers to a dedicated fusion marker
+        a vendor can expand — the gate `zorch.sumcheck.prover` reads to mark its
+        scan as one register-resident sumcheck kernel (mirrors `Sponge`/
+        `Compression`). False for a test `CheapPermutation`, so unit tests keep the
+        plain scan."""
+        return self.permutation.has_dedicated_fusion
 
     @classmethod
     def new(cls, permutation: Permutation, rate: int) -> DuplexTranscript:

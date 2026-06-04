@@ -65,9 +65,6 @@ py_library(
     deps = [
         ":round",
         ":transcript",
-        "//zorch/sumcheck",
-        "//zorch/utils:bits",
-        requirement("jax"),
     ],
 )
 

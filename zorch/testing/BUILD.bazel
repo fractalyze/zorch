@@ -48,7 +48,6 @@ py_test(
     deps = [
         "//zorch:prove",
         "//zorch:round",
-        "//zorch/sumcheck",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
@@ -75,7 +74,6 @@ py_test(
     size = "small",
     srcs = ["scan_test.py"],
     deps = [
-        "//zorch:prove",
         "//zorch:verify",
         "//zorch/sumcheck",
         "//zorch/testkit:transcript",

@@ -26,8 +26,9 @@ from zorch.logup_gkr.prover import (
 )
 from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
-from zorch.prove import fold_rounds, prove
+from zorch.prove import fold_rounds
 from zorch.round import ProveChain
+from zorch.sumcheck.prover import prove
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript

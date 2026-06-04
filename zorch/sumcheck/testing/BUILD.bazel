@@ -16,8 +16,23 @@ py_test(
     srcs = ["prove_test.py"],
     deps = [
         ":testing",
-        "//zorch:prove",
         "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "prove_marked_test",
+    size = "small",
+    srcs = ["prove_marked_test.py"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
@@ -32,7 +47,6 @@ py_test(
     size = "small",
     srcs = ["prover_test.py"],
     deps = [
-        "//zorch:prove",
         "//zorch/sumcheck",
         "//zorch/testkit:fusion",
         "//zorch/testkit:random_field",
@@ -49,7 +63,6 @@ py_test(
     srcs = ["verifier_test.py"],
     deps = [
         ":testing",
-        "//zorch:prove",
         "//zorch:verify",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",

@@ -32,6 +32,8 @@ def fused_region(
     decomposition: Callable[..., _Region],
     *operands: Array,
     name: str = FUSED_REGION_MARKER,
+    version: int = 0,
+    **attrs: object,
 ) -> _Region:
     """Mark a region (`decomposition`) as one fused kernel — or, under a
     name-routed marker, a boundary a vendor expands into a kernel chain.
@@ -49,5 +51,12 @@ def fused_region(
     single-kernel: a vendor may expand it into a chain (e.g. `zorch.merkle_commit`
     → per-layer hash kernels), so `decomposition` may return a pytree, not just an
     Array.
+
+    `version` and `attrs` ride through to the composite (`composite.version` and
+    `composite.attributes`) — the structural metadata a recognizer parses, e.g. a
+    sumcheck marker's `degree` / `num_vars`. Both default to absent (`version=0`,
+    no attrs), so a plain straight-line region is unchanged.
     """
-    return composite_or_inline(decomposition, *operands, name=name)
+    return composite_or_inline(
+        decomposition, *operands, name=name, version=version, **attrs
+    )
