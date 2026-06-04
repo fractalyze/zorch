@@ -21,9 +21,9 @@ py_test(
     name = "merkle_test",
     size = "small",
     srcs = ["merkle_test.py"],
-    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
-    # CI job covers it); drop the tag after the jax pin bump.
-    tags = ["manual"],
+    # composite-vmap; CI's published jaxlib can't run it. .bazelrc.ci excludes the
+    # local_only tag from CI (full rationale there); local bazel runs it.
+    tags = ["local_only"],
     deps = [
         ":koalabear16",
         "//zorch:_composite",
@@ -32,6 +32,7 @@ py_test(
         "//zorch/hash:sponge",
         "//zorch/hash/poseidon2",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,

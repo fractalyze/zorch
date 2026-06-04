@@ -3,11 +3,13 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
-    name = "eq_test",
+    name = "reed_solomon_test",
     size = "small",
-    srcs = ["eq_test.py"],
+    srcs = ["reed_solomon_test.py"],
     deps = [
-        "//zorch/poly",
+        "//zorch/coding:linear_code",
+        "//zorch/coding:reed_solomon",
+        "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
@@ -15,23 +17,13 @@ py_test(
 )
 
 py_test(
-    name = "univariate_test",
+    name = "fri_test",
     size = "small",
-    srcs = ["univariate_test.py"],
+    srcs = ["fri_test.py"],
     deps = [
-        "//zorch/poly",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "multilinear_test",
-    size = "small",
-    srcs = ["multilinear_test.py"],
-    deps = [
-        "//zorch/poly",
+        "//zorch/coding:fri",
+        "//zorch/coding:reed_solomon",
+        "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

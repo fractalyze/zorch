@@ -21,9 +21,6 @@ py_test(
     name = "poseidon2_test",
     size = "small",
     srcs = ["poseidon2_test.py"],
-    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
-    # CI job covers it); drop the tag after the jax pin bump.
-    tags = ["manual"],
     deps = [
         ":koalabear16",
         "//zorch:_composite",
@@ -50,9 +47,6 @@ py_test(
     name = "permute_shape_test",
     size = "small",
     srcs = ["permute_shape_test.py"],
-    # manual: vmaps the zorch.fused_region composite -> needs jax#164 (the pytest
-    # CI job covers it); drop the tag after the jax pin bump.
-    tags = ["manual"],
     deps = [
         "//zorch/hash/poseidon2",
         requirement("absl_py"),

@@ -53,47 +53,11 @@ jobs:
           bazelisk-cache: true
           disk-cache: ${{ github.workflow }}-${{ matrix.backend }}
           repository-cache: true
-      # The tests that vmap poseidon2's zorch.fused_region composite carry
-      # `tags = ["manual"]`, so `//...` skips them here — they need
-      # fractalyze/jax#164's batching rule, absent from the pinned jax wheel
-      # bazel's hermetic pip resolves. The pytest job runs them against the fork
-      # branch. Drop those tags after the jax pin bump.
+      # `.bazelrc.ci` filters the `local_only` (composite-vmap) tests out of CI —
+      # they need a jaxlib CI's published wheel isn't; see .bazelrc.ci. They run
+      # under a local `bazel test //...`.
       - name: Run bazel test
-        run: bazel test --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
-
-  pytest:
-    needs: setup
-    strategy:
-      fail-fast: false
-      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
-    runs-on: ${{ matrix.runs_on }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: requirements_lock_3_11.txt
-      - name: Install pinned deps + pytest
-        run: |
-          pip install -r requirements_lock_3_11.txt
-          pip install pytest
-      # TEMP — remove once fractalyze/jax#164 merges and the jax-update pin bump
-      # lands here. The pinned jax wheel lacks the vmap-over-composite batching
-      # rule that poseidon2's zorch.fused_region marker needs; override the jax package
-      # with the fork branch (tarball via the read token, since jax is private;
-      # pinned to the PR-head commit so CI is reproducible; --no-deps keeps the
-      # pinned jaxlib).
-      - name: (temp) jax composite-vmap batching rule (fractalyze/jax#164)
-        run: |
-          mkdir -p "${RUNNER_TEMP}/jax-src"
-          curl -fsSL \
-            -H "Authorization: token ${{ secrets.FRACTALYZE_REPOS_READ_TOKEN }}" \
-            "https://api.github.com/repos/fractalyze/jax/tarball/da27584c20f80c6563234d9234116dd61ec3b293" \
-            | tar -xz --strip-components=1 -C "${RUNNER_TEMP}/jax-src"
-          pip install --no-deps --force-reinstall "${RUNNER_TEMP}/jax-src"
-      - name: Run module tests
-        run: JAX_PLATFORMS=${{ matrix.jax_platforms }} PYTHONPATH=. pytest
+        run: bazel --bazelrc=.bazelrc.ci test --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
 
   pre-commit:
     if: github.actor != 'fractalyze-dev'
