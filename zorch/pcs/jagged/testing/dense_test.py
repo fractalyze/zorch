@@ -9,6 +9,7 @@ import numpy as np
 from zk_dtypes import koalabear_mont as F
 
 from zorch.pcs.jagged.dense import from_blocks
+from zorch.pcs.jagged.poly import build_jagged_layout
 from zorch.utils.bits import log2_ceil_usize
 
 
@@ -18,7 +19,7 @@ def _oracle_pack(blocks: list[object], log_s: int) -> tuple[np.ndarray, int]:
     parts = [np.ravel(np.asarray(b), order="F") for b in blocks]
     flat = np.concatenate(parts) if parts else np.zeros(0)
     total = flat.shape[0]
-    log_m = max(log2_ceil_usize(total), log_s)
+    log_m = max(log2_ceil_usize(total) + 1, log_s)
     m_max = 1 << log_m
     padded = np.concatenate([flat, np.zeros(m_max - total, dtype=flat.dtype)])
     return padded, log_m
@@ -53,6 +54,25 @@ class FromBlocksTest(unittest.TestCase):
     def test_negative_stacking_height_raises(self) -> None:
         with self.assertRaises(ValueError):
             from_blocks([jnp.arange(2, dtype=F).reshape(2, 1)], log_stacking_height=-1)
+
+    def test_tier_matches_indicator_n_d(self) -> None:
+        # The opening seam requires cfg.n_d == layout.log_m; both must derive
+        # the same tier from the same total area so the constraint holds by
+        # construction whenever log_s <= n_d.
+        blocks = [
+            jnp.arange(6, dtype=F).reshape(3, 2),
+            jnp.arange(3, dtype=F).reshape(3, 1),
+        ]
+        _, layout = from_blocks(blocks, log_stacking_height=2)
+        _, cfg = build_jagged_layout([3, 3, 3], l_max=3, n_r=2, dtype=F)
+        self.assertEqual(layout.log_m, cfg.n_d)
+
+    def test_k_gt_1_reachable(self) -> None:
+        # area 9 -> tier log2_ceil(9)+1 = 5; log_s=3 leaves K = 2^(5-3) = 4.
+        blocks = [jnp.arange(9, dtype=F).reshape(9, 1)]
+        _, layout = from_blocks(blocks, log_stacking_height=3)
+        self.assertEqual(layout.log_m, 5)
+        self.assertEqual(layout.K, 4)
 
     def test_stacking_height_dominates_tier(self) -> None:
         # total_area=1 but log_stacking_height=3 floors the tier: log_m=3.

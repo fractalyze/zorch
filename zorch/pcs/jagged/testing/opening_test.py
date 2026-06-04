@@ -37,10 +37,12 @@ from zorch.testkit.random_field import rand_field
 from zorch.transcript import DuplexTranscript
 from zorch.verify import verify as outer_verify
 
-# heights [4, 2, 3], width-1 columns -> area 9, n_d 5; log_stacking_height 5
-# makes log_m == n_d (the seam's requirement), K == 1.
+# heights [4, 2, 3], width-1 columns -> area 9, tier log_m == n_d == 5 (the
+# seam's requirement, by construction for any log_s <= n_d). log_s 5 gives the
+# K == 1 base case; log_s 3 stacks the dense MLE as an [8, 4] matrix (K == 4).
 _HEIGHTS = [4, 2, 3]
 _LOG_STACK = 5
+_LOG_STACK_K4 = 3
 _N_R = 2  # log2_ceil(max height 4)
 
 
@@ -52,8 +54,7 @@ def _t() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
 
-def _stack() -> tuple[JaggedPcsProver, JaggedPcsVerifier]:
-    log_s = _LOG_STACK
+def _stack(log_s: int = _LOG_STACK) -> tuple[JaggedPcsProver, JaggedPcsVerifier]:
     S = 1 << log_s
     rs = ReedSolomon(message_len=S, blowup=2, dtype=EF)
     sponge, comp, tree = koalabear16_merkle()
@@ -90,7 +91,7 @@ def _column_claims(blocks: list[jnp.ndarray], z_row: jnp.ndarray) -> jnp.ndarray
     "remove this skip when zkx#507 lands or the pytest job is sharded.",
 )
 class JaggedOpeningTest(absltest.TestCase):
-    def _open(self, seed: int) -> tuple[
+    def _open(self, seed: int, log_s: int = _LOG_STACK) -> tuple[
         JaggedPcsVerifier,
         jnp.ndarray,
         jnp.ndarray,
@@ -98,9 +99,9 @@ class JaggedOpeningTest(absltest.TestCase):
         JaggedProverData,
         JaggedOpeningProof,
     ]:
-        prover, verifier = _stack()
+        prover, verifier = _stack(log_s)
         blocks = _blocks(seed)
-        commitment, pdata = prover.commit(blocks, log_stacking_height=_LOG_STACK)
+        commitment, pdata = prover.commit(blocks, log_stacking_height=log_s)
         z_row = _rand_ef(seed + 50, (_N_R,))
         column_claims = _column_claims(blocks, z_row)
         proof, _ = prover.open(pdata, z_row, column_claims, _t())
@@ -108,6 +109,18 @@ class JaggedOpeningTest(absltest.TestCase):
 
     def test_round_trip_verifies(self) -> None:
         verifier, commitment, z_row, column_claims, pdata, proof = self._open(1)
+        ok, _ = verifier.verify(
+            commitment, z_row, column_claims, pdata.layout, proof, _t()
+        )
+        self.assertTrue(bool(ok))
+
+    def test_k4_round_trip_verifies(self) -> None:
+        # K > 1: the stacked eq-combine is exercised by the full opening path
+        # (BaseFold opens 4 columns; z_final's leading bits select the column).
+        verifier, commitment, z_row, column_claims, pdata, proof = self._open(
+            7, log_s=_LOG_STACK_K4
+        )
+        self.assertEqual(pdata.layout.K, 4)
         ok, _ = verifier.verify(
             commitment, z_row, column_claims, pdata.layout, proof, _t()
         )
