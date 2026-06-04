@@ -48,8 +48,8 @@ py_test(
     deps = [
         "//zorch:prove",
         "//zorch:round",
-        "//zorch:transcript",
         "//zorch/sumcheck",
+        "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
@@ -63,6 +63,7 @@ py_test(
     deps = [
         "//zorch:round",
         "//zorch:transcript",
+        "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
@@ -75,9 +76,9 @@ py_test(
     srcs = ["scan_test.py"],
     deps = [
         "//zorch:prove",
-        "//zorch:transcript",
         "//zorch:verify",
         "//zorch/sumcheck",
+        "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

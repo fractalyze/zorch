@@ -1,15 +1,14 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Fiat-Shamir transcript: the `Transcript` interface, a real duplex-sponge
-implementation, and a preset-challenge stub for tests.
+"""Fiat-Shamir transcript: the `Transcript` interface and a real duplex-sponge
+implementation.
 
 `DuplexTranscript` is the device-side duplex sponge (fixed-size buffers + position
 scalars) — a JAX pytree whose state threads functionally under `@jit`, with no
-host callback or zkVM FFI. `StubTranscript` yields preset challenges and ignores
-observations.
+host callback or zkVM FFI.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any, Protocol, Self
 
@@ -24,34 +23,6 @@ class Transcript(Protocol):
     def observe(self, values: Array) -> Self: ...
     def sample(self, n: int = 1) -> tuple[Self, Array]: ...
     def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
-
-
-@partial(register_dataclass, data_fields=["challenges", "pos"], meta_fields=[])
-@dataclass(frozen=True)
-class StubTranscript:
-    """Preset challenge stream; `observe` is a no-op. Test/dev only.
-
-    A registered pytree so it rides a `lax.scan` carry like the real
-    `DuplexTranscript` -- the `prove` / `verify` drivers scan it (issue #58). `pos`
-    is an int32 leaf, not a static field, so the carry structure stays invariant as
-    it advances each round."""
-
-    challenges: Array  # (k,) preset challenge values
-    # index of the next challenge; factory, not a bare literal -- a frozen
-    # dataclass rejects an Array as a default value.
-    pos: Array = field(default_factory=lambda: jnp.int32(0))
-
-    def observe(self, values: Array) -> "StubTranscript":
-        return self
-
-    def sample(self, n: int = 1) -> tuple["StubTranscript", Array]:
-        out = lax.dynamic_slice_in_dim(self.challenges, self.pos, n)
-        return StubTranscript(self.challenges, self.pos + n), out
-
-    def observe_and_sample(
-        self, values: Array, n: int = 1
-    ) -> tuple["StubTranscript", Array]:
-        return self.observe(values).sample(n)
 
 
 @register_dataclass

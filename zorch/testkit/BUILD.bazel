@@ -20,3 +20,13 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [requirement("jax")],
 )
+
+py_library(
+    name = "transcript",
+    srcs = ["transcript.py"],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        "//zorch:transcript",
+        requirement("jax"),
+    ],
+)

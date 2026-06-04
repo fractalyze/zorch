@@ -25,3 +25,17 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "transcript_test",
+    size = "small",
+    srcs = ["transcript_test.py"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/hash:permutation",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

@@ -13,6 +13,7 @@ would yield a wrong proof.
 Tracing only -- no execution -- so these run on every backend (the zkx#500 CPU
 while-emitter bug only bites at run time; see transcript_test).
 """
+
 from __future__ import annotations
 
 import jax
@@ -22,7 +23,7 @@ from absl.testing import absltest
 
 from zorch.prove import prove
 from zorch.sumcheck import prover, verifier
-from zorch.transcript import StubTranscript
+from zorch.testkit.transcript import cheap_transcript
 from zorch.verify import verify
 
 KB = zk_dtypes.koalabear
@@ -35,7 +36,7 @@ def _top_primitives(jaxpr: jax.core.ClosedJaxpr) -> list[str]:
 def _verify_eqn_count(rounds: int) -> int:
     proof = jnp.ones((rounds, 2), KB)  # degree+1 = 2
     jaxpr = jax.make_jaxpr(lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t))(
-        jnp.array(0, KB), proof, StubTranscript(jnp.zeros(rounds, KB))
+        jnp.array(0, KB), proof, cheap_transcript(KB)
     )
     return len(jaxpr.jaxpr.eqns)
 
@@ -43,7 +44,7 @@ def _verify_eqn_count(rounds: int) -> int:
 def _prove_eqn_count(rounds: int) -> int:
     f = jnp.arange(1, (1 << rounds) + 1, dtype=KB)
     jaxpr = jax.make_jaxpr(lambda s, t: prove(prover.SumcheckRound(1), s, t))(
-        [f], StubTranscript(jnp.zeros(rounds, KB))
+        [f], cheap_transcript(KB)
     )
     return len(jaxpr.jaxpr.eqns)
 
@@ -57,7 +58,7 @@ class VerifyScanShapeTest(absltest.TestCase):
         proof = jnp.ones((4, 2), KB)
         jaxpr = jax.make_jaxpr(
             lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t)
-        )(jnp.array(0, KB), proof, StubTranscript(jnp.zeros(4, KB)))
+        )(jnp.array(0, KB), proof, cheap_transcript(KB))
         self.assertIn("scan", _top_primitives(jaxpr))
 
 
@@ -69,7 +70,7 @@ class ProveScanShapeTest(absltest.TestCase):
     def test_prove_lowers_to_a_scan(self) -> None:
         f = jnp.arange(1, 17, dtype=KB)
         jaxpr = jax.make_jaxpr(lambda s, t: prove(prover.SumcheckRound(1), s, t))(
-            [f], StubTranscript(jnp.zeros(4, KB))
+            [f], cheap_transcript(KB)
         )
         self.assertIn("scan", _top_primitives(jaxpr))
 

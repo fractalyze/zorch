@@ -1,4 +1,4 @@
-load("@rules_python//python:defs.bzl", "py_binary", "py_library")
+load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
 # Dense LogUp-GKR: fractional-sum circuit, prover (per-variable LogUp sumcheck
@@ -22,21 +22,5 @@ py_library(
         "//zorch/sumcheck",
         "//zorch/utils:bits",
         requirement("jax"),
-    ],
-)
-
-py_binary(
-    name = "bench_logup_gkr",
-    srcs = ["bench_logup_gkr.py"],
-    deps = [
-        "//zorch:transcript",
-        "//zorch/hash/poseidon2/testing:koalabear16",
-        "//zorch/logup_gkr/testing",
-        "//zorch/testkit:random_field",
-        requirement("jax"),
-        requirement("jax_cuda12_plugin"),
-        requirement("zk_dtypes"),
-        requirement("zkbench"),
-        requirement("zkx_cuda_pjrt"),
     ],
 )

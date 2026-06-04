@@ -30,7 +30,8 @@ from zorch.prove import fold_rounds, prove
 from zorch.round import ProveChain
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import StubTranscript, Transcript
+from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import Transcript
 
 KB = zk_dtypes.koalabear_mont
 
@@ -69,15 +70,10 @@ class LogupSumcheckRoundTest(absltest.TestCase):
 
     def test_call_returns_round_msg_with_challenge(self) -> None:
         st = _state(50, 8)
-        t = StubTranscript(jnp.array([4, 0, 0], dtype=KB))
-        state, t2, msg = LogupSumcheckRound(jnp.array(2, KB))(st, t)
+        state, _, msg = LogupSumcheckRound(jnp.array(2, KB))(st, cheap_transcript(KB))
         self.assertEqual(msg.round_poly.shape, (4,))
-        self.assertTrue(bool(msg.challenge == jnp.array(4, KB)))  # the sampled r
         self.assertEqual(len(state), 5)
-        self.assertEqual(state[0].shape, (4,))  # width halved
-        if not isinstance(t2, StubTranscript):
-            raise AssertionError("expected StubTranscript")
-        self.assertEqual(t2.pos, 1)  # one challenge consumed
+        self.assertEqual(state[0].shape, (4,))  # width halved — one round consumed
 
     def test_end_to_end_sumcheck_reduction(self) -> None:
         # Drive the round to completion; the running claim must reduce
@@ -87,28 +83,28 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         lam = jnp.array(11, KB)
         rnd = LogupSumcheckRound(lam)
         n = 4  # log2(16)
-        challenges = rand_field(99, (n,), KB)
 
-        # Replay round-by-round to check the per-round sumcheck identity.
+        # Replay round-by-round to check the per-round sumcheck identity, reducing
+        # at the challenge actually sampled from the sponge each round.
         claim = jnp.sum(rnd._combine(*st))
         state = st
-        t: Transcript = StubTranscript(challenges)
-        for i in range(n):
+        t: Transcript = cheap_transcript(KB)
+        for _ in range(n):
             state, t, msg = rnd(state, t)
             self.assertTrue(bool(msg.round_poly[0] + msg.round_poly[1] == claim))
-            claim = eval_univariate(msg.round_poly, challenges[i])
+            claim = eval_univariate(msg.round_poly, msg.challenge)
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
         self.assertTrue(bool(rnd._combine(*state)[0] == claim))
 
-        # `fold_rounds` collects the same round polys and the bound point, and the
+        # `fold_rounds` collects the round polys and the bound point, and the
         # homogeneous scan driver `prove` (what GkrLayerRound uses) is byte-identical
-        # to that loop -- same Fiat-Shamir order, so same round polys + point.
-        _, _, msgs = fold_rounds(rnd, st, StubTranscript(challenges), n)
+        # to that loop -- same Fiat-Shamir order over an identical fresh sponge, so
+        # same round polys + point.
+        _, _, msgs = fold_rounds(rnd, st, cheap_transcript(KB), n)
         round_polys = jnp.stack([m.round_poly for m in msgs])
         point = jnp.stack([m.challenge for m in msgs])
         self.assertEqual(round_polys.shape, (n, 4))
-        self.assertTrue(bool(jnp.all(point == challenges)))
-        _, _, scan_msgs = prove(rnd, st, StubTranscript(challenges))
+        _, _, scan_msgs = prove(rnd, st, cheap_transcript(KB))
         self.assertTrue(bool(jnp.all(scan_msgs.round_poly == round_polys)))
         self.assertTrue(bool(jnp.all(scan_msgs.challenge == point)))
 
@@ -121,7 +117,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
             st = _state(7, 1 << num_vars)
             jaxpr = jax.make_jaxpr(
                 lambda s, t: prove(LogupSumcheckRound(jnp.array(3, KB)), s, t)
-            )(st, StubTranscript(jnp.zeros(num_vars, KB)))
+            )(st, cheap_transcript(KB))
             return len(jaxpr.jaxpr.eqns)
 
         self.assertEqual(eqn_count(3), eqn_count(5))
@@ -191,8 +187,7 @@ class BindOutputTest(absltest.TestCase):
     def test_initial_carry_shapes(self) -> None:
         first = random_first_layer(7, 2, 3)
         output = extract_outputs(build_pyramid(first)[-1])
-        ch = rand_field(1, (32,), KB)
-        (num_eval, den_eval, point), _ = bind_output(output, StubTranscript(ch))
+        (num_eval, den_eval, point), _ = bind_output(output, cheap_transcript(KB))
         self.assertEqual(num_eval.shape, ())
         self.assertEqual(den_eval.shape, ())
         # The output layer has num_interaction_variables + 1 variables.
@@ -202,7 +197,7 @@ class BindOutputTest(absltest.TestCase):
 class GkrProverTest(absltest.TestCase):
     def test_chain_emits_one_proof_per_non_floor_layer(self) -> None:
         first = random_first_layer(11, 1, 2)
-        layers, _, proofs, _ = prove_gkr(first, rand_field(2, (64,), KB))
+        layers, _, proofs, _ = prove_gkr(first)
         self.assertEqual(len(proofs), len(layers) - 1)
         for lp, layer in zip(proofs, reversed(layers[:-1]), strict=True):
             self.assertEqual(lp.round_polys.shape, (layer.num_variables, _DEGREE + 1))
@@ -220,10 +215,9 @@ class GkrProverTest(absltest.TestCase):
         first = random_first_layer(13, 2, 2)
         layers = build_pyramid(first)
         output = extract_outputs(layers[-1])
-        ch = rand_field(3, (64,), KB)
-        carry, transcript = bind_output(output, StubTranscript(ch))
-        # The first layer round samples lam off this same transcript position;
-        # peeking is non-destructive (StubTranscript is immutable).
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+        # The first layer round samples lam off this same transcript state; peeking
+        # is non-destructive (sample returns a fresh transcript, leaving this one).
         _, lam = transcript.sample(1)
         claim = lam[0] * carry[0] + carry[1]
         chain = ProveChain([GkrLayerRound(layer) for layer in reversed(layers[:-1])])
@@ -233,26 +227,23 @@ class GkrProverTest(absltest.TestCase):
 
     def test_deterministic_under_fixed_transcript(self) -> None:
         first = random_first_layer(17, 1, 3)
-        ch = rand_field(4, (64,), KB)
-        _, _, a, _ = prove_gkr(first, ch)
-        _, _, b, _ = prove_gkr(first, ch)
+        _, _, a, _ = prove_gkr(first)
+        _, _, b, _ = prove_gkr(first)
         for pa, pb in zip(a, b):
             self.assertTrue(bool(jnp.all(pa.round_polys == pb.round_polys)))
 
     def test_prove_under_jit_matches_eager(self) -> None:
-        # The benchmark's jit mode fuses the whole prove into one program via
-        # prove_gkr_jitted; guard that fusing changes nothing — GkrLayer /
-        # StubTranscript / fold_rounds are all jit-traceable and the round
-        # polynomials are bit-identical to the eager prove_gkr.
+        # prove_gkr_jitted fuses the whole prove into one program; guard that
+        # fusing changes nothing — GkrLayer / cheap_transcript / fold_rounds are
+        # all jit-traceable and the round polynomials are bit-identical to the
+        # eager prove_gkr.
         first = random_first_layer(23, 2, 3)
-        ch = rand_field(5, (64,), KB)
-        eager = prove_gkr(first, ch)[2][-1].round_polys
+        eager = prove_gkr(first)[2][-1].round_polys
         jitted = prove_gkr_jitted(
             first.numerator_0,
             first.numerator_1,
             first.denominator_0,
             first.denominator_1,
-            ch,
             first.num_interaction_variables,
         )
         self.assertTrue(bool(jnp.all(eager == jitted)))
