@@ -1,7 +1,7 @@
-# jagged — Jagged Little Polynomial eval
+# jagged — Jagged PCS (Little Polynomial eval + opening)
 
-The *why* behind `zorch/commit/jagged/`. The *what* lives in the code and its
-tests under `zorch/commit/jagged/testing/`. Full design and open decisions: epic
+The *why* behind `zorch/pcs/jagged/`. The *what* lives in the code and its
+tests under `zorch/pcs/jagged/testing/`. Full design and open decisions: epic
 issue [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Why the shape
@@ -33,6 +33,38 @@ counts, gather-pad) is the consumer's trace concern; here it is just the agnosti
 eval. Adapted from whir-zorch's `jagged/poly.py` to AOT-clean form — a static
 `l_max` column axis and a `lax.fori_loop` layer loop in place of host-driven
 shapes.
+
+## Opening
+
+The opening proves the evaluation of the original sparse, variable-height
+polynomial via the committed dense poly `D` (the [BaseFold matrix](pcs.md#basefold-transparent-multilinear)
+commitment) and `J̃`. It is **two sumchecks plus a stacked dense open**, all
+zorch-native (natural-order fold, [transcript](hash.md), no domain separators or
+PoW — mathematical fidelity, not byte-equality with any external prover):
+
+- **Outer Hadamard sumcheck** `Σ_i D(i)·J̃(i)` (degree 2) reduces to a point
+  `z_final`, leaving `dense_eval·jagged_eval == outer_final_eval` to check. Its
+  second factor is `partial_eval` — `J̃(z_row, z_col, ·)` materialized over the
+  dense hypercube.
+- **Inner jagged-assist sumcheck** reproves `jagged_eval = J̃(z_final)`. That is a
+  `Σ_c eq(z_col, c)·h(…)` sum over all `L` columns; rather than make the verifier
+  pay `O(L)`, the inner sumcheck reduces it — over the merged-prefix-bit hypercube,
+  exploiting that the column eq-weight is sparse (`L` deltas) — to a **single**
+  branching-program leaf `h` the verifier evaluates. The succinctness mechanism,
+  not a soundness afterthought.
+- **Stacked dense open.** `z_final` splits into `(z_K, stack_point)`; BaseFold
+  opens at `stack_point` → the `K` per-column evals, eq-combined by `z_K` into
+  `D(z_final)`. (`D` and `J̃` share the dense index width, so `log_m == n_d`.)
+
+The verifier replays both sumchecks, recomputes the `h` leaf, checks the product,
+verifies the BaseFold opening, and re-derives the structure bind — tying the proof
+to the commitment.
+
+**Composite fusion is deferred.** The opening is a procedural composition of `@jit`
+device zones; folding the whole protocol into one fused kernel (the
+[fusion north star](README.md#fusion-north-star)) needs the Fiat-Shamir-internal
+sumcheck marker and is gated on `jax.lax.composite` accepting field dtypes —
+tracked on the epic, not this slice.
 
 ## Fusion by construction
 
