@@ -7,7 +7,7 @@ commit each polynomial in the batch independently and return one root per poly â
 BaseFold is a **matrix commitment**: the columns share one RS domain and the
 Merkle leaves are codeword *rows* spanning all columns, so the whole batch binds
 under a single root. That single-root commitment is what the jagged structure bind
-(`JaggedPcs`) hashes against. Both halves are already-fused substrate ops, so the
+(`JaggedPcsProver`) hashes against. Both halves are already-fused substrate ops, so the
 commit is one `@jit`-able device zone with no host sync.
 
 `open` is the interleaved-sumcheck BaseFold opening: it evaluates the matrix's K

@@ -1,4 +1,4 @@
-# zorch/commit/jagged/dense.py
+# zorch/pcs/jagged/dense.py
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Dense packing for the jagged commit.
 

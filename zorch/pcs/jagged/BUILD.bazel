@@ -1,0 +1,92 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "poly",
+    srcs = [
+        "__init__.py",
+        "poly.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/utils:bits",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "dense",
+    srcs = ["dense.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "stacked",
+    srcs = ["stacked.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/pcs/basefold",
+        "//zorch/pcs/jagged:dense",
+        "//zorch/poly",
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "config",
+    srcs = ["config.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/pcs/basefold",
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "prover",
+    srcs = ["prover.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:prove",
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/pcs/basefold",
+        "//zorch/pcs/jagged:config",
+        "//zorch/pcs/jagged:dense",
+        "//zorch/pcs/jagged:poly",
+        "//zorch/pcs/jagged:stacked",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/utils:bits",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "verifier",
+    srcs = ["verifier.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch:verify",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/pcs/basefold",
+        "//zorch/pcs/jagged:config",
+        "//zorch/pcs/jagged:dense",
+        "//zorch/pcs/jagged:poly",
+        "//zorch/pcs/jagged:prover",
+        "//zorch/pcs/jagged:stacked",
+        "//zorch/sumcheck",
+        requirement("jax"),
+    ],
+)

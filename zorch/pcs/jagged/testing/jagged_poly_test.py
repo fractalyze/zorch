@@ -1,7 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from functools import partial
+import operator
+from functools import partial, reduce
 from typing import Any
 
 import jax
@@ -11,19 +12,22 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.commit.jagged.poly import (
+from zorch.pcs.jagged.poly import (
     _TRANSITION_ROWS,
     NUM_BIT_STATES,
     NUM_MEMORY_STATES,
     JaggedStaticConfig,
+    _offset_bit_tensor,
     bp_eval_core,
     build_jagged_layout,
     build_prefix_sums,
     eval_jagged_mle,
+    partial_eval,
 )
+from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.testkit.random_field import rand_field
 
-EF = zk_dtypes.koalabearx4
+EF = zk_dtypes.koalabearx4_mont
 
 
 def _field_val(x: Array) -> bytes:
@@ -125,7 +129,6 @@ def _naive_jagged_mle(
 
 class EvalJaggedMleTest(absltest.TestCase):
     def test_matches_oracle_compile_once_many_heights(self) -> None:
-        EF = zk_dtypes.koalabearx4
         # Several height vectors sharing the same (l_max, log-area tier).
         # total_area in [8,16) -> n_d = log2_ceil(area)+1 = 5, same tier.
         heights_list = [[4, 2, 3], [1, 5, 3], [2, 2, 5]]  # areas 9,9,9
@@ -147,7 +150,6 @@ class EvalJaggedMleTest(absltest.TestCase):
 
     def test_zero_bit_pad_diverges(self) -> None:
         # Negative test: zero-bit padding (vs empty-range) changes J̃.
-        EF = zk_dtypes.koalabearx4
         l_max, n_r = 4, 3
         cps, cfg = build_jagged_layout([4, 2, 3], l_max, n_r, EF)
         z_row = rand_field(1, (n_r,), EF)
@@ -157,6 +159,53 @@ class EvalJaggedMleTest(absltest.TestCase):
         bad_cps = cps.at[3].set(jnp.zeros(cfg.n_d, dtype=EF))  # padding row -> t=0
         bad = eval_jagged_mle(bad_cps, z_row, z_col, z_index, cfg=cfg)
         self.assertNotEqual(_field_val(good), _field_val(bad))
+
+
+class PartialEvalTest(absltest.TestCase):
+    def test_partial_eval_matches_eval_jagged_mle(self) -> None:
+        heights = [4, 2, 3]
+        l_max, n_r = 4, 3
+        cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)
+        # partial_eval reads its scatter offsets from limb 0 of the tensor it is
+        # given; a Montgomery tensor's limb 0 is R mod p, not the canonical bit, so
+        # pass the canonical-limb offsets sibling (the production caller's path).
+        offsets = _offset_bit_tensor(heights, l_max, cfg)
+        z_row = rand_field(10, (cfg.n_r,), EF)
+        z_col = rand_field(11, (cfg.n_c,), EF)
+        z_index = rand_field(12, (cfg.n_d,), EF)
+        indicator = partial_eval(offsets, z_row, z_col, cfg=cfg)
+        self.assertEqual(indicator.shape, (2**cfg.n_d,))
+        eq_idx = expand_eq_to_hypercube(z_index, jnp.array(1, EF))
+        # jnp.sum aborts on EF (koalabearx4_mont) — unroll at trace time.
+        n = 2**cfg.n_d
+        got = reduce(operator.add, [indicator[i] * eq_idx[i] for i in range(n)])
+        # The field-valued mont tensor stays the oracle's input.
+        want = eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg)
+        self.assertEqual(_field_val(got), _field_val(want))
+
+    def test_partial_eval_jits_and_compiles_once_across_heights(self) -> None:
+        # Two height vectors in the same tier produce the same compiled artifact.
+        # The offsets tensor is a traced argument — no ConcretizationError,
+        # cache_size==1.
+        l_max, n_r = 4, 3
+        heights_a = [4, 2, 3]  # area 9, n_d=5
+        heights_b = [1, 5, 3]  # area 9, n_d=5 (same tier)
+        _cps_a, cfg = build_jagged_layout(heights_a, l_max, n_r, EF)
+        _cps_b, cfg_b = build_jagged_layout(heights_b, l_max, n_r, EF)
+        self.assertEqual((cfg.n_d, cfg.n_c), (cfg_b.n_d, cfg_b.n_c))  # same tier
+        off_a = _offset_bit_tensor(heights_a, l_max, cfg)
+        off_b = _offset_bit_tensor(heights_b, l_max, cfg)
+        z_row = rand_field(20, (cfg.n_r,), EF)
+        z_col = rand_field(21, (cfg.n_c,), EF)
+        run = jax.jit(lambda cps, zr, zc: partial_eval(cps, zr, zc, cfg=cfg))
+        out1 = run(off_a, z_row, z_col)
+        out1.block_until_ready()
+        out2 = run(off_b, z_row, z_col)
+        out2.block_until_ready()
+        # Compiled once: a single cache entry (no re-trace across height vectors).
+        self.assertEqual(run._cache_size(), 1)
+        # Sanity: the two height vectors produce different indicators.
+        self.assertNotEqual(out1.tobytes(), out2.tobytes())
 
 
 if __name__ == "__main__":

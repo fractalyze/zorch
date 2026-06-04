@@ -73,15 +73,21 @@ this because `commitment` is scheme-defined; the input convention stays uniform
 
 ## Jagged: a consumer on the seam
 
-The jagged PCS (`zorch/commit/jagged/`) is the first `basefold` consumer: it
+The jagged PCS (`zorch/pcs/jagged/`) is the first `basefold` consumer: it
 densifies variable-height columns into one MLE and commits it, then binds the
 jagged structure (row/column counts, hashed) into the single root. The layering is
 deliberate — `chip → blocks` is the *consumer's* concern (e.g. whir-zorch), while
 `blocks → dense MLE` is zorch's, because the layout must match the `t_c`
-prefix-sum convention the jagged indicator (`zorch/commit/jagged/poly.py`) reads.
+prefix-sum convention the jagged indicator (`zorch/pcs/jagged/poly.py`) reads.
 The structure bind lives in the jagged layer, not the generic seam — it is why
 BaseFold's single-root commitment matters: there is exactly one root to hash the
 structure against.
+
+Opening reduces a jagged evaluation to a BaseFold opening of that dense MLE via
+two sumchecks (an outer Hadamard `Σ D·J̃` and an inner jagged-assist that collapses
+the `O(L)`-column indicator sum to one branching-program leaf) plus the stacked
+`z_final` split — see [jagged](jagged.md#opening). Whole-protocol composite fusion
+is deferred (gated on `jax.lax.composite` accepting field dtypes).
 
 ## Fusion by construction
 
