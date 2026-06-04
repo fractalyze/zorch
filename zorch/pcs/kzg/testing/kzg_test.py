@@ -90,6 +90,10 @@ def _kzg_srs(tau: int, n: int) -> tuple[KzgProvingKey, KzgVerifierKey]:
 _GPU = jax.default_backend() == "gpu"
 
 
+def _transcript() -> DuplexTranscript:
+    return cheap_transcript(SF)  # KZG threads a transcript but doesn't use it
+
+
 @absltest.skipUnless(_GPU, "KZG commit/open use lax.msm, a GPU-only kernel")
 class KzgRoundTripTest(absltest.TestCase):
     def setUp(self) -> None:
@@ -99,27 +103,20 @@ class KzgRoundTripTest(absltest.TestCase):
         self.prover = KzgProver(self.pk)
         self.verifier = KzgVerifier(self.vk)
 
-    def _transcript(self) -> DuplexTranscript:
-        return cheap_transcript(SF)  # KZG threads a transcript but doesn't use it
-
     def _open(self) -> tuple[Array, Array, Array]:
         commitment, data = self.prover.commit([self.coeffs])
-        values, proof, _ = self.prover.open(data, [self.z], self._transcript())
+        values, proof, _ = self.prover.open(data, [self.z], _transcript())
         return commitment, values, proof
 
     def test_open_verifies(self) -> None:
         commitment, values, proof = self._open()
-        ok, _ = self.verifier.verify(
-            commitment, [self.z], values, proof, self._transcript()
-        )
+        ok, _ = self.verifier.verify(commitment, [self.z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
     def test_wrong_value_rejected(self) -> None:
         commitment, values, proof = self._open()
         bad = values + jnp.array(1, dtype=SF)
-        ok, _ = self.verifier.verify(
-            commitment, [self.z], bad, proof, self._transcript()
-        )
+        ok, _ = self.verifier.verify(commitment, [self.z], bad, proof, _transcript())
         self.assertFalse(bool(ok))
 
 
@@ -130,7 +127,7 @@ class KzgBatchValidationTest(absltest.TestCase):
         coeffs = jnp.array([3, 1, 4, 1], dtype=SF)
         z = jnp.array(7, dtype=SF)
         with self.assertRaises(ValueError):
-            KzgProver(pk).open([coeffs], [z, z], cheap_transcript(SF))
+            KzgProver(pk).open([coeffs], [z, z], _transcript())
 
     def test_verify_rejects_batch_mismatch(self) -> None:
         _, vk = _kzg_srs(tau=5, n=4)
@@ -142,7 +139,7 @@ class KzgBatchValidationTest(absltest.TestCase):
                 [z, z],
                 jnp.zeros(2, SF),
                 jnp.zeros(2, SF),
-                cheap_transcript(SF),
+                _transcript(),
             )
 
 
