@@ -25,3 +25,16 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "stacked",
+    srcs = ["stacked.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/pcs/basefold:prover",
+        "//zorch/pcs/basefold:verifier",
+        "//zorch/pcs/jagged:dense",
+        "//zorch/poly",
+        requirement("jax"),
+    ],
+)

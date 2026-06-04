@@ -27,3 +27,18 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "stacked_test",
+    size = "small",
+    srcs = ["stacked_test.py"],
+    deps = [
+        "//zorch/pcs/basefold:prover",
+        "//zorch/pcs/basefold:verifier",
+        "//zorch/pcs/jagged:stacked",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

@@ -19,9 +19,9 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.pcs.jagged.dense import JaggedLayout, from_blocks
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
+from zorch.pcs.jagged.dense import JaggedLayout, from_blocks
 from zorch.pcs.protocol import PcsProver
 
 

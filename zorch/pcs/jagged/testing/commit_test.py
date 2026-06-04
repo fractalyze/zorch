@@ -9,9 +9,9 @@ import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
 
 from zorch.coding.reed_solomon import ReedSolomon
-from zorch.pcs.jagged.commit import JaggedPcs
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.basefold.prover import BasefoldProver
+from zorch.pcs.jagged.commit import JaggedPcs
 
 
 def _jagged_pcs(log_s: int = 2, blowup: int = 2) -> JaggedPcs:
