@@ -9,7 +9,7 @@ from jax import tree_util
 from zorch.sumcheck import prover, verifier
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import StubTranscript
+from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
@@ -61,13 +61,9 @@ class SumcheckRoundTest(absltest.TestCase):
     def test_call_threads_state_transcript_msg(self) -> None:
         f = rand_field(15, (8,), KB)
         rnd = prover.SumcheckRound(degree=1)
-        t = StubTranscript(jnp.array([3, 0, 0], dtype=KB))
-        state, t2, msg = rnd([f], t)
+        state, _, msg = rnd([f], cheap_transcript(KB))
         self.assertEqual(msg.shape, (2,))
-        self.assertEqual(state[0].shape, (4,))  # width halved
-        if not isinstance(t2, StubTranscript):
-            raise AssertionError("expected StubTranscript")
-        self.assertEqual(t2.pos, 1)  # one challenge consumed
+        self.assertEqual(state[0].shape, (4,))  # width halved — one round consumed
 
     def test_round_poly_is_fusion_ready(self) -> None:
         a = rand_field(16, (8,), KB)

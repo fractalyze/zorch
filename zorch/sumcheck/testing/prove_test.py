@@ -14,23 +14,22 @@ from zorch.prove import prove
 from zorch.sumcheck import prover
 from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import StubTranscript
+from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear
 _GPU_BACKEND = jax.default_backend() == "gpu"
 
 
 class SumcheckProveTest(absltest.TestCase):
-    def _check_identity(
-        self, factors: Sequence[Array], degree: int, n: int, seed: int
-    ) -> None:
-        challenges = rand_field(seed, (n,), KB)
+    def _check_identity(self, factors: Sequence[Array], degree: int, n: int) -> None:
         final_state, _, msgs = prove(
             prover.SumcheckRound(degree=degree),
             list(factors),
-            StubTranscript(challenges),
+            cheap_transcript(KB),
         )
         proof = msgs.round_poly
+        # The sponge derives the challenges; read them back to check the identity.
+        challenges = msgs.challenge
 
         # claimed sum == s_0(0) + s_0(1)
         claimed = jnp.sum(product(list(factors)))
@@ -50,16 +49,16 @@ class SumcheckProveTest(absltest.TestCase):
 
     def test_empty_state_raises(self) -> None:
         with self.assertRaises(ValueError):
-            prove(prover.SumcheckRound(degree=1), [], StubTranscript(jnp.zeros(1, KB)))
+            prove(prover.SumcheckRound(degree=1), [], cheap_transcript(KB))
 
     def test_degree1_single_mle(self) -> None:
         f = rand_field(20, (1 << 4,), KB)
-        self._check_identity((f,), degree=1, n=4, seed=21)
+        self._check_identity((f,), degree=1, n=4)
 
     def test_degree2_product_two_mles(self) -> None:
         a = rand_field(22, (1 << 4,), KB)
         b = rand_field(23, (1 << 4,), KB)
-        self._check_identity((a, b), degree=2, n=4, seed=24)
+        self._check_identity((a, b), degree=2, n=4)
 
     @absltest.skipIf(
         _GPU_BACKEND,
@@ -69,11 +68,11 @@ class SumcheckProveTest(absltest.TestCase):
     def test_degree1_extension_challenges(self) -> None:
         EF = zk_dtypes.koalabearx4
         f = rand_field(30, (1 << 4,), KB).astype(EF)
-        challenges = rand_field(31, (4,), KB).astype(EF)
         final_state, _, msgs = prove(
-            prover.SumcheckRound(degree=1), [f], StubTranscript(challenges)
+            prover.SumcheckRound(degree=1), [f], cheap_transcript(EF)
         )
         proof = msgs.round_poly
+        challenges = msgs.challenge  # extension-field challenges from the EF sponge
         self.assertTrue(bool(jnp.sum(f) == proof[0][0] + proof[0][1]))
         for i in range(1, 4):
             lhs = proof[i][0] + proof[i][1]
