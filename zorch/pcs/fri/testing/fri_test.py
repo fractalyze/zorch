@@ -13,7 +13,8 @@ from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.fri.config import FriParams
 from zorch.pcs.fri.prover import FriProver
 from zorch.pcs.fri.verifier import FriVerifier
-from zorch.transcript import StubTranscript
+from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont  # match the koalabear16 poseidon2 fixture's form
 
@@ -25,9 +26,11 @@ def _params() -> FriParams:
     return FriParams(code=code, tree=tree, num_rounds=2, num_queries=3)
 
 
-def _transcript() -> StubTranscript:
-    # 2 fold challenges + 3 query positions; both sides consume in the same order.
-    return StubTranscript(jnp.array([7, 11, 2, 5, 3], dtype=KB))
+def _transcript() -> DuplexTranscript:
+    # A cheap deterministic sponge; prover and verifier each build a fresh,
+    # identical one, so both draw the same Fiat-Shamir stream (fold challenges
+    # then query positions).
+    return cheap_transcript(KB)
 
 
 class FriRoundTripTest(absltest.TestCase):

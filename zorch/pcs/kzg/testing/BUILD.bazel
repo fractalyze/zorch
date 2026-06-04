@@ -9,6 +9,7 @@ py_test(
     deps = [
         "//zorch:transcript",
         "//zorch/pcs/kzg",
+        "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),
