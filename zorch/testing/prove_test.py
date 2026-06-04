@@ -8,7 +8,7 @@ from absl.testing import absltest
 from zorch.prove import fold_rounds, prove
 from zorch.round import Round
 from zorch.sumcheck import prover
-from zorch.transcript import StubTranscript
+from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear
 
@@ -26,9 +26,7 @@ class _CollectRound(Round):
 class FoldRoundsTest(absltest.TestCase):
     def test_collects_structured_messages_as_list(self) -> None:
         xs = jnp.arange(8, dtype=KB)
-        _, _, msgs = fold_rounds(
-            _CollectRound(), [xs], StubTranscript(jnp.zeros(0, KB)), 3
-        )
+        _, _, msgs = fold_rounds(_CollectRound(), [xs], cheap_transcript(KB), 3)
         self.assertEqual([m["len"] for m in msgs], [8, 4, 2])
         self.assertEqual(len(msgs), 3)
 
@@ -39,13 +37,12 @@ class FoldRoundsTest(absltest.TestCase):
             prove(
                 prover.SumcheckRound(1),
                 [jnp.arange(1, dtype=KB)],
-                StubTranscript(jnp.zeros(0, KB)),
+                cheap_transcript(KB),
             )
 
     def test_prove_still_stacks_sumcheck_messages(self) -> None:
         f = jnp.arange(1, 17, dtype=KB)
-        ch = jnp.arange(2, 6, dtype=KB)
-        _, _, msgs = prove(prover.SumcheckRound(degree=1), [f], StubTranscript(ch))
+        _, _, msgs = prove(prover.SumcheckRound(degree=1), [f], cheap_transcript(KB))
         self.assertEqual(msgs.round_poly.shape, (4, 2))  # n rounds × (degree+1)
         self.assertEqual(msgs.challenge.shape, (4,))  # one challenge per round
 

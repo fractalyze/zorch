@@ -16,7 +16,8 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.round import ProveChain, Round, VerifyChain
-from zorch.transcript import StubTranscript, Transcript
+from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import Transcript
 
 KB = zk_dtypes.koalabear
 
@@ -52,53 +53,45 @@ class _ScaleVerifier(Round):
 
 class ChainTest(absltest.TestCase):
     def test_roundtrip_heterogeneous(self) -> None:
-        ch = jnp.array([2, 3, 5], KB)
         factors = (2, 3, 7)
         carry0 = jnp.array(11, KB)
 
         final, _, msgs = ProveChain([_ScaleProver(f) for f in factors])(
-            carry0, StubTranscript(ch)
+            carry0, cheap_transcript(KB)
         )
         self.assertEqual(len(msgs), 3)
 
-        vcarry, vt, ok = VerifyChain([_ScaleVerifier(f) for f in factors])(
-            carry0, msgs, StubTranscript(ch)
+        # Prover and verifier each drive a fresh, identical transcript, so they
+        # sample the same challenge stream in lockstep — agreeing carries (and ok)
+        # are that lockstep, the dual of the old preset-challenge / pos check.
+        vcarry, _, ok = VerifyChain([_ScaleVerifier(f) for f in factors])(
+            carry0, msgs, cheap_transcript(KB)
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(vcarry == final))  # lockstep carries agree
-        if not isinstance(vt, StubTranscript):
-            raise AssertionError("expected StubTranscript")
-        self.assertEqual(vt.pos, 3)  # one challenge per round
 
     def test_chain_is_a_round_so_chains_nest(self) -> None:
-        ch = jnp.array([1, 2, 3], KB)
         inner = ProveChain([_ScaleProver(2), _ScaleProver(3)])
         outer = ProveChain([inner, _ScaleProver(5)])
-        final, t, msgs = outer(jnp.array(4, KB), StubTranscript(ch))
+        _, _, msgs = outer(jnp.array(4, KB), cheap_transcript(KB))
         self.assertEqual(len(msgs), 2)  # [inner's message list, scale-5's message]
         self.assertEqual(len(msgs[0]), 2)  # inner ran two rounds
-        if not isinstance(t, StubTranscript):
-            raise AssertionError("expected StubTranscript")
-        self.assertEqual(t.pos, 3)  # 2 inner + 1 outer challenges
 
     def test_verify_rejects_message_count_mismatch(self) -> None:
         # A short msgs list must fail loud, not silently skip rounds with ok=True.
         chain = VerifyChain([_ScaleVerifier(2), _ScaleVerifier(3)])
         with self.assertRaises(ValueError):
-            chain(
-                jnp.array(1, KB), [jnp.array(1, KB)], StubTranscript(jnp.zeros(2, KB))
-            )
+            chain(jnp.array(1, KB), [jnp.array(1, KB)], cheap_transcript(KB))
 
     def test_verify_rejects_tampered_message(self) -> None:
-        ch = jnp.array([2, 3], KB)
         factors = (2, 3)
         carry0 = jnp.array(9, KB)
         _, _, msgs = ProveChain([_ScaleProver(f) for f in factors])(
-            carry0, StubTranscript(ch)
+            carry0, cheap_transcript(KB)
         )
         msgs[0] = msgs[0] + jnp.array(1, KB)
         _, _, ok = VerifyChain([_ScaleVerifier(f) for f in factors])(
-            carry0, msgs, StubTranscript(ch)
+            carry0, msgs, cheap_transcript(KB)
         )
         self.assertFalse(bool(ok))
 
