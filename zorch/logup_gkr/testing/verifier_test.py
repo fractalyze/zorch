@@ -26,7 +26,6 @@ from zorch.logup_gkr.testing import (
     verify_gkr_with_transcript,
 )
 from zorch.poly.multilinear import eval_mle
-from zorch.testkit.random_field import rand_field
 from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
@@ -39,12 +38,11 @@ _CPU_BACKEND = jax.default_backend() == "cpu"
 
 
 class GkrRoundtripTest(absltest.TestCase):
-    def _roundtrip(self, first: GkrLayer, expected_layers: int, seed: int) -> None:
-        ch = rand_field(seed, (128,), KB)
-        _, output, proofs, prover_final = prove_gkr(first, ch)
+    def _roundtrip(self, first: GkrLayer, expected_layers: int) -> None:
+        _, output, proofs, prover_final = prove_gkr(first)
         self.assertEqual(len(proofs), expected_layers)
 
-        verifier_final, ok = verify_gkr(output, proofs, ch)
+        verifier_final, ok = verify_gkr(output, proofs)
         self.assertTrue(bool(ok))
 
         # Prover and verifier thread identical reductions.
@@ -60,20 +58,19 @@ class GkrRoundtripTest(absltest.TestCase):
         self.assertTrue(bool(den_eval == eval_mle(leaf_den, point)))
 
     def test_self_verifies_two_layers(self) -> None:
-        self._roundtrip(random_first_layer(7, 1, 2), expected_layers=2, seed=99)
+        self._roundtrip(random_first_layer(7, 1, 2), expected_layers=2)
 
     def test_self_verifies_wider(self) -> None:
-        self._roundtrip(random_first_layer(11, 2, 3), expected_layers=3, seed=123)
+        self._roundtrip(random_first_layer(11, 2, 3), expected_layers=3)
 
     def test_rejects_tampered_round_poly(self) -> None:
         first = random_first_layer(7, 1, 2)
-        ch = rand_field(99, (128,), KB)
-        _, output, proofs, _ = prove_gkr(first, ch)
+        _, output, proofs, _ = prove_gkr(first)
         bad = proofs[0]
         proofs[0] = replace(
             bad, round_polys=bad.round_polys.at[0, 0].add(jnp.array(1, KB))
         )
-        _, ok = verify_gkr(output, proofs, ch)
+        _, ok = verify_gkr(output, proofs)
         self.assertFalse(bool(ok))
 
 

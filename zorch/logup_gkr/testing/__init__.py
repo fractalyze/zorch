@@ -20,7 +20,8 @@ from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
 from zorch.logup_gkr.verifier import GkrLayerRound as _VerifierLayer
 from zorch.round import ProveChain, VerifyChain
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import StubTranscript, Transcript
+from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import Transcript
 
 _KB = zk_dtypes.koalabear_mont
 
@@ -45,8 +46,8 @@ def prove_gkr_with_transcript(
     first: GkrLayer, transcript: Transcript
 ) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], Carry]:
     """Run the GKR prover chain over `first`'s pyramid, drawing Fiat-Shamir
-    challenges from `transcript` (a preset `StubTranscript` or the on-device
-    poseidon2 `DuplexTranscript`).
+    challenges from `transcript` (a cheap test `DuplexTranscript` or the
+    on-device poseidon2 one).
 
     Returns (layers, output, layer_proofs, final_carry).
     """
@@ -59,28 +60,27 @@ def prove_gkr_with_transcript(
 
 
 def prove_gkr(
-    first: GkrLayer, challenges: Array
+    first: GkrLayer,
 ) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], Carry]:
-    """`prove_gkr_with_transcript` against a preset challenge stream."""
-    return prove_gkr_with_transcript(first, StubTranscript(challenges))
+    """`prove_gkr_with_transcript` over a cheap deterministic test transcript."""
+    return prove_gkr_with_transcript(first, cheap_transcript(_KB))
 
 
-@functools.partial(jax.jit, static_argnums=(5,))
+@functools.partial(jax.jit, static_argnums=(4,))
 def prove_gkr_jitted(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
-    challenges: Array,
     num_interaction_variables: int,
 ) -> Array:
     """`prove_gkr` traced into one fused program (whole pyramid + chain).
 
-    The four first-layer MLEs and the challenge stream are the traced inputs;
-    `num_interaction_variables` is static (it fixes the pyramid height, hence the
-    unrolled layer count). Returns the last proved layer's round polynomials --
-    the tail of the sequential carry, so it transitively forces the whole prove.
-    Drives the jit-vs-eager equivalence test, which must fuse the *same* program.
+    The four first-layer MLEs are the traced inputs; `num_interaction_variables`
+    is static (it fixes the pyramid height, hence the unrolled layer count).
+    Returns the last proved layer's round polynomials -- the tail of the
+    sequential carry, so it transitively forces the whole prove. Drives the
+    jit-vs-eager equivalence test, which must fuse the *same* program.
     """
     first = GkrLayer(
         numerator_0,
@@ -89,7 +89,7 @@ def prove_gkr_jitted(
         denominator_1,
         num_interaction_variables=num_interaction_variables,
     )
-    return prove_gkr(first, challenges)[2][-1].round_polys
+    return prove_gkr(first)[2][-1].round_polys
 
 
 def verify_gkr_with_transcript(
@@ -103,8 +103,6 @@ def verify_gkr_with_transcript(
     return final, ok
 
 
-def verify_gkr(
-    output: LogUpGkrOutput, proofs: list[LayerProof], challenges: Array
-) -> tuple[Carry, Array]:
-    """`verify_gkr_with_transcript` against a preset challenge stream."""
-    return verify_gkr_with_transcript(output, proofs, StubTranscript(challenges))
+def verify_gkr(output: LogUpGkrOutput, proofs: list[LayerProof]) -> tuple[Carry, Array]:
+    """`verify_gkr_with_transcript` over a cheap deterministic test transcript."""
+    return verify_gkr_with_transcript(output, proofs, cheap_transcript(_KB))
