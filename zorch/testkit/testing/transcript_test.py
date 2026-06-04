@@ -43,8 +43,8 @@ class TestTranscriptTest(absltest.TestCase):
         self.assertTrue(bool(jnp.all(a == b)))
 
     def test_observation_changes_the_challenge(self) -> None:
-        # Unlike StubTranscript (observe is a no-op), this is a real sponge: a
-        # different observation must yield a different challenge.
+        # A real sponge (observe is not a no-op): a different observation must
+        # yield a different challenge.
         _, a = cheap_transcript(KB).observe_and_sample(jnp.arange(3, dtype=KB), 1)
         _, b = cheap_transcript(KB).observe_and_sample(jnp.arange(3, 6, dtype=KB), 1)
         self.assertFalse(bool(jnp.all(a == b)))

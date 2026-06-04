@@ -1,13 +1,10 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""A fast, deterministic transcript for tests — the replacement for the removed
-`StubTranscript`.
+"""A fast, deterministic transcript for unit tests.
 
-`StubTranscript` fed preset challenges and ignored observations: convenient, but
-not a real Fiat-Shamir transcript, and (lacking a `permutation`) it couldn't ride
-`prove`'s `has_dedicated_fusion` marker gate. `cheap_transcript` instead returns a
-real `DuplexTranscript` over `CheapPermutation` — a genuine sponge whose
-challenges derive from observations, just cheap enough for unit tests and gated
-`has_dedicated_fusion=False` so `prove` keeps it on the unmarked path.
+`cheap_transcript` returns a real `DuplexTranscript` over `CheapPermutation` — a
+genuine Fiat-Shamir sponge whose challenges derive from observations, but cheap
+enough for unit tests and gated `has_dedicated_fusion=False` so `prove` keeps it
+on the unmarked path (no `zorch.sumcheck` marker).
 """
 
 from __future__ import annotations
@@ -46,7 +43,6 @@ class CheapPermutation:
 
 
 def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTranscript:
-    """A fresh `DuplexTranscript` over `CheapPermutation` for tests — drop-in for
-    the old `StubTranscript(...)`, minus preset challenges (challenges now derive
-    from observations, like a real sponge)."""
+    """A fresh `DuplexTranscript` over `CheapPermutation` for tests — a real sponge
+    whose challenges derive from observations (no preset stream)."""
     return DuplexTranscript.new(CheapPermutation(width=width, dtype=dtype), rate=rate)
