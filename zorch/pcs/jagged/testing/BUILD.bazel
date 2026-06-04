@@ -17,6 +17,23 @@ py_test(
 )
 
 py_test(
+    name = "inner_sumcheck_test",
+    size = "small",
+    srcs = ["inner_sumcheck_test.py"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/pcs/jagged:inner_sumcheck",
+        "//zorch/pcs/jagged:poly",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "dense_test",
     size = "small",
     srcs = ["dense_test.py"],
