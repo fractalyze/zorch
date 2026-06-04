@@ -1,7 +1,7 @@
 """koalabear-16 reference fixture — TEST ONLY (never re-exported from the package).
 
-A single golden parameterization + vector pinned to one Plonky3 revision (honest,
-R^-1-free). Generated from Plonky3 p3_commit=4318eba062fd1cbca3dbe98904ad18ad950f3b49.
+A single golden parameterization + vector pinned to one Plonky3 revision.
+Generated from Plonky3 p3_commit=4318eba062fd1cbca3dbe98904ad18ad950f3b49.
 Exists only to prove the agnostic engine against a known vector; named instances
 are a consumer concern, not zorch API.
 """

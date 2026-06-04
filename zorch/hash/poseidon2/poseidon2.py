@@ -123,14 +123,15 @@ class Poseidon2:
             return s
 
         # ABI operands [state, ext_init_rc, int_rc, ext_term_rc, diag, off_diag].
-        # zorch's internal matrix is J + Diag(internal_diag), so off_diag = 1.
+        # The internal matrix is internal_j_scale*J + Diag(internal_diag); the
+        # ABI's off_diag operand carries the J scale (params normalize None to 1).
         operands = (
             state,
             p.external_constants_initial.reshape(-1),
             p.internal_constants[:, 0],
             p.external_constants_terminal.reshape(-1),
             p.internal_diag,
-            jnp.array(1, dtype=self.dtype),
+            p.internal_j_scale,
         )
 
         return fused_region(permutation, *operands, name=self._fused_region_name)

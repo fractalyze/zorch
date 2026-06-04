@@ -34,9 +34,10 @@ class Poseidon2Params:
     """Fully-free parameter surface of a Poseidon2 permutation.
 
     The core treats `dtype` as opaque and names no field/scheme/zkVM. The
-    internal layer is J + Diag(internal_diag); `internal_diag` (the V vector) is
-    its only free part, so it is carried as a vector, not a matrix. There is no
-    `monty_inverse` knob — R^-1 is a Montgomery storage artifact, not math.
+    internal layer is the rank-one family `internal_j_scale*J +
+    Diag(internal_diag)` — the J coefficient is a free field constant just
+    like the diag vector (reference kernels that fold a storage constant,
+    e.g. a Montgomery R^-1, into the layer land in this slot).
 
     Convention baked into this implementation (not yet a parameter): the partial
     round acts on lane 0, so `internal_constants` must be zero in lanes 1..w-1.
@@ -47,6 +48,7 @@ class Poseidon2Params:
       external_constants_initial/terminal : (external_rounds, width)
       internal_constants : (internal_rounds, width); RC in lane 0, zeros elsewhere
       internal_diag : (width,)
+      internal_j_scale : scalar over dtype; None normalizes to one
       alpha : positive S-box exponent; caller guarantees gcd(alpha, p-1)==1
           (the core does not know p, so it cannot check).
     """
@@ -61,6 +63,7 @@ class Poseidon2Params:
     internal_constants: Array
     internal_diag: Array
     external_matrix: Array | None = None
+    internal_j_scale: Array | None = None
 
     def __post_init__(self) -> None:
         if self.alpha < 1:
@@ -70,6 +73,8 @@ class Poseidon2Params:
             object.__setattr__(
                 self, "external_matrix", default_external_matrix(w, self.dtype)
             )
+        if self.internal_j_scale is None:
+            object.__setattr__(self, "internal_j_scale", jnp.array(1, dtype=self.dtype))
         checks = {
             "external_matrix": ((w, w), self.external_matrix),
             "external_constants_initial": (
@@ -82,6 +87,7 @@ class Poseidon2Params:
             ),
             "internal_constants": ((self.internal_rounds, w), self.internal_constants),
             "internal_diag": ((w,), self.internal_diag),
+            "internal_j_scale": ((), self.internal_j_scale),
         }
         for name, (want, arr) in checks.items():
             got = tuple(np.shape(arr))

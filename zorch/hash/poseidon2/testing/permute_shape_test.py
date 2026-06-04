@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import jax.numpy as jnp
 from absl.testing import absltest
@@ -25,6 +27,28 @@ def _params() -> Poseidon2Params:
         internal_constants=jnp.zeros((ir, w), dtype=F),
         internal_diag=jnp.ones((w,), dtype=F),
     )
+
+
+class Poseidon2InternalJScaleTest(absltest.TestCase):
+    """`internal_j_scale` generalizes the internal matrix to
+    c*J + Diag(internal_diag); the default must stay byte-identical to the
+    historical J + Diag form."""
+
+    def test_explicit_one_equals_default(self) -> None:
+        base = _params()
+        scaled = dataclasses.replace(base, internal_j_scale=jnp.ones((), dtype=F))
+        x = jnp.arange(16, dtype=jnp.uint32).view(F)
+        self.assertTrue(
+            bool(jnp.all(Poseidon2(base).permute(x) == Poseidon2(scaled).permute(x)))
+        )
+
+    def test_non_unit_scale_changes_output(self) -> None:
+        base = _params()
+        scaled = dataclasses.replace(base, internal_j_scale=jnp.full((), 2, dtype=F))
+        x = jnp.arange(16, dtype=jnp.uint32).view(F)
+        self.assertFalse(
+            bool(jnp.all(Poseidon2(base).permute(x) == Poseidon2(scaled).permute(x)))
+        )
 
 
 class Poseidon2PermuteShapeTest(absltest.TestCase):
