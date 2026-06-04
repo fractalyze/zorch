@@ -16,6 +16,19 @@ py_test(
 )
 
 py_test(
+    name = "constraint_eval_test",
+    size = "small",
+    srcs = ["constraint_eval_test.py"],
+    deps = [
+        "//zorch:constraint_eval",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "prove_test",
     size = "small",
     srcs = ["prove_test.py"],
