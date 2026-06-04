@@ -26,6 +26,7 @@ py_test(
     tags = ["manual"],
     deps = [
         ":koalabear16",
+        "//zorch:_composite",
         "//zorch/commit:merkle",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",

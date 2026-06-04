@@ -12,37 +12,20 @@ the body (fixed, small counts) and the linear layers use the normal-form helpers
 (not `jnp.dot`/`reduce`/`gather`). Loop-carrying large-N rounds await the
 in-kernel-loop emitter; see fractalyze/zorch#25.
 
-`lax.composite` lowers to `stablehlo.CompositeOp`; jaxlib builds predating the
-fork's composite backport (fractalyze/jax#164, not yet in a published wheel) lack
-it, so lowering a composite under `@jit` fails there — which forces every
-Poseidon2/Round/fold path onto the assertion-heavy self-built jaxlib (~28× slower
-compile). When `CompositeOp` is absent, `fused_region` runs the decomposition
-inline instead: numerically identical, only the fusion marker is dropped (the
-`ZorchFusedRegionRewriter` then has nothing to fuse, which matters only on the GPU
-fusion path — not CPU dev/test, not correctness). Auto-retires once the
-composite-capable wheel ships.
+On a jaxlib without `stablehlo.CompositeOp` the marker is dropped and the
+decomposition runs inline — see `zorch._composite.composite_or_inline`, the
+shared fallback every zorch composite marker routes through.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TypeVar
 
-from jax import Array, lax
+from jax import Array
 
-try:
-    from jaxlib.mlir.dialects import stablehlo as _stablehlo
-
-    _HAS_COMPOSITE_OP = hasattr(_stablehlo, "CompositeOp")
-except ImportError:  # pragma: no cover - jaxlib MLIR bindings unavailable
-    _HAS_COMPOSITE_OP = False
+from zorch._composite import _Region, composite_or_inline
 
 FUSED_REGION_MARKER = "zorch.fused_region"
-
-# The region's output: a single Array for a one-kernel marker, or a pytree of
-# Arrays for a name-routed region a vendor expands (e.g. a whole-tree commit
-# returning (root, layers)). lax.composite preserves it either way.
-_Region = TypeVar("_Region")
 
 
 def fused_region(
@@ -67,6 +50,4 @@ def fused_region(
     → per-layer hash kernels), so `decomposition` may return a pytree, not just an
     Array.
     """
-    if not _HAS_COMPOSITE_OP:
-        return decomposition(*operands)
-    return lax.composite(decomposition, name=name)(*operands)
+    return composite_or_inline(decomposition, *operands, name=name)

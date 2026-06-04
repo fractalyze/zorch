@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
-import zorch.fusion as fusion
+import zorch._composite as _composite
 from zorch.hash.poseidon2.poseidon2 import Poseidon2
 from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
@@ -34,15 +34,17 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_inline_fallback_byte_matches(self) -> None:
         # The published-wheel path (no CompositeOp): fused_region runs the
         # 6-operand decomposition inline. Must still byte-match the golden.
-        orig = fusion._HAS_COMPOSITE_OP
+        orig = _composite._HAS_COMPOSITE_OP
         try:
-            fusion._HAS_COMPOSITE_OP = False
+            _composite._HAS_COMPOSITE_OP = False
             out = koalabear16_perm().permute(jnp.arange(16, dtype=F))
             self.assertTrue(bool(jnp.array_equal(out, KOALABEAR16_EXPECTED)))
         finally:
-            fusion._HAS_COMPOSITE_OP = orig
+            _composite._HAS_COMPOSITE_OP = orig
 
-    @absltest.skipUnless(fusion._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    @absltest.skipUnless(
+        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
+    )
     def test_permute_emits_poseidon2_named_composite(self) -> None:
         # The standard-MDS permute marks its region "poseidon2:W:E:I:S" so zkx
         # routes it to the dedicated Poseidon2Fusion emitter. W=16, E=4, I=20,
@@ -61,7 +63,9 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         operands = composite_line.split('"poseidon2:16:4:20:3"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 6, composite_line)
 
-    @absltest.skipUnless(fusion._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    @absltest.skipUnless(
+        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
+    )
     def test_custom_external_matrix_uses_generic_marker(self) -> None:
         # The GPU Poseidon2Fusion emitter hardcodes the standard M4-circulant
         # MDS, so a non-standard external matrix must NOT take the poseidon2:

@@ -3,17 +3,11 @@
 import jax
 import jax.numpy as jnp
 from absl.testing import absltest
-from jaxlib.mlir.dialects import stablehlo
 from zk_dtypes import koalabear_mont as F
 
+from zorch._composite import _HAS_COMPOSITE_OP
 from zorch.constraint_eval import CONSTRAINT_EVAL_MARKER, constraint_eval
 from zorch.testkit.random_field import rand_field
-
-# Lowering a composite needs stablehlo.CompositeOp in jaxlib's MLIR bindings.
-# The published jaxlib wheel doesn't carry the fork's backport yet (only a
-# self-built jaxlib does), so this emission check is skipped there; eager use
-# still works because lax.composite runs its decomposition. Mirrors fusion_test.
-_HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 
 
 def _eval_fn(rows: jax.Array) -> jax.Array:

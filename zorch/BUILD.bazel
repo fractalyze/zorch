@@ -1,18 +1,33 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
+# The CompositeOp-absent fallback every composite marker shares (jaxlib-compat
+# shim; auto-retires once the composite-capable wheel ships).
+py_library(
+    name = "_composite",
+    srcs = ["_composite.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("jax")],
+)
+
 py_library(
     name = "fusion",
     srcs = ["fusion.py"],
     visibility = ["//visibility:public"],
-    deps = [requirement("jax")],
+    deps = [
+        ":_composite",
+        requirement("jax"),
+    ],
 )
 
 py_library(
     name = "constraint_eval",
     srcs = ["constraint_eval.py"],
     visibility = ["//visibility:public"],
-    deps = [requirement("jax")],
+    deps = [
+        ":_composite",
+        requirement("jax"),
+    ],
 )
 
 # The folding spine: the `Round`/chain base, the Fiat-Shamir transcript, and the
