@@ -10,8 +10,8 @@ from absl.testing import absltest
 from jax import Array
 
 from zorch.poly.univariate import eval_univariate
-from zorch.prove import prove
 from zorch.sumcheck import prover
+from zorch.sumcheck.prover import prove
 from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript

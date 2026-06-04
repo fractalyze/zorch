@@ -1,0 +1,143 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+import zk_dtypes
+from absl.testing import absltest
+from jaxlib.mlir.dialects import stablehlo
+
+from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.sumcheck import prover
+from zorch.sumcheck.prover import (
+    SUMCHECK_MARKER,
+    SUMCHECK_MARKER_VERSION,
+    _prove_scan,
+    prove,
+)
+from zorch.testkit.random_field import rand_field
+from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import DuplexTranscript
+
+KB = zk_dtypes.koalabear_mont
+_HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
+
+
+class ProveTest(absltest.TestCase):
+    def test_rejects_zero_round_state(self) -> None:
+        # A width-1 carry derives 0 rounds: the scan would yield no round polys.
+        # Fail fast with a clear message instead.
+        with self.assertRaisesRegex(ValueError, "at least one round"):
+            prove(
+                prover.SumcheckRound(1), [jnp.arange(1, dtype=KB)], cheap_transcript(KB)
+            )
+
+    def test_stacks_sumcheck_messages(self) -> None:
+        f = jnp.arange(1, 17, dtype=KB)
+        _, _, msgs = prove(prover.SumcheckRound(degree=1), [f], cheap_transcript(KB))
+        self.assertEqual(msgs.round_poly.shape, (4, 2))  # n rounds × (degree+1)
+        self.assertEqual(msgs.challenge.shape, (4,))  # one challenge per round
+
+
+class ProveMarkedTest(absltest.TestCase):
+    """Over a transcript whose permutation has a dedicated fusion marker (real
+    poseidon2), `prove` wraps its scan in a `zorch.sumcheck` composite with
+    Fiat-Shamir INSIDE. Unrecognized — every CPU path here — the marker decomposes
+    to the exact same scan, so the folded state, advanced transcript, AND proof are
+    byte-identical to the plain `_prove_scan`; the recognized->fused GPU path is
+    exercised in zkx. The gate keeps a test `CheapPermutation` on the plain scan.
+
+    Base field is X.1's bar — extension-field (koalabearx4) byte-identity is the
+    GPU fusion's gate (X.2, zkx), where the EF sponge is the real path; the marker
+    here threads operands dtype-blind, so the base-field cases prove the wrapping."""
+
+    def _poseidon_transcript(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+    def _assert_marked_equals_scan(
+        self, round: prover.SumcheckRound, factors: list[Any]
+    ) -> None:
+        # Fiat-Shamir is sampled inside the marker from the threaded sponge, so the
+        # marked path must match the plain scan on the folded state, the advanced
+        # transcript, AND the proof — all driven from an identical fresh transcript.
+        got_state, got_t, got_msgs = prove(
+            round, list(factors), self._poseidon_transcript()
+        )
+        want_state, want_t, want_msgs = _prove_scan(
+            round, list(factors), self._poseidon_transcript()
+        )
+        self.assertTrue(bool(jnp.all(got_msgs.round_poly == want_msgs.round_poly)))
+        self.assertTrue(bool(jnp.all(got_msgs.challenge == want_msgs.challenge)))
+        # GkrLayerRound reads the folded final state for its layer openings; option
+        # A keeps it (the proof-only `prove_fs` of the closed #117 dropped it).
+        self.assertEqual(len(got_state), len(want_state))
+        for g, w in zip(got_state, want_state):
+            self.assertTrue(bool(jnp.all(g == w)))
+        if not isinstance(got_t, DuplexTranscript) or not isinstance(
+            want_t, DuplexTranscript
+        ):
+            raise AssertionError("prove must thread the DuplexTranscript back")
+        gs, ws = got_t.state, want_t.state
+        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
+        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
+        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
+        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
+
+    def test_marked_equals_scan_product_base(self) -> None:
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        self._assert_marked_equals_scan(prover.SumcheckRound(degree=2), [a, b])
+
+    def test_marked_equals_scan_single_mle_base(self) -> None:
+        f = rand_field(43, (1 << 5,), KB)
+        self._assert_marked_equals_scan(prover.SumcheckRound(degree=1), [f])
+
+    def test_cheap_transcript_stays_unmarked(self) -> None:
+        # has_dedicated_fusion=False keeps the gate shut: no composite, plain scan.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        t0 = cheap_transcript(KB)
+        jaxpr = jax.make_jaxpr(
+            lambda x, y: prove(prover.SumcheckRound(degree=2), [x, y], t0)
+        )(a, b).jaxpr
+        self.assertFalse(any(e.primitive.name == "composite" for e in jaxpr.eqns))
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_marker_envelope_carries_shape_attributes(self) -> None:
+        # Recognition contract asserted off the jaxpr (no lowering): name is the
+        # bare routing key, version gates the revision, and degree/num_vars/
+        # num_factors ride in composite.attributes. Results are [2 folded factors]
+        # [5 transcript leaves][round polys][challenges]; the poseidon round
+        # constants auto-lift, so the marker carries more operands than the
+        # [2 factors][5 leaves] explicit.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()  # build the sponge eagerly, not under trace
+        jaxpr = jax.make_jaxpr(lambda x, y: prove(rnd, [x, y], t0))(a, b).jaxpr
+        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+        self.assertEqual(eqn.params["name"], SUMCHECK_MARKER)
+        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
+        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(int(attrs["degree"]), 2)
+        self.assertEqual(int(attrs["num_vars"]), 4)
+        self.assertEqual(int(attrs["num_factors"]), 2)
+        self.assertEqual(len(eqn.outvars), 2 + 5 + 2)  # folded, leaves, polys, chal
+        self.assertGreater(len(eqn.invars), 2 + 5)  # RC auto-lifted past explicit
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_marker_and_nested_permute_survive_lowering(self) -> None:
+        # The whole sumcheck lowers under the hash-agnostic zorch.sumcheck marker;
+        # the FS permute survives as a nested poseidon2: marker the vendor reads to
+        # run the sponge in-kernel.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()
+        text = jax.jit(lambda x, y: prove(rnd, [x, y], t0)).lower(a, b).as_text()
+        self.assertIn(SUMCHECK_MARKER, text)
+        self.assertIn("poseidon2:", text)
+
+
+if __name__ == "__main__":
+    absltest.main()

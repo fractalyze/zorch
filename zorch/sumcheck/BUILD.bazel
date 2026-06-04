@@ -1,7 +1,8 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
-# Sumcheck prover + verifier rounds.
+# Sumcheck prover + verifier rounds, and the multilinear sumcheck scan driver
+# (`prove`, with the register-resident `zorch.sumcheck` marker).
 py_library(
     name = "sumcheck",
     srcs = [
@@ -11,9 +12,11 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:fusion",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/poly",
+        "//zorch/utils:bits",
         requirement("jax"),
     ],
 )

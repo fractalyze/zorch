@@ -21,8 +21,8 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.prove import prove
 from zorch.sumcheck import prover, verifier
+from zorch.sumcheck.prover import prove
 from zorch.testkit.transcript import cheap_transcript
 from zorch.verify import verify
 

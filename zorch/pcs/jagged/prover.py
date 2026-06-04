@@ -55,9 +55,9 @@ from zorch.pcs.jagged.poly import (
 from zorch.pcs.jagged.stacked import stacked_open
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_univariate
-from zorch.prove import RoundMsg, fold_rounds, prove
+from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.prover import SumcheckRound
+from zorch.sumcheck.prover import RoundMsg, SumcheckRound, prove
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_ceil_usize
 

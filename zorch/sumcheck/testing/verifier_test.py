@@ -9,8 +9,8 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.prove import prove
 from zorch.sumcheck import prover, verifier
+from zorch.sumcheck.prover import prove
 from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
