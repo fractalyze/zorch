@@ -1,9 +1,8 @@
-"""koalabear-16 Merkle stack fixture — TEST/BENCH only.
+"""koalabear-16 Merkle stack fixture — TEST only.
 
-The Poseidon2(koalabear-16) -> Sponge -> Compression -> MerkleTree wiring shared
-by merkle_test and bench_merkle_commit. Lives under commit/ rather than
-poseidon2/testing so the poseidon2 fixture stays free of a back-dependency on
-the commit layer.
+The Poseidon2(koalabear-16) -> Sponge -> Compression -> MerkleTree wiring used by
+merkle_test. Lives under commit/ rather than poseidon2/testing so the poseidon2
+fixture stays free of a back-dependency on the commit layer.
 """
 
 from __future__ import annotations

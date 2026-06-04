@@ -3,7 +3,7 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 # Shared LogUp-GKR fixtures + chain runners (random_first_layer, prove_gkr,
-# verify_gkr) — used by the package tests and the benchmark.
+# verify_gkr) — used by the package tests.
 py_library(
     name = "testing",
     srcs = ["__init__.py"],

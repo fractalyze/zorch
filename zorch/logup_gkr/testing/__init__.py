@@ -80,8 +80,7 @@ def prove_gkr_jitted(
     `num_interaction_variables` is static (it fixes the pyramid height, hence the
     unrolled layer count). Returns the last proved layer's round polynomials --
     the tail of the sequential carry, so it transitively forces the whole prove.
-    Shared by the prove benchmark's jit mode and its jit-vs-eager equivalence
-    test, which must fuse the *same* program.
+    Drives the jit-vs-eager equivalence test, which must fuse the *same* program.
     """
     first = GkrLayer(
         numerator_0,
@@ -91,32 +90,6 @@ def prove_gkr_jitted(
         num_interaction_variables=num_interaction_variables,
     )
     return prove_gkr(first, challenges)[2][-1].round_polys
-
-
-@functools.partial(jax.jit, static_argnums=(5,))
-def prove_gkr_jitted_with_transcript(
-    numerator_0: Array,
-    numerator_1: Array,
-    denominator_0: Array,
-    denominator_1: Array,
-    transcript: Transcript,
-    num_interaction_variables: int,
-) -> Array:
-    """`prove_gkr_jitted` with Fiat-Shamir drawn from `transcript` instead of a
-    preset challenge stream. The transcript is a **traced** pytree argument, so its
-    initial state is a runtime input rather than baked into the executable (the
-    permutation rides as static pytree aux). The caller builds it -- the on-device
-    poseidon2 `DuplexTranscript` can't be constructed under a `@jit` trace -- which
-    also keeps this entry permutation-agnostic. `num_interaction_variables` is
-    static; returns the last layer's round polynomials."""
-    first = GkrLayer(
-        numerator_0,
-        numerator_1,
-        denominator_0,
-        denominator_1,
-        num_interaction_variables=num_interaction_variables,
-    )
-    return prove_gkr_with_transcript(first, transcript)[2][-1].round_polys
 
 
 def verify_gkr_with_transcript(
