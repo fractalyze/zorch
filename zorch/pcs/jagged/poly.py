@@ -209,6 +209,32 @@ def build_jagged_layout(
     return cps, JaggedStaticConfig(l_max=l_max, n_c=n_c, n_r=n_r, n_d=n_d, dtype=dtype)
 
 
+def _offset_bit_tensor(
+    col_heights: list[int], l_max: int, cfg: JaggedStaticConfig
+) -> Array:
+    """`(l_max+1, n_d)` prefix-sum bit tensor whose canonical int32 limb-0 holds
+    each MSB-first bit, typed as `cfg.dtype`.
+
+    `partial_eval` derives its integer scatter offsets by bitcasting the bit
+    tensor to int32 and reading limb 0 — it needs the *canonical* bit there. A
+    Montgomery field dtype encodes `astype(1)` as `R mod p` (limb 0 ≠ 1), so
+    `build_jagged_layout`'s field-valued tensor (correct for the inner sumcheck's
+    field arithmetic) misreads under that raw bitcast. Build a separate tensor
+    by packing the bits into int32 limb 0 (other limbs zero) and bitcasting to
+    the field dtype — its raw bytes give the right offsets regardless of the
+    field's Montgomery-ness. Limb count is derived from the dtype's storage.
+    """
+    prefix = build_prefix_sums(col_heights)  # length len+1
+    padded = prefix + [prefix[-1]] * (l_max - len(col_heights))  # empty-range pad
+    bits = msb_first_bits(padded, cfg.n_d)  # (l_max+1, n_d) int
+    # int32 limbs per field element (4 for a 128-bit EF, 1 for a 32-bit base).
+    probe = jax.lax.bitcast_convert_type(jnp.zeros((1,), cfg.dtype), jnp.int32)
+    n_limbs = probe.shape[-1] if probe.ndim > 1 else 1
+    limbs = np.zeros((bits.shape[0], cfg.n_d, n_limbs), dtype=np.int32)
+    limbs[..., 0] = bits
+    return jax.lax.bitcast_convert_type(jnp.asarray(limbs), cfg.dtype)
+
+
 @partial(jax.jit, static_argnames=("cfg",))
 def partial_eval(
     col_prefix_sums: Array,

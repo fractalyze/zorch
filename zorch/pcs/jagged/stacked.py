@@ -72,6 +72,10 @@ def stacked_open(
     `values` is the `(K,)` array of per-column evals at `stack_point`.
     `dense_eval` is the scalar MLE evaluation at `z_final`.
     """
+    if z_final.shape != (layout.log_m,):
+        raise ValueError(
+            f"z_final must have shape (log_m,)=({layout.log_m},), got {z_final.shape}"
+        )
     z_k, stack_point = _split(z_final, layout)
     values, proof, transcript = bf_prover.open(prover_data, [stack_point], transcript)
     dense_eval = _combine(values, z_k, layout)
@@ -94,6 +98,14 @@ def stacked_verify(
     1. BaseFold verifies the K column evals at `stack_point`.
     2. The eq-combine of `values` by `z_K` matches `dense_eval`.
     """
+    if z_final.shape != (layout.log_m,):
+        raise ValueError(
+            f"z_final must have shape (log_m,)=({layout.log_m},), got {z_final.shape}"
+        )
+    if values.shape[0] != layout.K:
+        raise ValueError(
+            f"values must hold K={layout.K} per-column evals, got {values.shape[0]}"
+        )
     z_k, stack_point = _split(z_final, layout)
     ok_bf, transcript = bf_verifier.verify(
         commitment, [stack_point], values, proof, transcript

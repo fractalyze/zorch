@@ -157,11 +157,8 @@ class JaggedOpeningTest(absltest.TestCase):
 
     def test_tampered_inner_proof_rejects(self) -> None:
         verifier, commitment, z_row, column_claims, pdata, proof = self._open(6)
-        inner = proof.inner_proof
-        bad_inner = dataclasses.replace(
-            inner, round_polys=inner.round_polys.at[0, 0].add(jnp.array(1, EF))
-        )
-        bad = dataclasses.replace(proof, inner_proof=bad_inner)
+        bad_polys = proof.inner_round_polys.at[0, 0].add(jnp.array(1, EF))
+        bad = dataclasses.replace(proof, inner_round_polys=bad_polys)
         ok, _ = verifier.verify(
             commitment, z_row, column_claims, pdata.layout, bad, _t()
         )

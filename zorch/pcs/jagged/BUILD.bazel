@@ -27,21 +27,6 @@ py_library(
 )
 
 py_library(
-    name = "inner_sumcheck",
-    srcs = ["inner_sumcheck.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//zorch:prove",
-        "//zorch:round",
-        "//zorch:transcript",
-        "//zorch/pcs/jagged:poly",
-        "//zorch/poly",
-        requirement("jax"),
-        requirement("zk_dtypes"),
-    ],
-)
-
-py_library(
     name = "stacked",
     srcs = ["stacked.py"],
     visibility = ["//visibility:public"],
@@ -59,27 +44,23 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch/pcs/basefold",
-        "//zorch/pcs/jagged:inner_sumcheck",
         requirement("jax"),
     ],
 )
 
 py_library(
     name = "prover",
-    srcs = [
-        "commit.py",
-        "prover.py",
-    ],
+    srcs = ["prover.py"],
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:prove",
+        "//zorch:round",
         "//zorch:transcript",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/pcs/basefold",
         "//zorch/pcs/jagged:config",
         "//zorch/pcs/jagged:dense",
-        "//zorch/pcs/jagged:inner_sumcheck",
         "//zorch/pcs/jagged:poly",
         "//zorch/pcs/jagged:stacked",
         "//zorch/poly",
@@ -102,7 +83,7 @@ py_library(
         "//zorch/pcs/basefold",
         "//zorch/pcs/jagged:config",
         "//zorch/pcs/jagged:dense",
-        "//zorch/pcs/jagged:inner_sumcheck",
+        "//zorch/pcs/jagged:poly",
         "//zorch/pcs/jagged:prover",
         "//zorch/pcs/jagged:stacked",
         "//zorch/sumcheck",

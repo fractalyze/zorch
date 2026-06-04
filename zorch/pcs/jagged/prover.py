@@ -33,7 +33,6 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax import Array
 from jax.tree_util import register_dataclass
 
@@ -42,17 +41,20 @@ from zorch.hash.sponge import Sponge
 from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
 from zorch.pcs.jagged.config import JaggedOpeningProof
 from zorch.pcs.jagged.dense import JaggedLayout, from_blocks
-from zorch.pcs.jagged.inner_sumcheck import prove_jagged_eval
 from zorch.pcs.jagged.poly import (
+    _TRANSITION_ROWS,
     JaggedStaticConfig,
+    _offset_bit_tensor,
+    bp_eval_core,
     build_jagged_layout,
-    build_prefix_sums,
-    msb_first_bits,
+    eval_jagged_mle,
     partial_eval,
 )
 from zorch.pcs.jagged.stacked import stacked_open
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.prove import prove
+from zorch.poly.univariate import eval_univariate
+from zorch.prove import RoundMsg, fold_rounds, prove
+from zorch.round import Round
 from zorch.sumcheck.prover import SumcheckRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_ceil_usize
@@ -60,37 +62,238 @@ from zorch.utils.bits import log2_ceil_usize
 # Outer Hadamard sumcheck degree: Σ_i D(i)·J̃(i), a product of two MLEs.
 _OUTER_DEGREE = 2
 
+# Inner jagged-assist sumcheck degree (eq-weighted branching-program summand).
+_INNER_DEGREE = 2
+
+
+def _ef_sum(terms: list[Array]) -> Array:
+    """Σ over a static-length list of extension-field scalars at trace time.
+
+    jnp.sum over an extension-field array aborts the ZKX backend, so the column
+    reduction is a Python-level fold over the static l_max (same semantics)."""
+    return functools.reduce(operator.add, terms)
+
+
+@partial(
+    register_dataclass,
+    data_fields=[
+        "weights",
+        "buf",
+        "merged_bits",
+        "claim",
+        "rounds_left",
+        "z_row",
+        "z_final",
+        "t_matrix",
+    ],
+    meta_fields=["num_vars"],
+)
+@dataclass(frozen=True)
+class _InnerState:
+    """Carry for the jagged-assist round.
+
+    weights: (l_max,) running delta weights w_c = eq(z_col, c)·∏_{j done} eq(α_j,
+        m_c[j]) — the only thing that folds across rounds.
+    buf: (l_max, 2·num_bits) merged-prefix bit tables, column `round_idx`
+        overwritten by α each round so the next round's BP reads the bound value.
+    merged_bits: (l_max, 2·num_bits) immutable original bits, source of bits_i.
+    claim: running sumcheck claim s_prev(α_prev).
+    rounds_left: int32 countdown; the buffer column eliminated this round is
+        `rounds_left - 1` (LSB-first over the 2·num_bits-wide buffer).
+    z_row, z_final, t_matrix, num_vars: fixed branching-program arguments.
+
+    A registered pytree (num_vars static) so it threads through the per-round
+    `@jit` — each round shares the carry's shapes, so the round body compiles once
+    and `fold_rounds`'s nine remaining calls reuse it, instead of unrolling ten
+    sponge permutes into one graph (a multi-minute XLA compile on the ZKX CPU
+    backend)."""
+
+    weights: Array
+    buf: Array
+    merged_bits: Array
+    claim: Array
+    rounds_left: Array
+    z_row: Array
+    z_final: Array
+    t_matrix: Array
+    num_vars: int
+
+
+@jax.jit
+def _jagged_assist_step(
+    state: _InnerState, transcript: Transcript
+) -> tuple[_InnerState, Transcript, RoundMsg]:
+    """One jitted jagged-assist round body — see `JaggedAssistRound`. The carry
+    shapes are round-invariant, so this compiles once and `fold_rounds` reuses it
+    across all 2·n_d rounds (the sponge permute is not re-unrolled per round)."""
+    dtype = state.z_row.dtype
+    num_bits = state.merged_bits.shape[1] // 2
+    n_cols = state.buf.shape[0]
+    one = jnp.ones([], dtype=dtype)
+    col_shape = (n_cols,)
+
+    # The buffer column eliminated this round, LSB-first over the 2·num_bits
+    # merged-bit buffer (the buffer stores bits MSB-first, so eliminate from the
+    # high index down).
+    round_idx = state.rounds_left - 1
+
+    # Branching program at this column = 0 and = 1, over all L delta columns.
+    buf_0 = state.buf.at[:, round_idx].set(jnp.zeros(col_shape, dtype=dtype))
+    all_bp_0 = jax.vmap(
+        lambda pl, pr: bp_eval_core(
+            state.z_row, state.z_final, pl, pr, state.t_matrix, state.num_vars
+        )
+    )(buf_0[:, :num_bits], buf_0[:, num_bits:])
+    buf_1 = state.buf.at[:, round_idx].set(jnp.ones(col_shape, dtype=dtype))
+    all_bp_1 = jax.vmap(
+        lambda pl, pr: bp_eval_core(
+            state.z_row, state.z_final, pl, pr, state.t_matrix, state.num_vars
+        )
+    )(buf_1[:, :num_bits], buf_1[:, num_bits:])
+
+    bits_i = state.merged_bits[:, round_idx]  # (l_max,) the column's true bit
+    eq_0 = one - bits_i
+
+    # p_0 = s(0) = Σ_c w_c·eq_0·bp_0;
+    # p_inf = s(∞) = Σ_c w_c·(bits − eq_0)·(bp_1 − bp_0).
+    # EF reduce via trace-time fold over the static l_max.
+    p_0 = _ef_sum([state.weights[c] * eq_0[c] * all_bp_0[c] for c in range(n_cols)])
+    p_inf = _ef_sum(
+        [
+            state.weights[c] * (bits_i[c] - eq_0[c]) * (all_bp_1[c] - all_bp_0[c])
+            for c in range(n_cols)
+        ]
+    )
+
+    # zorch's native round message is eval form [s(0), s(1), s(2)], checked by the
+    # stock `SumcheckRound` (ok = claim == s(0)+s(1), reduce via eval_univariate).
+    # From the monomial coefs c0 = p_0, c1 = claim − 2·p_0 − p_inf, c2 = p_inf:
+    #   s(0) = c0 = p_0
+    #   s(1) = c0 + c1 + c2 = claim − p_0
+    #   s(2) = c0 + 2·c1 + 4·c2 = 2·claim − 3·p_0 + 2·p_inf
+    s0 = p_0
+    s1 = state.claim - p_0
+    s2 = 2 * state.claim - 3 * p_0 + 2 * p_inf
+    msg = jnp.stack([s0, s1, s2])
+
+    # Observe + sample IDENTICALLY to `SumcheckRound` so prover and verifier
+    # transcripts stay aligned. The sponge squeezes a Montgomery base scalar that
+    # multiplies the Montgomery EF state directly (all-Montgomery world, no cast).
+    transcript, r = transcript.observe_and_sample(msg, 1)
+    alpha = r[0]
+
+    # Fold: bind this column to α and update the running weights/claim. Reduce the
+    # claim via the stock eval-form Lagrange interpolation (eval_univariate).
+    new_buf = state.buf.at[:, round_idx].set(jnp.broadcast_to(alpha, col_shape))
+    new_weights = state.weights * (alpha * bits_i + (one - alpha) * (one - bits_i))
+    new_claim = eval_univariate(msg, alpha)
+
+    new_state = _InnerState(
+        weights=new_weights,
+        buf=new_buf,
+        merged_bits=state.merged_bits,
+        claim=new_claim,
+        rounds_left=round_idx,
+        z_row=state.z_row,
+        z_final=state.z_final,
+        t_matrix=state.t_matrix,
+        num_vars=state.num_vars,
+    )
+    return new_state, transcript, RoundMsg(msg, alpha)
+
+
+class JaggedAssistRound(Round):
+    """One degree-2 jagged-assist sumcheck round (prover side).
+
+    Maps (state, transcript) -> (state, transcript, RoundMsg). Per round:
+    eliminate the next merged-bit variable by evaluating the branching program at
+    the column's 0/1 settings over the L deltas, build the eval-form round poly
+    [s(0), s(1), s(2)], observe + sample alpha, then fold — bind that column to
+    alpha, update the running weights by eq(alpha, bit_c), and reduce the claim to
+    s(alpha). The fold lands in the emitted state, so the round is self-contained
+    and `fold_rounds` chains it straight through with no prior-challenge plumbing.
+    Delegates to the jitted `_jagged_assist_step` so the round body compiles once
+    and is reused across rounds."""
+
+    def __call__(
+        self, state: _InnerState, transcript: Transcript
+    ) -> tuple[_InnerState, Transcript, RoundMsg]:
+        return _jagged_assist_step(state, transcript)
+
+
+def _merged_bits(col_prefix_sums: Array, cfg: JaggedStaticConfig) -> Array:
+    """(l_max, 2·n_d) merged prefix bits: row c = bits(t_c) ‖ bits(t_{c+1})."""
+    left = col_prefix_sums[: cfg.l_max]  # (l_max, n_d)
+    right = col_prefix_sums[1:]  # (l_max, n_d)
+    return jnp.concatenate([left, right], axis=1)
+
+
+@partial(jax.jit, static_argnames=("cfg",))
+def _inner_setup(
+    col_prefix_sums: Array,
+    z_row: Array,
+    z_col: Array,
+    z_final: Array,
+    transcript: Transcript,
+    *,
+    cfg: JaggedStaticConfig,
+) -> tuple[_InnerState, Array, Transcript]:
+    """Compute the claim, seed the transcript, and build the round-0 carry — one
+    `@jit` zone (the claim eval + one sponge absorb) ahead of the per-round loop."""
+    dtype = z_row.dtype
+    claimed_sum = eval_jagged_mle(col_prefix_sums, z_row, z_col, z_final, cfg=cfg)
+    transcript = transcript.observe(claimed_sum)
+    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # 2^n_c
+    merged_bits = _merged_bits(col_prefix_sums, cfg)
+    state = _InnerState(
+        weights=col_eq[: cfg.l_max],
+        buf=merged_bits,
+        merged_bits=merged_bits,
+        claim=claimed_sum,
+        rounds_left=jnp.int32(2 * cfg.n_d),
+        z_row=z_row,
+        z_final=z_final,
+        t_matrix=jnp.asarray(_TRANSITION_ROWS, dtype=dtype),
+        num_vars=max(cfg.n_r, cfg.n_d),
+    )
+    return state, claimed_sum, transcript
+
+
+def prove_jagged_eval(
+    col_prefix_sums: Array,
+    z_row: Array,
+    z_col: Array,
+    z_final: Array,
+    *,
+    cfg: JaggedStaticConfig,
+    transcript: Transcript,
+) -> tuple[Array, Array, Transcript]:
+    """Open the inner jagged-assist sumcheck reproving J̃(z_row, z_col, z_final).
+
+    Returns (inner_round_polys, claimed_sum, transcript) where claimed_sum =
+    J̃(z_row, z_col, z_final) = eval_jagged_mle(...) and `inner_round_polys` is the
+    `(2·n_d, 3)` eval-form proof the stock `verify(SumcheckRound(2))` replays.
+
+    Jitted setup (claim eval + one sponge absorb), then the `fold_rounds` Python
+    loop over the jitted per-round step. The round body compiles once
+    (round-invariant carry shapes) and is reused across all 2·n_d rounds —
+    unrolling all rounds into a single `@jit` instead re-expands the sponge permute
+    per round, a multi-minute XLA compile on the ZKX CPU backend.
+    """
+    state, claimed_sum, transcript = _inner_setup(
+        col_prefix_sums, z_row, z_col, z_final, transcript, cfg=cfg
+    )
+    _, transcript, msgs = fold_rounds(
+        JaggedAssistRound(), state, transcript, 2 * cfg.n_d
+    )
+    inner_round_polys = jnp.stack([m.round_poly for m in msgs])  # (2·n_d, 3)
+    return inner_round_polys, claimed_sum, transcript
+
 
 def _expand_col_heights(layout: JaggedLayout) -> list[int]:
     """Per-column heights for the indicator: each block `[h, w]` is `w` unit-width
     columns of height `h` (matching `from_blocks`' column-major packing)."""
     return [h for h, w in zip(layout.heights, layout.widths) for _ in range(w)]
-
-
-def _offset_bit_tensor(
-    col_heights: list[int], l_max: int, cfg: JaggedStaticConfig
-) -> Array:
-    """`(l_max+1, n_d)` prefix-sum bit tensor whose canonical int32 limb-0 holds
-    each MSB-first bit, typed as `cfg.dtype`.
-
-    `partial_eval` derives its integer scatter offsets by bitcasting the bit
-    tensor to int32 and reading limb 0 — it needs the *canonical* bit there. A
-    Montgomery field dtype encodes `astype(1)` as `R mod p` (limb 0 ≠ 1), so
-    `build_jagged_layout`'s field-valued tensor (correct for the inner sumcheck's
-    field arithmetic) misreads under that raw bitcast. Build a separate tensor
-    by packing the bits into int32 limb 0 (other limbs zero) and bitcasting to
-    the field dtype — its raw bytes give the right offsets regardless of the
-    field's Montgomery-ness. Limb count is derived from the dtype's storage.
-    """
-    prefix = build_prefix_sums(col_heights)  # length len+1
-    padded = prefix + [prefix[-1]] * (l_max - len(col_heights))  # empty-range pad
-    bits = msb_first_bits(padded, cfg.n_d)  # (l_max+1, n_d) int
-    # int32 limbs per field element (4 for a 128-bit EF, 1 for a 32-bit base).
-    probe = jax.lax.bitcast_convert_type(jnp.zeros((1,), cfg.dtype), jnp.int32)
-    n_limbs = probe.shape[-1] if probe.ndim > 1 else 1
-    limbs = np.zeros((bits.shape[0], cfg.n_d, n_limbs), dtype=np.int32)
-    limbs[..., 0] = bits
-    return jax.lax.bitcast_convert_type(jnp.asarray(limbs), cfg.dtype)
 
 
 def _indicator_inputs(
@@ -240,10 +443,19 @@ class JaggedPcsProver:
         from `D`·`J̃` and never reads `column_claims`. Returns
         `(proof, transcript)`.
         """
-        del column_claims  # symmetry with verify; the seed-free sumcheck needs it not
         cfg = prover_data.cfg
         layout = prover_data.layout
         col_prefix_sums = prover_data.col_prefix_sums
+        if z_row.shape != (cfg.n_r,):
+            raise ValueError(
+                f"z_row must have shape (n_r,)=({cfg.n_r},), got {z_row.shape}"
+            )
+        if column_claims.shape[0] > cfg.l_max:
+            raise ValueError(
+                f"column_claims holds at most l_max={cfg.l_max} per-column claims, "
+                f"got {column_claims.shape[0]}"
+            )
+        del column_claims  # symmetry with verify; the seed-free sumcheck needs it not
         if cfg.n_d != layout.log_m:
             raise ValueError(
                 f"jagged open requires cfg.n_d == layout.log_m; got n_d={cfg.n_d}, "
@@ -275,25 +487,24 @@ class JaggedPcsProver:
         # the stacked opening / the inner BP all read. (The whir-zorch reference
         # folds LSB-first with insert-at-front and reverses; zorch does not.)
         z_final = msgs.challenge.astype(cfg.dtype)
-        dense_eval = folded[0][0]  # D(z_final)
         outer_final_eval = folded[0][0] * folded[1][0]  # D(z_final)·J̃(z_final)
 
         # S4: inner jagged-assist sumcheck reproving J̃(z_row, z_col, z_final).
-        inner_proof, inner_claimed_sum, transcript = prove_jagged_eval(
+        inner_round_polys, inner_claimed_sum, transcript = prove_jagged_eval(
             col_prefix_sums, z_row, z_col, z_final, cfg=cfg, transcript=transcript
         )
 
-        # S6: stacked BaseFold opening of D(z_final).
-        dense_eval2, column_values, basefold_proof, transcript = stacked_open(
+        # S6: stacked BaseFold opening of D(z_final). Its `dense_eval` (recomputed
+        # from the column evals) is the one the wire carries — the stacked verify
+        # re-checks it against the opened columns, and the S5 product check ties it
+        # back to the outer sumcheck's reduced D(z_final), so one source suffices.
+        dense_eval, column_values, basefold_proof, transcript = stacked_open(
             self.bf_prover,
             prover_data.basefold_prover_data,
             z_final,
             layout,
             transcript,
         )
-        # dense_eval2 is D(z_final) recomputed from the column evals; it must
-        # equal the outer sumcheck's reduced D(z_final).
-        del dense_eval2
 
         # The un-bound BaseFold root the jagged commitment binds; the verifier
         # re-derives the bind from it and feeds it to the stacked verify.
@@ -302,7 +513,7 @@ class JaggedPcsProver:
         proof = JaggedOpeningProof(
             outer_sumcheck_polys=outer_sumcheck_polys,
             outer_final_eval=outer_final_eval,
-            inner_proof=inner_proof,
+            inner_round_polys=inner_round_polys,
             inner_claimed_sum=inner_claimed_sum,
             dense_eval=dense_eval,
             column_values=column_values,
