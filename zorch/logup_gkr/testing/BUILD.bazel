@@ -38,6 +38,7 @@ py_test(
     srcs = ["jagged_prover_test.py"],
     deps = [
         ":testing",
+        "//zorch:round",
         "//zorch:transcript",
         "//zorch/logup_gkr",
         "//zorch/poly",

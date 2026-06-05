@@ -9,6 +9,7 @@ aggregation, heterogeneous rounds, and nesting (a chain is itself a Round).
 
 from __future__ import annotations
 
+import weakref
 from typing import Any
 
 import jax.numpy as jnp
@@ -51,6 +52,30 @@ class _ScaleVerifier(Round):
         return carry * self.factor + r[0], transcript, ok
 
 
+class _Payload:
+    """weakref-able stand-in for a layer-sized witness (`object()` is not)."""
+
+
+class _ReleaseProbeProver(Round):
+    """Round holding a payload that records, when run, how many probed payloads
+    are still alive — the release a lazily-consumed chain buys."""
+
+    def __init__(
+        self,
+        payload: _Payload,
+        refs: list[weakref.ref[_Payload]],
+        live_log: list[int],
+    ) -> None:
+        self.payload = payload
+        self.refs = refs
+        self.live_log = live_log
+
+    def __call__(self, carry: Any, transcript: Transcript) -> Any:
+        self.live_log.append(sum(ref() is not None for ref in self.refs))
+        transcript, r = transcript.sample(1)
+        return carry + r[0], transcript, carry
+
+
 class ChainTest(absltest.TestCase):
     def test_roundtrip_heterogeneous(self) -> None:
         factors = (2, 3, 7)
@@ -76,6 +101,45 @@ class ChainTest(absltest.TestCase):
         _, _, msgs = outer(jnp.array(4, KB), cheap_transcript(KB))
         self.assertEqual(len(msgs), 2)  # [inner's message list, scale-5's message]
         self.assertEqual(len(msgs[0]), 2)  # inner ran two rounds
+
+    def test_generator_chain_releases_each_round_after_proving(self) -> None:
+        # The big-witness pattern from logup_gkr: rounds built on demand, each
+        # holding a layer-sized payload that must be collectible once its
+        # round is proved. An eager chain would pin all three for its
+        # lifetime.
+        refs: list[weakref.ref[_Payload]] = []
+        live_log: list[int] = []
+
+        def make_round() -> _ReleaseProbeProver:
+            payload = _Payload()
+            refs.append(weakref.ref(payload))
+            return _ReleaseProbeProver(payload, refs, live_log)
+
+        chain = ProveChain(make_round() for _ in range(3))
+        chain(jnp.array(1, KB), cheap_transcript(KB))
+
+        # Each round saw only its own payload alive; nothing survives the call.
+        self.assertEqual(live_log, [1, 1, 1])
+        self.assertEqual([ref() for ref in refs], [None, None, None])
+
+    def test_generator_chain_matches_eager_chain(self) -> None:
+        factors = (2, 3, 7)
+        carry0 = jnp.array(11, KB)
+        eager_carry, eager_t, eager_msgs = ProveChain(
+            [_ScaleProver(f) for f in factors]
+        )(carry0, cheap_transcript(KB))
+        lazy_carry, lazy_t, lazy_msgs = ProveChain(_ScaleProver(f) for f in factors)(
+            carry0, cheap_transcript(KB)
+        )
+
+        # Same rounds, same stream: messages, carry, and the next sampled
+        # challenge all agree.
+        for eager, lazy in zip(eager_msgs, lazy_msgs, strict=True):
+            self.assertTrue(bool(eager == lazy))
+        self.assertTrue(bool(lazy_carry == eager_carry))
+        _, eager_r = eager_t.sample(1)
+        _, lazy_r = lazy_t.sample(1)
+        self.assertTrue(bool(eager_r[0] == lazy_r[0]))
 
     def test_verify_rejects_message_count_mismatch(self) -> None:
         # A short msgs list must fail loud, not silently skip rounds with ok=True.

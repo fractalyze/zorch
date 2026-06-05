@@ -42,10 +42,16 @@ class Round:
 class ProveChain(Round):
     """Sequence prover rounds (nn.Sequential). Threads the carry + transcript
     through each round and collects their messages. Itself a `Round`, so chains
-    nest."""
+    nest.
+
+    The rounds are consumed lazily on `__call__`: a generator that builds each
+    round on demand lets a proved round (and the witness it holds) be released
+    before the next is built, so at most one layer of a big-witness pyramid
+    stays live. A chain over a one-shot iterable is single-use — build it from
+    a list to call it more than once."""
 
     def __init__(self, rounds: Iterable[Round]) -> None:
-        self.rounds = list(rounds)
+        self.rounds = rounds
 
     def __call__(
         self, carry: Any, transcript: Transcript
@@ -60,7 +66,8 @@ class ProveChain(Round):
 class VerifyChain(Round):
     """Verifier dual of `ProveChain`: replays each round against its message,
     threading the carry, and ANDs every round's `ok`. `msgs` aligns with the
-    rounds (one per round, in order)."""
+    rounds (one per round, in order). Unlike `ProveChain` it materializes its
+    rounds — the len-vs-msgs fail-loud check needs them all up front."""
 
     def __init__(self, rounds: Iterable[Round]) -> None:
         self.rounds = list(rounds)

@@ -68,7 +68,10 @@ same agnostic `zorch.verify` scan via `sumcheck.verifier.CoeffsSumcheckRound`.
 Inverted from a single fused `Round`: the pyramid is folded and proved *eagerly*
 (`build_pyramid` is a plain Python loop), **not** one fused program — the full
 pyramid does not fit one `@jit` at scale, and each transition's output feeds the
-next layer's per-variable sumcheck independently. Fusion-by-construction lives one
+next layer's per-variable sumcheck independently. `ProveChain` consumes its
+rounds lazily for the same scale reason: a generator-built chain releases each
+layer once its round is proved, so the pyramid's planes never need to be live
+together. Fusion-by-construction lives one
 level down: each `LogupSumcheckRound` body reuses sumcheck's `split`/`fold` plus
 an element-wise combine and the one inherent `Σ`, so a round body folds to one
 kernel without a marker, exactly as in [`sumcheck.md`](sumcheck.md). The

@@ -23,14 +23,17 @@ from zorch.logup_gkr.circuit import (
     LogUpGkrOutput,
     _interleave,
     extract_jagged_outputs,
-    jagged_layer_transition,
 )
 from zorch.logup_gkr.jagged_prover import JaggedGkrLayerRound, JaggedLayerProof
 from zorch.logup_gkr.jagged_verifier import (
     JaggedGkrLayerRound as JaggedVerifierLayerRound,
 )
 from zorch.logup_gkr.prover import Carry, bind_output
-from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
+from zorch.logup_gkr.testing import (
+    build_jagged_pyramid,
+    random_jagged_layer,
+    virtual_planes,
+)
 from zorch.poly.multilinear import eval_mle
 from zorch.round import ProveChain, VerifyChain
 from zorch.testkit.transcript import cheap_transcript
@@ -41,18 +44,6 @@ KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 
 ROW_COUNTS = (3, 1, 5, 2)
-
-
-def _build_pyramid(first: JaggedGkrLayer) -> list[JaggedGkrLayer]:
-    """Fold to the floor under a schedule that over-pads unsaturated segments
-    to even counts -- saturated segments stay at one row so the floor is
-    reachable while the padding paths stay exercised."""
-    layers = [first]
-    while max(layers[-1].row_counts) > 1:
-        folded = tuple((rc + 1) // 2 for rc in layers[-1].row_counts)
-        schedule = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
-        layers.append(jagged_layer_transition(layers[-1], schedule))
-    return layers
 
 
 def _bind_multi_limb(
@@ -94,7 +85,7 @@ def _verify(
 
 class JaggedRoundtripTest(absltest.TestCase):
     def test_roundtrip_accepts_and_closes_on_leaf_mle(self) -> None:
-        layers = _build_pyramid(random_jagged_layer(7, ROW_COUNTS))
+        layers = build_jagged_pyramid(random_jagged_layer(7, ROW_COUNTS))
         prover_final, proofs, output = _prove(layers)
         self.assertEqual(len(proofs), len(layers) - 1)
 
@@ -113,7 +104,7 @@ class JaggedRoundtripTest(absltest.TestCase):
         self.assertTrue(bool(den_eval == eval_mle(_interleave(d0, d1), point)))
 
     def test_tampered_round_poly_rejected(self) -> None:
-        layers = _build_pyramid(random_jagged_layer(17, ROW_COUNTS))
+        layers = build_jagged_pyramid(random_jagged_layer(17, ROW_COUNTS))
         _, proofs, output = _prove(layers)
         bumped = proofs[1].round_polys.at[0, 0].add(jnp.array(1, KB))
         proofs[1] = replace(proofs[1], round_polys=bumped)
@@ -121,7 +112,7 @@ class JaggedRoundtripTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
     def test_tampered_opening_rejected(self) -> None:
-        layers = _build_pyramid(random_jagged_layer(27, ROW_COUNTS))
+        layers = build_jagged_pyramid(random_jagged_layer(27, ROW_COUNTS))
         _, proofs, output = _prove(layers)
         bad = proofs[0].numerator_0 + jnp.array(1, KB)
         proofs[0] = replace(proofs[0], numerator_0=bad)
@@ -132,7 +123,7 @@ class JaggedRoundtripTest(absltest.TestCase):
         # Extension-field claims over a base-field transcript: both sides
         # bind and squeeze through the same multi-limb rule.
         limbs = 4
-        layers = _build_pyramid(random_jagged_layer(37, ROW_COUNTS))
+        layers = build_jagged_pyramid(random_jagged_layer(37, ROW_COUNTS))
         output = extract_jagged_outputs(layers[-1])
 
         carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)

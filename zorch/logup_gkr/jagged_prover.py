@@ -59,9 +59,13 @@ _DEGREE = 3
 
 @dataclass(frozen=True)
 class JaggedLayerProof:
-    """One jagged GKR layer's sumcheck transcript: coefficient-form round
-    polynomials plus the final pair openings."""
+    """One jagged GKR layer's sumcheck transcript: the batching challenge and
+    opening claim the layer entered with (the per-layer anchors a consumer
+    diffs first when a byte-match diverges mid-pyramid), the coefficient-form
+    round polynomials, and the final pair openings."""
 
+    lam: Array
+    claim: Array
     round_polys: Array  # (num_variables, _DEGREE + 1), ascending coefficients
     numerator_0: Array
     numerator_1: Array
@@ -218,6 +222,7 @@ def prove_jagged_layer(
     eq_adj = one
     pad_adj = one
     point = eval_point
+    opening_claim = claim  # the loop rebinds claim to each round's reduction
     polys: list[Array] = []
     challenges: list[Array] = []
     for rnd in range(nrv + niv):
@@ -270,7 +275,9 @@ def prove_jagged_layer(
             eq_int = _bind_lsb(eq_int, r)
         point = point[:-1]
 
-    proof = JaggedLayerProof(jnp.stack(polys), n0[0], n1[0], d0[0], d1[0])
+    proof = JaggedLayerProof(
+        lam, opening_claim, jnp.stack(polys), n0[0], n1[0], d0[0], d1[0]
+    )
     return jnp.stack(challenges[::-1]), transcript, proof
 
 
