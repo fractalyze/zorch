@@ -16,6 +16,7 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array, lax
 
+from zorch.coding.foldable_code import FoldableCode
 from zorch.coding.linear_code import LinearCode
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.testkit.random_field import rand_field
@@ -42,9 +43,31 @@ class ReedSolomonTest(absltest.TestCase):
     def test_implements_linear_code_protocol(self) -> None:
         rs = ReedSolomon(message_len=4, blowup=2, dtype=F)
         self.assertIsInstance(rs, LinearCode)
+        self.assertIsInstance(rs, FoldableCode)
         self.assertEqual(rs.message_len, 4)
         self.assertEqual(rs.block_len, 8)
         self.assertEqual(rs.dtype, F)
+
+    def test_fold_values_matches_whole_codeword_fold(self) -> None:
+        # The invariant the BaseFold verifier relies on: folding opened pairs
+        # at queried positions equals the whole-codeword fold at those positions.
+        k, blowup = 8, 2
+        rs = ReedSolomon(k, blowup, F)
+        cw = rs.encode(rand_field(3, (k,), F))
+        beta = rand_field(4, (), F)
+        half = rs.block_len // 2
+        positions = jnp.array([0, 3, half - 1])
+        folded = rs.fold(cw, beta)
+        got = rs.fold_values(cw[positions], cw[positions + half], beta, positions, 0)
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_check_final_accepts_only_the_constant_claim(self) -> None:
+        rs = ReedSolomon(message_len=1, blowup=4, dtype=F)
+        claim = rand_field(5, (), F)
+        good = jnp.full((rs.block_len,), claim, F)
+        self.assertTrue(bool(rs.check_final(good, claim)))
+        bad = good.at[1].set(claim + jnp.ones((), F))
+        self.assertFalse(bool(rs.check_final(bad, claim)))
 
     def test_encode_matches_polynomial_evaluation(self) -> None:
         k, blowup = 4, 4

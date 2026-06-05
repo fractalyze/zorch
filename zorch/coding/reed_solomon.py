@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Reed-Solomon as a LinearCode: low-degree extension via the native NTT.
+"""Reed-Solomon as a FoldableCode: low-degree extension via the native NTT.
 
 `encode` reads the message as the `message_len` low-order coefficients of a
 polynomial, zero-pads to `block_len`, and evaluates it on the order-`block_len`
@@ -11,6 +11,9 @@ There is deliberately no hand-rolled butterfly: a `jnp` butterfly would be
 log(n) unfused kernels the compiler cannot recognize as an NTT. Reed-Solomon
 hands its evaluation to the native op, the way poseidon2 hands its algebra to
 zkx rather than fusing it by pattern-match.
+
+The fold half of the seam delegates to `coding/fri`, which recovers the fold's
+x-coordinates from the same `lax.fft` evaluation domain the encoder used.
 """
 
 from __future__ import annotations
@@ -20,11 +23,12 @@ from typing import Any
 import jax.numpy as jnp
 from jax import Array, lax
 
+from zorch.coding.fri import eval_domain, fri_fold, fri_fold_values
 from zorch.utils.bits import is_power_of_two
 
 
 class ReedSolomon:
-    """Reed-Solomon code over `dtype`; implements LinearCode.
+    """Reed-Solomon code over `dtype`; implements FoldableCode.
 
     `block_len = message_len * blowup` (both powers of two). With `coset_shift`
     set to a field element outside the subgroup, the codeword is the message
@@ -74,3 +78,20 @@ class ReedSolomon:
         if self._coset_powers is not None:
             coeffs = coeffs * self._coset_powers
         return lax.fft(coeffs, "FFT", n)
+
+    def fold(self, codeword: Array, beta: Array) -> Array:
+        """FoldableCode fold: natural-order `(x, -x)` conjugate pairs."""
+        return fri_fold(codeword, beta)
+
+    def fold_values(
+        self, lo: Array, hi: Array, beta: Array, positions: Array, level: int
+    ) -> Array:
+        """Fold opened pairs of layer `level`; the x-coordinates are the first
+        half of the layer's (level-times-squared) evaluation domain."""
+        domain = eval_domain(self.dtype, self.block_len >> level)
+        return fri_fold_values(lo, hi, beta, domain[positions])
+
+    def check_final(self, final: Array, claim: Array) -> Array:
+        """A message-length-1 RS codeword is the constant polynomial, so base-code
+        membership and message == `claim` collapse into one comparison."""
+        return jnp.all(final == claim)
