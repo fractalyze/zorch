@@ -19,6 +19,10 @@ inside are fine — `jit` unrolls them.
   would unroll the composition into one trace; the per-round numeric bodies are
   the fusion target, not the driver. (`prove` / `verify` are the deliberate
   exception — their per-variable loop is homogeneous, so it *is* one `lax.scan`.)
+- builds a constant from static (non-`Array`) arguments alone — e.g.
+  `zorch.poly.univariate.compute_inv_vandermonde` assembles a matrix from
+  `degree` + `dtype`; with no array input there is nothing for `jit` to
+  specialize over.
 
 A round's `_round_poly` / `_fold` are pure numeric and *could* be `@jit`'d,
 but are deliberately left undecorated: they are the bodies a future marked
@@ -245,6 +249,12 @@ drifts from a hand-maintained re-export list. The one exception is a
 `testing/__init__.py`, which may host shared fixtures the package's tests import
 — e.g. `zorch/sumcheck/testing`'s `product` / `eval_mle_oracle` reference
 oracles.
+
+Tests draw field elements as the Montgomery-form dtypes
+(`zk_dtypes.koalabear_mont`, `koalabearx4_mont`): Montgomery is the production
+encoding the GPU kernels compute in, so tests exercise the arithmetic path the
+prover ships. Reach for the bare canonical dtypes only when a test is *about*
+the canonical integer encoding itself.
 
 Tests subclass `absltest.TestCase` and assert through `self.assert*` /
 `self.assertRaises` — never a bare `def test_*` + `assert`. A bare `assert` is a
