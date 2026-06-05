@@ -121,6 +121,21 @@ class SpongeTest(absltest.TestCase):
                 f"len {n}",
             )
 
+    def test_hash_many_blocks_matches_stepwise_replay(self) -> None:
+        # n=28/32 drive the scan through 2-3 iterations (carry across blocks)
+        # with and without a partial tail — regimes the fixed vectors above
+        # never reach.
+        perm = koalabear16_perm()
+        s = Sponge(perm, SpongeParams(rate=8, out=8))
+        for n in (28, 32):
+            x = jnp.arange(n, dtype=F)
+            st = jnp.zeros(16, dtype=F)
+            for start in range(0, n, 8):
+                block = x[start : start + 8]
+                st = st.at[: block.shape[0]].set(block)
+                st = perm.permute(st)
+            self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])), f"len {n}")
+
     def test_hash_vmap_matches_unbatched(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         a = jnp.arange(16, dtype=F)
