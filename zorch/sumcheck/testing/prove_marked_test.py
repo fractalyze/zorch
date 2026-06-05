@@ -122,8 +122,63 @@ class ProveMarkedTest(absltest.TestCase):
         self.assertEqual(int(attrs["degree"]), 2)
         self.assertEqual(int(attrs["num_vars"]), 4)
         self.assertEqual(int(attrs["num_factors"]), 2)
+        # `num_real` is optional: a dense (unpadded) prove emits no such attr, so
+        # a recognizer that predates it sees an unchanged envelope.
+        self.assertNotIn("num_real", attrs)
         self.assertEqual(len(eqn.outvars), 2 + 5 + 2)  # folded, leaves, polys, chal
         self.assertGreater(len(eqn.invars), 2 + 5)  # RC auto-lifted past explicit
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_marker_carries_num_real_attribute(self) -> None:
+        # A jagged factor table zero-pads to the next power of two; `num_real`
+        # declares the real prefix length so a vendor bounds the first round's
+        # reduction to it instead of sweeping the padded tail.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()
+        jaxpr = jax.make_jaxpr(lambda x, y: prove(rnd, [x, y], t0, num_real=10))(
+            a, b
+        ).jaxpr
+        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(int(attrs["num_real"]), 10)
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_num_real_is_metadata_only(self) -> None:
+        # The attr never reaches the computation: the marked call's
+        # decomposition jaxpr is identical with and without it, so the bounded
+        # prove stays byte-identical by construction (bounding the reduction
+        # is the vendor's move, sound because the padded tail sums to zero).
+        # Structural, not executed — the dense marker's executed byte-identity
+        # is test_marked_equals_scan_product_base's job, and an executed check
+        # here would pay a full scan compile only to rerun the same program.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()
+
+        def marker_jaxpr(**kw: int) -> str:
+            jaxpr = jax.make_jaxpr(lambda x, y: prove(rnd, [x, y], t0, **kw))(
+                a, b
+            ).jaxpr
+            eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+            return str(eqn.params["jaxpr"])
+
+        self.assertEqual(marker_jaxpr(num_real=10), marker_jaxpr())
+
+    def test_num_real_out_of_range_rejected(self) -> None:
+        # Mirror the zkx recognizer's bound (1 <= num_real <= table width) at
+        # emission, on the marked and unmarked paths alike. `prove` raises
+        # before touching the transcript, so both are safely reused across
+        # the bad values.
+        f = rand_field(43, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=1)
+        transcripts = (cheap_transcript(KB), self._poseidon_transcript())
+        for bad in (0, 17):
+            for transcript in transcripts:
+                with self.assertRaisesRegex(ValueError, "num_real"):
+                    prove(rnd, [f], transcript, num_real=bad)
 
     @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_marker_and_nested_permute_survive_lowering(self) -> None:

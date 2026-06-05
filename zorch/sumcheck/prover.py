@@ -191,7 +191,11 @@ SUMCHECK_MARKER_VERSION = 1
 
 
 def prove(
-    round: SumcheckSummand, state: Sequence[Array], transcript: Transcript
+    round: SumcheckSummand,
+    state: Sequence[Array],
+    transcript: Transcript,
+    *,
+    num_real: int | None = None,
 ) -> tuple[list[Array], Transcript, RoundMsg]:
     """Scan a sumcheck round once per variable; return the folded state, the
     advanced transcript, and the stacked per-round `RoundMsg` (`.round_poly` is the
@@ -206,6 +210,13 @@ def prove(
     `zorch.sumcheck` composite a vendor codegens register-resident (see the module
     docstring); otherwise it runs directly. The two are byte-identical — the marker
     decomposes to the same scan — so callers see one `prove`.
+
+    `num_real` declares how many leading entries of each factor table are real,
+    the rest being zero padding (a jagged table padded to a power of two). It
+    rides on the marker as an optional composite attribute so a vendor bounds the
+    first round's reduction to the real prefix; the computation is unchanged —
+    skipping the tail is sound only because a padded summand sums to zero there,
+    which is the caller's contract.
     """
     state = list(state)
     if not state:
@@ -216,12 +227,18 @@ def prove(
             "prove requires a state width >= 2 (at least one round), got "
             f"width {width}"
         )
+    # Mirror the zkx recognizer's bound so a bad value fails at emission, and on
+    # the unmarked path too — the two paths must reject identically.
+    if num_real is not None and not 1 <= num_real <= width:
+        raise ValueError(
+            f"num_real must be within [1, table width {width}], got {num_real}"
+        )
     # Mark only a DuplexTranscript with a dedicated-fusion permutation: the marker
     # threads the sponge's five-leaf state as operands, so it needs that concrete
     # layout. The isinstance narrows the type for `_prove_marked` (the merkle.py
     # `has_dedicated_fusion` gate pattern, here over the transcript's permutation).
     if isinstance(transcript, DuplexTranscript) and transcript.has_dedicated_fusion:
-        return _prove_marked(round, state, transcript)
+        return _prove_marked(round, state, transcript, num_real=num_real)
     return _prove_scan(round, state, transcript)
 
 
@@ -273,15 +290,19 @@ def _state_leaves(st: DuplexState) -> tuple[Array, Array, Array, Array, Array]:
 
 
 def _prove_marked(
-    round: SumcheckSummand, state: list[Array], transcript: DuplexTranscript
+    round: SumcheckSummand,
+    state: list[Array],
+    transcript: DuplexTranscript,
+    num_real: int | None = None,
 ) -> tuple[list[Array], DuplexTranscript, RoundMsg]:
     """Wrap `_prove_scan` in the hash-agnostic `zorch.sumcheck` composite —
     Fiat-Shamir INSIDE, so the body is the *same* scan and the folded state,
     advanced transcript, and proof are bit-identical to the plain path.
 
-    The shape (`degree`, `num_vars`, `num_factors`) rides as `composite.attributes`
-    under `version` 1 — the recognizer's contract; the body ignores them (metadata
-    only). The duplex sponge threads through as the five `DuplexState` leaves (the
+    The shape (`degree`, `num_vars`, `num_factors`, plus `num_real` when given)
+    rides as `composite.attributes` under `version` 1 — the recognizer's
+    contract; the body ignores them (metadata only). The duplex sponge threads
+    through as the five `DuplexState` leaves (the
     mutable carry); the FS permutation rides as the nested `poseidon2:` marker
     inside `observe_and_sample`, whose round constants auto-lift into this
     composite's operands — so the marker names no hash and carries no pre-sampled
@@ -301,13 +322,16 @@ def _prove_marked(
         lv = operands[n_factors : n_factors + len(leaves)]
         # Rebuild the transcript from its leaves so the body closes over no sponge
         # state; `_prove_scan` runs the per-round FS, keeping this the one prover.
-        # `_attrs` (degree/num_vars/num_factors) is marker metadata the inline
-        # fallback passes through — the decomposition itself does not read it.
+        # `_attrs` is marker metadata the inline fallback passes through — the
+        # decomposition itself does not read it.
         folded, t, msgs = _prove_scan(
             round, tables, DuplexTranscript(perm, rate, DuplexState(*lv))
         )
         return folded, _state_leaves(cast(DuplexTranscript, t).state), msgs
 
+    # Optional attr: emitted only when declared, so a dense prove's envelope is
+    # unchanged for a recognizer that predates `num_real`.
+    opt_attrs = {} if num_real is None else {"num_real": num_real}
     folded, out_leaves, msgs = fused_region(
         body,
         *state,
@@ -317,5 +341,6 @@ def _prove_marked(
         degree=round.degree,
         num_vars=num_vars,
         num_factors=n_factors,
+        **opt_attrs,
     )
     return folded, DuplexTranscript(perm, rate, DuplexState(*out_leaves)), msgs
