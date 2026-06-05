@@ -24,7 +24,7 @@ from zorch.transcript import Transcript
 class FriParams:
     """Public FRI configuration, identical on both sides."""
 
-    code: ReedSolomon  # low-degree extension; gives the block_len + eval domain
+    code: ReedSolomon  # LDE; gives block_len + eval domain (incl. coset_shift)
     tree: MerkleTree  # Merkle commitment over codeword leaves
     num_rounds: int  # fold rounds; final codeword has block_len >> num_rounds entries
     num_queries: int  # query repetitions (soundness amplification)

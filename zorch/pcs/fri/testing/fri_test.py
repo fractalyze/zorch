@@ -19,10 +19,10 @@ from zorch.transcript import DuplexTranscript
 KB = zk_dtypes.koalabear_mont  # match the koalabear16 poseidon2 fixture's form
 
 
-def _params() -> FriParams:
+def _params(coset_shift: Array | None = None) -> FriParams:
     # message_len 4 -> block_len 8; quotient (deg 2) folds in 2 rounds to a constant.
     _, _, tree = koalabear16_merkle()
-    code = ReedSolomon(message_len=4, blowup=2, dtype=KB)
+    code = ReedSolomon(message_len=4, blowup=2, dtype=KB, coset_shift=coset_shift)
     return FriParams(code=code, tree=tree, num_rounds=2, num_queries=3)
 
 
@@ -75,6 +75,31 @@ class FriRoundTripTest(absltest.TestCase):
             self.verifier.verify(
                 roots, [self.z, self.z], jnp.zeros(2, dtype=KB), [], _transcript()
             )
+
+
+class FriCosetRoundTripTest(absltest.TestCase):
+    """FRI on a coset LDE (the STARK shape: eval domain disjoint from the trace
+    domain). Every layer folds over the shifted domain, squaring the shift."""
+
+    def setUp(self) -> None:
+        self.params = _params(coset_shift=jnp.array(3, dtype=KB))
+        self.coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
+        self.z = jnp.array(2, dtype=KB)  # outside the coset 3·<ω₈>
+        self.prover = FriProver(self.params)
+        self.verifier = FriVerifier(self.params)
+
+    def test_honest_opening_verifies(self) -> None:
+        roots, data = self.prover.commit([self.coeffs])
+        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        ok, _ = self.verifier.verify(roots, [self.z], values, proofs, _transcript())
+        self.assertTrue(bool(ok))
+
+    def test_wrong_value_rejected(self) -> None:
+        roots, data = self.prover.commit([self.coeffs])
+        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        bad = values + jnp.array(1, dtype=KB)
+        ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
+        self.assertFalse(bool(ok))
 
 
 if __name__ == "__main__":

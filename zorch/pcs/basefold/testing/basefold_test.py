@@ -163,6 +163,24 @@ class BasefoldOpenTest(absltest.TestCase):
         ok, _ = verifier.verify(root, [z], values, bad, _transcript())
         self.assertFalse(bool(ok))
 
+    def test_open_verify_round_trip_coset(self) -> None:
+        # Coset LDE: prover and verifier must thread rs.coset_shift through
+        # every fold (squaring it per round); an EF shift exercises the
+        # EF-domain path end to end.
+        log_s, K = 3, 2
+        S = 1 << log_s
+        shift = _rand_ef(10, ())
+        rs = ReedSolomon(message_len=S, blowup=2, dtype=EF, coset_shift=shift)
+        _, _, tree = koalabear16_merkle()
+        prover = BasefoldProver(rs, tree, num_queries=4)
+        verifier = BasefoldVerifier(rs, tree, num_queries=4)
+        mle = _rand_ef(11, (S, K))
+        root, pdata = prover.commit([mle[:, k] for k in range(K)])
+        z = _rand_ef(12, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+
     def test_verify_rejects_wrong_root(self) -> None:
         # Directly exercises the commitment-root binding: verifying a valid proof
         # against a different root must fail (the FS challenges diverge and the

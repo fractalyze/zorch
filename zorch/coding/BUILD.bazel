@@ -2,27 +2,16 @@ load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
 py_library(
-    name = "fri",
+    name = "reed_solomon",
     srcs = [
         "__init__.py",
-        "fri.py",
+        "reed_solomon.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//zorch/utils:bits",
         requirement("jax"),
         requirement("zk_dtypes"),
-    ],
-)
-
-py_library(
-    name = "reed_solomon",
-    srcs = ["reed_solomon.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":fri",
-        "//zorch/utils:bits",
-        requirement("jax"),
     ],
 )
 
