@@ -24,6 +24,7 @@ from zorch.pcs.jagged.poly import (
     eval_jagged_mle,
     partial_eval,
 )
+from zorch.pcs.jagged.testing import scatter_partial_eval
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.testkit.random_field import rand_field
 
@@ -182,6 +183,48 @@ class PartialEvalTest(absltest.TestCase):
         # The field-valued mont tensor stays the oracle's input.
         want = eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg)
         self.assertEqual(_field_val(got), _field_val(want))
+
+    def test_partial_eval_bit_equals_scatter_oracle(self) -> None:
+        # Gather form vs the per-column scatter oracle, byte-for-byte, across
+        # the layout corners: zero-height mid column (duplicate prefix entry),
+        # single column taller than 2^n_r (capacity truncation), full l_max
+        # (tail clamps into a real column), and the standard mixed case.
+        l_max, n_r = 4, 3
+        layouts = [[4, 2, 3], [4, 0, 3, 2], [9], [3, 3, 2, 1]]
+        for heights in layouts:
+            with self.subTest(heights=heights):
+                _cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)
+                offsets = _offset_bit_tensor(heights, l_max, cfg)
+                z_row = rand_field(30, (cfg.n_r,), EF)
+                z_col = rand_field(31, (cfg.n_c,), EF)
+                got = partial_eval(offsets, z_row, z_col, cfg=cfg)
+                want = scatter_partial_eval(offsets, z_row, z_col, cfg=cfg)
+                self.assertEqual(_field_val(got), _field_val(want))
+
+    def test_partial_eval_all_padding(self) -> None:
+        # All columns empty: every prefix entry duplicates t_L = 0, no element
+        # is owned, the indicator is identically zero. The all-padding tier is
+        # n_d = 1, so any n_r with 2^n_r > 2 makes the scatter form untraceable
+        # (its fixed window exceeds the dense buffer) — the gather form has no
+        # window, so it also covers that region of the domain.
+        l_max = 4
+        zeros = [0, 0, 0]
+        # n_r=1: window fits the buffer — differential vs the oracle.
+        _cps, cfg = build_jagged_layout(zeros, l_max, n_r=1, dtype=EF)
+        offsets = _offset_bit_tensor(zeros, l_max, cfg)
+        z_row = rand_field(40, (cfg.n_r,), EF)
+        z_col = rand_field(41, (cfg.n_c,), EF)
+        got = partial_eval(offsets, z_row, z_col, cfg=cfg)
+        want = scatter_partial_eval(offsets, z_row, z_col, cfg=cfg)
+        self.assertEqual(_field_val(got), _field_val(want))
+        self.assertEqual(_field_val(got), _field_val(jnp.zeros(1 << cfg.n_d, dtype=EF)))
+        # n_r=3: scatter-untraceable region — pin the gather's zero indicator.
+        _cps, cfg = build_jagged_layout(zeros, l_max, n_r=3, dtype=EF)
+        offsets = _offset_bit_tensor(zeros, l_max, cfg)
+        z_row = rand_field(42, (cfg.n_r,), EF)
+        z_col = rand_field(43, (cfg.n_c,), EF)
+        got = partial_eval(offsets, z_row, z_col, cfg=cfg)
+        self.assertEqual(_field_val(got), _field_val(jnp.zeros(1 << cfg.n_d, dtype=EF)))
 
     def test_partial_eval_jits_and_compiles_once_across_heights(self) -> None:
         # Two height vectors in the same tier produce the same compiled artifact.
