@@ -33,6 +33,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -45,6 +46,9 @@ from zorch.round import Round
 from zorch.sumcheck.prover import RoundMsg, factors_on_domain, fold, prove
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+
+if TYPE_CHECKING:
+    from zorch.sumcheck.prover import SumcheckSummand
 
 # eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2).
 _DEGREE = 3
@@ -171,3 +175,8 @@ class GkrLayerRound(Round):
 
         proof = LayerProof(round_polys, n0, n1, d0, d1)
         return (num_eval, den_eval, eval_point), transcript, proof
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[SumcheckSummand] = LogupSumcheckRound

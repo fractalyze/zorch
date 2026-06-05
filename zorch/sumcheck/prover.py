@@ -48,7 +48,7 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import Protocol, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 import jax
 import jax.numpy as jnp
@@ -344,3 +344,8 @@ def _prove_marked(
         **opt_attrs,
     )
     return folded, DuplexTranscript(perm, rate, DuplexState(*out_leaves)), msgs
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[SumcheckSummand] = SumcheckRound

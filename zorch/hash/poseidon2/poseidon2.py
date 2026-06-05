@@ -15,6 +15,8 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax.numpy as jnp
 from jax import Array
 
@@ -25,6 +27,9 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
+
+if TYPE_CHECKING:
+    from zorch.hash.permutation import Permutation
 
 
 class Poseidon2:
@@ -135,3 +140,8 @@ class Poseidon2:
         )
 
         return fused_region(permutation, *operands, name=self._fused_region_name)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[Permutation] = Poseidon2

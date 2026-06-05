@@ -21,14 +21,11 @@ layer that *uses* it, not in the primitive.
 **Wire types are generic parameters, conformance is mypy-enforced.** The
 commitment, retained prover data, and proof are scheme-defined: `PcsProver[C, D,
 P]` produces `C` and `D` from `commit` and `P` from `open`; `PcsVerifier[C, P]`
-consumes the two wire types. Each instance pins them concretely with a one-line
-`if TYPE_CHECKING` assignment at the end of its module, so signature drift fails
-mypy rather than surfacing at a consumer call site. Because this repo's mypy
-collapses `jax.Array` to `Any` (jax's stubs don't parse — see pyproject.toml),
-the pins have teeth only where they are zorch-owned nominal types — which is why
-every scheme names its prover data (`KzgProverData`, `FriProverData`,
-`BasefoldProverData`) instead of passing raw containers. See docs/pcs.md
-"Instance anatomy".
+consumes the two wire types. Each instance parameterizes its seam conformance
+pin (docs/conventions.md "Seam conformance pins") with them. A pin bites only on
+zorch-owned nominal types — which is why every scheme names its prover data
+(`KzgProverData`, `FriProverData`, `BasefoldProverData`) instead of passing raw
+containers. See docs/pcs.md "Instance anatomy".
 
 **Representation is the scheme's business.** The seam takes polynomials in whatever
 form the scheme needs: KZG wants the coefficient basis (powers-of-tau MSM), the

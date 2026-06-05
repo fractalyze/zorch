@@ -9,12 +9,15 @@ on the unmarked path (no `zorch.sumcheck` marker).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jax.numpy as jnp
 from jax import Array
 
 from zorch.transcript import DuplexTranscript
+
+if TYPE_CHECKING:
+    from zorch.hash.permutation import Permutation
 
 
 class CheapPermutation:
@@ -46,3 +49,8 @@ def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTran
     """A fresh `DuplexTranscript` over `CheapPermutation` for tests — a real sponge
     whose challenges derive from observations (no preset stream)."""
     return DuplexTranscript.new(CheapPermutation(width=width, dtype=dtype), rate=rate)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[Permutation] = CheapPermutation

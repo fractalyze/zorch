@@ -87,21 +87,20 @@ not an instance.)
 
 Naming: `XProver` / `XVerifier` / `XProverData` / `XProof` / `XCommitment`.
 
-**Conformance is mypy-enforced, not conventional.** The seam is generic —
-`PcsProver[C, D, P]` / `PcsVerifier[C, P]` — and every instance module ends with
-a one-line pin:
+**Conformance is mypy-enforced, not conventional** — the repo-wide seam pin
+([conventions.md "Seam conformance pins"](conventions.md#seam-conformance-pins)).
+The seam is generic — `PcsProver[C, D, P]` / `PcsVerifier[C, P]` — so each
+instance parameterizes its pin with the scheme's wire types:
 
 ```python
 if TYPE_CHECKING:
     _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver
 ```
 
-Signature drift — a renamed method, wrong arity, `commit`'s prover data
-disagreeing with `open`'s — fails pre-commit mypy instead of surfacing at a
-consumer call site. One caveat shapes the whole convention: this repo's mypy
-collapses `jax.Array` to `Any` (jax's stubs don't parse — see pyproject.toml),
-so the pins have teeth only where they are zorch-owned nominal types. That is
-why prover data is always a named dataclass, never a bare list or tuple.
+Because those wire types are zorch-owned nominal types, the PCS pins have full
+teeth despite the `jax.Array ≡ Any` caveat: `commit`'s prover data disagreeing
+with `open`'s fails the pin. That is why prover data is always a named
+dataclass, never a bare list or tuple.
 
 **Commitments are aliases until they grow structure.** Every scheme's commitment
 is literally an `Array` (KZG: `[K]` G1 points; FRI: `[K]` roots; BaseFold: one
