@@ -11,7 +11,6 @@ four tamper paths (each must reject).
 from __future__ import annotations
 
 import dataclasses
-import os
 
 import jax.numpy as jnp
 from absl.testing import absltest
@@ -83,13 +82,6 @@ def _column_claims(blocks: list[jnp.ndarray], z_row: jnp.ndarray) -> jnp.ndarray
     return jnp.stack(claims)
 
 
-@absltest.skipIf(
-    os.environ.get("CI") == "true",
-    "~40 min of cold XLA compile per CI run: the e2e opening cannot use a warm "
-    "compile cache until fractalyze/zkx#507 (warm cache replays wrong "
-    "executables for EF-in-scan programs) is fixed. Run locally before merge; "
-    "remove this skip when zkx#507 lands or the pytest job is sharded.",
-)
 class JaggedOpeningTest(absltest.TestCase):
     def _open(self, seed: int, log_s: int = _LOG_STACK) -> tuple[
         JaggedPcsVerifier,
