@@ -70,9 +70,12 @@ class FriVerifier:
         t, positions = sample_positions(t, n, params.num_queries)
         a = query_layer_indices(positions, n, params.num_rounds)
         half0 = n >> 1
-        layer_domains = [
-            eval_domain(params.code.dtype, n >> i) for i in range(params.num_rounds)
-        ]
+        layer_domains = []
+        shift = params.code.coset_shift
+        for i in range(params.num_rounds):
+            layer_domains.append(eval_domain(params.code.dtype, n >> i, shift=shift))
+            if shift is not None:
+                shift = shift * shift  # each fold lands on the squared domain
 
         # The final fold layer must be a constant (degree 0).
         ok = jnp.all(pf.final_layer == pf.final_layer[0])

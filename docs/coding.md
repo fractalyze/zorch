@@ -37,6 +37,12 @@ field-generator table — the same stance as `encode`. It is distinct from
 layout makes `f(x)` / `f(−x)` a slice, not a gather, so the fold stays
 fusion-friendly.
 
+On a coset `h·H` the fold takes the same `shift` the encoder used, and its
+output lives on the squared coset `h²·H²` — each layer's shift is the previous
+one squared. `ReedSolomon`'s seam `fold`/`fold_values` apply the right
+per-level shift internally; `pcs/fri`, not yet on the seam, threads it from
+the code's `coset_shift` through its own fold loops.
+
 ## Design rules
 
 - **A code is an object, not a call.** `ReedSolomon` is a class, not a function,
@@ -61,7 +67,9 @@ fusion-friendly.
   code keeps no per-field generator table: `zk_dtypes.pfinfo` exposes
   two-adicity but no multiplicative generator, and it is the scheme (FRI/STARK)
   that knows which coset it needs disjoint from the trace domain. Domain policy
-  lives with the consumer that has the context to choose it.
+  lives with the consumer that has the context to choose it — the code exposes
+  `coset_shift` and `domain()` so the scheme can thread the same shift through
+  its folds.
 
 - **`encode` acts on the last axis.** Leading batch axes ride through untouched,
   so many polynomials — or a matrix of rows — encode in one call. This is part

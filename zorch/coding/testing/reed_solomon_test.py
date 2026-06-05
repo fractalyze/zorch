@@ -67,6 +67,22 @@ class ReedSolomonTest(absltest.TestCase):
         got = rs.fold_values(cw[positions], cw[positions + half], beta, positions, 0)
         self.assertTrue(bool(jnp.all(got == folded[positions])))
 
+    def test_fold_values_matches_whole_codeword_fold_on_coset(self) -> None:
+        # Same invariant on a coset, one level down: both sides must apply the
+        # level's shift coset_shift^(2^level), not the code's base shift.
+        k, blowup = 8, 2
+        h = jnp.array(3, dtype=F)
+        rs = ReedSolomon(k, blowup, F, coset_shift=h)
+        layer1 = rs.fold(rs.encode(rand_field(8, (k,), F)), rand_field(9, (), F))
+        beta = rand_field(10, (), F)
+        half = layer1.shape[0] // 2
+        positions = jnp.array([0, 2, half - 1])
+        folded = rs.fold(layer1, beta)
+        got = rs.fold_values(
+            layer1[positions], layer1[positions + half], beta, positions, 1
+        )
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
     def test_check_final_accepts_only_the_constant_claim(self) -> None:
         rs = ReedSolomon(message_len=1, blowup=4, dtype=F)
         claim = rand_field(5, (), F)
@@ -111,6 +127,14 @@ class ReedSolomonTest(absltest.TestCase):
         coeffs = rand_field(6, (k,), F)
         want = _horner(coeffs, shift * _domain(k * blowup, F))
         self.assertTrue(bool(jnp.all(rs.encode(coeffs) == want)))
+
+    def test_domain_matches_independent_recovery(self) -> None:
+        k, blowup = 4, 2
+        plain = ReedSolomon(k, blowup, F)
+        self.assertTrue(bool(jnp.all(plain.domain() == _domain(k * blowup, F))))
+        shift = jnp.array(3, dtype=F)
+        coset = ReedSolomon(k, blowup, F, coset_shift=shift)
+        self.assertTrue(bool(jnp.all(coset.domain() == shift * _domain(k * blowup, F))))
 
     def test_wrong_message_length_raises(self) -> None:
         rs = ReedSolomon(4, 2, F)
@@ -170,6 +194,21 @@ class FriFoldCommuteTest(absltest.TestCase):
         p_fold = p[0::2] + beta * p[1::2]  # even + β·odd
         expected = ReedSolomon(L // 2, 1, F).encode(p_fold)
         self.assertEqual(folded.shape, (L // 2,))
+        self.assertTrue(bool(jnp.all(folded == expected)))
+
+    def test_fold_encode_commute_on_coset(self) -> None:
+        # Same commute on a coset h·H: the fold's x-coordinates are h·d, and the
+        # folded codeword lives on the squared coset h²·H² — so `fri_fold` must
+        # be told the shift, and the next layer's code carries shift h².
+        k = 4
+        L = 1 << k
+        h = jnp.array(3, dtype=F)
+        p = rand_field(42, (L,), F)
+        beta = rand_field(43, (), F)
+        cw = ReedSolomon(L, 1, F, coset_shift=h).encode(p)
+        folded = fri_fold(cw, beta, shift=h)
+        p_fold = p[0::2] + beta * p[1::2]
+        expected = ReedSolomon(L // 2, 1, F, coset_shift=h * h).encode(p_fold)
         self.assertTrue(bool(jnp.all(folded == expected)))
 
 

@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.coding.reed_solomon import eval_domain, fri_fold
+from zorch.coding.reed_solomon import fri_fold
 from zorch.commit.merkle import Opening
 from zorch.pcs.fri.config import (
     FriParams,
@@ -93,7 +93,7 @@ class FriProver:
     ) -> tuple[Transcript, FriProof]:
         params = self.params
         n = params.code.block_len
-        domain = eval_domain(params.code.dtype, n)
+        domain = params.code.domain()
         f_codeword = matrix.reshape(-1)
         quotient = (f_codeword - v) / (domain - z)  # layer 0, rebuilt from f at verify
 
@@ -101,11 +101,14 @@ class FriProver:
         betas, layer_mats, layer_dls, layer_roots = [], [], [], []
         cw = quotient
         final_layer = cw
+        shift = params.code.coset_shift
         for r in range(params.num_rounds):
             t, beta = t.sample()
             beta = beta.reshape(())
             betas.append(beta)
-            cw = fri_fold(cw, beta)
+            cw = fri_fold(cw, beta, shift=shift)
+            if shift is not None:
+                shift = shift * shift  # the fold landed on the squared domain
             if r < params.num_rounds - 1:
                 m = cw.reshape(-1, 1)
                 root, dl = params.tree.commit(m)
