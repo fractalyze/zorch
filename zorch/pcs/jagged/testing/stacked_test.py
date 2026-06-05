@@ -2,7 +2,6 @@
 """Oracle: stacked_open eval == eval_mle(d_full, z_final); stacked_verify passes."""
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
@@ -28,15 +27,6 @@ def _t() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
 
-_CPU_BACKEND = jax.default_backend() == "cpu"
-
-
-@absltest.skipIf(
-    _CPU_BACKEND,
-    "the unfused e2e stacked-opening compile is impractically slow on ZKX CPU; "
-    "run on GPU. Remove when the jagged opening lowers through composite fusion "
-    "(fractalyze/zorch#25).",
-)
 class StackedTest(absltest.TestCase):
     def test_stacked_open_matches_full_mle_eval(self) -> None:
         log_s, log_k = 3, 2

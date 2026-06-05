@@ -2,9 +2,9 @@
 """BaseFold verifier — the `PcsVerifier` half of the multilinear PCS.
 
 `verify` rebuilds the queried codeword leaves from the committed root and checks
-the FRI fold consistency plus the jagged opening sumchecks. It holds only the
-public params (`rs` for the domain/blowup, `tree` for the Merkle config) — never
-the prover's retained codeword.
+the fold consistency plus the jagged opening sumchecks. It holds only the
+public params (`code` for the block geometry and fold, `tree` for the Merkle
+config) — never the prover's retained codeword.
 """
 
 from __future__ import annotations
@@ -17,8 +17,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.coding.fri import eval_domain, fri_fold_values
-from zorch.coding.reed_solomon import ReedSolomon
+from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.config import (
     BasefoldCommitment,
@@ -36,7 +35,7 @@ if TYPE_CHECKING:
 class BasefoldVerifier:
     """BaseFold PCS verifier (`PcsVerifier`)."""
 
-    rs: ReedSolomon
+    code: FoldableCode
     tree: MerkleTree
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
@@ -56,15 +55,15 @@ class BasefoldVerifier:
         z = points[0]
         dtype = z.dtype
         K = values.shape[0]
-        n = self.rs.block_len
+        n = self.code.block_len
         num_vars = z.shape[0]
         # Fail loud on a structurally malformed proof — a short message/layer list
         # would otherwise let the round loop silently skip checks (cf. the same
         # guard in `round.VerifyChain`).
-        if self.rs.message_len != (1 << num_vars):
+        if self.code.message_len != (1 << num_vars):
             raise ValueError(
                 f"point dimension {num_vars} doesn't match message_len "
-                f"{self.rs.message_len} (expected 2^{num_vars})"
+                f"{self.code.message_len} (expected 2^{num_vars})"
             )
         if (
             len(proof.univariate_messages) != num_vars
@@ -103,14 +102,12 @@ class BasefoldVerifier:
                 t = t.observe(proof.fri_roots[r])
             else:
                 t = t.observe(proof.final_poly)
-        ok = ok & jnp.all(proof.final_poly == proof.final_poly[0])
-        ok = ok & (current_claim == proof.final_poly[0])
+        ok = ok & self.code.check_final(proof.final_poly, current_claim)
 
         # Query phase (natural order, mirrors fri/verifier._verify_one).
         t, positions = sample_positions(t, n, self.num_queries)
         a = query_layer_indices(positions, n, num_vars)
         half0 = n >> 1
-        domains = [eval_domain(self.rs.dtype, n >> i) for i in range(num_vars)]
 
         def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
             recon = jax.vmap(self.tree.reconstruct_root)(idx, opening)
@@ -134,11 +131,10 @@ class BasefoldVerifier:
         lo_val = (proof.component_opening.lo.row * coeffs).sum(axis=-1)  # (Q,)
         hi_val = (proof.component_opening.hi.row * coeffs).sum(axis=-1)
         for i in range(num_vars):
-            d = domains[i]
             if i > 0:
                 lo_val = proof.query_openings[i - 1].lo.row[:, 0]
                 hi_val = proof.query_openings[i - 1].hi.row[:, 0]
-            folded = fri_fold_values(lo_val, hi_val, betas[i], d[a[i]])
+            folded = self.code.fold_values(lo_val, hi_val, betas[i], a[i], i)
             if i < num_vars - 1:
                 half_next = n >> (i + 2)
                 nxt = proof.query_openings[i]

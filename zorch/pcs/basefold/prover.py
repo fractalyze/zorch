@@ -1,10 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """BaseFold prover — the commit slice of the multilinear PCS on the `pcs` seam.
 
-`commit` is the RS low-degree extension (the native NTT via `ReedSolomon`) of each
-column followed by a Merkle commit of the codeword rows. Unlike `kzg`/`fri` — which
-commit each polynomial in the batch independently and return one root per poly —
-BaseFold is a **matrix commitment**: the columns share one RS domain and the
+`commit` is the low-degree extension of each column (`FoldableCode.encode`; the
+native-NTT Reed-Solomon today) followed by a Merkle commit of the codeword rows.
+Unlike `kzg`/`fri` — which commit each polynomial in the batch independently and
+return one root per poly — BaseFold is a **matrix commitment**: the columns share
+one code domain and the
 Merkle leaves are codeword *rows* spanning all columns, so the whole batch binds
 under a single root. That single-root commitment is what the jagged structure bind
 (`JaggedPcsProver`) hashes against. Both halves are already-fused substrate ops, so the
@@ -13,7 +14,7 @@ commit is one `@jit`-able device zone with no host sync.
 `open` is the interleaved-sumcheck BaseFold opening: it evaluates the matrix's K
 columns at one shared point, RLC-batches them into a single codeword, then folds
 the MLE and the codeword by the same per-round challenge (a sumcheck interleaved
-with a natural-order FRI fold) and proves the folded codeword with a query phase.
+with the code's fold) and proves the folded codeword with a query phase.
 """
 
 from __future__ import annotations
@@ -27,8 +28,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.coding.fri import fri_fold
-from zorch.coding.reed_solomon import ReedSolomon
+from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.config import (
     BasefoldCommitment,
@@ -51,35 +51,36 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class BasefoldProverData:
     """Retained witness from `BasefoldProver.commit`: the Merkle digest layers
-    over the RS codeword, the message-domain MLE `[S, K]` (the sumcheck folds
-    it), the codeword `[S*blowup, K]` (the FRI folds it and Merkle-opens it),
+    over the codeword, the message-domain MLE `[S, K]` (the sumcheck folds
+    it), the codeword `[block_len, K]` (the fold halves it and Merkle opens it),
     plus per-column widths. A pytree so `commit`/`open` ride a `@jit` zone."""
 
     digest_layers: list[Array]
     mle: Array  # [S, K] message-domain columns
-    codeword: Array  # [S*blowup, K] RS codeword (Merkle leaves = its rows)
+    codeword: Array  # [block_len, K] codeword (Merkle leaves = its rows)
     # len-1 today (one MLE per commit); reserved for batch-commit in P3.
     widths: tuple[int, ...]
 
 
 @dataclass(frozen=True)
 class BasefoldProver:
-    """BaseFold PCS prover (`PcsProver`). `rs` fixes the per-column message length
-    (= the MLE height `S`); `tree` commits the codeword rows."""
+    """BaseFold PCS prover (`PcsProver`). `code` fixes the per-column message
+    length (= the MLE height `S`); `tree` commits the codeword rows."""
 
-    rs: ReedSolomon
+    code: FoldableCode
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
 
     def commit(
         self, polys: Sequence[Array]
     ) -> tuple[BasefoldCommitment, BasefoldProverData]:
-        # The columns share one RS message length S; encode each column separately
-        # (lax.fft on extension-field dtypes requires 1-D input, so the batched
-        # transpose trick doesn't generalise). O(K) NTTs — fine at current column
-        # counts; revisit if K grows. Stack the codewords into [n, K].
+        # The columns share one message length S; encode each column separately
+        # (encode lowers to lax.fft today, which requires 1-D input on
+        # extension-field dtypes, so the batched transpose trick doesn't
+        # generalise). O(K) encodes — fine at current column counts; revisit
+        # if K grows. Stack the codewords into [n, K].
         mle = jnp.stack(polys, axis=1)
-        codeword = jnp.stack([self.rs.encode(p) for p in polys], axis=1)
+        codeword = jnp.stack([self.code.encode(p) for p in polys], axis=1)
         root, layers = self.tree.commit(codeword)
         return root, BasefoldProverData(
             digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
@@ -136,7 +137,7 @@ class BasefoldProver:
             t = t.observe(jnp.stack([zero_val, one_val]))
             t, beta = t.sample()
             beta = beta.reshape(())
-            cw = fri_fold(cw, beta)
+            cw = self.code.fold(cw, beta)
             current_mle = mle_fold(current_mle, beta)
             current_claim = zero_val + beta * one_val
             if r < num_vars - 1:

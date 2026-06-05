@@ -20,6 +20,7 @@ py_library(
     srcs = ["reed_solomon.py"],
     visibility = ["//visibility:public"],
     deps = [
+        ":fri",
         "//zorch/utils:bits",
         requirement("jax"),
     ],
@@ -30,6 +31,16 @@ py_library(
     srcs = ["linear_code.py"],
     visibility = ["//visibility:public"],
     deps = [
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "foldable_code",
+    srcs = ["foldable_code.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":linear_code",
         requirement("jax"),
     ],
 )
