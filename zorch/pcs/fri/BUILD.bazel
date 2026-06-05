@@ -12,7 +12,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
-        "//zorch/coding:reed_solomon",
+        "//zorch/coding:foldable_code",
         "//zorch/commit:merkle",
         "//zorch/pcs:protocol",  # type-only (seam conformance pins)
         requirement("jax"),

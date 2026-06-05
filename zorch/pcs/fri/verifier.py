@@ -18,7 +18,6 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.coding.reed_solomon import eval_domain, fri_fold_values
 from zorch.commit.merkle import Opening
 from zorch.pcs.fri.config import (
     FriCommitment,
@@ -75,15 +74,10 @@ class FriVerifier:
         t, positions = sample_positions(t, n, params.num_queries)
         a = query_layer_indices(positions, n, params.num_rounds)
         half0 = n >> 1
-        layer_domains = []
-        shift = params.code.coset_shift
-        for i in range(params.num_rounds):
-            layer_domains.append(eval_domain(params.code.dtype, n >> i, shift=shift))
-            if shift is not None:
-                shift = shift * shift  # each fold lands on the squared domain
 
-        # The final fold layer must be a constant (degree 0).
-        ok = jnp.all(pf.final_layer == pf.final_layer[0])
+        # The final fold layer must be a constant (degree 0). FRI binds no
+        # external claim, so the layer's own head is the claimed message.
+        ok = params.code.check_final(pf.final_layer, pf.final_layer[0])
 
         # Merkle: every opened leaf must rebuild its committed root. vmap
         # reconstruct_root over the whole query batch and compare on device.
@@ -100,18 +94,17 @@ class FriVerifier:
             ok = ok & roots_ok(root, a[layer] + half, pf.layers[layer - 1].hi)
 
         # Rebuild the layer-0 quotient at each conjugate pair from f's leaves.
-        d0 = layer_domains[0]
+        d0 = params.code.domain()
         g_lo = (pf.f_lo.row[:, 0] - v) / (d0[a[0]] - z)
         g_hi = (pf.f_hi.row[:, 0] - v) / (d0[a[0] + half0] - z)
 
         for i in range(params.num_rounds):
-            domain_i = layer_domains[i]
             if i == 0:
                 lo_val, hi_val = g_lo, g_hi
             else:
                 lo_val = pf.layers[i - 1].lo.row[:, 0]
                 hi_val = pf.layers[i - 1].hi.row[:, 0]
-            folded = fri_fold_values(lo_val, hi_val, betas[i], domain_i[a[i]])
+            folded = params.code.fold_values(lo_val, hi_val, betas[i], a[i], i)
             # The fold output lands at position a[i] in layer i+1 — the lo or hi of
             # that layer's conjugate pair depending on which half a[i] is in.
             if i < params.num_rounds - 1:
