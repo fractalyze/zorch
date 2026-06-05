@@ -1,5 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Shared FRI parameters, proof types, and the Fiat-Shamir position derivation.
+"""Shared FRI parameters, the code contract FRI requires, proof types, and the
+Fiat-Shamir position derivation.
 
 FRI is transparent, so the prover and verifier hold the *same* public params —
 the degenerate case of the PCS prover-key/verifier-key split (no secret to keep
@@ -11,23 +12,36 @@ the sumcheck block shares one module-level oracle to keep the two sides in locks
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TypeAlias
+from typing import Protocol, TypeAlias, runtime_checkable
 
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.coding.reed_solomon import ReedSolomon
+from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.transcript import Transcript
 
 FriCommitment: TypeAlias = Array  # stacked Merkle roots, one per committed poly
 
 
+@runtime_checkable
+class DeepFoldableCode(FoldableCode, Protocol):
+    """A FoldableCode whose codewords are evaluations on a queryable domain.
+
+    The DEEP quotient `(f(x) − v)/(x − z)` divides pointwise by the layer-0
+    domain coordinates, so FRI needs `domain()` on top of the fold contract —
+    a fold-only code with no evaluation-domain notion cannot drive it."""
+
+    def domain(self) -> Array:
+        """The layer-0 evaluation points, coset shift included."""
+        ...
+
+
 @dataclass(frozen=True)
 class FriParams:
     """Public FRI configuration, identical on both sides."""
 
-    code: ReedSolomon  # LDE; gives block_len + eval domain (incl. coset_shift)
+    code: DeepFoldableCode  # LDE; the fold seam + the DEEP quotient's domain
     tree: MerkleTree  # Merkle commitment over codeword leaves
     num_rounds: int  # fold rounds; final codeword has block_len >> num_rounds entries
     num_queries: int  # query repetitions (soundness amplification)

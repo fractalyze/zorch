@@ -10,7 +10,7 @@ from jax import Array
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.pcs.fri.config import FriParams
+from zorch.pcs.fri.config import DeepFoldableCode, FriParams
 from zorch.pcs.fri.prover import FriProver
 from zorch.pcs.fri.verifier import FriVerifier
 from zorch.testkit.transcript import cheap_transcript
@@ -31,6 +31,11 @@ def _transcript() -> DuplexTranscript:
     # identical one, so both draw the same Fiat-Shamir stream (fold challenges
     # then query positions).
     return cheap_transcript(KB)
+
+
+class DeepFoldableCodeTest(absltest.TestCase):
+    def test_reed_solomon_satisfies_protocol(self) -> None:
+        self.assertIsInstance(_params().code, DeepFoldableCode)
 
 
 class FriRoundTripTest(absltest.TestCase):

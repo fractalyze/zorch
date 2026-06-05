@@ -80,7 +80,6 @@ class ReedSolomon:
         self.message_len = message_len
         self.block_len = message_len * blowup
         self.dtype = dtype
-        # Exposed for consumers that thread the shift through folds.
         self.coset_shift = coset_shift
         # Coset eval scales coeffs by [1, h, h^2, ..., h^{n-1}]; precompute it
         # once since h and n are fixed. Built as a cumulative product because
