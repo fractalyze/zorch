@@ -10,6 +10,10 @@ own invariants.
 
 from __future__ import annotations
 
+import weakref
+from collections.abc import Iterator
+from dataclasses import fields
+
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
@@ -18,6 +22,7 @@ from jax import Array
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _interleave,
+    extract_jagged_outputs,
     jagged_layer_transition,
 )
 from zorch.logup_gkr.jagged_prover import (
@@ -25,13 +30,19 @@ from zorch.logup_gkr.jagged_prover import (
     JaggedLayerProof,
     prove_jagged_layer,
 )
-from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
+from zorch.logup_gkr.prover import Carry, bind_output
+from zorch.logup_gkr.testing import (
+    build_jagged_pyramid,
+    random_jagged_layer,
+    virtual_planes,
+)
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.poly.univariate import eval_coeffs
+from zorch.round import ProveChain
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import sample_challenge
+from zorch.transcript import Transcript, sample_challenge
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
@@ -157,6 +168,11 @@ class ProveJaggedLayerTest(absltest.TestCase):
         )
         self.assertTrue(bool(claim == want))
 
+    def test_proof_records_lam_and_entry_claim(self) -> None:
+        _, lam, _, claim, _, proof = self._prove()
+        self.assertTrue(bool(proof.lam == lam))
+        self.assertTrue(bool(proof.claim == claim))
+
     def test_rejects_missing_row_variable(self) -> None:
         layer = random_jagged_layer(61, (1, 1))
         with self.assertRaises(ValueError):
@@ -221,6 +237,107 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         n0, n1, d0, d1 = virtual_planes(layer, nrv)
         self.assertTrue(bool(num_eval == eval_mle(_interleave(n0, n1), new_point)))
         self.assertTrue(bool(den_eval == eval_mle(_interleave(d0, d1), new_point)))
+
+    def test_proof_records_lam_and_opening_claim(self) -> None:
+        # The per-layer anchors a consumer diffs when a transcript diverges
+        # mid-pyramid: the round's sampled lam and the opening claim it
+        # batched from the carry.
+        layer = random_jagged_layer(101, (3, 1, 5, 2))
+        carry = (
+            rand_field(111, (), KB),
+            rand_field(112, (), KB),
+            rand_field(113, (5,), KB),
+        )
+        transcript = cheap_transcript(KB)
+        # Peek lam off the same transcript state (sample is non-destructive
+        # on this one; the round re-derives it).
+        _, lam = sample_challenge(transcript, KB, 1)
+
+        _, _, proof = JaggedGkrLayerRound(layer)(carry, transcript)
+
+        self.assertTrue(bool(proof.lam == lam))
+        self.assertTrue(bool(proof.claim == lam * carry[0] + carry[1]))
+
+
+class ChainedJaggedProveTest(absltest.TestCase):
+    """The consumer shape from #154: a generator-built `ProveChain` replaying
+    the hand loop it replaces, releasing each layer once its round is proved."""
+
+    ROW_COUNTS = (3, 1, 5, 2)
+
+    def _hand_loop(
+        self, layers: list[JaggedGkrLayer]
+    ) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
+        """The hand-threaded layer loop the chain replaces: the reference
+        stream, whose proofs carry the loop's own (lam, claim)."""
+        output = extract_jagged_outputs(layers[-1])
+        (num_eval, den_eval, eval_point), transcript = bind_output(
+            output, cheap_transcript(KB)
+        )
+        proofs = []
+        for layer in reversed(layers[:-1]):
+            transcript, lam = sample_challenge(transcript, num_eval.dtype, 1)
+            claim = lam * num_eval + den_eval
+            point, transcript, proof = prove_jagged_layer(
+                layer, lam, claim, eval_point, transcript
+            )
+            n0, n1 = proof.numerator_0, proof.numerator_1
+            d0, d1 = proof.denominator_0, proof.denominator_1
+            transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
+            transcript, r = sample_challenge(transcript, num_eval.dtype, 1)
+            num_eval = n0 + (n1 - n0) * r
+            den_eval = d0 + (d1 - d0) * r
+            eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+            proofs.append(proof)
+        return (num_eval, den_eval, eval_point), transcript, proofs
+
+    def test_generator_chain_replays_the_hand_loop(self) -> None:
+        layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
+        want_carry, want_t, want_proofs = self._hand_loop(layers)
+
+        output = extract_jagged_outputs(layers[-1])
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+        chain = ProveChain(
+            JaggedGkrLayerRound(layer) for layer in reversed(layers[:-1])
+        )
+        got_carry, got_t, got_proofs = chain(carry, transcript)
+
+        # Identical proofs (every field, the (lam, claim) anchors included),
+        # carry, and next challenge: the streams agree.
+        for got, want in zip(got_proofs, want_proofs, strict=True):
+            for field in fields(JaggedLayerProof):
+                self.assertTrue(
+                    bool(jnp.all(getattr(got, field.name) == getattr(want, field.name)))
+                )
+        for got, want in zip(got_carry, want_carry, strict=True):
+            self.assertTrue(bool(jnp.all(got == want)))
+        _, want_r = want_t.sample(1)
+        _, got_r = got_t.sample(1)
+        self.assertTrue(bool(got_r[0] == want_r[0]))
+
+    def test_chained_prove_keeps_at_most_one_layer_alive(self) -> None:
+        # The #154 acceptance bound: of the layers handed to the chain, at
+        # most one is alive at any point during the prove, and none survive
+        # it -- the release semantics the hand loop's `layers[i] = None` had.
+        layers = build_jagged_pyramid(random_jagged_layer(17, self.ROW_COUNTS))
+        output = extract_jagged_outputs(layers.pop())
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+
+        yielded: list[weakref.ref[JaggedGkrLayer]] = []
+        live_log: list[int] = []
+
+        def rounds() -> Iterator[JaggedGkrLayerRound]:
+            while layers:
+                live_log.append(sum(ref() is not None for ref in yielded))
+                layer = layers.pop()
+                yielded.append(weakref.ref(layer))
+                yield JaggedGkrLayerRound(layer)
+
+        ProveChain(rounds())(carry, transcript)
+
+        # At each build, only the round just proved could still be alive.
+        self.assertEqual(live_log, [0] + [1] * (len(yielded) - 1))
+        self.assertEqual([ref() for ref in yielded], [None] * len(yielded))
 
 
 if __name__ == "__main__":

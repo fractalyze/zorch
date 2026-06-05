@@ -17,6 +17,7 @@ from zorch.logup_gkr.circuit import (
     LogUpGkrOutput,
     build_pyramid,
     extract_outputs,
+    jagged_layer_transition,
 )
 from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
@@ -69,6 +70,18 @@ def virtual_planes(
             parts.append(jnp.concatenate([arr[starts[i] : starts[i + 1]], pad]))
         planes.append(jnp.concatenate(parts))
     return planes[0], planes[1], planes[2], planes[3]
+
+
+def build_jagged_pyramid(first: JaggedGkrLayer) -> list[JaggedGkrLayer]:
+    """Fold to the floor under a schedule that over-pads unsaturated segments
+    to even counts -- saturated segments stay at one row so the floor is
+    reachable while the padding paths stay exercised."""
+    layers = [first]
+    while max(layers[-1].row_counts) > 1:
+        folded = tuple((rc + 1) // 2 for rc in layers[-1].row_counts)
+        schedule = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
+        layers.append(jagged_layer_transition(layers[-1], schedule))
+    return layers
 
 
 def random_first_layer(
