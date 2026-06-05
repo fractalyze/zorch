@@ -41,10 +41,9 @@ polynomial's value at `point`, which a PCS opening supplies — keeping it outsi
 the block is what makes sumcheck here proving-scheme- and PCS-agnostic (a
 non-negotiable). A wrong claimed sum or a tampered message comes back as a
 returned `ok`, not a raise, so a round body carries no value-dependent host
-control flow and stays trace-friendly for the device transcript
-([#3](https://github.com/fractalyze/zorch/issues/3)) and single-kernel
-directions. A *malformed* proof (wrong rank, or a round message not `degree+1`
-wide) is a structural error, not a soundness one — that raises.
+control flow and stays trace-friendly for the device `DuplexTranscript` and the
+single-kernel direction. A *malformed* proof (wrong rank, or a round message
+not `degree+1` wide) is a structural error, not a soundness one — that raises.
 
 ## Fusion is by construction
 
@@ -66,6 +65,6 @@ step (Phase 3, cross-repo).
   against extension-field challenges.
 - **Prover and verifier must start the transcript in the same state.** That
   shared initial state is the block's entire local soundness assumption.
-  `StubTranscript` replays preset challenges; the real duplex-sponge transcript
-  ([#3](https://github.com/fractalyze/zorch/issues/3)) implements the same
-  `Transcript` Protocol and drops in without touching any round.
+  The hash rides on the sponge's `Permutation`, so the test `cheap_transcript`
+  (a `DuplexTranscript` over `CheapPermutation`) and a production sponge swap
+  without touching the block.
