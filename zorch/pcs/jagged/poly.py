@@ -234,6 +234,22 @@ def _offset_bit_tensor(
     return jax.lax.bitcast_convert_type(jnp.asarray(limbs), cfg.dtype)
 
 
+def _decode_prefix_sums(col_prefix_sums: Array, n_d: int) -> Array:
+    """(l_max+1, n_d) MSB-first bit tensor → (l_max+1,) int32 prefix sums.
+
+    Derives the integers on-device via bitcast (no host numpy). The reshape
+    normalizes the limb axis: base field (4B→1 int32) gets shape
+    (l_max+1, n_d, 1); EF (16B→4 int32) gets (l_max+1, n_d, 4). Both cases
+    then take limb 0 correctly — without the reshape, base-field bitcast omits
+    the trailing axis and [..., 0] would index the n_d axis instead.
+    """
+    limbs = jax.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
+    limbs = limbs.reshape(col_prefix_sums.shape[0], n_d, -1)  # (l_max+1, n_d, L)
+    bit_vals = limbs[..., 0]  # (l_max+1, n_d) — canonical 0/1 representative
+    powers = jnp.array([1 << (n_d - 1 - k) for k in range(n_d)], dtype=jnp.int32)
+    return jnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
+
+
 @partial(jax.jit, static_argnames=("cfg",))
 def partial_eval(
     col_prefix_sums: Array,
@@ -247,48 +263,46 @@ def partial_eval(
     Returns indicator[i] = Σ_c eq(z_col, c) · eq(z_row, i−t_c) · [t_c ≤ i < t_{c+1}]
     for every i in {0,…,2^n_d − 1}, holding (z_row, z_col) fixed.
 
-    col_prefix_sums: (l_max+1, n_d) field bit tensor (same as eval_jagged_mle).
+    col_prefix_sums: (l_max+1, n_d) bit tensor with the canonical bit in int32
+    limb 0 (`_offset_bit_tensor`) — NOT `build_jagged_layout`'s field tensor,
+    whose Montgomery limb 0 misdecodes (see `_decode_prefix_sums`).
     Output shape: (2^n_d,).
 
-    Each column c scatters col_eq[c]·row_eq[0..h−1] into the output at offset t_c
-    via lax.fori_loop (AOT-clean, fusion-ready). Padding columns (t_c == t_{c+1})
-    contribute a zero-width write and are handled uniformly (no special case).
+    Every output element gathers from its owning column — the last c with
+    t_c ≤ i, found by binary search over the monotone prefix sums. The
+    single-owner gather is one parallel elementwise pass; the per-column
+    scatter dual is a loop-carried RMW chain whose overlapping
+    [t_c, t_c + 2^n_r) windows serialize column order on GPU (the scatter
+    form survives as the differential oracle in `testing/`). Padding columns
+    (t_c == t_{c+1}) own no element, and the tail i ≥ t_L clamps to a column
+    it sits past the height of — both zero out through the height mask.
     """
     dtype = z_row.dtype
-    n_r = cfg.n_r
     n_d = cfg.n_d
-    row_len = 1 << n_r  # static
+    row_len = 1 << cfg.n_r  # static
 
-    # Derive integer scatter offsets on-device via bitcast (no host numpy).
-    # Reshape normalizes the limb axis: base field (4B→1 int32) gets shape
-    # (l_max+1, n_d, 1); EF (16B→4 int32) gets (l_max+1, n_d, 4). Both cases
-    # then take limb 0 correctly — without the reshape, base-field bitcast omits
-    # the trailing axis and [..,,0] would index the n_d axis instead.
-    limbs = jax.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
-    limbs = limbs.reshape(col_prefix_sums.shape[0], n_d, -1)  # (l_max+1, n_d, L)
-    bit_vals = limbs[..., 0]  # (l_max+1, n_d) — canonical 0/1 representative
-    powers = jnp.array([1 << (n_d - 1 - k) for k in range(n_d)], dtype=jnp.int32)
-    prefix_sums_int = jnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
+    prefix_sums_int = _decode_prefix_sums(col_prefix_sums, n_d)
 
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # [2^n_c]
     row_eq = expand_eq_to_hypercube(z_row, jnp.ones([], dtype=dtype))  # [2^n_r]
 
-    out = jnp.zeros(1 << n_d, dtype=dtype)
-    row_indices = jnp.arange(row_len, dtype=jnp.int32)
-
-    def body(c: Array, out: Array) -> Array:
-        t_c = prefix_sums_int[c]
-        h = prefix_sums_int[c + 1] - t_c  # column height (0 for padding columns)
-
-        # Mask row entries beyond this column's actual height.
-        mask = row_indices < h  # (2^n_r,) bool
-        contrib = col_eq[c] * jnp.where(mask, row_eq, jnp.zeros([], dtype=dtype))
-
-        # Read-modify-write: add contrib into out[t_c : t_c + row_len].
-        old = jax.lax.dynamic_slice(out, (t_c,), (row_len,))
-        return jax.lax.dynamic_update_slice(out, old + contrib, (t_c,))
-
-    return jax.lax.fori_loop(0, cfg.l_max, body, out)
+    # side="right" counts entries ≤ i, so duplicate prefix entries (zero-height
+    # columns) resolve to the real owner; "scan_unrolled" lowers the binary
+    # search to straight-line gathers/selects (AOT-clean, no while loop).
+    i_idx = jnp.arange(1 << n_d, dtype=jnp.int32)
+    c_idx = (
+        jnp.searchsorted(prefix_sums_int, i_idx, side="right", method="scan_unrolled")
+        - 1
+    )
+    c_idx = jnp.minimum(c_idx, cfg.l_max - 1)
+    t_c = prefix_sums_int[c_idx]
+    h = prefix_sums_int[c_idx + 1] - t_c  # column height (0 for padding columns)
+    local = i_idx - t_c
+    # min(h, row_len): row_eq covers 2^n_r rows, so a taller-than-capacity
+    # column truncates — identical to the scatter form's fixed-width window.
+    mask = local < jnp.minimum(h, row_len)
+    val = col_eq[c_idx] * row_eq[jnp.minimum(local, row_len - 1)]
+    return jnp.where(mask, val, jnp.zeros([], dtype=dtype))
 
 
 @partial(jax.jit, static_argnames=("cfg",))

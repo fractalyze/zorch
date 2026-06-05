@@ -1,12 +1,25 @@
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# Shared reference oracle (scatter_partial_eval) the gather partial_eval
+# differential test cross-checks against.
+py_library(
+    name = "testing",
+    srcs = ["__init__.py"],
+    deps = [
+        "//zorch/pcs/jagged:poly",
+        "//zorch/poly",
+        requirement("jax"),
+    ],
+)
 
 py_test(
     name = "jagged_poly_test",
     size = "small",
     srcs = ["jagged_poly_test.py"],
     deps = [
+        ":testing",
         "//zorch/pcs/jagged:poly",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
