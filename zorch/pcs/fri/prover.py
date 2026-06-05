@@ -24,7 +24,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.coding.fri import eval_domain, fri_fold
+from zorch.coding.reed_solomon import eval_domain, fri_fold
 from zorch.commit.merkle import Opening
 from zorch.pcs.fri.config import (
     FriParams,

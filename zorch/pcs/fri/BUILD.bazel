@@ -12,7 +12,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
-        "//zorch/coding:fri",
         "//zorch/coding:reed_solomon",
         "//zorch/commit:merkle",
         requirement("jax"),

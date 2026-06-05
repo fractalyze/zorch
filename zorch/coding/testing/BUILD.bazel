@@ -16,17 +16,3 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
-
-py_test(
-    name = "fri_test",
-    size = "small",
-    srcs = ["fri_test.py"],
-    deps = [
-        "//zorch/coding:fri",
-        "//zorch/coding:reed_solomon",
-        "//zorch/testkit:random_field",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
