@@ -19,6 +19,7 @@ from __future__ import annotations
 import functools
 import operator
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -82,6 +83,7 @@ def stacked_open(
     return dense_eval, values, proof, transcript
 
 
+@functools.partial(jax.jit, static_argnames=("bf_verifier", "layout"))
 def stacked_verify(
     bf_verifier: BasefoldVerifier,
     commitment: Array,
@@ -97,6 +99,9 @@ def stacked_verify(
     Checks:
     1. BaseFold verifies the K column evals at `stack_point`.
     2. The eq-combine of `values` by `z_K` matches `dense_eval`.
+
+    One `@jit` zone: standalone callers get a compiled replay instead of eager
+    per-composite dispatch; under an enclosing jit it inlines.
     """
     if z_final.shape != (layout.log_m,):
         raise ValueError(

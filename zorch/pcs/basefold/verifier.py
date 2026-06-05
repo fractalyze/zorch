@@ -9,8 +9,8 @@ config) — never the prover's retained codeword.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jax
@@ -39,6 +39,22 @@ class BasefoldVerifier:
     tree: MerkleTree
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
+    # Built once per instance: a per-call `jax.vmap(...)` has a fresh identity
+    # and re-traces every eager call.
+    _reconstruct_root_batch: Callable[..., Array] = field(
+        init=False, repr=False, compare=False
+    )
+    # Jitted verify body: an eager replay interprets each composite op-by-op
+    # in Python (issue #140).
+    _verify_body: Callable[..., tuple[Array, Transcript]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "_reconstruct_root_batch", jax.vmap(self.tree.reconstruct_root)
+        )
+        object.__setattr__(self, "_verify_body", jax.jit(self._verify_traced))
 
     def verify(
         self,
@@ -53,13 +69,10 @@ class BasefoldVerifier:
                 f"BaseFold opens the matrix at one shared point, got {len(points)}"
             )
         z = points[0]
-        dtype = z.dtype
-        K = values.shape[0]
-        n = self.code.block_len
         num_vars = z.shape[0]
         # Fail loud on a structurally malformed proof — a short message/layer list
         # would otherwise let the round loop silently skip checks (cf. the same
-        # guard in `round.VerifyChain`).
+        # guard in `round.VerifyChain`). Eager guards, ahead of the jit zone.
         if self.code.message_len != (1 << num_vars):
             raise ValueError(
                 f"point dimension {num_vars} doesn't match message_len "
@@ -75,6 +88,20 @@ class BasefoldVerifier:
                 f"{num_vars - 1} fold layers, got {len(proof.univariate_messages)} / "
                 f"{len(proof.fri_roots)} / {len(proof.query_openings)}"
             )
+        return self._verify_body(commitment, z, values, proof, transcript)
+
+    def _verify_traced(
+        self,
+        commitment: BasefoldCommitment,
+        z: Array,
+        values: Array,
+        proof: BasefoldProof,
+        transcript: Transcript,
+    ) -> tuple[Array, Transcript]:
+        dtype = z.dtype
+        K = values.shape[0]
+        n = self.code.block_len
+        num_vars = z.shape[0]
         t = transcript
         # Bind the commitment root into the transcript (mirrors `open`).
         t = t.observe(commitment)
@@ -110,8 +137,7 @@ class BasefoldVerifier:
         half0 = n >> 1
 
         def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
-            recon = jax.vmap(self.tree.reconstruct_root)(idx, opening)
-            return jnp.all(recon == root)
+            return jnp.all(self._reconstruct_root_batch(idx, opening) == root)
 
         ok = ok & roots_ok(commitment, a[0], proof.component_opening.lo)
         ok = ok & roots_ok(commitment, a[0] + half0, proof.component_opening.hi)

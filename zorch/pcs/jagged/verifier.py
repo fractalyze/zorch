@@ -20,6 +20,10 @@ All flags are ANDed; one false anywhere rejects.
 
 from __future__ import annotations
 
+from functools import partial
+from typing import Any
+
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -118,7 +122,15 @@ def _inner_leaf_check(
 class JaggedPcsVerifier:
     """Jagged PCS verifier. Holds the BaseFold verifier (O(1) verifier key) and
     the `sponge` / `compressor` that re-derive the structure bind (the jagged
-    layer owns the bind, mirroring `JaggedPcsProver`)."""
+    layer owns the bind, mirroring `JaggedPcsProver`).
+
+    The S1-S0 replay is one jit'd device zone built in `__init__` (capturing
+    `bf_verifier` / `sponge` / `compressor`, keyed on the static structure +
+    cfg, mirroring `JaggedPcsProver._commit`): replayed eagerly, every
+    composite interprets its decomposition op-by-op in Python, which dominated
+    the opening round trip (issue #140)."""
+
+    _verify: Any  # jax.jit-wrapped verify closure, built in __init__
 
     def __init__(
         self, bf_verifier: BasefoldVerifier, sponge: Sponge, compressor: Compression
@@ -126,6 +138,81 @@ class JaggedPcsVerifier:
         self.bf_verifier = bf_verifier
         self.sponge = sponge
         self.compressor = compressor
+
+        @partial(jax.jit, static_argnames=("structure", "cfg"))
+        def _verify(
+            commitment: Array,
+            z_row: Array,
+            column_claims: Array,
+            col_prefix_sums: Array,
+            proof: JaggedOpeningProof,
+            transcript: Transcript,
+            *,
+            structure: JaggedLayout,
+            cfg: JaggedStaticConfig,
+        ) -> tuple[Array, Transcript]:
+            # S1: sample z_col, recompute the column claim. Embed the base-field
+            # squeeze in the indicator's extension field (mirrors the prover).
+            transcript, z_col = transcript.sample(cfg.n_c)
+            z_col = z_col.astype(cfg.dtype)
+            claim = _compress_column_claims(column_claims, z_col)
+
+            # S3: replay the outer Hadamard sumcheck.
+            point, outer_final_eval, transcript, ok_outer = verify(
+                SumcheckRound(_OUTER_DEGREE),
+                claim,
+                proof.outer_sumcheck_polys,
+                transcript,
+            )
+            # No reversal: zorch's stock sumcheck folds MSB-first (see the
+            # prover).
+            z_final = point.astype(cfg.dtype)
+
+            # S4: replay the inner jagged-assist sumcheck against the proof's
+            # seed.
+            jagged_eval = proof.inner_claimed_sum
+            ok_inner, transcript = verify_jagged_eval(
+                col_prefix_sums,
+                z_row,
+                z_col,
+                z_final,
+                proof.inner_round_polys,
+                jagged_eval,
+                cfg=cfg,
+                transcript=transcript,
+            )
+
+            # S5: product check. The replayed final claim and the proof's stored
+            # value must both equal D(z_final)·J̃(z_final).
+            ok_prod = (proof.dense_eval * jagged_eval == outer_final_eval) & (
+                proof.outer_final_eval == outer_final_eval
+            )
+
+            # S6: stacked BaseFold verify of D(z_final) against the un-bound
+            # root.
+            ok_bf, transcript = stacked_verify(
+                bf_verifier,
+                proof.basefold_root,
+                z_final,
+                proof.dense_eval,
+                proof.column_values,
+                proof.basefold_proof,
+                structure,
+                transcript,
+            )
+
+            # S0: re-derive the structure bind and check it matches the
+            # commitment.
+            structure_hash = sponge.hash(_structure_vec(structure))
+            bound = compressor.compress(
+                jnp.stack([proof.basefold_root, structure_hash])
+            )
+            ok_bind = jnp.all(bound == commitment)
+
+            ok = ok_outer & ok_inner & ok_prod & ok_bf & ok_bind
+            return ok, transcript
+
+        self._verify = _verify
 
     def verify(
         self,
@@ -154,60 +241,13 @@ class JaggedPcsVerifier:
                 f"jagged verify requires cfg.n_d == layout.log_m; got "
                 f"n_d={cfg.n_d}, log_m={structure.log_m}."
             )
-
-        # S1: sample z_col, recompute the column claim. Embed the base-field
-        # squeeze in the indicator's extension field (mirrors the prover).
-        transcript, z_col = transcript.sample(cfg.n_c)
-        z_col = z_col.astype(cfg.dtype)
-        claim = _compress_column_claims(column_claims, z_col)
-
-        # S3: replay the outer Hadamard sumcheck.
-        point, outer_final_eval, transcript, ok_outer = verify(
-            SumcheckRound(_OUTER_DEGREE),
-            claim,
-            proof.outer_sumcheck_polys,
-            transcript,
-        )
-        # No reversal: zorch's stock sumcheck folds MSB-first (see the prover).
-        z_final = point.astype(cfg.dtype)
-
-        # S4: replay the inner jagged-assist sumcheck against the proof's seed.
-        jagged_eval = proof.inner_claimed_sum
-        ok_inner, transcript = verify_jagged_eval(
-            col_prefix_sums,
+        return self._verify(
+            commitment,
             z_row,
-            z_col,
-            z_final,
-            proof.inner_round_polys,
-            jagged_eval,
-            cfg=cfg,
-            transcript=transcript,
-        )
-
-        # S5: product check. The replayed final claim and the proof's stored
-        # value must both equal D(z_final)·J̃(z_final).
-        ok_prod = (proof.dense_eval * jagged_eval == outer_final_eval) & (
-            proof.outer_final_eval == outer_final_eval
-        )
-
-        # S6: stacked BaseFold verify of D(z_final) against the un-bound root.
-        ok_bf, transcript = stacked_verify(
-            self.bf_verifier,
-            proof.basefold_root,
-            z_final,
-            proof.dense_eval,
-            proof.column_values,
-            proof.basefold_proof,
-            structure,
+            column_claims,
+            col_prefix_sums,
+            proof,
             transcript,
+            structure=structure,
+            cfg=cfg,
         )
-
-        # S0: re-derive the structure bind and check it matches the commitment.
-        structure_hash = self.sponge.hash(_structure_vec(structure))
-        bound = self.compressor.compress(
-            jnp.stack([proof.basefold_root, structure_hash])
-        )
-        ok_bind = jnp.all(bound == commitment)
-
-        ok = ok_outer & ok_inner & ok_prod & ok_bf & ok_bind
-        return ok, transcript
