@@ -10,21 +10,13 @@ from jax import Array
 from zorch.pcs.kzg.prover import KzgProver, KzgProverData, _quotient_and_eval
 from zorch.pcs.kzg.testing.srs import toy_srs
 from zorch.pcs.kzg.verifier import KzgVerifier
+from zorch.poly.univariate import eval_coeffs
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
 # The quotient/eval math is field-agnostic; exercise it over a small base field
 # (CPU-friendly), independent of bn254 and the GPU msm/pairing path.
 KB = zk_dtypes.koalabear_mont
-
-
-def _horner(coeffs: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
-    """f(x) for ascending `coeffs`, by index loop (iterating a field array under
-    CUDA dispatches lax.sign — avoid it even though this test is CPU)."""
-    acc = jnp.zeros((), coeffs.dtype)
-    for i in range(coeffs.shape[0] - 1, -1, -1):
-        acc = acc * x + coeffs[i]
-    return acc
 
 
 class QuotientAndEvalTest(absltest.TestCase):
@@ -34,7 +26,7 @@ class QuotientAndEvalTest(absltest.TestCase):
         z = jnp.array(4, dtype=KB)
         q, fz = _quotient_and_eval(coeffs, z)
         self.assertEqual(q.shape, (3,))
-        self.assertEqual(int(fz), int(_horner(coeffs, z)))
+        self.assertEqual(int(fz), int(eval_coeffs(coeffs, z)))
 
     def test_division_identity(self) -> None:
         # q(x)·(x − z) + f(z) == f(x) for every x.
@@ -43,8 +35,8 @@ class QuotientAndEvalTest(absltest.TestCase):
         q, fz = _quotient_and_eval(coeffs, z)
         for xv in (0, 1, 6, 100):
             x = jnp.array(xv, dtype=KB)
-            lhs = _horner(q, x) * (x - z) + fz
-            self.assertEqual(int(lhs), int(_horner(coeffs, x)))
+            lhs = eval_coeffs(q, x) * (x - z) + fz
+            self.assertEqual(int(lhs), int(eval_coeffs(coeffs, x)))
 
     def test_degree_one(self) -> None:
         # f(x) = a0 + a1 x → q = a1 (constant), f(z) = a0 + a1 z.

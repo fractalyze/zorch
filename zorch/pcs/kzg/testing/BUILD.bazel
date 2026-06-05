@@ -24,6 +24,7 @@ py_test(
         ":srs",
         "//zorch:transcript",
         "//zorch/pcs/kzg",
+        "//zorch/poly",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
