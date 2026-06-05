@@ -30,13 +30,38 @@ with the pyramid's child selector appended as the low bit, so the prover's and
 verifier's points align with no flip. The verifier evaluates `eq` with the
 `O(n)` `eval_eq`, never a `2ⁿ` vector, so it stays succinct.
 
-**Stops at the point-claim; the PCS closes; dense only.** `verify` reduces to a
+**Stops at the point-claim; the PCS closes.** `verify` reduces to a
 `(point, claim)`; the final `claim == leaf_mle(point)` check needs a PCS opening
-of the input trace and is the consumer's — keeping this block PCS-agnostic. The
-circuit is dense/uniform (every interaction shares one row count, so a layer is a
-flat power of two with no padding); jagged real-chip layouts, interaction
-fingerprinting, and trace openings are an SP1-trace concern in the consumer
-(whir-zorch), not here.
+of the input trace and is the consumer's — keeping this block PCS-agnostic.
+Interaction fingerprinting, padding schedules, and trace openings likewise stay
+in the consumer: the circuit and provers carry only the two layouts (dense and
+jagged), never a proving scheme.
+
+## The jagged pair
+
+A `JaggedGkrLayer` materializes only `sum(row_counts)` of its virtual
+`2^(niv+nrv)` positions; everything else is the fold-neutral fraction
+(n=0, d=1). Two consequences shape `jagged_prover` / `jagged_verifier`:
+
+- **Virtual mass is closed-form, not memory.** A neutral position's summand
+  collapses to its eq weight, and a full hypercube's eq weights sum to the
+  bound prefix's eq product — so the per-round correction is `pad_adj − eq_sum`
+  and the prover never densifies. The verifier is layout-blind: the corrections
+  make the round polynomials exactly those of the virtual dense hypercube, so
+  it replays them knowing nothing about row counts.
+- **Coefficient form, LSB-first.** The summand carries the current variable's
+  eq factor, whose root is known to both sides, so a degree-3 round travels as
+  coefficients interpolated through {0, 1, 1/2, b} — two materialized
+  evaluations plus the claim (Gruen, https://eprint.iacr.org/2024/108) where
+  the dense round's value form needs the whole natural domain. Binding is
+  LSB-first because the layout is interaction-major: the row LSB is the
+  in-segment pair dimension, so the stride-2 fold respects segment boundaries.
+  Reversing the challenges lands back on the dense chain's MSB-first carry, so
+  dense and jagged chains thread the same `(num_eval, den_eval, eval_point)`.
+
+The two rounds are two wire forms of the same LogUp summand — `logup_combine`
+stays the one shared definition — and the jagged verifier replays through the
+same agnostic `zorch.verify` scan via `sumcheck.verifier.CoeffsSumcheckRound`.
 
 ## Fusion by construction
 
