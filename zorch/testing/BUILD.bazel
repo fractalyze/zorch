@@ -91,6 +91,7 @@ py_test(
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

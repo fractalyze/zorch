@@ -9,7 +9,8 @@ from jax import tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import DuplexTranscript
+from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import DuplexTranscript, sample_challenge
 
 F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 
@@ -93,6 +94,40 @@ class DuplexTranscriptTest(absltest.TestCase):
         _, a = self._new().sample(1)
         _, b = rebuilt.sample(1)
         self.assertTrue(bool(a[0] == b[0]))
+
+
+class SampleChallengeTest(absltest.TestCase):
+    """`sample_challenge` over the cheap test sponge -- the squeeze rule
+    itself, independent of the duplex permutation."""
+
+    def test_single_limb_is_plain_sample(self) -> None:
+        t = cheap_transcript(F)
+        t_ch, ch = sample_challenge(t, F, 1)
+        t_raw, raw = t.sample(1)
+        self.assertTrue(bool(ch == raw[0]))
+        # Both advance the sponge identically.
+        _, a = t_ch.sample(1)
+        _, b = t_raw.sample(1)
+        self.assertTrue(bool(a[0] == b[0]))
+
+    def test_multi_limb_reinterprets_base_samples_as_coefficients(self) -> None:
+        EF = zk_dtypes.koalabearx4_mont
+        t = cheap_transcript(F)
+        _, ch = sample_challenge(t, EF, 4)
+        _, raw = t.sample(4)
+        self.assertEqual(ch.dtype, EF)
+        self.assertTrue(bool(jnp.all(ch[None].view(F) == raw)))
+
+    def test_rejects_mismatched_packing(self) -> None:
+        # The squeezes are consumed before the reinterpret, so a wrong limb
+        # count must fail loud rather than truncate to the first element.
+        EF = zk_dtypes.koalabearx4_mont
+        with self.assertRaises(ValueError):
+            sample_challenge(cheap_transcript(F), EF, 8)
+        with self.assertRaises(ValueError):
+            sample_challenge(cheap_transcript(F), F, 2)
+        with self.assertRaises(ValueError):
+            sample_challenge(cheap_transcript(F), F, 0)
 
 
 if __name__ == "__main__":

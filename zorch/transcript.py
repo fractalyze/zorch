@@ -27,6 +27,34 @@ class Transcript(Protocol):
     def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
 
 
+def sample_challenge(
+    transcript: Transcript, dtype: Any, limbs: int = 1
+) -> tuple[Transcript, Array]:
+    """Squeeze one challenge of `dtype` as `limbs` transcript samples.
+
+    A transcript squeezes elements of its own field; a challenge field that
+    extends it takes `limbs` consecutive squeezes reinterpreted as the
+    extension element's coefficients (`limbs == 1` with the transcript's own
+    field is the identity reinterpret). Module-level so a prover, its
+    verifier dual, and any binding glue derive challenges from one
+    definition -- a drift would desynchronize their Fiat-Shamir streams.
+
+    Fails loud on a limbs/dtype packing mismatch: the squeezes are already
+    consumed by then, so silently truncating the reinterpret would leave the
+    stream advanced past a challenge nobody received.
+    """
+    if limbs < 1:
+        raise ValueError(f"limbs must be >= 1, got {limbs}")
+    transcript, raw = transcript.sample(limbs)
+    viewed = raw.view(dtype)
+    if viewed.shape != (1,):
+        raise ValueError(
+            f"{limbs} samples reinterpret to {viewed.shape} elements of "
+            f"{dtype}; a challenge needs exactly one"
+        )
+    return transcript, viewed[0]
+
+
 @register_dataclass
 @dataclass(frozen=True)
 class DuplexState:
