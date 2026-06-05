@@ -211,7 +211,7 @@ class MerkleTreeTest(absltest.TestCase):
         self.assertFalse(bool(tree.verify(root, 1, op)))  # wrong index -> reject
 
     def test_verify_rejects_out_of_range_index(self) -> None:
-        # Traced open no longer bounds-checks, so verify is the sole gate for an
+        # Traced open does not bounds-check, so verify is the sole gate for an
         # untrusted/out-of-range index: reject below 0 and at >= 2^depth.
         tree, matrix, root, layers = _committed_4x8()
         op = tree.open(matrix, layers, 0)
