@@ -24,11 +24,15 @@ home.
 
 ## Development environment
 
-`zorch` is pure Python on JAX + the ZKX PJRT plugin. The pinned dev venv lives
-under `$DEVENV_ENVS_DIR/zorch/.venv` (default `~/Workspace/envs/zorch/.venv`):
+`zorch` is pure Python on JAX + the ZKX PJRT plugin. Each workspace pins its
+own jax checkout + venv under `$DEVENV_ENVS_DIR/<workspace>/` (default
+`~/Workspace/envs/<workspace>/`); never point a workspace at another
+checkout's editable jax. The venv must carry the **opt** selfbuilt jaxlib —
+an assertion-enabled build makes XLA compilation an order of magnitude
+slower, which shows up as multi-minute test "hangs":
 
 ```sh
-. "$HOME/Workspace/envs/zorch/.venv/bin/activate"
+. "$HOME/Workspace/envs/<workspace>/.venv/bin/activate"
 export PYTHONPATH="$PWD"           # import top-level modules directly
 export ZKX_REPO_ROOT="$HOME/Workspace/zkx"   # dev against a local ZKX checkout
 ```
