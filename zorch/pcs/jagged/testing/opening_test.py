@@ -11,8 +11,8 @@ four tamper paths (each must reject).
 from __future__ import annotations
 
 import dataclasses
-import os
 
+import jax
 import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
@@ -33,7 +33,7 @@ from zorch.pcs.jagged.prover import (
 from zorch.pcs.jagged.verifier import JaggedPcsVerifier
 from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck.verifier import SumcheckRound as VSumcheckRound
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 from zorch.verify import verify as outer_verify
 
@@ -43,11 +43,12 @@ from zorch.verify import verify as outer_verify
 _HEIGHTS = [4, 2, 3]
 _LOG_STACK = 5
 _LOG_STACK_K4 = 3
+_CPU_BACKEND = jax.default_backend() == "cpu"
 _N_R = 2  # log2_ceil(max height 4)
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
-    return rand_field(seed, (*shape, 4), F).view(EF).reshape(shape)
+    return rand_ext_field(seed, shape, F, EF)
 
 
 def _t() -> DuplexTranscript:
@@ -84,11 +85,11 @@ def _column_claims(blocks: list[jnp.ndarray], z_row: jnp.ndarray) -> jnp.ndarray
 
 
 @absltest.skipIf(
-    os.environ.get("CI") == "true",
-    "~40 min of cold XLA compile per CI run: the e2e opening cannot use a warm "
-    "compile cache until fractalyze/zkx#507 (warm cache replays wrong "
-    "executables for EF-in-scan programs) is fixed. Run locally before merge; "
-    "remove this skip when zkx#507 lands or the pytest job is sharded.",
+    _CPU_BACKEND,
+    "the unfused e2e opening compile is impractically slow on ZKX CPU (40min+ "
+    "cold); run on GPU. Remove when the jagged opening lowers through composite "
+    "fusion (fractalyze/zorch#25). The previous CI-only skip's removal condition "
+    "(zkx#507) was fixed by zkx#487, but the cold-compile cost stands.",
 )
 class JaggedOpeningTest(absltest.TestCase):
     def _open(self, seed: int, log_s: int = _LOG_STACK) -> tuple[

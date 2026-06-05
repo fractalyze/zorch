@@ -2,6 +2,7 @@
 """Oracle: stacked_open eval == eval_mle(d_full, z_final); stacked_verify passes."""
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
@@ -15,18 +16,27 @@ from zorch.pcs.basefold.verifier import BasefoldVerifier
 from zorch.pcs.jagged.dense import JaggedLayout
 from zorch.pcs.jagged.stacked import stacked_open, stacked_verify
 from zorch.poly.multilinear import eval_mle
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
-    return rand_field(seed, (*shape, 4), F).view(EF).reshape(shape)
+    return rand_ext_field(seed, shape, F, EF)
 
 
 def _t() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
 
+_CPU_BACKEND = jax.default_backend() == "cpu"
+
+
+@absltest.skipIf(
+    _CPU_BACKEND,
+    "the unfused e2e stacked-opening compile is impractically slow on ZKX CPU; "
+    "run on GPU. Remove when the jagged opening lowers through composite fusion "
+    "(fractalyze/zorch#25).",
+)
 class StackedTest(absltest.TestCase):
     def test_stacked_open_matches_full_mle_eval(self) -> None:
         log_s, log_k = 3, 2
