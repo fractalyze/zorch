@@ -6,10 +6,12 @@ the FRI fold consistency plus the jagged opening sumchecks. It holds only the
 public params (`rs` for the domain/blowup, `tree` for the Merkle config) — never
 the prover's retained codeword.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -18,9 +20,16 @@ from jax import Array
 from zorch.coding.fri import eval_domain, fri_fold_values
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.pcs.basefold.config import BasefoldProof, sample_rlc_coeffs
+from zorch.pcs.basefold.config import (
+    BasefoldCommitment,
+    BasefoldProof,
+    sample_rlc_coeffs,
+)
 from zorch.pcs.fri.config import query_layer_indices, sample_positions
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.pcs.protocol import PcsVerifier
 
 
 @dataclass(frozen=True)
@@ -34,7 +43,7 @@ class BasefoldVerifier:
 
     def verify(
         self,
-        commitment: Array,
+        commitment: BasefoldCommitment,
         points: Sequence[Array],
         values: Array,
         proof: BasefoldProof,
@@ -140,3 +149,8 @@ class BasefoldVerifier:
                 expected = proof.final_poly[a[i]]
             ok = ok & jnp.all(folded == expected)
         return ok, t
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    _: type[PcsVerifier[BasefoldCommitment, BasefoldProof]] = BasefoldVerifier

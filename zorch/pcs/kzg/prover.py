@@ -15,12 +15,17 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import jax.numpy as jnp
 from jax import Array, lax
 
+from zorch.pcs.kzg.config import KzgCommitment, KzgProof
 from zorch.pcs.kzg.setup import KzgProvingKey
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.pcs.protocol import PcsProver
 
 
 def _quotient_and_eval(coeffs: Array, z: Array) -> tuple[Array, Array]:
@@ -42,32 +47,47 @@ def _quotient_and_eval(coeffs: Array, z: Array) -> tuple[Array, Array]:
 
 
 @dataclass(frozen=True)
+class KzgProverData:
+    """Retained witness from `KzgProver.commit`: the coefficient vectors, kept to
+    build the opening quotients. The tuple holds references to the (immutable)
+    input arrays — no polynomial data is copied."""
+
+    coeffs: tuple[Array, ...]
+
+
+@dataclass(frozen=True)
 class KzgProver:
     pk: KzgProvingKey
 
-    def commit(self, polys: Sequence[Array]) -> tuple[Array, list[Array]]:
+    def commit(self, polys: Sequence[Array]) -> tuple[KzgCommitment, KzgProverData]:
         """Commit a batch of coefficient-basis polynomials. Returns the stacked G1
         commitments and the coeffs as prover data (kept to build quotients)."""
         commitments = [lax.msm(c, self.pk.powers_g1[: c.shape[0]]) for c in polys]
-        return jnp.stack(commitments), list(polys)
+        return jnp.stack(commitments), KzgProverData(tuple(polys))
 
     def open(
         self,
-        prover_data: Sequence[Array],
+        prover_data: KzgProverData,
         points: Sequence[Array],
         transcript: Transcript,
-    ) -> tuple[Array, Array, Transcript]:
+    ) -> tuple[Array, KzgProof, Transcript]:
         """Open poly `j` at `points[j]`. Returns `(values, proofs, transcript)`.
         KZG runs no fold rounds, so the transcript passes through unchanged for a
         single (poly, point) each; batching many openings into one proof (a γ
         sampled from the transcript) is a later extension."""
-        if len(prover_data) != len(points):
+        if len(prover_data.coeffs) != len(points):
             raise ValueError(
-                f"batch mismatch: {len(prover_data)} polys vs {len(points)} points"
+                f"batch mismatch: {len(prover_data.coeffs)} polys vs "
+                f"{len(points)} points"
             )
         values, proofs = [], []
-        for coeffs, z in zip(prover_data, points):
+        for coeffs, z in zip(prover_data.coeffs, points):
             q, fz = _quotient_and_eval(coeffs, z)
             proofs.append(lax.msm(q, self.pk.powers_g1[: q.shape[0]]))
             values.append(fz)
         return jnp.stack(values), jnp.stack(proofs), transcript
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    _: type[PcsProver[KzgCommitment, KzgProverData, KzgProof]] = KzgProver

@@ -15,6 +15,7 @@ py_library(
         "//zorch/coding:fri",
         "//zorch/coding:reed_solomon",
         "//zorch/commit:merkle",
+        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
         "//zorch/pcs/fri",
         "//zorch/poly",
         "//zorch/utils:bits",

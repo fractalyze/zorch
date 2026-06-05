@@ -5,11 +5,12 @@ is no `proof.py` in `pcs/`, so this keeps the three schemes consistent. The
 `sample_rlc_coeffs` helper lives here so `open` and `verify` derive the column
 weights from one definition and cannot drift, the same way `fri/config` shares
 its query-index derivation."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import Any, TypeAlias
 
 import jax
 import jax.numpy as jnp
@@ -19,6 +20,9 @@ from zorch.pcs.fri.config import LayerOpening
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_ceil_usize
+
+# A single Merkle root binding the whole column batch (the matrix commitment).
+BasefoldCommitment: TypeAlias = Array
 
 
 def sample_rlc_coeffs(

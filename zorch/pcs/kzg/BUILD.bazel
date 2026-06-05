@@ -5,6 +5,7 @@ py_library(
     name = "kzg",
     srcs = [
         "__init__.py",
+        "config.py",
         "prover.py",
         "setup.py",
         "verifier.py",
@@ -12,6 +13,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
+        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
         requirement("jax"),
         requirement("zk_dtypes"),
     ],

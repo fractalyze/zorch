@@ -1,23 +1,21 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-from typing import cast
-
 import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array, lax
+from jax import Array
 
-from zorch.pcs.kzg.prover import KzgProver, _quotient_and_eval
-from zorch.pcs.kzg.setup import KzgProvingKey, KzgVerifierKey, setup
+from zorch.pcs.kzg.prover import KzgProver, KzgProverData, _quotient_and_eval
+from zorch.pcs.kzg.testing.srs import toy_srs
 from zorch.pcs.kzg.verifier import KzgVerifier
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
 # The quotient/eval math is field-agnostic; exercise it over a small base field
 # (CPU-friendly), independent of bn254 and the GPU msm/pairing path.
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 def _horner(coeffs: jnp.ndarray, x: jnp.ndarray) -> jnp.ndarray:
@@ -64,28 +62,10 @@ class QuotientAndEvalTest(absltest.TestCase):
 
 # --- full commit -> open -> verify over bn254 (GPU: lax.msm is GPU-only) ---------
 
+# Standard domain until lax.pairing_check decodes Montgomery inputs (zkx#518);
+# see the note in testing/srs.py.
 SF = zk_dtypes.bn254_sf
 G1 = zk_dtypes.bn254_g1_affine
-G2 = zk_dtypes.bn254_g2_affine
-
-
-def _kzg_srs(tau: int, n: int) -> tuple[KzgProvingKey, KzgVerifierKey]:
-    """Toy SRS: scalar-mul the curve generators by powers of a known τ (CPU/GPU EC
-    mul). The generators and Fr modulus come from zk_dtypes; the round-trip below
-    certifies the SRS is internally consistent."""
-    fr = zk_dtypes.pfinfo(SF).modulus
-    e1, e2 = zk_dtypes.ecinfo(G1), zk_dtypes.ecinfo(G2)
-    g1 = jnp.asarray(G1((e1.gx, e1.gy)))
-    g2 = jnp.asarray(
-        G2((tuple(cast("list[int]", e2.gx)), tuple(cast("list[int]", e2.gy))))
-    )
-    powers = [
-        lax.convert_element_type(jnp.array(pow(tau, i, fr), SF) * g1, G1)
-        for i in range(n)
-    ]
-    tau_g2 = lax.convert_element_type(jnp.array(tau, SF) * g2, G2)
-    return setup(jnp.stack(powers), tau_g2, g1, g2)
-
 
 _GPU = jax.default_backend() == "gpu"
 
@@ -97,7 +77,7 @@ def _transcript() -> DuplexTranscript:
 @absltest.skipUnless(_GPU, "KZG commit/open use lax.msm, a GPU-only kernel")
 class KzgRoundTripTest(absltest.TestCase):
     def setUp(self) -> None:
-        self.pk, self.vk = _kzg_srs(tau=5, n=4)
+        self.pk, self.vk = toy_srs(tau=5, n=4)
         self.coeffs = jnp.array([3, 1, 4, 1], dtype=SF)  # f(x) = 3 + x + 4x² + x³
         self.z = jnp.array(7, dtype=SF)
         self.prover = KzgProver(self.pk)
@@ -123,14 +103,14 @@ class KzgRoundTripTest(absltest.TestCase):
 class KzgBatchValidationTest(absltest.TestCase):
     # The batch-length guard fires before any MSM, so these need no GPU.
     def test_open_rejects_batch_mismatch(self) -> None:
-        pk, _ = _kzg_srs(tau=5, n=4)
+        pk, _ = toy_srs(tau=5, n=4)
         coeffs = jnp.array([3, 1, 4, 1], dtype=SF)
         z = jnp.array(7, dtype=SF)
         with self.assertRaises(ValueError):
-            KzgProver(pk).open([coeffs], [z, z], _transcript())
+            KzgProver(pk).open(KzgProverData((coeffs,)), [z, z], _transcript())
 
     def test_verify_rejects_batch_mismatch(self) -> None:
-        _, vk = _kzg_srs(tau=5, n=4)
+        _, vk = toy_srs(tau=5, n=4)
         z = jnp.array(7, dtype=SF)
         one_commit = jnp.stack([jnp.asarray(G1((1, 2)))])
         with self.assertRaises(ValueError):

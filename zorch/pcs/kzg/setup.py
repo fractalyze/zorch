@@ -19,7 +19,7 @@ from jax import Array
 
 @dataclass(frozen=True)
 class KzgProvingKey:
-    """O(degree). `powers_g1[i] = τⁱ · G1` (bn254_g1_affine[N]). Never shipped to
+    """O(degree). `powers_g1[i] = τⁱ · G1` (bn254 G1 affine [N]). Never shipped to
     a verifier."""
 
     powers_g1: Array
@@ -29,9 +29,9 @@ class KzgProvingKey:
 class KzgVerifierKey:
     """O(1), degree-independent — the whole of what a verifier deployment ships."""
 
-    gen_g1: Array  # bn254_g1_affine — [1]₁
-    gen_g2: Array  # bn254_g2_affine — [1]₂
-    tau_g2: Array  # bn254_g2_affine — [τ]₂
+    gen_g1: Array  # bn254 G1 affine — [1]₁
+    gen_g2: Array  # bn254 G2 affine — [1]₂
+    tau_g2: Array  # bn254 G2 affine — [τ]₂
 
 
 def setup(

@@ -18,6 +18,18 @@ not a convention. A static commitment primitive (the Merkle `Mmcs`) has neither
 property and so stays a single unified building block — the split lives in the PCS
 layer that *uses* it, not in the primitive.
 
+**Wire types are generic parameters, conformance is mypy-enforced.** The
+commitment, retained prover data, and proof are scheme-defined: `PcsProver[C, D,
+P]` produces `C` and `D` from `commit` and `P` from `open`; `PcsVerifier[C, P]`
+consumes the two wire types. Each instance pins them concretely with a one-line
+`if TYPE_CHECKING` assignment at the end of its module, so signature drift fails
+mypy rather than surfacing at a consumer call site. Because this repo's mypy
+collapses `jax.Array` to `Any` (jax's stubs don't parse — see pyproject.toml),
+the pins have teeth only where they are zorch-owned nominal types — which is why
+every scheme names its prover data (`KzgProverData`, `FriProverData`,
+`BasefoldProverData`) instead of passing raw containers. See docs/pcs.md
+"Instance anatomy".
+
 **Representation is the scheme's business.** The seam takes polynomials in whatever
 form the scheme needs: KZG wants the coefficient basis (powers-of-tau MSM), the
 FRI family wants evaluations over a domain. Neither a `PolynomialSpace` nor any
@@ -28,45 +40,53 @@ consumer concerns, kept out so no scheme's shape ossifies into the seam.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any, Protocol
+from typing import Protocol, TypeVar
 
 from jax import Array
 
 from zorch.transcript import Transcript
 
+# Scheme-defined wire types. The prover produces the commitment and proof
+# (covariant) and threads its retained prover data from `commit` to `open`
+# (invariant); the verifier only consumes its two (contravariant).
+C_co = TypeVar("C_co", covariant=True)
+D = TypeVar("D")
+P_co = TypeVar("P_co", covariant=True)
+C_contra = TypeVar("C_contra", contravariant=True)
+P_contra = TypeVar("P_contra", contravariant=True)
 
-class PcsProver(Protocol):
+
+class PcsProver(Protocol[C_co, D, P_co]):
     """Commit to polynomials and prove their evaluations. Holds the (possibly
-    O(degree)) prover key. The commitment, prover data, and proof are opaque,
-    scheme-defined types (`Any` here); each instance pins them concretely."""
+    O(degree)) prover key."""
 
-    def commit(self, polys: Sequence[Array]) -> tuple[Any, Any]:
+    def commit(self, polys: Sequence[Array]) -> tuple[C_co, D]:
         """Bind to a batch of polynomials. Returns the commitment (sent to the
-        verifier) and opaque prover data kept for `open`."""
+        verifier) and the prover data retained for `open`."""
         ...
 
     def open(
         self,
-        prover_data: Any,
+        prover_data: D,
         points: Sequence[Array],
         transcript: Transcript,
-    ) -> tuple[Array, Any, Transcript]:
+    ) -> tuple[Array, P_co, Transcript]:
         """Prove the evaluations at `points`, threading Fiat-Shamir. Returns
         `(values, proof, transcript)`. The FRI family runs fold rounds here; KZG
         runs none."""
         ...
 
 
-class PcsVerifier(Protocol):
+class PcsVerifier(Protocol[C_contra, P_contra]):
     """Check a claimed opening against a commitment. Holds only the O(1)
     verifier key."""
 
     def verify(
         self,
-        commitment: Any,
+        commitment: C_contra,
         points: Sequence[Array],
         values: Array,
-        proof: Any,
+        proof: P_contra,
         transcript: Transcript,
     ) -> tuple[Array, Transcript]:
         """Return `(ok, transcript)` where `ok` is a scalar boolean array."""

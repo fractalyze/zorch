@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -20,12 +21,16 @@ from jax import Array
 from zorch.coding.fri import eval_domain, fri_fold_values
 from zorch.commit.merkle import Opening
 from zorch.pcs.fri.config import (
+    FriCommitment,
     FriParams,
     FriProof,
     query_layer_indices,
     sample_positions,
 )
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.pcs.protocol import PcsVerifier
 
 
 @dataclass(frozen=True)
@@ -34,7 +39,7 @@ class FriVerifier:
 
     def verify(
         self,
-        commitment: Array,
+        commitment: FriCommitment,
         points: Sequence[Array],
         values: Array,
         proof: Sequence[FriProof],
@@ -116,3 +121,8 @@ class FriVerifier:
                 expected = pf.final_layer[a[i]]
             ok = ok & jnp.all(folded == expected)
         return t, ok
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    _: type[PcsVerifier[FriCommitment, list[FriProof]]] = FriVerifier
