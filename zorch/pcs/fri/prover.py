@@ -22,19 +22,12 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.commit.merkle import Opening
-from zorch.pcs.fri.config import (
-    FriCommitment,
-    FriParams,
-    FriProof,
-    LayerOpening,
-    query_layer_indices,
-    sample_positions,
-)
+from zorch.pcs.fold import CommitFoldRound, open_query_phase
+from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
+from zorch.prove import fold_rounds
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -112,49 +105,27 @@ class FriProver:
     ) -> tuple[Transcript, FriProof]:
         matrix, digest_layers = committed.matrix, committed.digest_layers
         params = self.params
-        n = params.code.block_len
         domain = params.code.domain()
         f_codeword = matrix.reshape(-1)
         quotient = (f_codeword - v) / (domain - z)  # layer 0, rebuilt from f at verify
 
         t = t.observe(digest_layers[-1][0])  # bind the f commitment root
-        layer_mats, layer_dls, layer_roots = [], [], []
-        cw = quotient
-        final_layer = cw
-        for r in range(params.num_rounds):
-            t, beta = t.sample()
-            cw = params.code.fold(cw, beta.reshape(()))
-            if r < params.num_rounds - 1:
-                m = cw.reshape(-1, 1)
-                root, dl = params.tree.commit(m)
-                layer_mats.append(m)
-                layer_dls.append(dl)
-                layer_roots.append(root)
-                t = t.observe(root)
-            else:
-                final_layer = cw
-                t = t.observe(final_layer)
+        cw, t, layers = fold_rounds(
+            CommitFoldRound(params.code, params.tree),
+            quotient,
+            t,
+            params.num_rounds - 1,
+        )
+        # Final round, peeled: the fully folded layer goes in the clear, no commit.
+        t, beta = t.sample()
+        final_layer = params.code.fold(cw, beta.reshape(()))
+        t = t.observe(final_layer)
 
-        # Query phase, all on device: positions are an int32 array and every
-        # Merkle opening is one vmap over that batch — no host indices, no
-        # per-query Python loop.
-        t, positions = sample_positions(t, n, params.num_queries)
-        a = query_layer_indices(positions, n, params.num_rounds)
-        half0 = n >> 1
-
-        def open_batch(mtx: Array, dl: list[Array], idx: Array) -> Opening:
-            return jax.vmap(lambda i: params.tree.open(mtx, dl, i))(idx)
-
-        f_lo = open_batch(matrix, digest_layers, a[0])
-        f_hi = open_batch(matrix, digest_layers, a[0] + half0)
-        layer_opens = []
-        for layer in range(1, params.num_rounds):
-            half = n >> (layer + 1)
-            m, dl = layer_mats[layer - 1], layer_dls[layer - 1]
-            lo = open_batch(m, dl, a[layer])
-            hi = open_batch(m, dl, a[layer] + half)
-            layer_opens.append(LayerOpening(lo, hi))
-        return t, FriProof(v, layer_roots, final_layer, f_lo, f_hi, layer_opens)
+        t, base, layer_opens = open_query_phase(
+            params.tree, t, matrix, digest_layers, layers, params.num_queries
+        )
+        layer_roots = [layer.root for layer in layers]
+        return t, FriProof(v, layer_roots, final_layer, base.lo, base.hi, layer_opens)
 
 
 if TYPE_CHECKING:

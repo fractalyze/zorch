@@ -66,7 +66,7 @@ class BasefoldTest(absltest.TestCase):
     def test_proof_pytree_round_trips(self) -> None:
         from zorch.commit.merkle import Opening
         from zorch.pcs.basefold.config import BasefoldProof
-        from zorch.pcs.fri.config import LayerOpening
+        from zorch.pcs.fold import LayerOpening
 
         op = Opening(row=jnp.zeros((2, 3), dtype=F), path=[jnp.zeros((2, 8), dtype=F)])
         proof = BasefoldProof(

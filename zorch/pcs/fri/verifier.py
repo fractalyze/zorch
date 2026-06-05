@@ -19,13 +19,8 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.commit.merkle import Opening
-from zorch.pcs.fri.config import (
-    FriCommitment,
-    FriParams,
-    FriProof,
-    query_layer_indices,
-    sample_positions,
-)
+from zorch.pcs.fold import query_layer_indices, sample_positions
+from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:

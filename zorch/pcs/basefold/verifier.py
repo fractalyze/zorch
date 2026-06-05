@@ -24,7 +24,7 @@ from zorch.pcs.basefold.config import (
     BasefoldProof,
     sample_rlc_coeffs,
 )
-from zorch.pcs.fri.config import query_layer_indices, sample_positions
+from zorch.pcs.fold import query_layer_indices, sample_positions
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
