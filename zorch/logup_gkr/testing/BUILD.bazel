@@ -33,12 +33,47 @@ py_test(
 )
 
 py_test(
+    name = "jagged_prover_test",
+    size = "medium",
+    srcs = ["jagged_prover_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/poly",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "jagged_verifier_test",
+    size = "medium",
+    srcs = ["jagged_verifier_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/poly",
+        "//zorch/testkit:transcript",
+        "//zorch/utils:bits",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "jagged_circuit_test",
     size = "small",
     srcs = ["jagged_circuit_test.py"],
     deps = [
+        ":testing",
         "//zorch/logup_gkr",
-        "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

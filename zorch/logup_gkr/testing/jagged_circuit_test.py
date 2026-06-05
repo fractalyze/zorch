@@ -13,20 +13,9 @@ from zorch.logup_gkr.circuit import (
     jagged_layer_transition,
     layer_transition,
 )
-from zorch.testkit.random_field import rand_field
+from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
 
 KB = zk_dtypes.koalabear_mont
-
-
-def _random_jagged_layer(seed: int, row_counts: tuple[int, ...]) -> JaggedGkrLayer:
-    height = sum(row_counts)
-    return JaggedGkrLayer(
-        numerator_0=rand_field(seed, (height,), KB),
-        numerator_1=rand_field(seed + 1, (height,), KB),
-        denominator_0=rand_field(seed + 2, (height,), KB),
-        denominator_1=rand_field(seed + 3, (height,), KB),
-        row_counts=row_counts,
-    )
 
 
 def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:

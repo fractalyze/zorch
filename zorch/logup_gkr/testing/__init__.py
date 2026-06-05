@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 import functools
+from typing import Any
 
 import jax
+import jax.numpy as jnp
 import zk_dtypes
 from jax import Array
 
 from zorch.logup_gkr.circuit import (
     GkrLayer,
+    JaggedGkrLayer,
     LogUpGkrOutput,
     build_pyramid,
     extract_outputs,
@@ -24,6 +27,48 @@ from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
 _KB = zk_dtypes.koalabear_mont
+
+
+def random_jagged_layer(
+    seed: int, row_counts: tuple[int, ...], dtype: Any = _KB
+) -> JaggedGkrLayer:
+    """A random jagged GKR layer over `row_counts` (flat, interaction-major)."""
+    height = sum(row_counts)
+    return JaggedGkrLayer(
+        numerator_0=rand_field(seed, (height,), dtype),
+        numerator_1=rand_field(seed + 1, (height,), dtype),
+        denominator_0=rand_field(seed + 2, (height,), dtype),
+        denominator_1=rand_field(seed + 3, (height,), dtype),
+        row_counts=row_counts,
+    )
+
+
+def virtual_planes(
+    layer: JaggedGkrLayer, num_row_variables: int
+) -> tuple[Array, Array, Array, Array]:
+    """The four planes as virtual dense MLEs over (interaction || row)
+    variables -- each segment zero/one-extended to `2^num_row_variables` rows
+    with the fold-neutral fraction (n=0, d=1). The brute-force oracle the
+    jagged prover's closed-form corrections are checked against."""
+    starts = layer.start_indices
+    rows = 1 << num_row_variables
+    planes = []
+    for arr, neutral in (
+        (layer.numerator_0, 0),
+        (layer.numerator_1, 0),
+        (layer.denominator_0, 1),
+        (layer.denominator_1, 1),
+    ):
+        parts = []
+        for i, rc in enumerate(layer.row_counts):
+            pad = (
+                jnp.zeros((rows - rc,), arr.dtype)
+                if neutral == 0
+                else jnp.ones((rows - rc,), arr.dtype)
+            )
+            parts.append(jnp.concatenate([arr[starts[i] : starts[i + 1]], pad]))
+        planes.append(jnp.concatenate(parts))
+    return planes[0], planes[1], planes[2], planes[3]
 
 
 def random_first_layer(

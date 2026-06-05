@@ -1,15 +1,17 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
-# LogUp-GKR: fractional-sum circuit (dense and jagged layouts), prover
-# (per-variable LogUp sumcheck round, one GKR layer, the layer chain), and
-# verifier. The package's testing runners import all three, so the verifier
-# rides along here.
+# LogUp-GKR: fractional-sum circuit (dense and jagged layouts), provers
+# (dense per-variable LogUp sumcheck round + layer chain; jagged materialized
+# layer round), and verifiers. The package's testing runners import them all,
+# so the verifiers ride along here.
 py_library(
     name = "logup_gkr",
     srcs = [
         "__init__.py",
         "circuit.py",
+        "jagged_prover.py",
+        "jagged_verifier.py",
         "prover.py",
         "verifier.py",
     ],
