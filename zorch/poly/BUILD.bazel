@@ -12,5 +12,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         requirement("jax"),
+        requirement("zk_dtypes"),
     ],
 )
