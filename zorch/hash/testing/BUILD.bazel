@@ -28,7 +28,9 @@ py_test(
 
 py_test(
     name = "sponge_test",
-    size = "small",
+    # Compile-heavy: the scanned absorb path compiles a while loop per hash
+    # shape, dominated by the vmapped one.
+    size = "medium",
     srcs = ["sponge_test.py"],
     deps = [
         "//zorch/hash:sponge",

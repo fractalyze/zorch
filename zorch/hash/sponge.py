@@ -6,10 +6,12 @@ final partial block overwrites only its own lanes. Squeeze the first `out` lanes
 This is the Merkle leaf hasher (Plonky3 PaddingFreeSponge).
 
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
-`SpongeParams` (capacity = width - rate), like `Poseidon2Params`. The block loop
-unrolls (input length is static), so the body stays straight-line; it runs one
-permute per absorbed block (one for a single-block input), each capturable on the
-poseidon2 fusion path (#25).
+`SpongeParams` (capacity = width - rate), like `Poseidon2Params`. The first
+block (and a partial last block) absorb outside the loop, so the traced body
+always carries a top-level permute — the marker a `zorch.merkle_commit`
+consumer reads the hash identity from; the remaining full blocks run in one
+`lax.scan`, keeping trace and lowering cost constant in the input width
+instead of paying one permute trace per block (#135).
 """
 
 from __future__ import annotations
@@ -17,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 
 from zorch.hash.permutation import Permutation
 
@@ -78,8 +80,32 @@ class Sponge:
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         state = jnp.zeros(self._permutation.width, dtype=input.dtype)
-        for start in range(0, input.shape[0], self.rate):
-            block = input[start : start + self.rate]
-            state = state.at[: block.shape[0]].set(block)
+        n = input.shape[0]
+        if n == 0:
+            return state[: self.out]
+        if n <= self.rate:  # single (possibly partial) block
+            state = state.at[:n].set(input)
+            return self._permutation.permute(state)[: self.out]
+        # Block 0 MUST absorb outside the scan: a merkle_commit consumer
+        # discovers the hash identity from a top-level permute marker only
+        # (it does not look inside loop bodies), so folding block 0 into the
+        # scan silently breaks commit. Revisit if marker discovery learns to
+        # recurse.
+        state = state.at[: self.rate].set(input[: self.rate])
+        state = self._permutation.permute(state)
+        # Remaining full blocks in one scan: trace cost constant in n (#135).
+        full = n // self.rate
+        if full > 1:
+            blocks = input[self.rate : full * self.rate].reshape(full - 1, self.rate)
+
+            def absorb(s: Array, block: Array) -> tuple[Array, None]:
+                s = s.at[: self.rate].set(block)
+                return self._permutation.permute(s), None
+
+            state, _ = lax.scan(absorb, state, blocks)
+        # A partial last block overwrites only its own lanes (padding-free).
+        tail = n - full * self.rate
+        if tail:
+            state = state.at[:tail].set(input[full * self.rate :])
             state = self._permutation.permute(state)
         return state[: self.out]
