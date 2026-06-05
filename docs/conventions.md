@@ -200,6 +200,33 @@ mypy can't see through the ZKX `jax` fork (its shipped stubs don't parse) or
 is catching a missing or malformed annotation, not deep array-shape checking —
 write the precise type regardless; it is documentation that outlives the stubs.
 
+## Seam conformance pins
+
+A `Protocol` seam's conformance is mypy-enforced, not conventional: every
+instance module (`testkit` included) ends with a one-line pin
+
+```python
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[Permutation] = Poseidon2
+```
+
+so signature drift — a renamed method, wrong arity, an added parameter — fails
+pre-commit mypy at the instance, instead of surfacing at a consumer call site
+(or never, while the instance still has no in-tree consumer). A generic seam
+parameterizes the pin with the instance's concrete types — the PCS pins are the
+worked example ([pcs.md "Instance anatomy"](pcs.md#instance-anatomy)).
+
+A `@runtime_checkable` `assertIsInstance` test is not a substitute: it checks
+member *presence* on a live object, never signatures. The two are complementary
+— the pin for instance modules, the runtime check for a test-local duck-typed
+fixture that lives and dies inside its test.
+
+With `jax.Array` collapsed to `Any` ([Type annotations](#type-annotations)), a
+pin checks names, arity, and parameter count — not coordinate types. It bites
+fully only where the signature carries zorch-owned nominal types, an argument
+for named-dataclass wire types.
+
 ## Testing
 
 A module's tests live in its package's `testing/` dir, named `<module>_test.py`

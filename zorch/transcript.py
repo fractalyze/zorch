@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import jax.numpy as jnp
 from jax import Array, lax
@@ -178,3 +178,8 @@ class DuplexTranscript:
         squeeze fuse into a single kernel under `@jit` by construction, never by a
         per-primitive pattern-match (the repo's fusion contract)."""
         return self.observe(values).sample(n)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[Transcript] = DuplexTranscript

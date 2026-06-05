@@ -163,5 +163,5 @@ class FriProver:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver

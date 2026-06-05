@@ -85,5 +85,5 @@ class KzgVerifier:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[PcsVerifier[KzgCommitment, KzgProof]] = KzgVerifier

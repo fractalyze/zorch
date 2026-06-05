@@ -21,13 +21,16 @@ consumer.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jax.numpy as jnp
 import zk_dtypes
 from jax import Array, lax
 
 from zorch.utils.bits import is_power_of_two
+
+if TYPE_CHECKING:
+    from zorch.coding.foldable_code import FoldableCode
 
 
 def _base_dtype(dtype: Any) -> Any:
@@ -169,3 +172,8 @@ def fri_fold(codeword: Array, beta: Array, *, shift: Array | None = None) -> Arr
     half = n // 2
     domain = eval_domain(_base_dtype(codeword.dtype), n, shift=shift)
     return fri_fold_values(codeword[:half], codeword[half:], beta, domain[:half])
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[FoldableCode] = ReedSolomon
