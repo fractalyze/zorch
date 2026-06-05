@@ -45,6 +45,16 @@ _LOG_STACK_K4 = 3
 _N_R = 2  # log2_ceil(max height 4)
 
 
+_Opening = tuple[
+    JaggedPcsVerifier,
+    jnp.ndarray,
+    jnp.ndarray,
+    jnp.ndarray,
+    JaggedProverData,
+    JaggedOpeningProof,
+]
+
+
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
     return rand_field(seed, (*shape, 4), F).view(EF).reshape(shape)
 
@@ -83,14 +93,13 @@ def _column_claims(blocks: list[jnp.ndarray], z_row: jnp.ndarray) -> jnp.ndarray
 
 
 class JaggedOpeningTest(absltest.TestCase):
-    def _open(self, seed: int, log_s: int = _LOG_STACK) -> tuple[
-        JaggedPcsVerifier,
-        jnp.ndarray,
-        jnp.ndarray,
-        jnp.ndarray,
-        JaggedProverData,
-        JaggedOpeningProof,
-    ]:
+    # One opened proof shared by every log_s=5 test: the round trip verifies
+    # it, the anchor test replays it, and each tamper mutates a COPY
+    # (dataclasses.replace / .at[]) of a different proof field. Seed diversity
+    # buys nothing while every extra _open pays a full commit+open execution.
+    _shared: _Opening | None = None
+
+    def _open(self, seed: int, log_s: int = _LOG_STACK) -> _Opening:
         prover, verifier = _stack(log_s)
         blocks = _blocks(seed)
         commitment, pdata = prover.commit(blocks, log_stacking_height=log_s)
@@ -99,8 +108,16 @@ class JaggedOpeningTest(absltest.TestCase):
         proof, _ = prover.open(pdata, z_row, column_claims, _t())
         return verifier, commitment, z_row, column_claims, pdata, proof
 
+    def _opened(self) -> _Opening:
+        """The shared opening, computed lazily on first use."""
+        opened = type(self)._shared
+        if opened is None:
+            opened = self._open(1)
+            type(self)._shared = opened
+        return opened
+
     def test_round_trip_verifies(self) -> None:
-        verifier, commitment, z_row, column_claims, pdata, proof = self._open(1)
+        verifier, commitment, z_row, column_claims, pdata, proof = self._opened()
         ok, _ = verifier.verify(
             commitment, z_row, column_claims, pdata.layout, proof, _t()
         )
@@ -121,7 +138,7 @@ class JaggedOpeningTest(absltest.TestCase):
     def test_prover_anchors(self) -> None:
         # dense_eval == eval_mle(D, z_final); inner_claimed_sum ==
         # eval_jagged_mle(...). Reconstruct z_final from the outer round polys.
-        verifier, _commitment, z_row, _claims, pdata, proof = self._open(2)
+        verifier, _commitment, z_row, _claims, pdata, proof = self._opened()
         cfg = pdata.cfg
         z_col_seed_t = _t()
         z_col_seed_t, z_col = z_col_seed_t.sample(cfg.n_c)
@@ -143,7 +160,7 @@ class JaggedOpeningTest(absltest.TestCase):
         self.assertEqual(proof.inner_claimed_sum.tolist(), want_inner.tolist())
 
     def test_tampered_outer_round_poly_rejects(self) -> None:
-        verifier, commitment, z_row, column_claims, pdata, proof = self._open(3)
+        verifier, commitment, z_row, column_claims, pdata, proof = self._opened()
         bad_polys = proof.outer_sumcheck_polys.at[0, 0].add(jnp.array(1, EF))
         bad = dataclasses.replace(proof, outer_sumcheck_polys=bad_polys)
         ok, _ = verifier.verify(
@@ -152,7 +169,7 @@ class JaggedOpeningTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
     def test_tampered_dense_eval_rejects(self) -> None:
-        verifier, commitment, z_row, column_claims, pdata, proof = self._open(4)
+        verifier, commitment, z_row, column_claims, pdata, proof = self._opened()
         bad = dataclasses.replace(proof, dense_eval=proof.dense_eval + jnp.array(1, EF))
         ok, _ = verifier.verify(
             commitment, z_row, column_claims, pdata.layout, bad, _t()
@@ -160,7 +177,7 @@ class JaggedOpeningTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
     def test_tampered_column_value_rejects(self) -> None:
-        verifier, commitment, z_row, column_claims, pdata, proof = self._open(5)
+        verifier, commitment, z_row, column_claims, pdata, proof = self._opened()
         bad_vals = proof.column_values.at[0].add(jnp.array(1, EF))
         bad = dataclasses.replace(proof, column_values=bad_vals)
         ok, _ = verifier.verify(
@@ -169,7 +186,7 @@ class JaggedOpeningTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
     def test_tampered_inner_proof_rejects(self) -> None:
-        verifier, commitment, z_row, column_claims, pdata, proof = self._open(6)
+        verifier, commitment, z_row, column_claims, pdata, proof = self._opened()
         bad_polys = proof.inner_round_polys.at[0, 0].add(jnp.array(1, EF))
         bad = dataclasses.replace(proof, inner_round_polys=bad_polys)
         ok, _ = verifier.verify(
