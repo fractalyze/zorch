@@ -180,6 +180,13 @@ class BasefoldOpenTest(absltest.TestCase):
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
+    def test_open_rejects_empty_point(self) -> None:
+        # num_vars = 0 would skip every fold round and leave nothing to observe;
+        # fail loud before the (also-wrong) MLE-height check can mask the cause.
+        prover, _, _, pdata, _, _ = self._commit(log_s=3, K=1)
+        with self.assertRaisesRegex(ValueError, "at least one variable"):
+            prover.open(pdata, [_rand_ef(3, (0,))], _transcript())
+
     def test_verify_rejects_wrong_root(self) -> None:
         # Directly exercises the commitment-root binding: verifying a valid proof
         # against a different root must fail (the FS challenges diverge and the

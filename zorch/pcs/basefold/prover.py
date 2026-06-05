@@ -142,6 +142,8 @@ class BasefoldProver:
         dtype = z.dtype
         K = mle.shape[1]
         num_vars = z.shape[0]
+        if num_vars < 1:
+            raise ValueError("BaseFold opens over at least one variable, got none")
         if mle.shape[0] != (1 << num_vars):
             raise ValueError(
                 f"point dimension {num_vars} doesn't match MLE height "
