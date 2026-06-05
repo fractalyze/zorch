@@ -10,9 +10,10 @@ the fold challenges. This is the structural opposite of KZG on the same PCS seam
 interactive, Merkle-backed, no SRS, and entirely field/NTT arithmetic that lowers
 on both CPU and GPU (no MSM). The query phase is device-batched — positions are a
 device int32 array and each Merkle opening is one `vmap` over them, no host indices
-or per-query loop — while the per-round fold transcript stays host-driven pending a
-device-side transcript (#3). Scope: a single base-field polynomial per opening,
-fixed small parameters — a demonstration of the seam, not a hardened prover.
+or per-query loop — while the fold phase stays a Python `for` over rounds: each
+round Merkle-commits a half-size layer, so the loop is not `scan`-shaped (see
+docs/conventions.md). Scope: a single base-field polynomial per opening, fixed
+small parameters — a demonstration of the seam, not a hardened prover.
 """
 
 from __future__ import annotations

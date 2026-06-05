@@ -66,9 +66,8 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   `scan`-shaped — keep it a Python loop (`fold_rounds`, the FRI fold phase, the GKR
   `ProveChain`). FRI's fold halves the codeword and commits a half-size Merkle
   layer each round; the GKR pyramid halves each layer. This is safe as a
-  **host-orchestrated** loop (separate dispatches, not one giant traced graph) —
-  which is also why it stays a Python loop while the transcript is host-side (the
-  device-side transcript is [#3](https://github.com/fractalyze/zorch/issues/3)).
+  **host-orchestrated** loop (separate dispatches, not one giant traced graph);
+  the `DuplexTranscript` steps inside it are device ops either way.
 
 The per-round Fiat-Shamir `observe` / `sample` is wrapped in a `Round` (the
 composable unit) by design, so a round loop is one of the two `Round` forms above:
@@ -110,9 +109,9 @@ class LogupSumcheckRound(Round):
 `sumcheck.prover.SumcheckRound`, `sumcheck.verifier.SumcheckRound`,
 `logup_gkr.prover.LogupSumcheckRound` — are registered: `fold_rounds` loops them,
 `prove` / `verify` carry them through a `lax.scan` (the per-variable loop is one
-traced region), and they are `vmap`-able over their config. Both transcripts —
-`DuplexTranscript` and the test `StubTranscript` — are registered for the same
-reason: the `scan` threads the transcript as part of its carry. `prove.RoundMsg`
+traced region), and they are `vmap`-able over their config. `DuplexTranscript`
+is registered for the same reason: the `scan` threads the transcript as part of
+its carry. `prove.RoundMsg`
 (round poly + challenge) is registered too — `prove` returns it as the `lax.scan`'s
 stacked per-round output.
 
@@ -189,8 +188,9 @@ Vocabulary:
 - The per-factor MLE state threaded through a `Round` is `Sequence[Array]` where
   it is only read, `list[Array]` where it is owned or returned.
 - `Transcript` (the Protocol in `transcript.py`) for the threaded transcript,
-  never a concrete implementation. A test that reaches a stub-only field narrows
-  first: `assert isinstance(t, StubTranscript)`.
+  never a concrete implementation. A test that reaches an implementation-only
+  field narrows first with `if not isinstance(t, DuplexTranscript): raise
+  AssertionError(...)`, not a bare `assert` ([Testing](#testing)).
 - `Any` for a field dtype — the core names no field and treats `dtype` as
   opaque, so `dtype: Any` is the honest type, not a placeholder.
 

@@ -34,11 +34,11 @@ separate goal.
 Two enablers make a round capturable: (1) the **whole round body in one traced
 region** with a **device-side** transcript (so `observe`/`sample` are device
 ops, not host steps that break the capture), and (2) a `stablehlo.composite`
-marker the emitter lowers as one unit. Until those land — the device transcript
-is [#3](https://github.com/fractalyze/zorch/issues/3); the marker + generic zkx
-emitter are Phase 3 — round bodies are written **fusion-ready**: element-wise
-field ops plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they
-drop into that path unchanged. See [`sumcheck.md`](sumcheck.md).
+marker the emitter lowers as one unit. Enabler (1) is in place
+(`DuplexTranscript`). Until (2) lands — the marker + generic zkx emitter,
+Phase 3 — round bodies are written **fusion-ready**: element-wise field ops
+plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they drop into
+that path unchanged. See [`sumcheck.md`](sumcheck.md).
 
 **Measured (ZKX GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
 compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
