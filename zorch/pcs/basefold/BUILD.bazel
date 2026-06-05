@@ -12,8 +12,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
-        "//zorch/coding:fri",
-        "//zorch/coding:reed_solomon",
+        "//zorch/coding:foldable_code",
         "//zorch/commit:merkle",
         "//zorch/pcs/fri",
         "//zorch/poly",
