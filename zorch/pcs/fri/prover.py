@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -27,6 +28,7 @@ from jax import Array
 from zorch.coding.reed_solomon import fri_fold
 from zorch.commit.merkle import Opening
 from zorch.pcs.fri.config import (
+    FriCommitment,
     FriParams,
     FriProof,
     LayerOpening,
@@ -34,6 +36,9 @@ from zorch.pcs.fri.config import (
     sample_positions,
 )
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.pcs.protocol import PcsProver
 
 
 def _eval_poly(coeffs: Array, z: Array) -> Array:
@@ -46,51 +51,66 @@ def _eval_poly(coeffs: Array, z: Array) -> Array:
 
 
 @dataclass(frozen=True)
+class FriCommittedPoly:
+    """One committed polynomial's retained witness: ascending coefficients, the
+    `[n, 1]` codeword matrix (the Merkle leaves), and its digest layers."""
+
+    coeffs: Array
+    matrix: Array
+    digest_layers: list[Array]
+
+
+@dataclass(frozen=True)
+class FriProverData:
+    """Retained witness from `FriProver.commit`, one entry per committed poly."""
+
+    polys: tuple[FriCommittedPoly, ...]
+
+
+@dataclass(frozen=True)
 class FriProver:
     params: FriParams
 
-    def commit(
-        self, polys: Sequence[Array]
-    ) -> tuple[Array, list[tuple[Array, Array, list[Array]]]]:
+    def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
         """RS-encode each coefficient vector and Merkle-commit the codeword.
         Returns stacked roots and the prover data needed to open."""
-        roots, data = [], []
+        roots, committed = [], []
         for coeffs in polys:
             codeword = self.params.code.encode(coeffs)
             matrix = codeword.reshape(-1, 1)
             root, digest_layers = self.params.tree.commit(matrix)
             roots.append(root)
-            data.append((coeffs, matrix, digest_layers))
-        return jnp.stack(roots), data
+            committed.append(FriCommittedPoly(coeffs, matrix, digest_layers))
+        return jnp.stack(roots), FriProverData(tuple(committed))
 
     def open(
         self,
-        prover_data: Sequence[tuple[Array, Array, list[Array]]],
+        prover_data: FriProverData,
         points: Sequence[Array],
         transcript: Transcript,
     ) -> tuple[Array, list[FriProof], Transcript]:
-        if len(prover_data) != len(points):
+        if len(prover_data.polys) != len(points):
             raise ValueError(
-                f"batch mismatch: {len(prover_data)} polys vs {len(points)} points"
+                f"batch mismatch: {len(prover_data.polys)} polys vs "
+                f"{len(points)} points"
             )
         values, proofs = [], []
         t = transcript
-        for (coeffs, matrix, digest_layers), z in zip(prover_data, points):
-            v = _eval_poly(coeffs, z)
-            t, proof = self._open_one(coeffs, matrix, digest_layers, z, v, t)
+        for committed, z in zip(prover_data.polys, points):
+            v = _eval_poly(committed.coeffs, z)
+            t, proof = self._open_one(committed, z, v, t)
             values.append(v)
             proofs.append(proof)
         return jnp.stack(values), proofs, t
 
     def _open_one(
         self,
-        coeffs: Array,
-        matrix: Array,
-        digest_layers: list[Array],
+        committed: FriCommittedPoly,
         z: Array,
         v: Array,
         t: Transcript,
     ) -> tuple[Transcript, FriProof]:
+        matrix, digest_layers = committed.matrix, committed.digest_layers
         params = self.params
         n = params.code.block_len
         domain = params.code.domain()
@@ -140,3 +160,8 @@ class FriProver:
             hi = open_batch(m, dl, a[layer] + half)
             layer_opens.append(LayerOpening(lo, hi))
         return t, FriProof(v, layer_roots, final_layer, f_lo, f_hi, layer_opens)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver

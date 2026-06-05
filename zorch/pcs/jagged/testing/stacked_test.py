@@ -15,12 +15,12 @@ from zorch.pcs.basefold.verifier import BasefoldVerifier
 from zorch.pcs.jagged.dense import JaggedLayout
 from zorch.pcs.jagged.stacked import stacked_open, stacked_verify
 from zorch.poly.multilinear import eval_mle
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
-    return rand_field(seed, (*shape, 4), F).view(EF).reshape(shape)
+    return rand_ext_field(seed, shape, F, EF)
 
 
 def _t() -> DuplexTranscript:

@@ -71,6 +71,53 @@ leaves are codeword *rows* spanning every column, so the whole batch binds under
 this because `commitment` is scheme-defined; the input convention stays uniform
 (`commit` takes a `Sequence` of 1D column MLEs, like the other instances).
 
+## Instance anatomy
+
+Every *instance* directory (`kzg`, `fri`, `basefold`) follows one shape, so a
+reader — or a new instance — knows where things live and what they are called.
+(`jagged` is exempt: it is a [consumer on the seam](#jagged-a-consumer-on-the-seam),
+not an instance.)
+
+| File | Contents |
+|------|----------|
+| `config.py` | Wire types shared by both sides: the commitment alias, the proof type, public params, and any Fiat-Shamir helper both sides must derive identically. |
+| `prover.py` | `XProver` and `XProverData` — the retained witness `commit` hands to `open`. Only the prover ever sees it. |
+| `verifier.py` | `XVerifier`. Never imports `prover.py` — the prover/verifier asymmetry is a module boundary too. |
+| `setup.py` | Keys, only for schemes with a trusted setup (`kzg`). |
+
+Naming: `XProver` / `XVerifier` / `XProverData` / `XProof` / `XCommitment`.
+
+**Conformance is mypy-enforced, not conventional.** The seam is generic —
+`PcsProver[C, D, P]` / `PcsVerifier[C, P]` — and every instance module ends with
+a one-line pin:
+
+```python
+if TYPE_CHECKING:
+    _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver
+```
+
+Signature drift — a renamed method, wrong arity, `commit`'s prover data
+disagreeing with `open`'s — fails pre-commit mypy instead of surfacing at a
+consumer call site. One caveat shapes the whole convention: this repo's mypy
+collapses `jax.Array` to `Any` (jax's stubs don't parse — see pyproject.toml),
+so the pins have teeth only where they are zorch-owned nominal types. That is
+why prover data is always a named dataclass, never a bare list or tuple.
+
+**Commitments are aliases until they grow structure.** Every scheme's commitment
+is literally an `Array` (KZG: `[K]` G1 points; FRI: `[K]` roots; BaseFold: one
+root) and feeds `Transcript.observe` / the jagged structure bind directly, so
+each scheme names it with a `TypeAlias` (`KzgCommitment`, …) rather than a
+wrapper dataclass — a wrapper would cost an unwrap at every observe site and a
+pytree registration for nothing. Promote an alias to a dataclass only when a
+commitment gains real structure.
+
+The seam-level round-trip test (`zorch/pcs/testing/protocol_test.py`) drives all
+three instances through one generic `commit → open → verify` driver typed
+against the protocols alone — the behavioral proof that the instances are
+interchangeable. (`JaggedPcsProver` is deliberately *not* pinned: it is a
+[consumer on the seam](#jagged-a-consumer-on-the-seam), not an instance — its
+`commit` takes blocks plus a stacking height, not a `Sequence` of polynomials.)
+
 ## Jagged: a consumer on the seam
 
 The jagged PCS (`zorch/pcs/jagged/`) is the first `basefold` consumer: it
@@ -102,7 +149,10 @@ of three tiers, and which tier an op takes is the only thing that varies:
   NTT (the RS LDE in both FRI and BaseFold commit).
 - **CPU-legalized primitive** — `lax.pairing_check` for KZG `verify`, which has no
   GPU kernel; the verifier is O(1), so the host round-trip (MSM on GPU →
-  materialize → pairing on CPU) is irrelevant.
+  materialize → pairing on CPU) is irrelevant. It currently mis-decodes
+  Montgomery-form inputs ([zkx#518](https://github.com/fractalyze/zkx/issues/518)),
+  which is why KZG's round-trip tests run the bn254 *standard* domain while every
+  other instance tests `*_mont` — the msm/scalar-mul path is already mont-correct.
 
 This is why "one fused kernel" is a property of an *instance's* lowering, not of the
 seam: MSM is a GPU-only kernel, pairing is CPU-only, and the FRI fold/NTT lower on

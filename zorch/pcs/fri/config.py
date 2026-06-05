@@ -11,6 +11,7 @@ the sumcheck block shares one module-level oracle to keep the two sides in locks
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TypeAlias
 
 import jax.numpy as jnp
 from jax import Array, lax
@@ -18,6 +19,8 @@ from jax import Array, lax
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.transcript import Transcript
+
+FriCommitment: TypeAlias = Array  # stacked Merkle roots, one per committed poly
 
 
 @dataclass(frozen=True)

@@ -16,11 +16,13 @@ columns at one shared point, RLC-batches them into a single codeword, then folds
 the MLE and the codeword by the same per-round challenge (a sumcheck interleaved
 with the code's fold) and proves the folded codeword with a query phase.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -28,10 +30,17 @@ from jax import Array
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.pcs.basefold.config import BasefoldProof, sample_rlc_coeffs
+from zorch.pcs.basefold.config import (
+    BasefoldCommitment,
+    BasefoldProof,
+    sample_rlc_coeffs,
+)
 from zorch.pcs.fri.config import LayerOpening, query_layer_indices, sample_positions
 from zorch.poly.multilinear import eval_mle, mle_fold
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.pcs.protocol import PcsProver
 
 
 @partial(
@@ -62,7 +71,9 @@ class BasefoldProver:
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
 
-    def commit(self, polys: Sequence[Array]) -> tuple[Array, BasefoldProverData]:
+    def commit(
+        self, polys: Sequence[Array]
+    ) -> tuple[BasefoldCommitment, BasefoldProverData]:
         # The columns share one message length S; encode each column separately
         # (encode lowers to lax.fft today, which requires 1-D input on
         # extension-field dtypes, so the batched transpose trick doesn't
@@ -164,3 +175,10 @@ class BasefoldProver:
             )
         proof = BasefoldProof(uni_msgs, layer_roots, final_layer, comp, layer_opens)
         return values, proof, t
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/pcs.md "Instance anatomy".
+    _: type[PcsProver[BasefoldCommitment, BasefoldProverData, BasefoldProof]] = (
+        BasefoldProver
+    )

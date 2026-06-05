@@ -14,6 +14,7 @@ py_library(
         "//zorch:transcript",
         "//zorch/coding:reed_solomon",
         "//zorch/commit:merkle",
+        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
         requirement("jax"),
     ],
 )
