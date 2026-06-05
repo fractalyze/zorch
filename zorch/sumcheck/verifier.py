@@ -1,11 +1,18 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck verifier round -- the per-variable dual of the prover family.
+"""Sumcheck verifier rounds -- the per-variable duals of the prover family.
 
 `SumcheckRound` checks the round-poly identity and reduces the claim. It is
 summand-agnostic: it sees only the round polynomials, so one verifier serves
 every prover summand (product, LogUp, ...) at a given `degree`. The
 observe -> sample order matches `prover.SumcheckRound.__call__` exactly, so
 the prover's and verifier's Fiat-Shamir transcripts cannot diverge.
+
+`CoeffsSumcheckRound` is the same check for a prover that sends ascending
+coefficients instead of natural-domain values -- the wire form of a round
+interpolated off a non-natural node set (e.g. through an eq factor's root),
+where value form would force the verifier to know the sender's nodes. It also
+owns the challenge squeeze rule (`challenge_limbs`), since a coefficient
+prover's claims may live in an extension of the transcript's field.
 """
 
 from __future__ import annotations
@@ -14,11 +21,12 @@ from dataclasses import dataclass
 from functools import partial
 
 import jax
+import jax.numpy as jnp
 from jax import Array
 
-from zorch.poly.univariate import eval_univariate
+from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
-from zorch.transcript import Transcript
+from zorch.transcript import Transcript, sample_challenge
 
 
 @partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
@@ -43,3 +51,37 @@ class SumcheckRound(Round):
         ok = claim == msg[0] + msg[1]
         transcript, r = transcript.observe_and_sample(msg, 1)
         return eval_univariate(msg, r[0]), transcript, r[0], ok
+
+
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[],
+    meta_fields=["degree", "challenge_limbs"],
+)
+@dataclass(frozen=True)
+class CoeffsSumcheckRound(Round):
+    """Verifier for a coefficient-form sumcheck round: `s(0) = c_0` and
+    `s(1) = sum(c)`, so the identity check and the claim reduction read the
+    coefficients directly."""
+
+    degree: int
+    challenge_limbs: int = 1
+
+    def __post_init__(self) -> None:
+        if self.degree < 1:
+            raise ValueError("degree must be >= 1")
+        if self.challenge_limbs < 1:
+            raise ValueError("challenge_limbs must be >= 1")
+
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
+        if msg.shape[0] != self.degree + 1:
+            raise ValueError(
+                f"round message must have degree+1={self.degree + 1} "
+                f"coefficients, got {msg.shape[0]}"
+            )
+        ok = claim == msg[0] + jnp.sum(msg)
+        transcript = transcript.observe(msg)
+        transcript, r = sample_challenge(transcript, claim.dtype, self.challenge_limbs)
+        return eval_coeffs(msg, r), transcript, r, ok

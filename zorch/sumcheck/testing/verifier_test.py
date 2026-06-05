@@ -145,5 +145,47 @@ class SumcheckRoundtripTest(absltest.TestCase):
             verifier.SumcheckRound(0)
 
 
+class CoeffsSumcheckRoundTest(absltest.TestCase):
+    def test_accepts_consistent_claim_and_reduces(self) -> None:
+        coeffs = jnp.array([3, 5, 2, 7], KB)  # s(0) = 3, s(1) = 17
+        claim = coeffs[0] + jnp.sum(coeffs)
+        next_claim, _, r, ok = verifier.CoeffsSumcheckRound(3)(
+            claim, coeffs, cheap_transcript(KB)
+        )
+        self.assertTrue(bool(ok))
+        # The reduction is the coefficient evaluation at the sampled point.
+        want = coeffs[0] + r * (coeffs[1] + r * (coeffs[2] + r * coeffs[3]))
+        self.assertTrue(bool(next_claim == want))
+
+    def test_wrong_claim_rejected(self) -> None:
+        coeffs = jnp.array([3, 5, 2, 7], KB)
+        bad = coeffs[0] + jnp.sum(coeffs) + jnp.array(1, KB)
+        _, _, _, ok = verifier.CoeffsSumcheckRound(3)(bad, coeffs, cheap_transcript(KB))
+        self.assertFalse(bool(ok))
+
+    def test_multi_limb_challenge_extends_transcript_field(self) -> None:
+        EF = zk_dtypes.koalabearx4
+        coeffs = jnp.array([3, 5, 2, 7], KB).astype(EF)
+        claim = coeffs[0] + jnp.sum(coeffs)
+        next_claim, _, r, ok = verifier.CoeffsSumcheckRound(3, challenge_limbs=4)(
+            claim, coeffs, cheap_transcript(KB)
+        )
+        self.assertTrue(bool(ok))
+        self.assertEqual(r.dtype, EF)
+        self.assertEqual(next_claim.dtype, EF)
+
+    def test_wrong_message_width_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            verifier.CoeffsSumcheckRound(3)(
+                jnp.zeros((), KB), jnp.zeros((3,), KB), cheap_transcript(KB)
+            )
+
+    def test_validates_degree_and_limbs(self) -> None:
+        with self.assertRaises(ValueError):
+            verifier.CoeffsSumcheckRound(0)
+        with self.assertRaises(ValueError):
+            verifier.CoeffsSumcheckRound(3, challenge_limbs=0)
+
+
 if __name__ == "__main__":
     absltest.main()
