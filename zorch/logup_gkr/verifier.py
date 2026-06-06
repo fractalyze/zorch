@@ -30,7 +30,7 @@ from zorch.transcript import Transcript
 from zorch.verify import verify
 
 if TYPE_CHECKING:
-    from zorch.round import ChainVerifierRound
+    from zorch.round import VerifierRound
 
 _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 
@@ -66,4 +66,4 @@ class GkrLayerRound(Round):
 
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
-    _: type[ChainVerifierRound] = GkrLayerRound
+    _: type[VerifierRound] = GkrLayerRound

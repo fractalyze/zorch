@@ -14,15 +14,19 @@ unrolled body that crosses the ZKX PTX cliff.
 """
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.round import Round
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.round import InnerVerifierRound
 
 
 def verify(
-    verifier: Round, claim: Array, proof: Array, transcript: Transcript
+    verifier: InnerVerifierRound, claim: Array, proof: Array, transcript: Transcript
 ) -> tuple[Array, Array, Transcript, Array]:
     """Replay `proof` against `claim` → `(point, final_claim, transcript, ok)`.
 

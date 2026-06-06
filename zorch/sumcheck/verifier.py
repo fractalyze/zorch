@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -27,6 +28,9 @@ from jax import Array
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
 from zorch.transcript import Transcript, sample_challenge
+
+if TYPE_CHECKING:
+    from zorch.round import InnerVerifierRound
 
 
 @partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
@@ -85,3 +89,9 @@ class CoeffsSumcheckRound(Round):
         transcript = transcript.observe(msg)
         transcript, r = sample_challenge(transcript, claim.dtype, self.challenge_limbs)
         return eval_coeffs(msg, r), transcript, r, ok
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _eval_form: type[InnerVerifierRound] = SumcheckRound
+    _coeffs_form: type[InnerVerifierRound] = CoeffsSumcheckRound
