@@ -142,15 +142,26 @@ class MerkleTree:
         `verify`'s plain equality can't express. Single-index; batch by
         `jax.vmap`-ing over `(index, opening)`."""
         node = self._leaf_hasher.hash(opening.row)
-        idx = index
-        for sibling in opening.path:
+        if not opening.path:
+            return node
+
+        # Roll the leaf->root fold into one `scan`: the body (one compress) is
+        # traced once, so a depth-h path lowers to a single compress region
+        # rather than h unrolled copies. The unrolled fold dominated the
+        # verifier's trace+lower across its per-layer reconstruct chains (#163).
+        def fold(
+            carry: tuple[Array, Array], sibling: Array
+        ) -> tuple[tuple[Array, Array], None]:
+            node, idx = carry
             # Data-select the sibling order (not a Python branch on idx) so the
             # fold traces under vmap; idx is the running parity at this level.
             is_left = idx % 2 == 0
-            left = jnp.where(is_left, node, sibling)
-            right = jnp.where(is_left, sibling, node)
+            left = jax.lax.select(is_left, node, sibling)
+            right = jax.lax.select(is_left, sibling, node)
             node = self._compressor.compress(jnp.stack([left, right]))
-            idx //= 2
+            return (node, idx // 2), None
+
+        (node, _), _ = jax.lax.scan(fold, (node, index), jnp.stack(opening.path))
         return node
 
     def verify(self, root: Array, index: int, opening: Opening) -> bool:
