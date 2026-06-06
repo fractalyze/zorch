@@ -18,8 +18,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.commit.merkle import Opening
-from zorch.pcs.fold import sample_positions
+from zorch.pcs.fold import sample_positions, verify_openings
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
 from zorch.transcript import Transcript
 
@@ -30,22 +29,12 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class FriVerifier:
     params: FriParams
-    # Built once per instance: a per-call `jax.vmap(...)` has a fresh identity
-    # and re-traces every eager call.
-    _reconstruct_root_batch: Callable[..., Array] = field(
-        init=False, repr=False, compare=False
-    )
     # Jitted per-poly verify body (issue #140); one compile serves the batch.
     _verify_one_jit: Callable[..., tuple[Transcript, Array]] = field(
         init=False, repr=False, compare=False
     )
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "_reconstruct_root_batch",
-            jax.vmap(self.params.tree.reconstruct_root),
-        )
         object.__setattr__(self, "_verify_one_jit", jax.jit(self._verify_one))
 
     def verify(
@@ -90,19 +79,17 @@ class FriVerifier:
         # external claim, so the layer's own head is the claimed message.
         ok = params.code.check_final(pf.final_layer, pf.final_layer[0])
 
-        # Merkle: every opened leaf must rebuild its committed root. vmap
-        # reconstruct_root over the whole query batch and compare on device.
-        def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
-            return jnp.all(self._reconstruct_root_batch(idx, opening) == root)
-
+        # Merkle: every opened pair must rebuild its committed root — layer 0's
+        # against f's root, each fold layer's against its committed root.
+        # Reconstruct all legs in one batched pass (#163).
         lo0, hi0 = params.code.pair_indices(a[0], 0)
-        ok = ok & roots_ok(f_root, lo0, pf.f_lo)
-        ok = ok & roots_ok(f_root, hi0, pf.f_hi)
+        legs = [(f_root, lo0, pf.f_lo), (f_root, hi0, pf.f_hi)]
         for layer in range(1, params.num_rounds):
             lo_idx, hi_idx = params.code.pair_indices(a[layer], layer)
             root = pf.layer_roots[layer - 1]
-            ok = ok & roots_ok(root, lo_idx, pf.layers[layer - 1].lo)
-            ok = ok & roots_ok(root, hi_idx, pf.layers[layer - 1].hi)
+            legs.append((root, lo_idx, pf.layers[layer - 1].lo))
+            legs.append((root, hi_idx, pf.layers[layer - 1].hi))
+        ok = ok & verify_openings(params.tree, legs)
 
         # Rebuild the layer-0 quotient at each point pair from f's leaves.
         d0 = params.code.domain()

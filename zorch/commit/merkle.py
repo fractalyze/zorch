@@ -134,6 +134,18 @@ class MerkleTree:
             idx //= 2
         return Opening(row=matrix[index], path=path)
 
+    def _fold_with_sibling(
+        self, node: Array, idx: Array, sibling: Array
+    ) -> tuple[Array, Array]:
+        """Compress `node` with its `sibling` into the parent digest, ordering
+        the pair by the running leaf-index parity `idx` (data-select, not a
+        Python branch, so the fold traces under `vmap`); return the parent and
+        `idx` halved for the level above."""
+        is_left = idx % 2 == 0
+        left = jnp.where(is_left, node, sibling)
+        right = jnp.where(is_left, sibling, node)
+        return self._compressor.compress(jnp.stack([left, right])), idx // 2
+
     def reconstruct_root(self, index: int | Array, opening: Opening) -> Array:
         """Rebuild the raw root from an `opening`'s row + path (leaf-first).
 
@@ -153,16 +165,45 @@ class MerkleTree:
             carry: tuple[Array, Array], sibling: Array
         ) -> tuple[tuple[Array, Array], None]:
             node, idx = carry
-            # Data-select the sibling order (not a Python branch on idx) so the
-            # fold traces under vmap; idx is the running parity at this level.
-            is_left = idx % 2 == 0
-            left = jax.lax.select(is_left, node, sibling)
-            right = jax.lax.select(is_left, sibling, node)
-            node = self._compressor.compress(jnp.stack([left, right]))
-            return (node, idx // 2), None
+            return self._fold_with_sibling(node, idx, sibling), None
 
         (node, _), _ = jax.lax.scan(fold, (node, index), jnp.stack(opening.path))
         return node
+
+    def reconstruct_roots(
+        self, rows: Array, indices: Array, paths: Array, valid: Array
+    ) -> Array:
+        """Rebuild a whole batch of roots in one `vmap` + one `scan`.
+
+        `rows` `(B, row_width)`, `indices` `(B,)`, `paths` `(B, depth, digest)`
+        leaf-first, `valid` `(B, depth)` true for the real levels of each path
+        and false for trailing don't-care padding. Paths shorter than `depth`
+        are zero-padded and masked, so a batch can mix Merkle trees of different
+        height: a masked step keeps the running node, so element `b` rebuilds the
+        same root `reconstruct_root` would on its first `valid[b].sum()` levels.
+
+        Tracing the compress body once for the whole batch — instead of once per
+        `reconstruct_root` call — is the point: the folding verifiers reconstruct
+        one pair per fold layer, and that per-layer loop dominated their
+        trace+lower (#163)."""
+
+        def one(row: Array, index: Array, path: Array, mask: Array) -> Array:
+            node = self._leaf_hasher.hash(row)
+
+            def fold(
+                carry: tuple[Array, Array], step: tuple[Array, Array]
+            ) -> tuple[tuple[Array, Array], None]:
+                node, idx = carry
+                sibling, active = step
+                folded, idx = self._fold_with_sibling(node, idx, sibling)
+                # Padding past the real depth is a no-op: keep the rebuilt root.
+                node = jnp.where(active, folded, node)
+                return (node, idx), None
+
+            (node, _), _ = jax.lax.scan(fold, (node, index), (path, mask))
+            return node
+
+        return jax.vmap(one)(rows, indices, paths, valid)
 
     def verify(self, root: Array, index: int, opening: Opening) -> bool:
         """Rebuild the root from the row + path; compare to the committed root."""

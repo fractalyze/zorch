@@ -18,13 +18,13 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.coding.foldable_code import FoldableCode
-from zorch.commit.merkle import MerkleTree, Opening
+from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.config import (
     BasefoldCommitment,
     BasefoldProof,
     sample_rlc_coeffs,
 )
-from zorch.pcs.fold import sample_positions
+from zorch.pcs.fold import sample_positions, verify_openings
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -39,11 +39,6 @@ class BasefoldVerifier:
     tree: MerkleTree
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
-    # Built once per instance: a per-call `jax.vmap(...)` has a fresh identity
-    # and re-traces every eager call.
-    _reconstruct_root_batch: Callable[..., Array] = field(
-        init=False, repr=False, compare=False
-    )
     # Jitted verify body: an eager replay interprets each composite op-by-op
     # in Python (issue #140).
     _verify_body: Callable[..., tuple[Array, Transcript]] = field(
@@ -51,9 +46,6 @@ class BasefoldVerifier:
     )
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self, "_reconstruct_root_batch", jax.vmap(self.tree.reconstruct_root)
-        )
         object.__setattr__(self, "_verify_body", jax.jit(self._verify_traced))
 
     def verify(
@@ -136,22 +128,20 @@ class BasefoldVerifier:
         t, positions = sample_positions(t, n, self.num_queries)
         a = self.code.layer_positions(positions, num_vars)
 
-        def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
-            return jnp.all(self._reconstruct_root_batch(idx, opening) == root)
-
+        # Every opened pair must rebuild its layer's committed root: layer 0's
+        # against the commitment, each fold layer's against its fri root. Collect
+        # the lo/hi legs and reconstruct them in one batched pass (#163).
         lo0, hi0 = self.code.pair_indices(a[0], 0)
-        ok = ok & roots_ok(commitment, lo0, proof.component_opening.lo)
-        ok = ok & roots_ok(commitment, hi0, proof.component_opening.hi)
+        legs = [
+            (commitment, lo0, proof.component_opening.lo),
+            (commitment, hi0, proof.component_opening.hi),
+        ]
         for layer in range(1, num_vars):
             lo_idx, hi_idx = self.code.pair_indices(a[layer], layer)
-            ok = ok & roots_ok(
-                proof.fri_roots[layer - 1], lo_idx, proof.query_openings[layer - 1].lo
-            )
-            ok = ok & roots_ok(
-                proof.fri_roots[layer - 1],
-                hi_idx,
-                proof.query_openings[layer - 1].hi,
-            )
+            root = proof.fri_roots[layer - 1]
+            legs.append((root, lo_idx, proof.query_openings[layer - 1].lo))
+            legs.append((root, hi_idx, proof.query_openings[layer - 1].hi))
+        ok = ok & verify_openings(self.tree, legs)
 
         # Rebuild layer-0 batched values from the opened ORIGINAL rows (RLC),
         # then fold each layer and check it reaches the next layer / final poly.
