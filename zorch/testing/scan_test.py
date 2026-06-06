@@ -26,7 +26,7 @@ from zorch.sumcheck.prover import prove
 from zorch.testkit.transcript import cheap_transcript
 from zorch.verify import verify
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 def _top_primitives(jaxpr: jax.core.ClosedJaxpr) -> list[str]:

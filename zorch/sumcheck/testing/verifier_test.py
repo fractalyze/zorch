@@ -16,7 +16,7 @@ from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.verify import verify
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 _GPU_BACKEND = jax.default_backend() == "gpu"
 
 
@@ -52,7 +52,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
         "remove when fractalyze/prime-ir#332 lands",
     )
     def test_extension_challenges_roundtrip(self) -> None:
-        EF = zk_dtypes.koalabearx4
+        EF = zk_dtypes.koalabearx4_mont
         f = rand_field(52, (1 << 4,), KB).astype(EF)
         claimed = jnp.sum(f)
         _, _, msgs = prove(prover.SumcheckRound(1), [f], cheap_transcript(EF))
@@ -164,7 +164,7 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
     def test_multi_limb_challenge_extends_transcript_field(self) -> None:
-        EF = zk_dtypes.koalabearx4
+        EF = zk_dtypes.koalabearx4_mont
         coeffs = jnp.array([3, 5, 2, 7], KB).astype(EF)
         claim = coeffs[0] + jnp.sum(coeffs)
         next_claim, _, r, ok = verifier.CoeffsSumcheckRound(3, challenge_limbs=4)(

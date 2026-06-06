@@ -16,7 +16,7 @@ from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 _GPU_BACKEND = jax.default_backend() == "gpu"
 
 
@@ -66,7 +66,7 @@ class SumcheckProveTest(absltest.TestCase):
         "remove when fractalyze/prime-ir#332 lands",
     )
     def test_degree1_extension_challenges(self) -> None:
-        EF = zk_dtypes.koalabearx4
+        EF = zk_dtypes.koalabearx4_mont
         f = rand_field(30, (1 << 4,), KB).astype(EF)
         final_state, _, msgs = prove(
             prover.SumcheckRound(degree=1), [f], cheap_transcript(EF)

@@ -56,8 +56,8 @@ class QuotientAndEvalTest(absltest.TestCase):
 
 # Standard domain until lax.pairing_check decodes Montgomery inputs (zkx#518);
 # see the note in testing/srs.py.
-SF = zk_dtypes.bn254_sf
-G1 = zk_dtypes.bn254_g1_affine
+SF = zk_dtypes.bn254_sf_mont
+G1 = zk_dtypes.bn254_g1_affine_mont
 
 _GPU = jax.default_backend() == "gpu"
 
