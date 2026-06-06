@@ -48,6 +48,7 @@ from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
+    from zorch.round import ProverRound
     from zorch.sumcheck.prover import SumcheckSummand
 
 # eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2).
@@ -179,4 +180,6 @@ class GkrLayerRound(Round):
 
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
-    _: type[SumcheckSummand] = LogupSumcheckRound
+    _summand: type[SumcheckSummand] = LogupSumcheckRound
+    _sumcheck_round: type[ProverRound] = LogupSumcheckRound
+    _layer_round: type[ProverRound] = GkrLayerRound

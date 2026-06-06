@@ -7,7 +7,10 @@ its `observe` / `sample` directly. A prover round maps
 `(carry, transcript) -> (carry, transcript, msg)`; a chain's verifier round maps
 `(carry, msg, transcript) -> (carry, transcript, ok)`. The carry (sumcheck MLE
 state, a GKR layer's running claim, ...) and the transcript thread functionally
-— never hidden mutable state.
+— never hidden mutable state. Those two shapes are the `ProverRound` /
+`ChainVerifierRound` Protocols below, the structural contracts the drivers
+(`ProveChain` / `VerifyChain` / `fold_rounds`) type against, so a wrong-shaped
+round is a type error. `Round` stays the nominal base subclasses inherit.
 
 (The per-variable sumcheck verifier in `zorch.sumcheck.verifier` is a
 specialized shape — it also returns the sampled challenge, which the
@@ -25,7 +28,7 @@ sequence, e.g. GKR layers).
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from jax import Array
 
@@ -39,6 +42,30 @@ class Round:
         raise NotImplementedError
 
 
+class ProverRound(Protocol):
+    """What `ProveChain` / `fold_rounds` consume. `carry` and `msg` are
+    scheme-defined (`Any`); the checker enforces arity and the threaded
+    `transcript` — what discriminates a prover round from a verifier one.
+
+    Parameters are positional-only (`/`): rounds name their carry `state` /
+    `claim` / `layer`, so a name-bound contract would reject every real round."""
+
+    def __call__(
+        self, carry: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Any]: ...
+
+
+class ChainVerifierRound(Protocol):
+    """What `VerifyChain` consumes. The per-variable sumcheck verifier returns
+    the sampled challenge too (a 4-tuple) and so pairs with `zorch.verify`, not
+    this — by design it does not satisfy this Protocol. Positional-only as on
+    `ProverRound`."""
+
+    def __call__(
+        self, carry: Any, msg: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Array]: ...
+
+
 class ProveChain(Round):
     """Sequence prover rounds (nn.Sequential). Threads the carry + transcript
     through each round and collects their messages. Itself a `Round`, so chains
@@ -50,7 +77,7 @@ class ProveChain(Round):
     stays live. A chain over a one-shot iterable is single-use — build it from
     a list to call it more than once."""
 
-    def __init__(self, rounds: Iterable[Round]) -> None:
+    def __init__(self, rounds: Iterable[ProverRound]) -> None:
         self.rounds = rounds
 
     def __call__(
@@ -69,7 +96,7 @@ class VerifyChain(Round):
     rounds (one per round, in order). Unlike `ProveChain` it materializes its
     rounds — the len-vs-msgs fail-loud check needs them all up front."""
 
-    def __init__(self, rounds: Iterable[Round]) -> None:
+    def __init__(self, rounds: Iterable[ChainVerifierRound]) -> None:
         self.rounds = list(rounds)
 
     def __call__(

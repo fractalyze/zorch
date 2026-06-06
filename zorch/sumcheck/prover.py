@@ -59,6 +59,9 @@ from zorch.round import Round
 from zorch.transcript import DuplexState, DuplexTranscript, Transcript
 from zorch.utils.bits import log2_strict_usize
 
+if TYPE_CHECKING:
+    from zorch.round import ProverRound
+
 
 def split_halves(state: Sequence[Array]) -> list[tuple[Array, Array]]:
     """Validate, then halve each MLE on the current variable: [(P0, P1), ...].
@@ -348,4 +351,5 @@ def _prove_marked(
 
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
-    _: type[SumcheckSummand] = SumcheckRound
+    _summand: type[SumcheckSummand] = SumcheckRound
+    _prover_round: type[ProverRound] = SumcheckRound

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -29,6 +30,9 @@ from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.round import Round
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.round import ProverRound
 
 
 @partial(jax.tree_util.register_dataclass, data_fields=["lo", "hi"], meta_fields=[])
@@ -142,3 +146,8 @@ def sample_positions(
     t, raw = transcript.sample(count)
     limbs = lax.bitcast_convert_type(raw, jnp.uint32).reshape(count, -1)
     return t, (limbs[:, 0] % block_len).astype(jnp.int32)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[ProverRound] = CommitFoldRound

@@ -15,14 +15,16 @@ driver is basis-agnostic.
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from zorch.round import Round
 from zorch.transcript import Transcript
+
+if TYPE_CHECKING:
+    from zorch.round import ProverRound
 
 
 def fold_rounds(
-    round: Round, state: Any, transcript: Transcript, rounds: int
+    round: ProverRound, state: Any, transcript: Transcript, rounds: int
 ) -> tuple[Any, Transcript, list[Any]]:
     """Run `round` exactly `rounds` times; return (state, transcript, list[msg])."""
     msgs: list[Any] = []
