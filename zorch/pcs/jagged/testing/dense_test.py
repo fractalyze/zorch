@@ -58,6 +58,10 @@ class FromBlocksTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             from_blocks([jnp.arange(2, dtype=F).reshape(2, 1)], log_stacking_height=-1)
 
+    def test_oversized_stacking_height_raises_before_allocating(self) -> None:
+        with self.assertRaisesRegex(ValueError, "log_m"):
+            from_blocks([jnp.arange(2, dtype=F).reshape(2, 1)], log_stacking_height=40)
+
     def test_tier_matches_indicator_n_d(self) -> None:
         # The opening seam requires cfg.n_d == layout.log_m; both must derive
         # the same tier from the same total area so the constraint holds by
@@ -146,6 +150,15 @@ class ValidateLayoutTest(absltest.TestCase):
     def test_log_s_above_log_m_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "log_s"):
             validate_layout(_layout([4], [4], log_m=4, log_s=5))
+
+    def test_log_m_above_safe_bound_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "log_m"):
+            validate_layout(_layout([4], [4], log_m=31))
+
+    def test_stacking_dominated_log_m_passes(self) -> None:
+        # log_s above the area tier legitimately dominates log_m at commit
+        # time; validation must not pin log_m to the tier.
+        validate_layout(_layout([1], [1], log_m=3, log_s=3))
 
     def test_negative_log_s_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "log_s"):

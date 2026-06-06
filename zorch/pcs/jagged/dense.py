@@ -106,6 +106,13 @@ def validate_layout(layout: JaggedLayout) -> None:
         for c in counts:
             if c > cap:
                 raise ValueError(f"block {label} {c} exceeds the tier capacity 2^{n_d}")
+    # log_m is bounded but NOT pinned to n_d: a stacking height above the area
+    # tier legitimately dominates it (`from_blocks` takes max(tier, log_s));
+    # the log_m == n_d equality is an open/verify concern, not validation's.
+    if layout.log_m > _MAX_AREA_TIER:
+        raise ValueError(
+            f"log_m {layout.log_m} exceeds the safe bound {_MAX_AREA_TIER}"
+        )
     if not 0 <= layout.log_s <= layout.log_m:
         raise ValueError(
             f"log_s must satisfy 0 <= log_s <= log_m, got log_s={layout.log_s}, "
@@ -138,6 +145,10 @@ def from_blocks(
 
     log_s = log_stacking_height
     log_m = max(log_area_tier(total_area), log_s)
+    # Guard before the 2^log_m allocation below — validate_layout runs only
+    # later (commit's _indicator_inputs), after the buffer would already exist.
+    if log_m > _MAX_AREA_TIER:
+        raise ValueError(f"log_m {log_m} exceeds the safe bound {_MAX_AREA_TIER}")
     m_max = 1 << log_m  # > total_area by construction (log_area_tier is strict)
 
     flats = [b.T.reshape(-1) for b in blocks]  # column-major per block
