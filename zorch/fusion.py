@@ -9,8 +9,12 @@ a hash permutation, …), so it is not named after any single use — see CLAUDE
 The decomposition must be straight-line element-wise — no loops, reductions, or
 gathers — so the region lowers to one kernel: a round sequence is unrolled into
 the body (fixed, small counts) and the linear layers use the normal-form helpers
-(not `jnp.dot`/`reduce`/`gather`). Loop-carrying large-N rounds await the
-in-kernel-loop emitter; see fractalyze/zorch#25.
+(not `jnp.dot`/`reduce`/`gather`). Use `lax` primitives over `jnp` wrappers
+(`lax.select`, not `jnp.where`): a `jnp` wrapper's internal `jit` lowers to a
+call inside the body, which the single-kernel rewriter rejects. Name-routed
+markers with a dedicated emitter (`zorch.sumcheck`, `poseidon2:`) are exempt —
+their emitters tolerate reductions and calls. Loop-carrying large-N rounds
+await the in-kernel-loop emitter; see fractalyze/zorch#25.
 
 On a jaxlib without `stablehlo.CompositeOp` the marker is dropped and the
 decomposition runs inline — see `zorch._composite.composite_or_inline`, the
