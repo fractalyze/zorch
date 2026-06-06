@@ -43,6 +43,7 @@ from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
+    from zorch.round import ProverRound
 
 
 @partial(
@@ -195,6 +196,7 @@ class BasefoldProver:
 
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
-    _: type[PcsProver[BasefoldCommitment, BasefoldProverData, BasefoldProof]] = (
-        BasefoldProver
-    )
+    _pcs_prover: type[
+        PcsProver[BasefoldCommitment, BasefoldProverData, BasefoldProof]
+    ] = BasefoldProver
+    _fold_round: type[ProverRound] = _SumcheckFoldRound

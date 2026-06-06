@@ -31,7 +31,7 @@ import functools
 import operator
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -60,6 +60,9 @@ from zorch.round import Round
 from zorch.sumcheck.prover import RoundMsg, SumcheckRound, prove
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_ceil_usize
+
+if TYPE_CHECKING:
+    from zorch.round import ProverRound
 
 # Outer Hadamard sumcheck degree: Σ_i D(i)·J̃(i), a product of two MLEs.
 _OUTER_DEGREE = 2
@@ -547,3 +550,8 @@ def _compress_column_claims(column_claims: Array, z_col: Array) -> Array:
     L = column_claims.shape[0]
     terms = [weights[c] * column_claims[c] for c in range(L)]
     return functools.reduce(operator.add, terms)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[ProverRound] = JaggedAssistRound

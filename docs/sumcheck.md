@@ -16,7 +16,7 @@ supplies only its summand `_combine`: `prover.SumcheckRound` multiplies a produc
 homogeneous scan driver, generic over that summand — it reads a round's `degree` +
 `_combine` (the `SumcheckSummand` seam in `prove.py`) and owns the split / fold /
 scan, so the product and LogUp per-variable loops share one driver; `verify` is the
-dual, generic over any verifier `Round`. The verifier is a single
+dual, generic over any `InnerVerifierRound`. The verifier is a single
 `verifier.SumcheckRound` that pairs with all of them: it sees only the round
 polynomials, so the summand is purely the prover's concern. Its observe→challenge
 order mirrors the prover's exactly — that shared ordering is the only thing keeping

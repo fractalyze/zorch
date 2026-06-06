@@ -219,7 +219,9 @@ so signature drift — a renamed method, wrong arity, an added parameter — fai
 pre-commit mypy at the instance, instead of surfacing at a consumer call site
 (or never, while the instance still has no in-tree consumer). A generic seam
 parameterizes the pin with the instance's concrete types — the PCS pins are the
-worked example ([pcs.md "Instance anatomy"](pcs.md#instance-anatomy)).
+worked example ([pcs.md "Instance anatomy"](pcs.md#instance-anatomy)). A module
+pinning more than one seam names each pin (`_summand`, `_prover_round`, ...):
+mypy rejects re-annotating `_`.
 
 A `@runtime_checkable` `assertIsInstance` test is not a substitute: it checks
 member *presence* on a live object, never signatures. The two are complementary

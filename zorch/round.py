@@ -4,28 +4,31 @@ chains that compose Rounds like `nn.Sequential`.
 
 Subclass `Round` and implement `__call__`, threading the transcript and calling
 its `observe` / `sample` directly. A prover round maps
-`(carry, transcript) -> (carry, transcript, msg)`; a chain's verifier round maps
+`(carry, transcript) -> (carry, transcript, msg)`; a verifier round maps
 `(carry, msg, transcript) -> (carry, transcript, ok)`. The carry (sumcheck MLE
 state, a GKR layer's running claim, ...) and the transcript thread functionally
 — never hidden mutable state.
 
-(The per-variable sumcheck verifier in `zorch.sumcheck.verifier` is a
-specialized shape — it also returns the sampled challenge, which the
-`zorch.verify` driver collects into the point — so it pairs with that driver,
-not with `VerifyChain`.)
+Rounds live at two levels. A *stage* round is one step of the heterogeneous
+protocol sequence (a GKR layer), run by the chains here; an *inner* round binds
+one variable of a stage's sumcheck — the homogeneous case, scanned by
+`zorch.prove` / `zorch.verify`, typically from inside a stage round. On the
+prover side both levels share one shape, so `ProverRound` is the single prover
+contract (`ProveChain` / `fold_rounds`). On the verifier side the inner round
+must also surface its sampled challenge for `zorch.verify` to collect into the
+evaluation point, so the contracts split: `VerifierRound` (stage, `VerifyChain`)
+vs `InnerVerifierRound` (per-variable). The Protocols are structural, so a
+wrong-shaped — or wrong-level — round is a type error. `Round` stays the
+nominal base subclasses inherit.
 
 A composite protocol is itself a `Round`: `ProveChain` / `VerifyChain` sequence
-sub-Rounds, threading the carry + transcript, so chains nest (a chain of layer
-chains, each a chain of per-variable rounds). The per-variable sumcheck loop is
-the homogeneous case (one round repeated) with its own runners in `zorch.prove`
-/ `zorch.verify`; the chains here are the heterogeneous case (distinct rounds in
-sequence, e.g. GKR layers).
+sub-Rounds, threading the carry + transcript, so chains nest.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
-from typing import Any
+from typing import Any, Protocol
 
 from jax import Array
 
@@ -39,6 +42,38 @@ class Round:
         raise NotImplementedError
 
 
+class ProverRound(Protocol):
+    """What `ProveChain` / `fold_rounds` consume. `carry` and `msg` are
+    scheme-defined (`Any`); the checker enforces arity and the threaded
+    `transcript` — what discriminates a prover round from a verifier one.
+
+    Parameters are positional-only (`/`): rounds name their carry `state` /
+    `claim` / `layer`, so a name-bound contract would reject every real round."""
+
+    def __call__(
+        self, carry: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Any]: ...
+
+
+class VerifierRound(Protocol):
+    """What `VerifyChain` consumes: a stage-level verifier round. Positional-only
+    as on `ProverRound`."""
+
+    def __call__(
+        self, carry: Any, msg: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Array]: ...
+
+
+class InnerVerifierRound(Protocol):
+    """What the `zorch.verify` scan consumes: the per-variable verifier inside a
+    stage's sumcheck. The trailing element is the bound coordinate `r`, collected
+    by the driver into the evaluation point. Positional-only as on `ProverRound`."""
+
+    def __call__(
+        self, claim: Any, msg: Any, transcript: Transcript, /
+    ) -> tuple[Any, Transcript, Array, Array]: ...
+
+
 class ProveChain(Round):
     """Sequence prover rounds (nn.Sequential). Threads the carry + transcript
     through each round and collects their messages. Itself a `Round`, so chains
@@ -50,7 +85,7 @@ class ProveChain(Round):
     stays live. A chain over a one-shot iterable is single-use — build it from
     a list to call it more than once."""
 
-    def __init__(self, rounds: Iterable[Round]) -> None:
+    def __init__(self, rounds: Iterable[ProverRound]) -> None:
         self.rounds = rounds
 
     def __call__(
@@ -69,7 +104,7 @@ class VerifyChain(Round):
     rounds (one per round, in order). Unlike `ProveChain` it materializes its
     rounds — the len-vs-msgs fail-loud check needs them all up front."""
 
-    def __init__(self, rounds: Iterable[Round]) -> None:
+    def __init__(self, rounds: Iterable[VerifierRound]) -> None:
         self.rounds = list(rounds)
 
     def __call__(

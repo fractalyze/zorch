@@ -36,6 +36,7 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -52,6 +53,9 @@ from zorch.poly.univariate import (
 )
 from zorch.round import Round
 from zorch.transcript import Transcript, sample_challenge
+
+if TYPE_CHECKING:
+    from zorch.round import ProverRound
 
 # eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2), in coefficient form.
 _DEGREE = 3
@@ -324,3 +328,8 @@ class JaggedGkrLayerRound(Round):
         # MSB-first point + the pyramid's child selector as the low (last) bit.
         eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
         return (num_eval, den_eval, eval_point), transcript, proof
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[ProverRound] = JaggedGkrLayerRound

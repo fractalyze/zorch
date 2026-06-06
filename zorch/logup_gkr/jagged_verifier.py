@@ -22,6 +22,8 @@ virtual dense leaf MLE.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import jax.numpy as jnp
 from jax import Array
 
@@ -32,6 +34,9 @@ from zorch.round import Round
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.transcript import Transcript, sample_challenge
 from zorch.verify import verify
+
+if TYPE_CHECKING:
+    from zorch.round import VerifierRound
 
 _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 
@@ -77,3 +82,8 @@ class JaggedGkrLayerRound(Round):
         den_eval = d0 + (d1 - d0) * r
         eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
         return (num_eval, den_eval, eval_point), transcript, ok
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    _: type[VerifierRound] = JaggedGkrLayerRound

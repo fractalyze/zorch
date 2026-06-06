@@ -16,7 +16,7 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.round import ProveChain, Round, VerifyChain
+from zorch.round import InnerVerifierRound, ProveChain, Round, VerifyChain
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
@@ -46,7 +46,9 @@ class _ScaleVerifier(Round):
     def __init__(self, factor: int) -> None:
         self.factor = jnp.array(factor, KB)
 
-    def __call__(self, carry: Any, msg: Any, transcript: Transcript) -> Any:
+    def __call__(
+        self, carry: Any, msg: Any, transcript: Transcript
+    ) -> tuple[Any, Transcript, Any]:
         ok = msg == carry
         transcript, r = transcript.sample(1)
         return carry * self.factor + r[0], transcript, ok
@@ -158,6 +160,39 @@ class ChainTest(absltest.TestCase):
             carry0, msgs, cheap_transcript(KB)
         )
         self.assertFalse(bool(ok))
+
+
+class _FourTupleRound(Round):
+    """Verifier-arity round that returns a 4-tuple — the per-variable
+    `InnerVerifierRound` shape. Not a `VerifierRound`, which replays a 3-tuple --
+    the shape `VerifyChain` must reject."""
+
+    def __call__(
+        self, carry: Any, msg: Any, transcript: Transcript
+    ) -> tuple[Any, Any, Any, Any]:
+        return carry, transcript, carry, carry
+
+
+class RoundProtocolContractTest(absltest.TestCase):
+    """Compile-time assertions that the chain Protocols bite: `warn_unused_ignores`
+    (pyproject) makes each `# type: ignore` below mean "this line MUST be a type
+    error", so if a Protocol stops rejecting a wrong-shaped round, mypy fails."""
+
+    def test_prove_chain_rejects_a_verifier_round(self) -> None:
+        chain = ProveChain([_ScaleVerifier(2)])  # type: ignore[list-item]
+        self.assertIsInstance(chain, ProveChain)
+
+    def test_verify_chain_rejects_a_prover_round(self) -> None:
+        chain = VerifyChain([_ScaleProver(2)])  # type: ignore[list-item]
+        self.assertIsInstance(chain, VerifyChain)
+
+    def test_verify_chain_rejects_a_four_tuple_round(self) -> None:
+        chain = VerifyChain([_FourTupleRound()])  # type: ignore[list-item]
+        self.assertIsInstance(chain, VerifyChain)
+
+    def test_inner_verifier_contract_rejects_a_stage_round(self) -> None:
+        rnd: InnerVerifierRound = _ScaleVerifier(2)  # type: ignore[assignment]
+        self.assertIsNotNone(rnd)
 
 
 if __name__ == "__main__":
