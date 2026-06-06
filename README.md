@@ -56,24 +56,8 @@ pip install -r requirements.in \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-To develop against a **local ZKX checkout** instead of the pinned
-`zkx-cuda-pjrt` wheel, point the plugin resolver at it:
-
-```sh
-export ZKX_REPO_ROOT="$HOME/Workspace/zkx"
-```
-
-### JAX compile-cache rule
-
-A persistent `JAX_COMPILATION_CACHE_DIR` skips recompiles of the heavy
-`local_only` tests across venv runs — worthwhile whenever you iterate against
-one jaxlib for a while. Keep **one cache directory per jaxlib build** and
-treat a rebuilt wheel as a new toolchain: self-built wheels share a version
-string, so a shared directory replays the *other* build's executables
-([#120](https://github.com/fractalyze/zorch/issues/120)).
-
-`bazel test` strips the variable (hermetic), so caching only applies to the
-venv loop.
+The dev loop — per-workspace venvs, developing against a local ZKX build, the
+JAX compile-cache rule — lives in [`docs/dev-env.md`](docs/dev-env.md).
 
 ## Documentation
 
