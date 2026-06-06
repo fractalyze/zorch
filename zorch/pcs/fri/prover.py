@@ -144,7 +144,13 @@ class FriProver:
         t = t.observe(final_layer)
 
         t, base, layer_opens = open_query_phase(
-            params.tree, t, matrix, digest_layers, layers, params.num_queries
+            params.code,
+            params.tree,
+            t,
+            matrix,
+            digest_layers,
+            layers,
+            params.num_queries,
         )
         layer_roots = [layer.root for layer in layers]
         return t, FriProof(v, layer_roots, final_layer, base.lo, base.hi, layer_opens)

@@ -12,7 +12,7 @@ from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
-from zorch.coding.reed_solomon import ReedSolomon
+from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.merkle import MerkleTree
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -100,7 +100,13 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
 
 
 class BasefoldOpenTest(absltest.TestCase):
-    def _commit(self, log_s: int, K: int, blowup: int = 2) -> tuple[
+    def _commit(
+        self,
+        log_s: int,
+        K: int,
+        blowup: int = 2,
+        code_cls: type = ReedSolomon,
+    ) -> tuple[
         BasefoldProver,
         BasefoldVerifier,
         jnp.ndarray,
@@ -109,10 +115,10 @@ class BasefoldOpenTest(absltest.TestCase):
         int,
     ]:
         S = 1 << log_s
-        rs = ReedSolomon(message_len=S, blowup=blowup, dtype=EF)
+        code = code_cls(message_len=S, blowup=blowup, dtype=EF)
         _, _, tree = koalabear16_merkle()
-        prover = BasefoldProver(rs, tree, num_queries=4)
-        verifier = BasefoldVerifier(rs, tree, num_queries=4)
+        prover = BasefoldProver(code, tree, num_queries=4)
+        verifier = BasefoldVerifier(code, tree, num_queries=4)
         mle = _rand_ef(1, (S, K))  # [S, K]
         cols = [mle[:, k] for k in range(K)]
         root, pdata = prover.commit(cols)
@@ -153,6 +159,36 @@ class BasefoldOpenTest(absltest.TestCase):
     def test_verify_rejects_tampered_query_opening(self) -> None:
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
         z = _rand_ef(8, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        comp = proof.component_opening
+        bad_lo = dataclasses.replace(comp.lo, row=comp.lo.row + jnp.array(1, EF))
+        bad = dataclasses.replace(
+            proof, component_opening=dataclasses.replace(comp, lo=bad_lo)
+        )
+        ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        self.assertFalse(bool(ok))
+
+    def test_open_verify_round_trip_bit_reversed_code(self) -> None:
+        # The open/verify path reads the pair layout off the code seam, so
+        # swapping in the bit-reversed code must round-trip with no other
+        # change — this exercises the adjacent-pair query indexing end to end.
+        prover, verifier, root, pdata, mle, log_s = self._commit(
+            log_s=3, K=2, code_cls=BitReversedReedSolomon
+        )
+        z = _rand_ef(13, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        for val, col in zip(values, mle.T, strict=True):
+            self.assertEqual(val.tolist(), eval_mle(col, z).tolist())
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+
+    def test_verify_rejects_tampered_opening_bit_reversed_code(self) -> None:
+        # The adjacent-pair indexing is exactly where a layout bug would hide
+        # a forged leaf, so the tamper rejection is re-checked on this code.
+        prover, verifier, root, pdata, _mle, log_s = self._commit(
+            log_s=3, K=2, code_cls=BitReversedReedSolomon
+        )
+        z = _rand_ef(15, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
         comp = proof.component_opening
         bad_lo = dataclasses.replace(comp.lo, row=comp.lo.row + jnp.array(1, EF))

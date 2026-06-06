@@ -6,11 +6,13 @@ sides of each scheme use.
 
 These are scheme-neutral — fri and basefold fold the same way (sample β →
 `code.fold` → commit the half-size layer → observe the root) and run the same
-natural-order query phase over the committed layers — so they live at the
-`pcs` level rather than under either scheme's package. The position derivation
-is shared so prover and verifier sample identical query indices from the
-transcript, the way the sumcheck block shares one module-level oracle to keep
-the two sides in lockstep.
+query phase over the committed layers — so they live at the `pcs` level rather
+than under either scheme's package. The pair layout inside each layer is the
+code's identity, so the query phase reads it off the `FoldableCode` seam
+(`layer_positions` / `pair_indices`) instead of assuming an order. The
+position derivation is shared so prover and verifier sample identical query
+indices from the transcript, the way the sumcheck block shares one
+module-level oracle to keep the two sides in lockstep.
 
 The round loop stays a Python `for` via `zorch.prove.fold_rounds`: each round
 Merkle-commits a half-size layer whose retained artifacts are ragged across
@@ -38,13 +40,14 @@ if TYPE_CHECKING:
 @partial(jax.tree_util.register_dataclass, data_fields=["lo", "hi"], meta_fields=[])
 @dataclass(frozen=True)
 class LayerOpening:
-    """A committed fold layer's conjugate-pair openings, batched over the queries
+    """A committed fold layer's opened point pair, batched over the queries
     (leading axis = query count) so the whole query phase is one device op.
+    The pair's leaf indices are the code's `pair_indices(a[layer], layer)`.
 
     A registered pytree so proofs carrying it cross a `@jit` boundary."""
 
-    lo: Opening  # leaves at a[layer]        (batched over queries)
-    hi: Opening  # leaves at a[layer] + half (batched over queries)
+    lo: Opening  # the pair's lo leg (batched over queries)
+    hi: Opening  # the pair's hi leg (batched over queries)
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,7 @@ class CommitFoldRound(Round):
 
 
 def open_query_phase(
+    code: FoldableCode,
     tree: MerkleTree,
     transcript: Transcript,
     base_matrix: Array,
@@ -93,26 +97,26 @@ def open_query_phase(
     layers: list[CommittedLayer],
     num_queries: int,
 ) -> tuple[Transcript, LayerOpening, list[LayerOpening]]:
-    """The natural-order query phase shared by the fri/basefold `open`: sample
-    the query positions, then open the conjugate pair of the base matrix
-    (layer 0) and of each committed fold layer. All on device — positions are
-    an int32 array and each Merkle opening is one `vmap` over them, no host
-    indices or per-query loop. `layers` are the `fold_rounds` msgs; the peeled
-    final round is cleartext in the proof, so it needs no opening."""
+    """The query phase shared by the fri/basefold `open`: sample the query
+    positions, then open the point pair of the base matrix (layer 0) and of
+    each committed fold layer, with the pair layout read off `code`. All on
+    device — positions are an int32 array and each Merkle opening is one
+    `vmap` over them, no host indices or per-query loop. `layers` are the
+    `fold_rounds` msgs; the peeled final round is cleartext in the proof, so
+    it needs no opening."""
     n = base_matrix.shape[0]
     num_rounds = len(layers) + 1  # committed layers + the peeled final round
 
     t, positions = sample_positions(transcript, n, num_queries)
-    a = query_layer_indices(positions, n, num_rounds)
+    a = code.layer_positions(positions, num_rounds)
 
     def open_pair(matrix: Array, dl: list[Array], layer: int) -> LayerOpening:
-        idx = a[layer]
-        half = n >> (layer + 1)  # the conjugate offset, = query_layer_indices' modulus
+        lo_idx, hi_idx = code.pair_indices(a[layer], layer)
 
         def open_batch(indices: Array) -> Opening:
             return jax.vmap(lambda i: tree.open(matrix, dl, i))(indices)
 
-        return LayerOpening(open_batch(idx), open_batch(idx + half))
+        return LayerOpening(open_batch(lo_idx), open_batch(hi_idx))
 
     base = open_pair(base_matrix, base_digest_layers, 0)
     layer_opens = [
@@ -120,21 +124,6 @@ def open_query_phase(
         for i, committed in enumerate(layers, start=1)
     ]
     return t, base, layer_opens
-
-
-def query_layer_indices(
-    positions: Array, block_len: int, num_rounds: int
-) -> list[Array]:
-    """The folded query index `a_i` at each layer for a batch of `positions`:
-    `a_i = q_i mod (n/2^{i+1})` with `q_0 = positions`, `q_{i+1} = a_i`, elementwise
-    over the query axis. The conjugate to open at layer `i` is `a_i + n/2^{i+1}`."""
-    indices = []
-    q = positions
-    for i in range(num_rounds):
-        a = q % (block_len >> (i + 1))
-        indices.append(a)
-        q = a
-    return indices
 
 
 def sample_positions(

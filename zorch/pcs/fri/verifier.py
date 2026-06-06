@@ -19,7 +19,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.commit.merkle import Opening
-from zorch.pcs.fold import query_layer_indices, sample_positions
+from zorch.pcs.fold import sample_positions
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
 from zorch.transcript import Transcript
 
@@ -84,8 +84,7 @@ class FriVerifier:
             committed = r < params.num_rounds - 1
             t = t.observe(pf.layer_roots[r] if committed else pf.final_layer)
         t, positions = sample_positions(t, n, params.num_queries)
-        a = query_layer_indices(positions, n, params.num_rounds)
-        half0 = n >> 1
+        a = params.code.layer_positions(positions, params.num_rounds)
 
         # The final fold layer must be a constant (degree 0). FRI binds no
         # external claim, so the layer's own head is the claimed message.
@@ -96,18 +95,19 @@ class FriVerifier:
         def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
             return jnp.all(self._reconstruct_root_batch(idx, opening) == root)
 
-        ok = ok & roots_ok(f_root, a[0], pf.f_lo)
-        ok = ok & roots_ok(f_root, a[0] + half0, pf.f_hi)
+        lo0, hi0 = params.code.pair_indices(a[0], 0)
+        ok = ok & roots_ok(f_root, lo0, pf.f_lo)
+        ok = ok & roots_ok(f_root, hi0, pf.f_hi)
         for layer in range(1, params.num_rounds):
-            half = n >> (layer + 1)
+            lo_idx, hi_idx = params.code.pair_indices(a[layer], layer)
             root = pf.layer_roots[layer - 1]
-            ok = ok & roots_ok(root, a[layer], pf.layers[layer - 1].lo)
-            ok = ok & roots_ok(root, a[layer] + half, pf.layers[layer - 1].hi)
+            ok = ok & roots_ok(root, lo_idx, pf.layers[layer - 1].lo)
+            ok = ok & roots_ok(root, hi_idx, pf.layers[layer - 1].hi)
 
-        # Rebuild the layer-0 quotient at each conjugate pair from f's leaves.
+        # Rebuild the layer-0 quotient at each point pair from f's leaves.
         d0 = params.code.domain()
-        g_lo = (pf.f_lo.row[:, 0] - v) / (d0[a[0]] - z)
-        g_hi = (pf.f_hi.row[:, 0] - v) / (d0[a[0] + half0] - z)
+        g_lo = (pf.f_lo.row[:, 0] - v) / (d0[lo0] - z)
+        g_hi = (pf.f_hi.row[:, 0] - v) / (d0[hi0] - z)
 
         for i in range(params.num_rounds):
             if i == 0:
@@ -116,13 +116,13 @@ class FriVerifier:
                 lo_val = pf.layers[i - 1].lo.row[:, 0]
                 hi_val = pf.layers[i - 1].hi.row[:, 0]
             folded = params.code.fold_values(lo_val, hi_val, betas[i], a[i], i)
-            # The fold output lands at position a[i] in layer i+1 — the lo or hi of
-            # that layer's conjugate pair depending on which half a[i] is in.
+            # The fold output lands at position a[i] in layer i+1 — the lo or
+            # hi of that layer's opened pair, decided by the code's layout.
             if i < params.num_rounds - 1:
-                half_next = n >> (i + 2)
+                next_lo_idx, _ = params.code.pair_indices(a[i + 1], i + 1)
                 nxt = pf.layers[i]
                 expected = jnp.where(
-                    a[i] < half_next, nxt.lo.row[:, 0], nxt.hi.row[:, 0]
+                    a[i] == next_lo_idx, nxt.lo.row[:, 0], nxt.hi.row[:, 0]
                 )
             else:
                 expected = pf.final_layer[a[i]]

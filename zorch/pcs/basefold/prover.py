@@ -184,9 +184,15 @@ class BasefoldProver:
         uni_msgs = [uni for uni, _ in msgs] + [(zero_val, one_val)]
         layers = [layer for _, layer in msgs]
 
-        # 3. Query phase (natural order, shared with fri).
+        # 3. Query phase (pair layout from the code seam, shared with fri).
         t, comp, layer_opens = open_query_phase(
-            self.tree, t, codeword, prover_data.digest_layers, layers, self.num_queries
+            self.code,
+            self.tree,
+            t,
+            codeword,
+            prover_data.digest_layers,
+            layers,
+            self.num_queries,
         )
         proof = BasefoldProof(
             uni_msgs, [layer.root for layer in layers], final_layer, comp, layer_opens

@@ -39,9 +39,23 @@ fusion-friendly.
 
 On a coset `h·H` the fold takes the same `shift` the encoder used, and its
 output lives on the squared coset `h²·H²` — each layer's shift is the previous
-one squared. `ReedSolomon`'s seam `fold`/`fold_values` apply the right
-per-level shift internally; `pcs/fri`, not yet on the seam, threads it from
-the code's `coset_shift` through its own fold loops.
+one squared. The seam `fold`/`fold_values` apply the right per-level shift
+internally; both `pcs/fri` and `pcs/basefold` fold and query through the seam.
+
+## Codeword order is the code's identity
+
+Where a pair's two points sit inside a layer is not a PCS choice: it is fixed
+the moment the codeword is committed, leaf order and Merkle paths included. So
+the pair geometry lives on the `FoldableCode` seam (`pair_indices` /
+`layer_positions`) next to the fold, and the query phase reads it instead of
+assuming one layout. `ReedSolomon` keeps the natural order (a pair is a slice,
+`(p, p + half)`); `BitReversedReedSolomon` stores the same codeword
+bit-reversed, where a pair is adjacent (`(2p, 2p+1)`) — Merkle paths of a pair
+share all but their last node, and a consumer whose committed layout is
+bit-reversed opens through the same prover/verifier with no other change. The
+layout is fold-stable: folding a bit-reversed layer yields the squared
+domain's codeword, again bit-reversed, so only the fold's x-gather and the
+index arithmetic differ — the fold math is shared (`fri_fold_values`).
 
 ## Design rules
 
