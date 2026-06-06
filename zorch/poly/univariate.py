@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import operator
+from functools import reduce
 from typing import Any
 
 import jax
@@ -18,7 +20,19 @@ def eval_univariate(evals: Array, x: Array) -> Array:
     A composer over the jitted basis kernel, so itself un-jitted. Nodes are
     built per element — an iota over an extension dtype is unsupported."""
     nodes = jnp.stack([jnp.array(i, evals.dtype) for i in range(evals.shape[0])])
-    return jnp.dot(evals, compute_lagrange_basis(x, nodes))
+    return dot_unrolled(evals, compute_lagrange_basis(x, nodes))
+
+
+def dot_unrolled(a: Array, v: Array) -> Array:
+    """``a @ v`` contracting ``a``'s last axis, unrolled over ``v``'s static
+    length as straight-line field ops.
+
+    Not ``dot`` and not ``reduce(multiply)``: a field ``dot`` fused with an
+    elementwise consumer miscompiles on CPU under ``jit``
+    (fractalyze/jax#168). Meant for round-poly-sized contractions — the
+    unroll is ``len(v)`` ops; exact field arithmetic makes the spelling
+    byte-neutral."""
+    return reduce(operator.add, (a[..., k] * v[k] for k in range(v.shape[0])))
 
 
 def _lagrange_denominators(domain: Array) -> Array:
@@ -82,12 +96,13 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
-    Powers built explicitly then contracted in one dot, so batched coefficient
-    rows evaluate in a single contraction. The power chain unrolls serially,
-    so the traced graph grows with the coefficient count — round-poly-sized
-    inputs, not whole codewords."""
-    n = coeffs.shape[-1]
-    powers = [jnp.ones((), point.dtype)]
-    for _ in range(n - 1):
-        powers.append(powers[-1] * point)
-    return jnp.dot(coeffs, jnp.stack(powers))
+    Horner over the static coefficient count: straight-line multiply-adds
+    that broadcast over batched coefficient rows. Not a ``dot`` — a field
+    ``dot`` fused with an elementwise consumer miscompiles on CPU under
+    ``jit`` (fractalyze/jax#168), and exact field arithmetic makes the
+    evaluation order byte-neutral. The unroll is coefficient-count-sized —
+    round-poly inputs, not whole codewords."""
+    result = coeffs[..., -1]
+    for i in range(coeffs.shape[-1] - 2, -1, -1):
+        result = result * point + coeffs[..., i]
+    return result

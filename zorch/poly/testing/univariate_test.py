@@ -9,11 +9,29 @@ from jax import Array
 from zorch.poly.univariate import (
     compute_inv_vandermonde,
     compute_lagrange_basis,
+    dot_unrolled,
     eval_coeffs,
     eval_univariate,
 )
 
 KB = zk_dtypes.koalabear_mont
+
+
+class DotUnrolledTest(absltest.TestCase):
+    def test_matches_matmul(self) -> None:
+        # The dot-free contraction must equal `a @ v` exactly (field
+        # arithmetic is exact, so the unroll order is byte-neutral).
+        a = jnp.array([3, 1, 4, 1], KB)
+        v = jnp.array([5, 9, 2, 6], KB)
+        self.assertTrue(bool(dot_unrolled(a, v) == jnp.dot(a, v)))
+
+    def test_contracts_last_axis_of_a(self) -> None:
+        # Batched: `a` is (rows, len), contracted against `v` of (len,).
+        a = jnp.array([[3, 1], [4, 1], [5, 9]], KB)
+        v = jnp.array([2, 6], KB)
+        got = dot_unrolled(a, v)
+        self.assertEqual(got.shape, (3,))
+        self.assertTrue(bool(jnp.all(got == a @ v)))
 
 
 class EvalUnivariateTest(absltest.TestCase):
