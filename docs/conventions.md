@@ -95,6 +95,11 @@ class LogupSumcheckRound(Round):
 - **`data_fields`** are the `Array` leaves the transform traces over (a round's
   challenge `lam`). **`meta_fields`** are static config the trace bakes in
   (`degree`, a permutation instance) — they must be hashable and compare by value.
+  Identity equality here does not error — it silently re-traces the enclosing
+  jit zone on every freshly built instance (issue #163: ~2 min/call on a replay
+  whose kernels run in 20 ms). An object-typed meta field needs explicit value
+  `__eq__`/`__hash__`, and its `*PytreeTest` should assert two independently
+  built instances share one treedef.
 - Validate in `__post_init__`, never `__init__`, and only on shapes / static
   fields — `__post_init__` reruns on **tracers** during `unflatten`, so branching
   on an `Array` *value* there breaks under `jit`/`vmap`.

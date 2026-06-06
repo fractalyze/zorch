@@ -54,6 +54,16 @@ class Poseidon2:
         # two can't drift if `_select_fused_region_name` grows another case.
         self.has_dedicated_fusion = self._fused_region_name != FUSED_REGION_MARKER
 
+    def __eq__(self, other: object) -> bool:
+        # Value identity IS the params surface — required for the pytree-aux
+        # seat in `DuplexTranscript` (docs/conventions.md "Pytree registration").
+        if not isinstance(other, Poseidon2):
+            return NotImplemented
+        return self._p == other._p
+
+    def __hash__(self) -> int:
+        return hash(self._p)
+
     def _select_fused_region_name(self) -> str:
         """Route to the dedicated Poseidon2Fusion only with the standard external
         matrix — its GPU emitter hardcodes the M4-circulant MDS, so a custom

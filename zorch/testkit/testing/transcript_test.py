@@ -30,6 +30,20 @@ class CheapPermutationTest(absltest.TestCase):
         self.assertEqual(out.dtype, KB)
         self.assertTrue(bool(jnp.all(out == again)))
 
+    def test_value_equality(self) -> None:
+        # Pytree-aux seat: fresh instances must compare by value or every jit
+        # zone taking a cheap transcript re-traces per call (issue #163).
+        self.assertEqual(
+            CheapPermutation(width=8, dtype=KB), CheapPermutation(width=8, dtype=KB)
+        )
+        self.assertEqual(
+            hash(CheapPermutation(width=8, dtype=KB)),
+            hash(CheapPermutation(width=8, dtype=KB)),
+        )
+        self.assertNotEqual(
+            CheapPermutation(width=8, dtype=KB), CheapPermutation(width=4, dtype=KB)
+        )
+
 
 class TestTranscriptTest(absltest.TestCase):
     def test_returns_duplex_transcript(self) -> None:

@@ -130,5 +130,31 @@ class SampleChallengeTest(absltest.TestCase):
             sample_challenge(cheap_transcript(F), F, 0)
 
 
+class TranscriptJitCacheTest(absltest.TestCase):
+    """Fresh transcripts must be cache-key-equal: the permutation is pytree aux
+    (meta_fields), so two `DuplexTranscript.new(...)` over independently built,
+    value-equal permutations must yield IDENTICAL treedefs — otherwise every jit
+    zone taking a transcript re-traces per call (issue #163: ~2 min/call on the
+    jagged verify replay whose kernels run in 20 ms)."""
+
+    def test_fresh_cheap_transcripts_share_treedef(self) -> None:
+        # The cheap permutation has no jit-cache counterpart below (its scan
+        # hits the zkx#500 CPU bug), so treedef equality is its only guard.
+        self.assertEqual(
+            tree_util.tree_structure(cheap_transcript(F)),
+            tree_util.tree_structure(cheap_transcript(F)),
+        )
+
+    def test_jit_zone_does_not_retrace_per_fresh_transcript(self) -> None:
+        @jax.jit
+        def zone(t: DuplexTranscript) -> jnp.ndarray:
+            return t.state.sponge_state
+
+        zone(DuplexTranscript.new(koalabear16_perm(), rate=8))
+        zone(DuplexTranscript.new(koalabear16_perm(), rate=8))
+        # _cache_size() is a private JAX API; may change on jax upgrade.
+        self.assertEqual(zone._cache_size(), 1)
+
+
 if __name__ == "__main__":
     absltest.main()

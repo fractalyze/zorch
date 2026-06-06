@@ -36,6 +36,16 @@ class CheapPermutation:
         # Keep test transcripts on prove's unmarked path.
         self.has_dedicated_fusion = False
 
+    def __eq__(self, other: object) -> bool:
+        # Pytree-aux value equality, mirroring `Poseidon2` (docs/conventions.md
+        # "Pytree registration") — identity-eq would re-trace per fresh instance.
+        if not isinstance(other, CheapPermutation):
+            return NotImplemented
+        return (self.width, self.dtype) == (other.width, other.dtype)
+
+    def __hash__(self) -> int:
+        return hash((self.width, self.dtype))
+
     def permute(self, state: Array) -> Array:
         # Cube each lane, then fold the lane-sum back into every lane so each
         # output diffuses all of the absorbed state (the squeezed lane must see
