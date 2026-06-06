@@ -24,11 +24,11 @@ if TYPE_CHECKING:
 
 
 def fold_rounds(
-    round: ProverRound, state: Any, transcript: Transcript, rounds: int
+    rnd: ProverRound, state: Any, transcript: Transcript, rounds: int
 ) -> tuple[Any, Transcript, list[Any]]:
-    """Run `round` exactly `rounds` times; return (state, transcript, list[msg])."""
+    """Run `rnd` exactly `rounds` times; return (state, transcript, list[msg])."""
     msgs: list[Any] = []
     for _ in range(rounds):
-        state, transcript, msg = round(state, transcript)
+        state, transcript, msg = rnd(state, transcript)
         msgs.append(msg)
     return state, transcript, msgs
