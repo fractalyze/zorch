@@ -42,6 +42,16 @@ generic style nits should stay at or below MEDIUM severity.
 - Every behavior change needs a test. New blocks need tests for the intended
   behavior and the edge/boundary cases. Where a reference implementation exists
   (e.g. poseidon2 vs Plonky3), prefer a byte/numeric match against it.
+- **Montgomery dtypes only** (flag at HIGH severity): tests draw field AND
+  curve-point elements as the `_mont` form of every `zk_dtypes` family that
+  ships one — fields (`koalabear(x4)`, `babybear(x4)`, `goldilocks(x3)`,
+  `bn254_sf`) and the bn254 G1/G2 `affine`/`jacobian`/`xyzz` point types.
+  Flag any bare form in a test, INCLUDING when the surrounding file still
+  uses it (file-local style can be the legacy half; the documented rule
+  wins). The one exception is a test genuinely about the canonical integer
+  encoding itself, marked `# canonical-encoding test` on the same line —
+  the `mont-test-dtypes` pre-commit hook enforces the same rule
+  mechanically.
 
 ## Comments, commits, PRs
 
