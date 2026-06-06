@@ -20,14 +20,17 @@ export PYTHONPATH="$PWD"           # import top-level modules directly
 
 ## Developing against a local ZKX checkout
 
-To develop against a **local ZKX checkout** instead of the pinned
-`zkx-cuda-pjrt` wheel, point the plugin resolver at it:
+Plugin resolution order is `ZKX_GPU_PLUGIN_PATH` > the wheel's bundled `.so` >
+`$ZKX_REPO_ROOT/bazel-bin` — so when the venv has `zkx-cuda-pjrt` installed
+(every pinned venv does), `ZKX_REPO_ROOT` is silently ignored and only
+`ZKX_GPU_PLUGIN_PATH` reaches a local zkx build:
 
 ```sh
-export ZKX_REPO_ROOT="$HOME/Workspace/zkx"
+export ZKX_GPU_PLUGIN_PATH="$HOME/Workspace/envs/<workspace>/zkx/bazel-bin/zkx/pjrt/c/pjrt_c_api_gpu_plugin.so"
 ```
 
-Without `ZKX_REPO_ROOT`, the pinned `zkx-cuda-pjrt` wheel is used.
+A stale wheel surfaces as `custom op 'stablehlo.composite' is unknown` on any
+fresh compile.
 
 ## JAX compile-cache rule
 
