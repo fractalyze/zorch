@@ -81,18 +81,31 @@ class LogupSumcheckRound(Round):
     def degree(self) -> int:
         return _DEGREE
 
-    def _combine(self, *factors: Array) -> Array:
-        """LogUp summand over [eq, n0, d1, n1, d0]; delegates to the module-level
-        `logup_combine` the verifier oracle also calls, so prover and verifier
-        cannot drift. Guards the factor count at this summand seam -- both
-        `_round_poly` and the scan driver reach it, so neither rechecks (arg count
-        is static, so the guard is trace-safe)."""
+    def combine_scalars(self) -> tuple[Array, ...]:
+        """The batching challenge λ, fixed across the layer's variable-rounds; the
+        marked path threads it as a marker operand so a vendor feeds the inlined
+        combine."""
+        return (self.lam,)
+
+    def combine(self, scalars: Sequence[Array], *factors: Array) -> Array:
+        """LogUp summand over [eq, n0, d1, n1, d0] (the scalar-explicit seam):
+        single source of the combine math -- `_combine`, the round-poly reduction,
+        and the marked path's nested combine region all route here. Delegates to
+        the module-level `logup_combine` the verifier oracle also calls, so prover
+        and verifier cannot drift. Guards the factor count at this summand seam --
+        both `_round_poly` and the scan driver reach it, so neither rechecks (arg
+        count is static, so the guard is trace-safe)."""
         if len(factors) != _NUM_FACTORS:
             raise ValueError(
                 f"LogUp combine needs {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
                 f"got {len(factors)}"
             )
-        return logup_combine(self.lam, *factors)
+        (lam,) = scalars
+        return logup_combine(lam, *factors)
+
+    def _combine(self, *factors: Array) -> Array:
+        """LogUp summand bound to its scalars (λ)."""
+        return self.combine(self.combine_scalars(), *factors)
 
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """Round polynomial over [0..degree], shape (degree+1, *batch):

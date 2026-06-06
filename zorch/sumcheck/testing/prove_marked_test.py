@@ -8,8 +8,10 @@ from absl.testing import absltest
 from jaxlib.mlir.dialects import stablehlo
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.logup_gkr.prover import LogupSumcheckRound
 from zorch.sumcheck import prover
 from zorch.sumcheck.prover import (
+    SUMCHECK_COMBINE_MARKER,
     SUMCHECK_MARKER,
     SUMCHECK_MARKER_VERSION,
     _prove_scan,
@@ -55,7 +57,7 @@ class ProveMarkedTest(absltest.TestCase):
         return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
     def _assert_marked_equals_scan(
-        self, round: prover.SumcheckRound, factors: list[Any]
+        self, round: prover.SumcheckSummand, factors: list[Any]
     ) -> None:
         # Fiat-Shamir is sampled inside the marker from the threaded sponge, so the
         # marked path must match the plain scan on the folded state, the advanced
@@ -91,6 +93,15 @@ class ProveMarkedTest(absltest.TestCase):
     def test_marked_equals_scan_single_mle_base(self) -> None:
         f = rand_field(43, (1 << 5,), KB)
         self._assert_marked_equals_scan(prover.SumcheckRound(degree=1), [f])
+
+    def test_marked_equals_scan_logup_combine_base(self) -> None:
+        # The non-product LogUp summand `eq*(λ*(n0*d1+n1*d0)+d0*d1)` through the same
+        # marker: proves the combine is generic (carried by the nested
+        # `zorch.sumcheck.combine` region) and that the λ scalar threads through as a
+        # marker operand byte-identically — degree 3 over 5 factors, so degree !=
+        # num_factors, unlike product.
+        factors = [rand_field(50 + i, (1 << 4,), KB) for i in range(5)]
+        self._assert_marked_equals_scan(LogupSumcheckRound(jnp.array(7, KB)), factors)
 
     def test_cheap_transcript_stays_unmarked(self) -> None:
         # has_dedicated_fusion=False keeps the gate shut: no composite, plain scan.
@@ -184,13 +195,15 @@ class ProveMarkedTest(absltest.TestCase):
     def test_marker_and_nested_permute_survive_lowering(self) -> None:
         # The whole sumcheck lowers under the hash-agnostic zorch.sumcheck marker;
         # the FS permute survives as a nested poseidon2: marker the vendor reads to
-        # run the sponge in-kernel.
+        # run the sponge in-kernel, and the per-round combine as a nested
+        # zorch.sumcheck.combine marker the vendor inlines generically.
         a = rand_field(40, (1 << 4,), KB)
         b = rand_field(41, (1 << 4,), KB)
         rnd = prover.SumcheckRound(degree=2)
         t0 = self._poseidon_transcript()
         text = jax.jit(lambda x, y: prove(rnd, [x, y], t0)).lower(a, b).as_text()
         self.assertIn(SUMCHECK_MARKER, text)
+        self.assertIn(SUMCHECK_COMBINE_MARKER, text)
         self.assertIn("poseidon2:", text)
 
 

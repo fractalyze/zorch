@@ -124,10 +124,22 @@ class SumcheckRound(Round):
         if self.degree < 1:
             raise ValueError("degree must be >= 1")
 
-    def _combine(self, *factors: Array) -> Array:
-        """Product summand `prod_k f_k`; the scan driver reads only this, so the
-        round owns its summand and the driver stays summand-generic."""
+    def combine_scalars(self) -> tuple[Array, ...]:
+        """No loop-invariant scalars: the product summand reads only its factors."""
+        return ()
+
+    def combine(self, scalars: Sequence[Array], *factors: Array) -> Array:
+        """Product summand `prod_k f_k` (the scalar-explicit seam; product takes no
+        scalars). Single source of the combine math: `_combine`, the round-poly
+        reduction, and the marked path's nested `zorch.sumcheck.combine` region all
+        route here, so they cannot drift."""
+        del scalars  # product has none
         return reduce(operator.mul, factors)
+
+    def _combine(self, *factors: Array) -> Array:
+        """Product summand bound to its (empty) scalars; the scan driver reads only
+        this, so the round owns its summand and the driver stays summand-generic."""
+        return self.combine(self.combine_scalars(), *factors)
 
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)), shape (degree+1, *batch).
@@ -173,10 +185,19 @@ class SumcheckSummand(Protocol):
 
     `degree` is a read-only property here so a frozen-dataclass field (product)
     and a `@property` (LogUp) both match — a plain `degree: int` would demand a
-    settable attribute that neither provides."""
+    settable attribute that neither provides.
+
+    `combine` is the scalar-explicit form of the summand and `combine_scalars` the
+    loop-invariant scalars it reads (LogUp's λ; empty for product). The marked path
+    threads those scalars as marker operands and delineates `combine` as a nested
+    `zorch.sumcheck.combine` region, so a vendor inlines any summand generically."""
 
     @property
     def degree(self) -> int: ...
+
+    def combine_scalars(self) -> tuple[Array, ...]: ...
+
+    def combine(self, scalars: Sequence[Array], *factors: Array) -> Array: ...
 
     def _combine(self, *factors: Array) -> Array: ...
 
@@ -191,6 +212,14 @@ class SumcheckSummand(Protocol):
 SUMCHECK_MARKER = "zorch.sumcheck"
 # Marker revision the zkx `SumcheckRecognizer` gates on (`composite.version`).
 SUMCHECK_MARKER_VERSION = 1
+
+# Nested region delineating the per-round combine (the summand over the lifted
+# factors) inside the sumcheck scan, so a vendor inlines it generically rather
+# than hardcoding one combine (#113). Carries the computation, not
+# params: operands are `[lifted factors][combine scalars]` and the body is
+# `round.combine`; found by recursive search like the nested `poseidon2:` marker.
+SUMCHECK_COMBINE_MARKER = "zorch.sumcheck.combine"
+SUMCHECK_COMBINE_MARKER_VERSION = 1
 
 
 def prove(
@@ -246,17 +275,31 @@ def prove(
 
 
 def _prove_scan(
-    round: SumcheckSummand, state: list[Array], transcript: Transcript
+    round: SumcheckSummand,
+    state: list[Array],
+    transcript: Transcript,
+    *,
+    mark_combine: bool = False,
+    scalars: Sequence[Array] | None = None,
 ) -> tuple[list[Array], Transcript, RoundMsg]:
     """The per-variable sumcheck scan: split / lift / round-poly / Fiat-Shamir /
     fold, one `lax.scan` step per variable. This is both the plain prover body and
     the decomposition `prove`'s `zorch.sumcheck` marker wraps, so the marked and
     unmarked paths are byte-identical by construction. Assumes a validated,
-    non-empty `state` (`prove` guards the empty / zero-round cases)."""
+    non-empty `state` (`prove` guards the empty / zero-round cases).
+
+    `mark_combine` wraps each round's combine in a nested `zorch.sumcheck.combine`
+    region (#113) — set only on the marked path, where `_prove_marked`
+    threads the combine `scalars` (λ) in as marker operands so the body reads them
+    instead of closing over the round (no duplicate auto-lift). The region is
+    transparent, so the wrapped scan stays byte-identical to the plain one. When
+    `scalars is None` the round binds its own (the plain path)."""
     width = state[0].shape[-1]
     rounds = log2_strict_usize(width)
     degree = round.degree
     half_max = width // 2
+    n_factors = len(state)
+    scalars = round.combine_scalars() if scalars is None else scalars
 
     def step(
         carry: tuple[list[Array], Transcript, Array], _: None
@@ -267,9 +310,19 @@ def _prove_scan(
             (buf[..., :half_max], lax.dynamic_slice_in_dim(buf, half, half_max, -1))
             for buf in state
         ]
-        integrand = round._combine(
-            *[lift_to_domain(p0, p1, degree) for p0, p1 in pairs]
-        )
+        lifted = [lift_to_domain(p0, p1, degree) for p0, p1 in pairs]
+        if mark_combine:
+            # operands [lifted factors][scalars]; body reads passed scalars, so the
+            # round (and its λ) is not captured — λ rides as an explicit operand.
+            integrand = fused_region(
+                lambda *ops: round.combine(ops[n_factors:], *ops[:n_factors]),
+                *lifted,
+                *scalars,
+                name=SUMCHECK_COMBINE_MARKER,
+                version=SUMCHECK_COMBINE_MARKER_VERSION,
+            )
+        else:
+            integrand = round.combine(scalars, *lifted)
         msg = jnp.sum(
             jnp.where(live, integrand, jnp.zeros((), integrand.dtype)), axis=-1
         )
@@ -309,26 +362,37 @@ def _prove_marked(
     mutable carry); the FS permutation rides as the nested `poseidon2:` marker
     inside `observe_and_sample`, whose round constants auto-lift into this
     composite's operands — so the marker names no hash and carries no pre-sampled
-    challenges. Operands: `[factor tables][5 sponge leaves]` plus the auto-lifted
-    round constants; results: `[folded state][5 sponge leaves][round polys]
-    [challenges]` — `prove`'s return, repacked.
+    challenges. Operands: `[factor tables][combine scalars][5 sponge leaves]` plus
+    the auto-lifted round constants; results: `[folded state][5 sponge leaves]
+    [round polys][challenges]` — `prove`'s return, repacked. The per-round combine
+    rides as a nested `zorch.sumcheck.combine` region and its scalars (λ) as the
+    `[combine scalars]` operand segment — empty for product, so a product marker's
+    operand layout is unchanged.
     """
     perm, rate = transcript.permutation, transcript.rate
     num_vars = log2_strict_usize(state[0].shape[-1])
     n_factors = len(state)
+    scalars = round.combine_scalars()
+    n_scalars = len(scalars)
     leaves = _state_leaves(transcript.state)
 
     def body(
         *operands: Array, **_attrs: object
     ) -> tuple[list[Array], tuple[Array, Array, Array, Array, Array], RoundMsg]:
         tables = list(operands[:n_factors])
-        lv = operands[n_factors : n_factors + len(leaves)]
+        sca = operands[n_factors : n_factors + n_scalars]
+        lv = operands[n_factors + n_scalars : n_factors + n_scalars + len(leaves)]
         # Rebuild the transcript from its leaves so the body closes over no sponge
         # state; `_prove_scan` runs the per-round FS, keeping this the one prover.
-        # `_attrs` is marker metadata the inline fallback passes through — the
-        # decomposition itself does not read it.
+        # Forward the combine scalars so the nested combine region reads them as
+        # operands. `_attrs` is marker metadata the inline fallback passes through
+        # — the decomposition itself does not read it.
         folded, t, msgs = _prove_scan(
-            round, tables, DuplexTranscript(perm, rate, DuplexState(*lv))
+            round,
+            tables,
+            DuplexTranscript(perm, rate, DuplexState(*lv)),
+            mark_combine=True,
+            scalars=sca,
         )
         return folded, _state_leaves(cast(DuplexTranscript, t).state), msgs
 
@@ -338,6 +402,7 @@ def _prove_marked(
     folded, out_leaves, msgs = fused_region(
         body,
         *state,
+        *scalars,
         *leaves,
         name=SUMCHECK_MARKER,
         version=SUMCHECK_MARKER_VERSION,

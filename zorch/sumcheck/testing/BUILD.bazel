@@ -33,6 +33,7 @@ py_test(
     deps = [
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/logup_gkr",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
