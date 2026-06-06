@@ -104,6 +104,49 @@ class Poseidon2Params:
                 "internal_constants lanes 1..w-1 must be zero (lane-0 partial round)"
             )
 
+    # Value equality/hash: a permutation rides pytree aux (`DuplexTranscript`
+    # meta_fields), which must compare by value — identity equality turns every
+    # freshly built transcript into a new jit cache key, re-tracing the whole
+    # enclosing zone per call (issue #163; docs/conventions.md "Pytree
+    # registration"). The dataclass-derived __eq__ is unusable here anyway:
+    # `==` on the Array fields is elementwise. Both methods go through one
+    # per-instance cached host-side key: jit dispatch calls __eq__ on the aux
+    # per call, so comparing live device arrays there would cost a
+    # device->host sync per dispatch.
+    _ARRAY_FIELDS = (
+        "external_constants_initial",
+        "external_constants_terminal",
+        "internal_constants",
+        "internal_diag",
+        "external_matrix",
+        "internal_j_scale",
+    )
+
+    def _value_key(self) -> tuple:
+        k = self.__dict__.get("_key")
+        if k is None:
+            k = (
+                self.width,
+                self.dtype,
+                self.alpha,
+                self.external_rounds,
+                self.internal_rounds,
+            ) + tuple(
+                np.asarray(getattr(self, f)).tobytes() for f in self._ARRAY_FIELDS
+            )
+            object.__setattr__(self, "_key", k)
+        return k
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, Poseidon2Params):
+            return NotImplemented
+        return self._value_key() == other._value_key()
+
+    def __hash__(self) -> int:
+        return hash(self._value_key())
+
     @property
     def uses_standard_external_matrix(self) -> bool:
         """Whether `external_matrix` is the standard M4-circulant default.

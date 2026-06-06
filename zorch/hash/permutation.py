@@ -5,6 +5,12 @@ Fiat-Shamir transcript, Merkle compression) read `width` to size state and
 `dtype` to allocate it, then call `permute` — they never name a concrete hash.
 Poseidon2 is one implementation; any other fixed-width permutation drops in
 unchanged.
+
+Implementations MUST define value-based `__eq__`/`__hash__` over their full
+parameter surface: a permutation rides pytree aux (`DuplexTranscript`
+meta_fields), where identity equality silently re-traces the enclosing jit
+zone on every freshly built instance (issue #163). A Protocol cannot enforce
+this — each implementation carries it (`Poseidon2`, `CheapPermutation`).
 """
 
 from __future__ import annotations

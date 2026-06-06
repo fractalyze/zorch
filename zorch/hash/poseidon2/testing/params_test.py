@@ -51,5 +51,24 @@ class Poseidon2ParamsTest(absltest.TestCase):
         self.assertIn("lane", str(cm.exception).lower())
 
 
+class Poseidon2ParamsValueEqualityTest(absltest.TestCase):
+    """Params compare by value: the permutation rides pytree aux (meta_fields),
+    so independently built equal params must be == and hash-equal — identity
+    equality re-traces every jit zone taking a transcript (issue #163)."""
+
+    def test_equal_by_value_across_instances(self) -> None:
+        a, b = _good(), _good()
+        self.assertIsNot(a, b)
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+
+    def test_differs_on_scalar_field(self) -> None:
+        self.assertNotEqual(_good(), _good(alpha=5))
+
+    def test_differs_on_constant_arrays(self) -> None:
+        ones = jnp.ones((4, 16), dtype=F)
+        self.assertNotEqual(_good(), _good(external_constants_initial=ones))
+
+
 if __name__ == "__main__":
     absltest.main()
