@@ -14,10 +14,11 @@ import weakref
 from collections.abc import Iterator
 from dataclasses import fields
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from jax import Array, tree_util
 
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
@@ -338,6 +339,54 @@ class ChainedJaggedProveTest(absltest.TestCase):
         # At each build, only the round just proved could still be alive.
         self.assertEqual(live_log, [0] + [1] * (len(yielded) - 1))
         self.assertEqual([ref() for ref in yielded], [None] * len(yielded))
+
+
+class JaggedLayerProofPytreeTest(absltest.TestCase):
+    """All proof fields are array leaves, so a consumer's
+    `jax.block_until_ready` reaches into the proof directly."""
+
+    def test_flatten_roundtrip(self) -> None:
+        layer = random_jagged_layer(21, (3, 1, 5, 2))
+        lam = rand_field(22, (), KB)
+        z = rand_field(23, (5,), KB)
+        claim = _virtual_claim(layer, 3, lam, z)
+        _, _, proof = prove_jagged_layer(layer, lam, claim, z, cheap_transcript(KB))
+        leaves, treedef = tree_util.tree_flatten(proof)
+        self.assertLen(leaves, 7)
+        rebuilt = tree_util.tree_unflatten(treedef, leaves)
+        self.assertTrue(bool(jnp.all(rebuilt.round_polys == proof.round_polys)))
+
+
+class JaggedLayerRoundJitParityTest(absltest.TestCase):
+    """The per-round jit programs must be byte-identical to per-op eager
+    dispatch -- `jax.disable_jit()` runs the same code pre-fusion, so any
+    drift is a compiler artifact, not a math change."""
+
+    ROW_COUNTS = (3, 1, 5, 2)
+    NRV = 3
+
+    def _run(self) -> tuple[Array, ...]:
+        layer = random_jagged_layer(31, self.ROW_COUNTS)
+        carry = (
+            rand_field(32, (), KB),
+            rand_field(33, (), KB),
+            rand_field(34, (self.NRV + 2,), KB),
+        )
+        (ne, de, pt), transcript, proof = JaggedGkrLayerRound(layer)(
+            carry, cheap_transcript(KB)
+        )
+        _, probe = transcript.sample(1)
+        return ne, de, pt, proof.lam, proof.claim, proof.round_polys, probe
+
+    def test_jit_matches_eager_dispatch(self) -> None:
+        if jax.default_backend() == "cpu":
+            # The prover deliberately runs the rounds eagerly on CPU.
+            self.skipTest("CPU jit miscompiles field programs (fractalyze/jax#168)")
+        jitted = self._run()
+        with jax.disable_jit():
+            eager = self._run()
+        for got, want in zip(jitted, eager):
+            self.assertTrue(bool(jnp.all(got == want)))
 
 
 if __name__ == "__main__":

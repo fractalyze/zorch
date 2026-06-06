@@ -76,7 +76,10 @@ level down: each `LogupSumcheckRound` body reuses sumcheck's `split`/`fold` plus
 an element-wise combine and the one inherent `Σ`, so a round body folds to one
 kernel without a marker, exactly as in [`sumcheck.md`](sumcheck.md). The
 host-driven pyramid over fused round bodies is the deliberate shape here, not a
-missing optimization.
+missing optimization. The jagged sibling realizes the same shape explicitly:
+`jagged_prover._round_step` is one `jit` program per round — the largest unit
+that compiles, since unrolling a whole layer exceeds GPU launch resources at
+production heights — while the round loop and the chain stay host loops.
 
 ## Gotcha
 

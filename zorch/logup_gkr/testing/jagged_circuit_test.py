@@ -1,10 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from jax import Array, tree_util
 
 from zorch.logup_gkr.circuit import (
     GkrLayer,
@@ -29,6 +30,25 @@ def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
             + jnp.sum(layer.numerator_1[lo:hi] / layer.denominator_1[lo:hi])
         )
     return sums
+
+
+class JaggedGkrLayerPytreeTest(absltest.TestCase):
+    """The layer is a JAX pytree -- the planes are leaves, `row_counts` is
+    static -- so the jit programs (the transition, the per-round step) take it
+    as a traced ARGUMENT instead of baking gigabyte planes into the trace."""
+
+    def test_flatten_roundtrip(self) -> None:
+        layer = _random_jagged_layer(1, (3, 1, 2, 2))
+        leaves, treedef = tree_util.tree_flatten(layer)
+        self.assertLen(leaves, 4)  # exactly the four MLE planes
+        rebuilt = tree_util.tree_unflatten(treedef, leaves)
+        self.assertEqual(rebuilt.row_counts, layer.row_counts)
+        self.assertTrue(bool(jnp.all(rebuilt.numerator_0 == layer.numerator_0)))
+
+    def test_threads_through_jit_as_argument(self) -> None:
+        layer = _random_jagged_layer(2, (3, 1, 2, 2))
+        got = jax.jit(lambda l: l.denominator_1)(layer)
+        self.assertTrue(bool(jnp.all(got == layer.denominator_1)))
 
 
 class JaggedGkrLayerTest(absltest.TestCase):

@@ -29,19 +29,24 @@ challenge the MSB -- so the carry convention (MSB-first point, child selector
 appended last) matches the dense chain's.
 
 Per-round shapes shrink and the gather layout changes round to round, so the
-driver is a host-orchestrated Python loop over plain numeric bodies, not the
-homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
+rounds do not fit the homogeneous `zorch.sumcheck` scan (see
+docs/conventions.md). Each round runs as one `jit` program (`_round_step`);
+the loop over rounds and the chain across layers stay host-orchestrated.
+Unrolling a whole layer into one program is ruled out by CUDA launch
+resources at production heights -- see `_round_step`.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from jax.tree_util import register_dataclass
 
 from zorch.logup_gkr.circuit import JaggedGkrLayer, _pad_neutral, _segment_gather
 from zorch.logup_gkr.prover import Carry, logup_combine
@@ -49,6 +54,7 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import (
     compute_inv_vandermonde,
     compute_lagrange_basis,
+    dot_unrolled,
     eval_coeffs,
 )
 from zorch.round import Round
@@ -61,12 +67,28 @@ if TYPE_CHECKING:
 _DEGREE = 3
 
 
+@partial(
+    register_dataclass,
+    data_fields=[
+        "lam",
+        "claim",
+        "round_polys",
+        "numerator_0",
+        "numerator_1",
+        "denominator_0",
+        "denominator_1",
+    ],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class JaggedLayerProof:
     """One jagged GKR layer's sumcheck transcript: the batching challenge and
     opening claim the layer entered with (the per-layer anchors a consumer
     diffs first when a byte-match diverges mid-pyramid), the coefficient-form
-    round polynomials, and the final pair openings."""
+    round polynomials, and the final pair openings.
+
+    A registered pytree (all fields are leaves): the per-round `jit` program
+    returns it, and a consumer can `block_until_ready` it directly."""
 
     lam: Array
     claim: Array
@@ -147,7 +169,7 @@ def _round_coeffs(
     xs = jnp.stack([jnp.zeros((), dtype), one, one / jnp.array(2, dtype), b_root])
     ys = jnp.stack([s_zero, s_one, s_half, jnp.zeros((), dtype)])
     lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
-    return jnp.dot(inv_vand, jnp.dot(lagrange, ys))
+    return dot_unrolled(inv_vand, dot_unrolled(lagrange, ys))
 
 
 def _paired_sums(
@@ -229,60 +251,130 @@ def prove_jagged_layer(
     opening_claim = claim  # the loop rebinds claim to each round's reduction
     polys: list[Array] = []
     challenges: list[Array] = []
+    # CPU jit miscompiles field programs fusion-shape-dependently
+    # (fractalyze/jax#168: a dot -- or a strided-slice fold -- fused with
+    # elementwise consumers computes wrong values), so the rounds run
+    # eagerly there; on GPU each round is one compiled program.
+    step = _round_step_eager if jax.default_backend() == "cpu" else _round_step
     for rnd in range(nrv + niv):
         in_rows = rnd < nrv
-        if in_rows:
-            gather, col_index, pair_index = meta[rnd]
-            n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
-            w = eq_int[col_index]
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0,
-                n1,
-                d0,
-                d1,
-                eq_row[pair_index * 2] * w,
-                eq_row[pair_index * 2 + 1] * w,
-                lam,
-            )
-        else:
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0, n1, d0, d1, eq_int[0::2], eq_int[1::2], lam
-            )
-        poly = _round_coeffs(
-            eval_zero,
-            eval_half,
-            eq_sum,
+        gather, col_index, pair_index = meta[rnd] if in_rows else (None, None, None)
+        (n0, n1, d0, d1, eq_row, eq_int, transcript, poly, r, claim, pad_adj) = step(
+            n0,
+            n1,
+            d0,
+            d1,
+            eq_row,
+            eq_int,
+            gather,
+            col_index,
+            pair_index,
+            lam,
             eq_adj,
             pad_adj,
             point[-1],
             claim,
             naturals,
             inv_vand,
+            transcript,
+            in_rows=in_rows,
+            challenge_limbs=challenge_limbs,
         )
-        transcript = transcript.observe(poly)
-        transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
         polys.append(poly)
         challenges.append(r)
-
-        claim = eval_coeffs(poly, r)
-        pad_adj = pad_adj * (point[-1] * r + (one - point[-1]) * (one - r))
-        n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
-        if in_rows:
-            eq_row = _bind_lsb(eq_row, r)
-            if rnd == nrv - 1:
-                # Rows exhausted: the accumulated row-eq product becomes the
-                # scalar factor of every interaction round; pad_adj restarts
-                # to track the interaction variables' own bound mass.
-                eq_adj = pad_adj
-                pad_adj = one
-        else:
-            eq_int = _bind_lsb(eq_int, r)
+        if in_rows and rnd == nrv - 1:
+            # Rows exhausted: the accumulated row-eq product becomes the
+            # scalar factor of every interaction round; pad_adj restarts
+            # to track the interaction variables' own bound mass.
+            eq_adj = pad_adj
+            pad_adj = one
         point = point[:-1]
 
     proof = JaggedLayerProof(
         lam, opening_claim, jnp.stack(polys), n0[0], n1[0], d0[0], d1[0]
     )
     return jnp.stack(challenges[::-1]), transcript, proof
+
+
+def _round_step_eager(
+    n0: Array,
+    n1: Array,
+    d0: Array,
+    d1: Array,
+    eq_row: Array,
+    eq_int: Array,
+    gather: Array | None,
+    col_index: Array | None,
+    pair_index: Array | None,
+    lam: Array,
+    eq_adj: Array,
+    pad_adj: Array,
+    z_cur: Array,
+    claim: Array,
+    naturals: Array,
+    inv_vand: Array,
+    transcript: Transcript,
+    *,
+    in_rows: bool,
+    challenge_limbs: int,
+) -> tuple[
+    Array, Array, Array, Array, Array, Array, Transcript, Array, Array, Array, Array
+]:
+    """One variable's round: pad -> paired sums -> coeffs -> observe/sample
+    -> fold. `_round_step` is its jitted form, one program per round shape.
+
+    The jit boundary sits at the ROUND, not the layer: the per-round bodies
+    are ~10 eager dispatches each, but unrolling a whole layer's rounds into
+    one program exceeds CUDA launch resources at production heights
+    (`CUDA_ERROR_LAUNCH_OUT_OF_RESOURCES` -- the same register-pressure
+    cliff that rules out one whole-pyramid program). One program per round
+    keeps every fusion the size of a single reduction + fold.
+    """
+    one = jnp.ones((), z_cur.dtype)
+    if in_rows:
+        # The caller passes the row-phase metadata only for row rounds; the
+        # static `in_rows` flag is the contract that it is present here.
+        assert col_index is not None and pair_index is not None
+        n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
+        w = eq_int[col_index]
+        eval_zero, eval_half, eq_sum = _paired_sums(
+            n0,
+            n1,
+            d0,
+            d1,
+            eq_row[pair_index * 2] * w,
+            eq_row[pair_index * 2 + 1] * w,
+            lam,
+        )
+    else:
+        eval_zero, eval_half, eq_sum = _paired_sums(
+            n0, n1, d0, d1, eq_int[0::2], eq_int[1::2], lam
+        )
+    poly = _round_coeffs(
+        eval_zero,
+        eval_half,
+        eq_sum,
+        eq_adj,
+        pad_adj,
+        z_cur,
+        claim,
+        naturals,
+        inv_vand,
+    )
+    transcript = transcript.observe(poly)
+    transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
+
+    claim = eval_coeffs(poly, r)
+    pad_adj = pad_adj * (z_cur * r + (one - z_cur) * (one - r))
+    n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
+    if in_rows:
+        eq_row = _bind_lsb(eq_row, r)
+    else:
+        eq_int = _bind_lsb(eq_int, r)
+    return n0, n1, d0, d1, eq_row, eq_int, transcript, poly, r, claim, pad_adj
+
+
+_round_step = jax.jit(_round_step_eager, static_argnames=("in_rows", "challenge_limbs"))
 
 
 class JaggedGkrLayerRound(Round):

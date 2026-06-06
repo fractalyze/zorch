@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass
+from functools import partial
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from jax.tree_util import register_dataclass
 
 from zorch.utils.bits import log2_strict_usize
 
@@ -161,6 +164,11 @@ def extract_outputs(layer: GkrLayer) -> LogUpGkrOutput:
     )
 
 
+@partial(
+    register_dataclass,
+    data_fields=["numerator_0", "numerator_1", "denominator_0", "denominator_1"],
+    meta_fields=["row_counts"],
+)
 @dataclass(frozen=True)
 class JaggedGkrLayer:
     """One jagged fractional-sum layer, stored interaction-major.
@@ -170,6 +178,10 @@ class JaggedGkrLayer:
     count. The interaction count must be a power of two (the consumer pads its
     interaction list). Row counts are static Python ints, so the transition's
     gather indices are built at trace time.
+
+    A registered pytree: the planes are the leaves and `row_counts` is static,
+    so a layer crosses the transition and per-round `jit` boundaries as a
+    traced argument instead of a baked-in constant.
     """
 
     numerator_0: Array
@@ -275,7 +287,24 @@ def jagged_layer_transition(
     folded segments are then padded out to `out_row_counts` with the same
     neutral rows. The schedule is the consumer's policy; this block only
     refuses to truncate, which would silently drop fractions from the sum.
+
+    One `jit` program per (layer shape, schedule) on GPU — the
+    gather/fold/pad body is a leaf numeric kernel, and eagerly it is a
+    dispatch-per-op chain on the pyramid's largest arrays. On CPU it runs
+    eagerly: CPU jit miscompiles field programs fusion-shape-dependently
+    (fractalyze/jax#168), the same gate as the jagged prover's rounds.
     """
+    body = (
+        _jagged_layer_transition
+        if jax.default_backend() == "cpu"
+        else _jagged_layer_transition_jit
+    )
+    return body(layer, out_row_counts)
+
+
+def _jagged_layer_transition(
+    layer: JaggedGkrLayer, out_row_counts: tuple[int, ...]
+) -> JaggedGkrLayer:
     if len(out_row_counts) != layer.num_interactions:
         raise ValueError(
             f"schedule must cover all {layer.num_interactions} interactions, "
@@ -311,6 +340,11 @@ def jagged_layer_transition(
         denominator_1=rd1,
         row_counts=out_row_counts,
     )
+
+
+_jagged_layer_transition_jit = jax.jit(
+    _jagged_layer_transition, static_argnames="out_row_counts"
+)
 
 
 def extract_jagged_outputs(layer: JaggedGkrLayer) -> LogUpGkrOutput:

@@ -24,10 +24,18 @@ inside are fine — `jit` unrolls them.
   `degree` + `dtype`; with no array input there is nothing for `jit` to
   specialize over.
 
-A round's `_round_poly` / `_fold` are pure numeric and *could* be `@jit`'d,
-but are deliberately left undecorated: they are the bodies a future marked
-fused region (`stablehlo.composite`) + zkx emitter will lower to one kernel
-(see `sumcheck.md`), not blanket-`@jit` candidates.
+A scan-shaped round's `_round_poly` / `_fold` are pure numeric and *could*
+be `@jit`'d, but are deliberately left undecorated: they are the bodies a
+marked fused region (`stablehlo.composite`) + zkx emitter lowers to one
+kernel (see `sumcheck.md`), not blanket-`@jit` candidates.
+
+The jagged GKR per-variable round is the deliberate `jit` leaf instead
+(`jagged_prover._round_step`): its shapes shrink round to round, so no
+marker/scan form fits, and one program per ROUND is the largest unit that
+compiles — unrolling a whole layer into one program exceeds GPU launch
+resources at production heights. The loop over rounds and the chain over
+layers stay host-orchestrated; the jagged path's backend gating lives at
+its dispatch sites in `logup_gkr/`.
 
 ## Loops: `for` vs `lax.scan` vs `vmap`
 
