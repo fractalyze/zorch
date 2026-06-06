@@ -60,6 +60,26 @@ The verifier replays both sumchecks, recomputes the `h` leaf, checks the product
 verifies the BaseFold opening, and re-derives the structure bind — tying the proof
 to the commitment.
 
+### Verifier input contract
+
+The verifier consumes the `JaggedLayout` from an untrusted statement, so
+`validate_layout` (invoked on every indicator derivation, prover and verifier
+alike) rejects malformed counts before any arithmetic reads them: negative or
+oversized heights/widths, zero total area, a log-area tier past the safe bound
+(`2^tier` must stay below every supported field prime for the canonical
+structure-hash embedding, and within int32 for the prefix-sum decode), and
+`log_s > log_m`. Per-count capacity is checked individually — block count
+included — because the area bounds only `h·w` products: a zero-width block
+would otherwise smuggle an arbitrary height into the structure hash (where it
+aliases a small one mod p), and zero-area blocks would grow the hash's leading
+block-count element without bound the same way.
+
+Booleanity and monotonicity of the prefix-sum bits need **no** runtime check:
+prover and verifier both *rebuild* the bits from the validated non-negative
+counts, so they hold by construction. (A verifier that instead consumed
+prover-supplied prefix sums would have to check both — that is a design
+property of this layout-recomputing shape, worth preserving.)
+
 **Composite fusion is deferred.** The opening is a procedural composition of `@jit`
 device zones; folding the whole protocol into one fused kernel (the
 [fusion north star](README.md#fusion-north-star)) needs the Fiat-Shamir-internal

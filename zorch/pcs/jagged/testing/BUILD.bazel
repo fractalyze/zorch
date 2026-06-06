@@ -36,6 +36,8 @@ py_test(
     deps = [
         "//zorch/pcs/jagged:dense",
         "//zorch/pcs/jagged:poly",
+        "//zorch/pcs/jagged:prover",
+        requirement("absl_py"),
         requirement("jax"),
         requirement("numpy"),
         requirement("zk_dtypes"),

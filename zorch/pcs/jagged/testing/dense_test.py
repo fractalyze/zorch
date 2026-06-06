@@ -1,15 +1,18 @@
 # zorch/pcs/jagged/testing/dense_test.py
-"""from_blocks — column-major pack to a static M_max=2^tier dense buffer."""
+"""from_blocks — column-major pack to a static M_max=2^tier dense buffer —
+plus the fail-loud `validate_layout` contract on untrusted layouts."""
 from __future__ import annotations
 
 import unittest
 
 import jax.numpy as jnp
 import numpy as np
+from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
-from zorch.pcs.jagged.dense import from_blocks
+from zorch.pcs.jagged.dense import JaggedLayout, from_blocks, validate_layout
 from zorch.pcs.jagged.poly import build_jagged_layout
+from zorch.pcs.jagged.prover import _indicator_inputs
 from zorch.utils.bits import log2_ceil_usize
 
 
@@ -86,5 +89,74 @@ class FromBlocksTest(unittest.TestCase):
         self.assertEqual(int(packed.shape[0]), 8)
 
 
+def _layout(
+    heights: list[int], widths: list[int], log_m: int = 6, log_s: int = 2
+) -> JaggedLayout:
+    return JaggedLayout(
+        log_m=log_m,
+        log_s=log_s,
+        heights=tuple(heights),
+        widths=tuple(widths),
+        dtype=F,
+    )
+
+
+class ValidateLayoutTest(absltest.TestCase):
+    """The verifier consumes the layout from an untrusted statement; malformed
+    counts must raise before any arithmetic — see docs/jagged.md § Verifier
+    input contract."""
+
+    def test_valid_layout_passes(self) -> None:
+        validate_layout(_layout([3, 0, 5], [2, 4, 1]))
+
+    def test_negative_height_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "height"):
+            validate_layout(_layout([3, -1], [2, 2]))
+
+    def test_negative_width_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "width"):
+            validate_layout(_layout([3, 1], [2, -2]))
+
+    def test_mismatched_height_width_lengths_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "heights.*widths"):
+            validate_layout(_layout([3, 1], [2]))
+
+    def test_empty_blocks_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "block"):
+            validate_layout(_layout([], []))
+
+    def test_zero_total_area_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "area"):
+            validate_layout(_layout([0, 0], [1, 1]))
+
+    def test_count_above_capacity_rejected(self) -> None:
+        # Width-0 block hides an oversized height from the area bound.
+        with self.assertRaisesRegex(ValueError, "height"):
+            validate_layout(_layout([2, 1 << 40], [2, 0]))
+
+    def test_block_count_above_capacity_rejected(self) -> None:
+        # Zero-area blocks grow the block count without growing the area.
+        with self.assertRaisesRegex(ValueError, "block count"):
+            validate_layout(_layout([2] + [0] * 5, [1] * 6))
+
+    def test_area_tier_above_safe_bound_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "tier"):
+            validate_layout(_layout([1 << 30], [1]))
+
+    def test_log_s_above_log_m_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "log_s"):
+            validate_layout(_layout([4], [4], log_m=4, log_s=5))
+
+    def test_negative_log_s_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "log_s"):
+            validate_layout(_layout([4], [4], log_s=-1))
+
+    def test_indicator_inputs_rejects_malformed_structure(self) -> None:
+        # The shared consumption path (commit/open/verify) must fire the
+        # validation before any bit tensor is built.
+        with self.assertRaisesRegex(ValueError, "height"):
+            _indicator_inputs(_layout([2, -1], [2, 2]))
+
+
 if __name__ == "__main__":
-    unittest.main()
+    absltest.main()
