@@ -148,6 +148,40 @@ class MerkleTreeTest(absltest.TestCase):
             bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
+    def test_reconstruct_root_rolls_path_into_scan(self) -> None:
+        # The leaf->root fold is one scan, not `depth` unrolled compresses: the
+        # lowered form carries a single while loop and its op count is
+        # independent of path depth, so the verifier's per-layer reconstruct
+        # chains lower in O(1), not O(depth) (#163 — the unrolled fold dominated
+        # trace+lower).
+        _, _, tree = koalabear16_merkle()
+
+        def lowered(depth: int) -> str:
+            opening = Opening(
+                row=jnp.zeros((8,), F),
+                path=[jnp.zeros((8,), F) for _ in range(depth)],
+            )
+            return jax.jit(tree.reconstruct_root).lower(0, opening).as_text()
+
+        shallow, deep = lowered(2), lowered(8)
+        self.assertIn("stablehlo.while", shallow)  # the fold is a scan, not unrolled
+        self.assertEqual(  # a 4x-deeper path adds no unrolled region
+            shallow.count("stablehlo.composite"), deep.count("stablehlo.composite")
+        )
+
+    def test_reconstruct_root_recovers_root_on_deeper_tree(self) -> None:
+        # The scan carries the leaf-index parity across levels; the other
+        # roundtrips are depth-2, so exercise depth-4 to cover that propagation.
+        _, _, tree = koalabear16_merkle()
+        matrix = jnp.arange(128, dtype=F).reshape(16, 8)  # height 16 -> depth 4
+        root, layers = tree.commit(matrix)
+        indices = jnp.arange(matrix.shape[0])
+        openings = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        roots = jax.vmap(tree.reconstruct_root)(indices, openings)
+        self.assertTrue(
+            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+        )
+
     def test_commit_root_matches_plonky3_golden(self) -> None:
         _, _, tree = koalabear16_merkle()
         raw_root, _ = tree.commit(jnp.arange(32, dtype=F).reshape(4, 8))
