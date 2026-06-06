@@ -60,6 +60,11 @@ thing exists, its background, the design philosophy, and the rules that follow
 from it. What the code already states (the API surface, a usage walkthrough)
 stays in the code and its tests, not here.
 
+## Dev environment
+
+Per-workspace venv pinning, the ZKX GPU plugin, and the JAX compile-cache rule
+live in [`dev-env.md`](dev-env.md).
+
 ______________________________________________________________________
 
 This hub grows as the repo does — each new subsystem adds a row here, not a
