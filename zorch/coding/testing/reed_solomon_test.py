@@ -20,6 +20,7 @@ from jax import Array, lax
 from zorch.coding.foldable_code import FoldableCode
 from zorch.coding.linear_code import LinearCode
 from zorch.coding.reed_solomon import (
+    BitReversedReedSolomon,
     ReedSolomon,
     eval_domain,
     fri_fold,
@@ -28,6 +29,18 @@ from zorch.coding.reed_solomon import (
 from zorch.testkit.random_field import rand_field
 
 F = zk_dtypes.koalabear_mont
+EF = zk_dtypes.koalabearx4_mont
+
+
+def _bit_reverse_perm(n: int) -> Array:
+    """The bit-reversal permutation of [0, n), built bit-by-bit so it shares
+    no code with the implementation's `lax.bit_reverse`."""
+    bits = n.bit_length() - 1
+    rev = [0] * n
+    for i in range(n):
+        for b in range(bits):
+            rev[i] |= ((i >> b) & 1) << (bits - 1 - b)
+    return jnp.array(rev, dtype=jnp.int32)
 
 
 def _domain(n: int, dtype: Any) -> Array:
@@ -146,6 +159,130 @@ class ReedSolomonTest(absltest.TestCase):
             ReedSolomon(message_len=3, blowup=2, dtype=F)
         with self.assertRaises(ValueError):
             ReedSolomon(message_len=4, blowup=3, dtype=F)
+
+
+class BitReversedReedSolomonTest(absltest.TestCase):
+    def test_implements_foldable_code_protocol(self) -> None:
+        code = BitReversedReedSolomon(message_len=4, blowup=2, dtype=F)
+        self.assertIsInstance(code, LinearCode)
+        self.assertIsInstance(code, FoldableCode)
+        self.assertEqual(code.message_len, 4)
+        self.assertEqual(code.block_len, 8)
+        self.assertEqual(code.dtype, F)
+
+    def test_encode_is_bit_reversed_natural_codeword(self) -> None:
+        k, blowup = 8, 2
+        msg = rand_field(11, (k,), F)
+        nat = ReedSolomon(k, blowup, F).encode(msg)
+        br = BitReversedReedSolomon(k, blowup, F).encode(msg)
+        self.assertTrue(bool(jnp.all(br == nat[_bit_reverse_perm(k * blowup)])))
+
+    def test_domain_matches_codeword_layout(self) -> None:
+        # domain()[j] must be the evaluation point of codeword[j], so the
+        # bit-reversed code's domain rides the same permutation as encode.
+        k, blowup = 4, 2
+        shift = jnp.array(3, dtype=F)
+        nat = ReedSolomon(k, blowup, F, coset_shift=shift)
+        br = BitReversedReedSolomon(k, blowup, F, coset_shift=shift)
+        self.assertTrue(
+            bool(jnp.all(br.domain() == nat.domain()[_bit_reverse_perm(k * blowup)]))
+        )
+
+    def test_fold_commutes_with_bit_reversal(self) -> None:
+        # br.fold on the bit-reversed codeword is the bit-reversal of the
+        # natural fold — the layout is fold-stable, layer by layer.
+        k, blowup = 8, 2
+        nat = ReedSolomon(k, blowup, F)
+        br = BitReversedReedSolomon(k, blowup, F)
+        cw = nat.encode(rand_field(12, (k,), F))
+        beta0, beta1 = rand_field(13, (), F), rand_field(14, (), F)
+        n = k * blowup
+        layer1_nat = nat.fold(cw, beta0)
+        layer1_br = br.fold(cw[_bit_reverse_perm(n)], beta0)
+        self.assertTrue(
+            bool(jnp.all(layer1_br == layer1_nat[_bit_reverse_perm(n // 2)]))
+        )
+        layer2_nat = nat.fold(layer1_nat, beta1)
+        layer2_br = br.fold(layer1_br, beta1)
+        self.assertTrue(
+            bool(jnp.all(layer2_br == layer2_nat[_bit_reverse_perm(n // 4)]))
+        )
+
+    def test_fold_commutes_with_bit_reversal_on_coset(self) -> None:
+        k, blowup = 8, 2
+        h = jnp.array(3, dtype=F)
+        nat = ReedSolomon(k, blowup, F, coset_shift=h)
+        br = BitReversedReedSolomon(k, blowup, F, coset_shift=h)
+        cw = nat.encode(rand_field(15, (k,), F))
+        beta = rand_field(16, (), F)
+        n = k * blowup
+        got = br.fold(cw[_bit_reverse_perm(n)], beta)
+        want = nat.fold(cw, beta)[_bit_reverse_perm(n // 2)]
+        self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_fold_extension_field_codeword(self) -> None:
+        # The basefold open folds RLC'd extension-field codewords through the
+        # same seam; the fold's x-coordinates stay base-field.
+        k, blowup = 8, 2
+        nat = ReedSolomon(k, blowup, EF)
+        br = BitReversedReedSolomon(k, blowup, EF)
+        cw = nat.encode(rand_field(17, (k,), EF))
+        beta = rand_field(18, (), EF)
+        n = k * blowup
+        got = br.fold(cw[_bit_reverse_perm(n)], beta)
+        want = nat.fold(cw, beta)[_bit_reverse_perm(n // 2)]
+        self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_fold_values_matches_whole_codeword_fold(self) -> None:
+        # The seam contract: with (l, h) = pair_indices(p, level),
+        # fold(layer, beta)[p] == fold_values(layer[l], layer[h], beta, p, level).
+        k, blowup = 8, 2
+        br = BitReversedReedSolomon(k, blowup, F)
+        cw = br.encode(rand_field(19, (k,), F))
+        beta = rand_field(20, (), F)
+        half = br.block_len // 2
+        positions = jnp.array([0, 3, half - 1])
+        lo_idx, hi_idx = br.pair_indices(positions, 0)
+        folded = br.fold(cw, beta)
+        got = br.fold_values(cw[lo_idx], cw[hi_idx], beta, positions, 0)
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_fold_values_matches_whole_codeword_fold_on_coset(self) -> None:
+        k, blowup = 8, 2
+        h = jnp.array(3, dtype=F)
+        br = BitReversedReedSolomon(k, blowup, F, coset_shift=h)
+        layer1 = br.fold(br.encode(rand_field(21, (k,), F)), rand_field(22, (), F))
+        beta = rand_field(23, (), F)
+        half = layer1.shape[0] // 2
+        positions = jnp.array([0, 2, half - 1])
+        lo_idx, hi_idx = br.pair_indices(positions, 1)
+        folded = br.fold(layer1, beta)
+        got = br.fold_values(layer1[lo_idx], layer1[hi_idx], beta, positions, 1)
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_pair_indices_are_adjacent(self) -> None:
+        br = BitReversedReedSolomon(8, 2, F)
+        positions = jnp.array([0, 2, 5])
+        lo_idx, hi_idx = br.pair_indices(positions, 0)
+        self.assertTrue(bool(jnp.all(lo_idx == positions * 2)))
+        self.assertTrue(bool(jnp.all(hi_idx == positions * 2 + 1)))
+
+    def test_layer_positions_shift_chain(self) -> None:
+        # A query at q tracks the value landing at q >> (i+1) after layer i.
+        br = BitReversedReedSolomon(8, 2, F)
+        q = jnp.array([13, 6])
+        a = br.layer_positions(q, 3)
+        self.assertTrue(bool(jnp.all(a[0] == q >> 1)))
+        self.assertTrue(bool(jnp.all(a[1] == q >> 2)))
+        self.assertTrue(bool(jnp.all(a[2] == q >> 3)))
+
+    def test_check_final_accepts_only_the_constant_claim(self) -> None:
+        br = BitReversedReedSolomon(message_len=1, blowup=4, dtype=F)
+        claim = rand_field(24, (), F)
+        good = jnp.full((br.block_len,), claim, F)
+        self.assertTrue(bool(br.check_final(good, claim)))
+        bad = good.at[1].set(claim + jnp.ones((), F))
+        self.assertFalse(bool(br.check_final(bad, claim)))
 
 
 class FriValuesTest(absltest.TestCase):

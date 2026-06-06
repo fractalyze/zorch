@@ -27,7 +27,7 @@ import jax.numpy as jnp
 import zk_dtypes
 from jax import Array, lax
 
-from zorch.utils.bits import is_power_of_two
+from zorch.utils.bits import is_power_of_two, log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.coding.foldable_code import FoldableCode
@@ -117,7 +117,7 @@ class ReedSolomon:
     def fold(self, codeword: Array, beta: Array) -> Array:
         """FoldableCode fold: natural-order `(x, -x)` conjugate pairs. The layer
         level — and with it the coset shift — is read off the codeword length."""
-        level = (self.block_len // codeword.shape[0]).bit_length() - 1
+        level = log2_strict_usize(self.block_len // codeword.shape[0])
         return fri_fold(codeword, beta, shift=self._level_shift(level))
 
     def fold_values(
@@ -136,6 +136,22 @@ class ReedSolomon:
         comparison."""
         return jnp.all(final == claim)
 
+    def pair_indices(self, positions: Array, level: int) -> tuple[Array, Array]:
+        """Natural order: the conjugates of layer `level` sit a half-layer
+        apart, and the lo index is the landing index itself."""
+        return positions, positions + (self.block_len >> (level + 1))
+
+    def layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
+        """Natural order: `a_i = q_i mod (n / 2^{i+1})` with `q_0 = positions`,
+        `q_{i+1} = a_i`, elementwise over the query axis."""
+        indices = []
+        q = positions
+        for i in range(num_rounds):
+            a = q % (self.block_len >> (i + 1))
+            indices.append(a)
+            q = a
+        return indices
+
     def _level_shift(self, level: int) -> Array | None:
         """Layer `level`'s domain shift, `coset_shift^(2^level)` — each fold
         lands on the squared domain, squaring the shift with it."""
@@ -145,6 +161,105 @@ class ReedSolomon:
         for _ in range(level):
             shift = shift * shift
         return shift
+
+
+def _bit_reverse_indices(positions: Array, n: int) -> Array:
+    """Bit-reverse each index in `positions` within width `log2(n)` — the
+    index-space mirror of `lax.bit_reverse`, for gathers too sparse to justify
+    permuting the whole array."""
+    bits = log2_strict_usize(n)
+    rev = positions * 0
+    for b in range(bits):
+        rev = rev | (((positions >> b) & 1) << (bits - 1 - b))
+    return rev
+
+
+class BitReversedReedSolomon:
+    """Reed-Solomon with codewords in bit-reversed evaluation order.
+
+    Some commitment layouts store the codeword bit-reversed so a fold's point
+    pair sits adjacently (`(2p, 2p+1)`) instead of a half-layer apart — Merkle
+    paths of a pair then share all but their last node, and the layout is
+    fold-stable (folding a bit-reversed layer yields the squared domain's
+    codeword, again bit-reversed). The fold math is `ReedSolomon`'s; only the
+    layout-dependent surfaces differ — pair geometry (`pair_indices` /
+    `layer_positions`), the fold's x-coordinate gather, and the
+    `encode`/`domain` output order.
+    """
+
+    def __init__(
+        self,
+        message_len: int,
+        blowup: int,
+        dtype: Any,
+        *,
+        coset_shift: Array | None = None,
+    ) -> None:
+        self._natural = ReedSolomon(message_len, blowup, dtype, coset_shift=coset_shift)
+        self.message_len = message_len
+        self.block_len = self._natural.block_len
+        self.dtype = dtype
+
+    def encode(self, message: Array) -> Array:
+        cw = self._natural.encode(message)
+        return lax.bit_reverse(cw, dimensions=(cw.ndim - 1,))
+
+    def domain(self) -> Array:
+        """The points `encode` evaluates on, in codeword (bit-reversed) order."""
+        return lax.bit_reverse(self._natural.domain(), dimensions=(0,))
+
+    def fold(self, codeword: Array, beta: Array) -> Array:
+        n = codeword.shape[0]
+        if n < 2:
+            raise ValueError(f"fold requires a codeword of length >= 2, got {n}")
+        level = log2_strict_usize(self.block_len // n)
+        pairs = codeword.reshape(n // 2, 2)
+        return fri_fold_values(
+            pairs[:, 0], pairs[:, 1], beta, self._pair_points(n, level)
+        )
+
+    def fold_values(
+        self, lo: Array, hi: Array, beta: Array, positions: Array, level: int
+    ) -> Array:
+        # Gather the few queried x-coordinates straight from the natural-order
+        # half at bit-reversed indices — a full-width `lax.bit_reverse` of the
+        # domain would be discarded except at `positions`.
+        n = self.block_len >> level
+        x = self._layer_domain(n, level)[_bit_reverse_indices(positions, n // 2)]
+        return fri_fold_values(lo, hi, beta, x)
+
+    def check_final(self, final: Array, claim: Array) -> Array:
+        """Constant-polynomial membership is order-invariant."""
+        return self._natural.check_final(final, claim)
+
+    def pair_indices(self, positions: Array, level: int) -> tuple[Array, Array]:
+        """Bit-reversed order: the pair landing at `positions` is adjacent."""
+        return positions * 2, positions * 2 + 1
+
+    def layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
+        """Bit-reversed order: each fold halves the index, `a_i = q >> (i+1)`."""
+        indices = []
+        q = positions
+        for _ in range(num_rounds):
+            q = q >> 1
+            indices.append(q)
+        return indices
+
+    def _layer_domain(self, n: int, level: int) -> Array:
+        """Layer `level`'s natural-order evaluation domain (length `n`)."""
+        return eval_domain(
+            _base_dtype(self.dtype), n, shift=self._natural._level_shift(level)
+        )
+
+    def _pair_points(self, n: int, level: int) -> Array:
+        """x-coordinates of all of layer `level`'s pairs in pair order: entry
+        `p` is the evaluation point of the pair `(2p, 2p+1)`, i.e. the natural
+        domain's first half gathered through the bit-reversal. For a sparse
+        gather see `fold_values`, which reverses the indices instead."""
+        x = self._layer_domain(n, level)[: n // 2]
+        if n > 2:
+            x = lax.bit_reverse(x, dimensions=(0,))
+        return x
 
 
 def fri_fold_values(fx: Array, fnx: Array, beta: Array, x: Array) -> Array:
@@ -176,3 +291,4 @@ def fri_fold(codeword: Array, beta: Array, *, shift: Array | None = None) -> Arr
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[FoldableCode] = ReedSolomon
+    _bitrev: type[FoldableCode] = BitReversedReedSolomon

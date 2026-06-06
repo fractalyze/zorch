@@ -24,7 +24,7 @@ from zorch.pcs.basefold.config import (
     BasefoldProof,
     sample_rlc_coeffs,
 )
-from zorch.pcs.fold import query_layer_indices, sample_positions
+from zorch.pcs.fold import sample_positions
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -131,24 +131,25 @@ class BasefoldVerifier:
                 t = t.observe(proof.final_poly)
         ok = ok & self.code.check_final(proof.final_poly, current_claim)
 
-        # Query phase (natural order, mirrors fri/verifier._verify_one).
+        # Query phase (pair layout from the code seam, mirrors
+        # fri/verifier._verify_one).
         t, positions = sample_positions(t, n, self.num_queries)
-        a = query_layer_indices(positions, n, num_vars)
-        half0 = n >> 1
+        a = self.code.layer_positions(positions, num_vars)
 
         def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
             return jnp.all(self._reconstruct_root_batch(idx, opening) == root)
 
-        ok = ok & roots_ok(commitment, a[0], proof.component_opening.lo)
-        ok = ok & roots_ok(commitment, a[0] + half0, proof.component_opening.hi)
+        lo0, hi0 = self.code.pair_indices(a[0], 0)
+        ok = ok & roots_ok(commitment, lo0, proof.component_opening.lo)
+        ok = ok & roots_ok(commitment, hi0, proof.component_opening.hi)
         for layer in range(1, num_vars):
-            half = n >> (layer + 1)
+            lo_idx, hi_idx = self.code.pair_indices(a[layer], layer)
             ok = ok & roots_ok(
-                proof.fri_roots[layer - 1], a[layer], proof.query_openings[layer - 1].lo
+                proof.fri_roots[layer - 1], lo_idx, proof.query_openings[layer - 1].lo
             )
             ok = ok & roots_ok(
                 proof.fri_roots[layer - 1],
-                a[layer] + half,
+                hi_idx,
                 proof.query_openings[layer - 1].hi,
             )
 
@@ -162,10 +163,12 @@ class BasefoldVerifier:
                 hi_val = proof.query_openings[i - 1].hi.row[:, 0]
             folded = self.code.fold_values(lo_val, hi_val, betas[i], a[i], i)
             if i < num_vars - 1:
-                half_next = n >> (i + 2)
+                # The fold lands at a[i] in layer i+1 — the lo or hi of
+                # that layer's opened pair, decided by the code's layout.
+                next_lo_idx, _ = self.code.pair_indices(a[i + 1], i + 1)
                 nxt = proof.query_openings[i]
                 expected = jnp.where(
-                    a[i] < half_next, nxt.lo.row[:, 0], nxt.hi.row[:, 0]
+                    a[i] == next_lo_idx, nxt.lo.row[:, 0], nxt.hi.row[:, 0]
                 )
             else:
                 expected = proof.final_poly[a[i]]

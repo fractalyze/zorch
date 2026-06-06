@@ -8,7 +8,7 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.coding.reed_solomon import ReedSolomon
+from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.fri.config import DeepFoldableCode, FriParams
 from zorch.pcs.fri.prover import FriProver
@@ -80,6 +80,34 @@ class FriRoundTripTest(absltest.TestCase):
             self.verifier.verify(
                 roots, [self.z, self.z], jnp.zeros(2, dtype=KB), [], _transcript()
             )
+
+
+class FriBitReversedRoundTripTest(absltest.TestCase):
+    """FRI over the bit-reversed code: the whole quotient/fold/query path
+    must read the pair layout off the seam, including the DEEP quotient's
+    domain coordinates at the layer-0 pair."""
+
+    def setUp(self) -> None:
+        _, _, tree = koalabear16_merkle()
+        code = BitReversedReedSolomon(message_len=4, blowup=2, dtype=KB)
+        self.params = FriParams(code=code, tree=tree, num_rounds=2, num_queries=3)
+        self.coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
+        self.z = jnp.array(2, dtype=KB)
+        self.prover = FriProver(self.params)
+        self.verifier = FriVerifier(self.params)
+
+    def test_honest_opening_verifies(self) -> None:
+        roots, data = self.prover.commit([self.coeffs])
+        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        ok, _ = self.verifier.verify(roots, [self.z], values, proofs, _transcript())
+        self.assertTrue(bool(ok))
+
+    def test_wrong_value_rejected(self) -> None:
+        roots, data = self.prover.commit([self.coeffs])
+        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        bad = values + jnp.array(1, dtype=KB)
+        ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
+        self.assertFalse(bool(ok))
 
 
 class FriCosetRoundTripTest(absltest.TestCase):

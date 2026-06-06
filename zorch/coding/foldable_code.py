@@ -35,11 +35,24 @@ class FoldableCode(LinearCode, Protocol):
     ) -> Array:
         """Fold opened value pairs of layer `level` at `positions` (verifier side).
 
-        `lo`/`hi` are the layer's entries at `positions` and
-        `positions + (block_len >> (level + 1))`. Must agree with `fold`:
-        `fold(layer, beta)[p] ==
-        fold_values(layer[p], layer[p + half], beta, p, level)`.
+        `lo`/`hi` are the layer's entries at `pair_indices(positions, level)`.
+        Must agree with `fold`: with `(l, h) = pair_indices(p, level)`,
+        `fold(layer, beta)[p] == fold_values(layer[l], layer[h], beta, p, level)`.
         """
+        ...
+
+    def pair_indices(self, positions: Array, level: int) -> tuple[Array, Array]:
+        """Leaf indices of layer `level`'s point pair for folded index
+        `positions` — the pair whose fold lands at `positions` in layer
+        `level + 1`. The pairing layout is part of the code's identity
+        (natural order pairs a half-layer apart; bit-reversed order pairs
+        adjacently), so it lives behind the seam with the fold."""
+        ...
+
+    def layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
+        """Per-layer folded query indices for sampled `positions`: element
+        `i` addresses layer `i`'s pair via `pair_indices` and is where that
+        fold lands in layer `i + 1`."""
         ...
 
     def check_final(self, final: Array, claim: Array) -> Array:
