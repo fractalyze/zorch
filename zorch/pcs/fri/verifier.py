@@ -10,8 +10,8 @@ All arithmetic (NTT domain, field divide, Merkle rebuild) lowers on CPU and GPU.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import jax
@@ -30,6 +30,23 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class FriVerifier:
     params: FriParams
+    # Built once per instance: a per-call `jax.vmap(...)` has a fresh identity
+    # and re-traces every eager call.
+    _reconstruct_root_batch: Callable[..., Array] = field(
+        init=False, repr=False, compare=False
+    )
+    # Jitted per-poly verify body (issue #140); one compile serves the batch.
+    _verify_one_jit: Callable[..., tuple[Transcript, Array]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "_reconstruct_root_batch",
+            jax.vmap(self.params.tree.reconstruct_root),
+        )
+        object.__setattr__(self, "_verify_one_jit", jax.jit(self._verify_one))
 
     def verify(
         self,
@@ -48,7 +65,7 @@ class FriVerifier:
         t = transcript
         oks = []
         for f_root, z, v, pf in zip(commitment, points, values, proof):
-            t, ok = self._verify_one(f_root, z, v, pf, t)
+            t, ok = self._verify_one_jit(f_root, z, v, pf, t)
             oks.append(ok)
         return jnp.all(jnp.stack(oks)), t
 
@@ -77,8 +94,7 @@ class FriVerifier:
         # Merkle: every opened leaf must rebuild its committed root. vmap
         # reconstruct_root over the whole query batch and compare on device.
         def roots_ok(root: Array, idx: Array, opening: Opening) -> Array:
-            recon = jax.vmap(params.tree.reconstruct_root)(idx, opening)
-            return jnp.all(recon == root)
+            return jnp.all(self._reconstruct_root_batch(idx, opening) == root)
 
         ok = ok & roots_ok(f_root, a[0], pf.f_lo)
         ok = ok & roots_ok(f_root, a[0] + half0, pf.f_hi)

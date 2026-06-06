@@ -11,8 +11,10 @@ lives in `zorch.pcs.fold`.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Protocol, TypeAlias, runtime_checkable
 
+import jax
 from jax import Array
 
 from zorch.coding.foldable_code import FoldableCode
@@ -45,11 +47,18 @@ class FriParams:
     num_queries: int  # query repetitions (soundness amplification)
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=["value", "layer_roots", "final_layer", "f_lo", "f_hi", "layers"],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class FriProof:
     """value = claimed f(z); layer_roots = roots of committed fold layers
     1..num_rounds-1; final_layer = the last (cleartext, constant) codeword;
-    f_lo/f_hi/layers carry the query openings, batched over the query axis."""
+    f_lo/f_hi/layers carry the query openings, batched over the query axis.
+
+    A registered pytree so it crosses the open/verify `@jit` boundary."""
 
     value: Array
     layer_roots: list[Array]

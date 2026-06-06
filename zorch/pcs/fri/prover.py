@@ -18,10 +18,12 @@ small parameters — a demonstration of the seam, not a hardened prover.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
+from functools import partial
 from typing import TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -43,10 +45,17 @@ def _eval_poly(coeffs: Array, z: Array) -> Array:
     return acc
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=["coeffs", "matrix", "digest_layers"],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class FriCommittedPoly:
     """One committed polynomial's retained witness: ascending coefficients, the
-    `[n, 1]` codeword matrix (the Merkle leaves), and its digest layers."""
+    `[n, 1]` codeword matrix (the Merkle leaves), and its digest layers.
+
+    A registered pytree so it crosses the `open` `@jit` boundary."""
 
     coeffs: Array
     matrix: Array
@@ -63,17 +72,30 @@ class FriProverData:
 @dataclass(frozen=True)
 class FriProver:
     params: FriParams
+    # Jitted per-poly commit/open bodies (issue #140); unlike basefold — whose
+    # commit rides the jagged seam's enclosing jit — fri is called standalone,
+    # so it owns its zones. One compile serves the batch.
+    _commit_one: Callable[..., FriCommittedPoly] = field(
+        init=False, repr=False, compare=False
+    )
+    _open_one_jit: Callable[..., tuple[Transcript, FriProof]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        def commit_one(coeffs: Array) -> FriCommittedPoly:
+            matrix = self.params.code.encode(coeffs).reshape(-1, 1)
+            _root, digest_layers = self.params.tree.commit(matrix)
+            return FriCommittedPoly(coeffs, matrix, digest_layers)
+
+        object.__setattr__(self, "_commit_one", jax.jit(commit_one))
+        object.__setattr__(self, "_open_one_jit", jax.jit(self._open_one))
 
     def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
         """RS-encode each coefficient vector and Merkle-commit the codeword.
         Returns stacked roots and the prover data needed to open."""
-        roots, committed = [], []
-        for coeffs in polys:
-            codeword = self.params.code.encode(coeffs)
-            matrix = codeword.reshape(-1, 1)
-            root, digest_layers = self.params.tree.commit(matrix)
-            roots.append(root)
-            committed.append(FriCommittedPoly(coeffs, matrix, digest_layers))
+        committed = [self._commit_one(coeffs) for coeffs in polys]
+        roots = [poly.digest_layers[-1][0] for poly in committed]
         return jnp.stack(roots), FriProverData(tuple(committed))
 
     def open(
@@ -91,7 +113,7 @@ class FriProver:
         t = transcript
         for committed, z in zip(prover_data.polys, points):
             v = _eval_poly(committed.coeffs, z)
-            t, proof = self._open_one(committed, z, v, t)
+            t, proof = self._open_one_jit(committed, z, v, t)
             values.append(v)
             proofs.append(proof)
         return jnp.stack(values), proofs, t

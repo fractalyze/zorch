@@ -19,6 +19,7 @@ rounds, so it is not `lax.scan`-shaped (docs/conventions.md "Loops")."""
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -30,10 +31,13 @@ from zorch.round import Round
 from zorch.transcript import Transcript
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=["lo", "hi"], meta_fields=[])
 @dataclass(frozen=True)
 class LayerOpening:
     """A committed fold layer's conjugate-pair openings, batched over the queries
-    (leading axis = query count) so the whole query phase is one device op."""
+    (leading axis = query count) so the whole query phase is one device op.
+
+    A registered pytree so proofs carrying it cross a `@jit` boundary."""
 
     lo: Opening  # leaves at a[layer]        (batched over queries)
     hi: Opening  # leaves at a[layer] + half (batched over queries)
