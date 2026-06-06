@@ -20,7 +20,7 @@ from zorch.round import InnerVerifierRound, ProveChain, Round, VerifyChain
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 class RoundBaseTest(absltest.TestCase):

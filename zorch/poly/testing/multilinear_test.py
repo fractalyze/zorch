@@ -7,7 +7,7 @@ from jax import Array
 
 from zorch.poly.multilinear import eval_mle, mle_fold
 
-F = zk_dtypes.koalabear
+F = zk_dtypes.koalabear_mont
 
 
 def _eval_eq(

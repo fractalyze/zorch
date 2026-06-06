@@ -252,11 +252,15 @@ drifts from a hand-maintained re-export list. The one exception is a
 — e.g. `zorch/sumcheck/testing`'s `product` / `eval_mle_oracle` reference
 oracles.
 
-Tests draw field elements as the Montgomery-form dtypes
-(`zk_dtypes.koalabear_mont`, `koalabearx4_mont`): Montgomery is the production
-encoding the GPU kernels compute in, so tests exercise the arithmetic path the
-prover ships. Reach for the bare canonical dtypes only when a test is *about*
-the canonical integer encoding itself.
+Tests draw field and curve-point elements as the Montgomery-form dtypes —
+every `zk_dtypes` family that ships a `_mont` sibling (`koalabear_mont`,
+`koalabearx4_mont`, the babybear/goldilocks families, `bn254_sf_mont`, and
+the bn254 G1/G2 `affine`/`jacobian`/`xyzz` point types): Montgomery is the
+production encoding the GPU kernels compute in, so tests exercise the
+arithmetic path the prover ships. Reach for the bare canonical dtypes only
+when a test is *about* the canonical integer encoding itself, and mark that
+line `# canonical-encoding test` — the `mont-test-dtypes` pre-commit hook
+rejects any other bare-canonical use in a `*_test.py`.
 
 Tests subclass `absltest.TestCase` and assert through `self.assert*` /
 `self.assertRaises` — never a bare `def test_*` + `assert`. A bare `assert` is a

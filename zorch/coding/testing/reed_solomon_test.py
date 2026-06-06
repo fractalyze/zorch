@@ -27,7 +27,7 @@ from zorch.coding.reed_solomon import (
 )
 from zorch.testkit.random_field import rand_field
 
-F = zk_dtypes.koalabear
+F = zk_dtypes.koalabear_mont
 
 
 def _domain(n: int, dtype: Any) -> Array:

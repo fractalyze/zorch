@@ -7,7 +7,7 @@ from absl.testing import absltest
 
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 class ExpandEqTest(absltest.TestCase):

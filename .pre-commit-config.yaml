@@ -39,3 +39,17 @@ repos:
     rev: v1.7.7
     hooks:
       - id: actionlint
+-   repo: local
+    hooks:
+      - id: mont-test-dtypes
+        # Tests draw field and curve-point elements as the Montgomery-form
+        # dtypes — the production encoding (docs/conventions.md "Testing").
+        # Covers every zk_dtypes family that ships a `_mont` sibling: the
+        # fields (babybear/goldilocks/koalabear + extensions, bn254_sf) and
+        # the bn254 G1/G2 point types. A test that is genuinely ABOUT the
+        # canonical encoding opts out by putting `canonical-encoding test`
+        # in a comment on the same line.
+        name: tests use Montgomery-form zk_dtypes
+        language: pygrep
+        entry: 'zk_dtypes\.(babybear|goldilocks|koalabear|bn254_(sf|g[12]_(affine|jacobian|xyzz)))(x[0-9]+)?(?![_\w])(?!.*canonical-encoding test)'
+        files: '_test\.py$'

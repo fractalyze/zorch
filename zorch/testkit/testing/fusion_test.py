@@ -7,7 +7,7 @@ from absl.testing import absltest
 
 from zorch.testkit.fusion import assert_fusion_ready
 
-KB = zk_dtypes.koalabear
+KB = zk_dtypes.koalabear_mont
 
 
 class AssertFusionReadyTest(absltest.TestCase):
