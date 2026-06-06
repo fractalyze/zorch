@@ -161,6 +161,33 @@ class EvalJaggedMleTest(absltest.TestCase):
         bad = eval_jagged_mle(bad_cps, z_row, z_col, z_index, cfg=cfg)
         self.assertNotEqual(_field_val(good), _field_val(bad))
 
+    def test_over_n_d_padding_rescales(self) -> None:
+        # Negative test for the area axis: padding n_d past the tier (to a free
+        # M_max ceiling) rescales J̃ by ∏(1−z_high) ≠ 1, because the extra
+        # z_index high coords are real challenges, not ignorable zeros — the
+        # log-area tiering rationale. Exact identity: with all mass below the
+        # tier, J̃_{n_d+2} = (1−z₀)(1−z₁)·J̃_{n_d}.
+        heights, l_max, n_r = [4, 2, 3], 4, 3
+        cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)  # n_d = 5
+        pad = 2
+        n_d_wide = cfg.n_d + pad
+        prefix = build_prefix_sums(heights)
+        padded = prefix + [prefix[-1]] * (l_max - len(heights))
+        wide_cps = jnp.stack([_bits_msb(t, n_d_wide, EF) for t in padded])
+        wide_cfg = JaggedStaticConfig(
+            l_max=l_max, n_c=cfg.n_c, n_r=n_r, n_d=n_d_wide, dtype=EF
+        )
+        z_row = rand_field(11, (n_r,), EF)
+        z_col = rand_field(12, (cfg.n_c,), EF)
+        z_wide = rand_field(13, (n_d_wide,), EF)  # MSB-first: [0:pad] are high
+
+        tight = eval_jagged_mle(cps, z_row, z_col, z_wide[pad:], cfg=cfg)
+        wide = eval_jagged_mle(wide_cps, z_row, z_col, z_wide, cfg=wide_cfg)
+        one = jnp.array(1, dtype=EF)
+        rescale = (one - z_wide[0]) * (one - z_wide[1])
+        self.assertNotEqual(_field_val(wide), _field_val(tight))
+        self.assertEqual(_field_val(wide), _field_val(rescale * tight))
+
 
 class PartialEvalTest(absltest.TestCase):
     def test_partial_eval_matches_eval_jagged_mle(self) -> None:

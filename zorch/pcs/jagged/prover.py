@@ -42,7 +42,7 @@ from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
 from zorch.pcs.jagged.config import JaggedOpeningProof
-from zorch.pcs.jagged.dense import JaggedLayout, from_blocks
+from zorch.pcs.jagged.dense import JaggedLayout, from_blocks, validate_layout
 from zorch.pcs.jagged.poly import (
     _TRANSITION_ROWS,
     JaggedStaticConfig,
@@ -311,6 +311,7 @@ def _indicator_inputs(
     `cfg.n_d == layout.log_m` requirement is enforced in `open` (commit itself
     does not need it).
     """
+    validate_layout(layout)
     col_heights = _expand_col_heights(layout)
     l_max = max(len(col_heights), 1)
     n_r = max(log2_ceil_usize(max(col_heights, default=1)), 1)
