@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -233,6 +234,28 @@ class BasefoldOpenTest(absltest.TestCase):
         wrong_root = root + jnp.ones_like(root)
         ok, _ = verifier.verify(wrong_root, [z], values, proof, _transcript())
         self.assertFalse(bool(ok))
+
+    def test_verify_rolls_fold_replay_into_scan(self) -> None:
+        # The sumcheck-reduction Fiat-Shamir replay lowers to one lax.scan over
+        # the homogeneous fold rounds (a stablehlo.while), so its poseidon2
+        # permute markers stop scaling with num_vars — the verifier traces the
+        # round body once instead of once per fold layer (#185). A regression
+        # that unrolls the replay reintroduces the per-round markers and fails
+        # the count-equality below.
+        def permute_markers(log_s: int) -> tuple[int, str]:
+            prover, verifier, root, pdata, _mle, _ = self._commit(log_s=log_s, K=2)
+            z = _rand_ef(40 + log_s, (log_s,))
+            values, proof, _ = prover.open(pdata, [z], _transcript())
+            # _verify_body is jitted; .lower() isn't on the field's Callable type.
+            verify_body: Any = verifier._verify_body
+            text = verify_body.lower(root, z, values, proof, _transcript()).as_text()
+            return text.count('"poseidon2:'), text
+
+        shallow_n, shallow_text = permute_markers(2)
+        deep_n, _ = permute_markers(4)
+        self.assertIn("stablehlo.while", shallow_text)
+        self.assertGreater(shallow_n, 0)
+        self.assertEqual(shallow_n, deep_n)
 
     def test_open_compiles_once_per_shape(self) -> None:
         log_s, K = 3, 2  # message_len = 1<<log_s = 8 rows; z has log_s vars

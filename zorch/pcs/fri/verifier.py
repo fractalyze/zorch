@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 
 from zorch.pcs.fold import sample_positions, verify_openings
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
@@ -51,6 +51,17 @@ class FriVerifier:
                 f"batch mismatch: commitment={k}, points={len(points)}, "
                 f"values={values.shape[0]}, proof={len(proof)}"
             )
+        # Fail loud on a structurally short proof: the replay scan iterates over
+        # whatever layer_roots it is handed, so a missing layer would silently
+        # skip a round's checks rather than error (cf. the same guard in the
+        # basefold verifier). Eager, ahead of the jit zone.
+        rounds = self.params.num_rounds
+        for pf in proof:
+            if len(pf.layer_roots) != rounds - 1 or len(pf.layers) != rounds - 1:
+                raise ValueError(
+                    f"malformed proof: expected {rounds - 1} fold layers, got "
+                    f"{len(pf.layer_roots)} roots / {len(pf.layers)} openings"
+                )
         t = transcript
         oks = []
         for f_root, z, v, pf in zip(commitment, points, values, proof):
@@ -64,14 +75,26 @@ class FriVerifier:
         params = self.params
         n = params.code.block_len
 
-        # Replay Fiat-Shamir: fold challenges, then query positions.
+        # Replay Fiat-Shamir: fold challenges, then query positions. The first
+        # num_rounds-1 rounds each observe the next layer's committed root, so
+        # they ride one lax.scan; the final round observes the cleartext final
+        # layer and is peeled (docs/conventions.md "Loops").
         t = t.observe(f_root)
-        betas = []
-        for r in range(params.num_rounds):
+
+        def fold_round(t: Transcript, root: Array) -> tuple[Transcript, Array]:
             t, beta = t.sample()
-            betas.append(beta.reshape(()))
-            committed = r < params.num_rounds - 1
-            t = t.observe(pf.layer_roots[r] if committed else pf.final_layer)
+            t = t.observe(root)
+            return t, beta.reshape(())
+
+        betas: list[Array] = []
+        if params.num_rounds > 1:
+            t, head_betas = lax.scan(fold_round, t, jnp.stack(pf.layer_roots))
+            # Index, don't iterate: list(field_array) dispatches lax.sign under
+            # CUDA (cf. fri/prover._eval_poly).
+            betas = [head_betas[r] for r in range(params.num_rounds - 1)]
+        t, final_beta = t.sample()
+        t = t.observe(pf.final_layer)
+        betas.append(final_beta.reshape(()))
         t, positions = sample_positions(t, n, params.num_queries)
         a = params.code.layer_positions(positions, params.num_rounds)
 

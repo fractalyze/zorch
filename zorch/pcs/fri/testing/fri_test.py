@@ -81,6 +81,15 @@ class FriRoundTripTest(absltest.TestCase):
                 roots, [self.z, self.z], jnp.zeros(2, dtype=KB), [], _transcript()
             )
 
+    def test_malformed_proof_layer_count_raises(self) -> None:
+        # A proof missing a fold layer must fail loud: the replay scan iterates
+        # over whatever roots it's handed, so a short list would silently skip a
+        # round's checks without the eager guard.
+        roots, values, proofs = self._prove()
+        short = dataclasses.replace(proofs[0], layer_roots=[], layers=[])
+        with self.assertRaises(ValueError):
+            self.verifier.verify(roots, [self.z], values, [short], _transcript())
+
 
 class FriBitReversedRoundTripTest(absltest.TestCase):
     """FRI over the bit-reversed code: the whole quotient/fold/query path
