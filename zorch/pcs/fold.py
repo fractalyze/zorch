@@ -20,6 +20,7 @@ rounds, so it is not `lax.scan`-shaped (docs/conventions.md "Loops")."""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
@@ -135,6 +136,50 @@ def sample_positions(
     t, raw = transcript.sample(count)
     limbs = lax.bitcast_convert_type(raw, jnp.uint32).reshape(count, -1)
     return t, (limbs[:, 0] % block_len).astype(jnp.int32)
+
+
+def verify_openings(
+    tree: MerkleTree, legs: Sequence[tuple[Array, Array, Opening]]
+) -> Array:
+    """AND of "every opened leaf rebuilds its committed root" over a list of
+    `(root, indices, opening)` legs — the lo/hi pair of layer 0 and of each
+    committed fold layer.
+
+    Legs are grouped by leaf-row width because the leaf hash must see a uniform
+    row shape within one `vmap` — the base layer's row is the RLC of all columns,
+    a fold layer's is a single column. Each group is rebuilt in one batched
+    `tree.reconstruct_roots`, padding the per-layer paths (the tree halves each
+    round) to the group's deepest. So the compress body traces once per width
+    group instead of once per layer (#163). Shared by the fri and basefold
+    verifiers, whose query phase has the same pair-per-layer shape."""
+    groups: dict[int, list[tuple[Array, Array, Opening]]] = {}
+    for root, idx, opening in legs:
+        groups.setdefault(opening.row.shape[-1], []).append((root, idx, opening))
+
+    ok = jnp.bool_(True)
+    for group in groups.values():
+        max_depth = max(len(opening.path) for _, _, opening in group)
+        rows, indices, paths, valid, roots = [], [], [], [], []
+        for root, idx, opening in group:
+            q = idx.shape[0]
+            depth = len(opening.path)
+            path = jnp.stack(opening.path, axis=1)  # (queries, depth, digest)
+            path = jnp.pad(path, ((0, 0), (0, max_depth - depth), (0, 0)))
+            rows.append(opening.row)
+            indices.append(idx)
+            paths.append(path)
+            valid.append(
+                jnp.broadcast_to(jnp.arange(max_depth) < depth, (q, max_depth))
+            )
+            roots.append(jnp.broadcast_to(root, (q, *root.shape)))
+        rebuilt = tree.reconstruct_roots(
+            jnp.concatenate(rows),
+            jnp.concatenate(indices),
+            jnp.concatenate(paths),
+            jnp.concatenate(valid),
+        )
+        ok = ok & jnp.all(rebuilt == jnp.concatenate(roots))
+    return ok
 
 
 if TYPE_CHECKING:

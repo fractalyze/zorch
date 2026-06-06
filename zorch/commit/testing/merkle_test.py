@@ -182,6 +182,58 @@ class MerkleTreeTest(absltest.TestCase):
             bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
+    def test_reconstruct_roots_batches_mixed_depths(self) -> None:
+        # The batched primitive rebuilds roots for trees of DIFFERENT height in
+        # one vmap+scan: each path is zero-padded to the batch's max depth and a
+        # validity mask makes the extra levels no-ops, so a depth-2 and a depth-4
+        # opening reconstruct the same roots `reconstruct_root` gives per call
+        # (#163 — the verifier's per-layer reconstruct loop folded into one pass).
+        _, _, tree = koalabear16_merkle()
+        deep_m = jnp.arange(128, dtype=F).reshape(16, 8)  # depth 4
+        shallow_m = jnp.arange(32, dtype=F).reshape(4, 8)  # depth 2
+        deep_root, deep_layers = tree.commit(deep_m)
+        shallow_root, shallow_layers = tree.commit(shallow_m)
+        legs = [
+            (deep_root, 5, tree.open(deep_m, deep_layers, 5)),
+            (deep_root, 12, tree.open(deep_m, deep_layers, 12)),
+            (shallow_root, 1, tree.open(shallow_m, shallow_layers, 1)),
+            (shallow_root, 3, tree.open(shallow_m, shallow_layers, 3)),
+        ]
+        max_depth = max(len(op.path) for _, _, op in legs)
+        rows = jnp.stack([op.row for _, _, op in legs])
+        indices = jnp.array([i for _, i, _ in legs])
+        paths = jnp.stack(
+            [
+                jnp.pad(jnp.stack(op.path), ((0, max_depth - len(op.path)), (0, 0)))
+                for _, _, op in legs
+            ]
+        )
+        valid = jnp.stack([jnp.arange(max_depth) < len(op.path) for _, _, op in legs])
+
+        roots = tree.reconstruct_roots(rows, indices, paths, valid)
+        self.assertTrue(bool(jnp.all(roots == jnp.stack([r for r, _, _ in legs]))))
+        for k, (_, idx, op) in enumerate(legs):  # identical to the per-call path
+            self.assertTrue(
+                bool(jnp.array_equal(roots[k], tree.reconstruct_root(idx, op)))
+            )
+
+    def test_reconstruct_roots_ignores_padding_levels(self) -> None:
+        # A masked (padding) sibling must not change the rebuilt root — the
+        # invariant that lets a shallow opening ride safely in a deeper batch.
+        _, _, tree = koalabear16_merkle()
+        m = jnp.arange(32, dtype=F).reshape(4, 8)  # depth 2
+        root, layers = tree.commit(m)
+        op = tree.open(m, layers, 2)
+        max_depth = 4
+        path = jnp.pad(jnp.stack(op.path), ((0, max_depth - len(op.path)), (0, 0)))
+        valid = jnp.arange(max_depth) < len(op.path)
+        tampered = path.at[len(op.path)].add(jnp.ones((), F))  # corrupt a pad level
+        for p in (path, tampered):
+            roots = tree.reconstruct_roots(
+                op.row[None], jnp.array([2]), p[None], valid[None]
+            )
+            self.assertTrue(bool(jnp.array_equal(roots[0], root)))
+
     def test_commit_root_matches_plonky3_golden(self) -> None:
         _, _, tree = koalabear16_merkle()
         raw_root, _ = tree.commit(jnp.arange(32, dtype=F).reshape(4, 8))
