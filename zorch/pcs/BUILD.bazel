@@ -2,6 +2,19 @@ load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
 py_library(
+    name = "fold",
+    srcs = ["fold.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch/coding:foldable_code",
+        "//zorch/commit:merkle",
+        requirement("jax"),
+    ],
+)
+
+py_library(
     name = "protocol",
     srcs = [
         "__init__.py",

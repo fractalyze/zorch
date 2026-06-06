@@ -66,7 +66,7 @@ class BasefoldTest(absltest.TestCase):
     def test_proof_pytree_round_trips(self) -> None:
         from zorch.commit.merkle import Opening
         from zorch.pcs.basefold.config import BasefoldProof
-        from zorch.pcs.fri.config import LayerOpening
+        from zorch.pcs.fold import LayerOpening
 
         op = Opening(row=jnp.zeros((2, 3), dtype=F), path=[jnp.zeros((2, 8), dtype=F)])
         proof = BasefoldProof(
@@ -179,6 +179,13 @@ class BasefoldOpenTest(absltest.TestCase):
         values, proof, _ = prover.open(pdata, [z], _transcript())
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
+
+    def test_open_rejects_empty_point(self) -> None:
+        # num_vars = 0 would skip every fold round and leave nothing to observe;
+        # fail loud before the (also-wrong) MLE-height check can mask the cause.
+        prover, _, _, pdata, _, _ = self._commit(log_s=3, K=1)
+        with self.assertRaisesRegex(ValueError, "at least one variable"):
+            prover.open(pdata, [_rand_ef(3, (0,))], _transcript())
 
     def test_verify_rejects_wrong_root(self) -> None:
         # Directly exercises the commitment-root binding: verifying a valid proof

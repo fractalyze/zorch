@@ -29,14 +29,16 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.coding.foldable_code import FoldableCode
-from zorch.commit.merkle import MerkleTree, Opening
+from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.config import (
     BasefoldCommitment,
     BasefoldProof,
     sample_rlc_coeffs,
 )
-from zorch.pcs.fri.config import LayerOpening, query_layer_indices, sample_positions
+from zorch.pcs.fold import CommitFoldRound, CommittedLayer, open_query_phase
 from zorch.poly.multilinear import eval_mle, mle_fold
+from zorch.prove import fold_rounds
+from zorch.round import Round
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -60,6 +62,45 @@ class BasefoldProverData:
     codeword: Array  # [block_len, K] codeword (Merkle leaves = its rows)
     # len-1 today (one MLE per commit); reserved for batch-commit in P3.
     widths: tuple[int, ...]
+
+
+def _sumcheck_msg(mle: Array, claim: Array, zs: Array) -> tuple[Array, Array]:
+    """The degree-1 sumcheck message `(s(0), s(1))` for the variable bound this
+    round (`zs[-1]`), from the running MLE and claim. `mle_fold(., 0)` fixes the
+    bound variable to 0 (the additive fold coincides with the multilinear
+    partial-eval at beta=0), so zero_val is the sumcheck s(0); one_val is
+    recovered from the running claim."""
+    zero_mle = mle_fold(mle, jnp.zeros((), zs.dtype))
+    rest = zs[:-1]
+    zero_val = eval_mle(zero_mle, rest) if rest.shape[0] > 0 else zero_mle[0]
+    one_val = (claim - zero_val) / zs[-1] + zero_val
+    return zero_val, one_val
+
+
+# (codeword, running MLE, running claim, unbound z suffix) — the suffix shrinks
+# with the MLE, so the round needs no explicit round index.
+_OpenCarry = tuple[Array, Array, Array, Array]
+
+
+@dataclass(frozen=True)
+class _SumcheckFoldRound(Round):
+    """One interleaved-sumcheck round: emit + observe the degree-1 sumcheck
+    message, run the shared commit-and-fold tail, then fold the MLE and reduce
+    the running claim by the tail's β — the sumcheck and the codeword fold by
+    the same challenge. msg = (sumcheck message, the tail's `CommittedLayer`)."""
+
+    tail: CommitFoldRound
+
+    def __call__(
+        self, carry: _OpenCarry, transcript: Transcript
+    ) -> tuple[_OpenCarry, Transcript, tuple[tuple[Array, Array], CommittedLayer]]:
+        cw, mle, claim, zs = carry
+        zero_val, one_val = _sumcheck_msg(mle, claim, zs)
+        t = transcript.observe(jnp.stack([zero_val, one_val]))
+        cw, t, layer = self.tail(cw, t)
+        mle = mle_fold(mle, layer.beta)
+        claim = zero_val + layer.beta * one_val
+        return (cw, mle, claim, zs[:-1]), t, ((zero_val, one_val), layer)
 
 
 @dataclass(frozen=True)
@@ -100,8 +141,9 @@ class BasefoldProver:
         mle, codeword = prover_data.mle, prover_data.codeword  # [S,K], [n,K]
         dtype = z.dtype
         K = mle.shape[1]
-        n = codeword.shape[0]
         num_vars = z.shape[0]
+        if num_vars < 1:
+            raise ValueError("BaseFold opens over at least one variable, got none")
         if mle.shape[0] != (1 << num_vars):
             raise ValueError(
                 f"point dimension {num_vars} doesn't match MLE height "
@@ -122,58 +164,32 @@ class BasefoldProver:
         cw = (codeword * coeffs).sum(axis=1)  # (n,)
         current_claim = (values * coeffs).sum()
 
-        # 2. Interleaved sumcheck + codeword fold (num_vars rounds).
-        uni_msgs, layer_roots, layer_mats, layer_dls = [], [], [], []
-        for r in range(num_vars):
-            last = z[-(r + 1)]
-            rest = z[: -(r + 1)] if r + 1 < num_vars else z[:0]
-            # mle_fold(., 0) fixes the bound variable to 0 (the additive fold
-            # coincides with the multilinear partial-eval at beta=0), so zero_val
-            # is the sumcheck s(0); one_val is recovered from the running claim.
-            zero_mle = mle_fold(current_mle, jnp.zeros((), dtype))
-            zero_val = eval_mle(zero_mle, rest) if rest.shape[0] > 0 else zero_mle[0]
-            one_val = (current_claim - zero_val) / last + zero_val
-            uni_msgs.append((zero_val, one_val))
-            t = t.observe(jnp.stack([zero_val, one_val]))
-            t, beta = t.sample()
-            beta = beta.reshape(())
-            cw = self.code.fold(cw, beta)
-            current_mle = mle_fold(current_mle, beta)
-            current_claim = zero_val + beta * one_val
-            if r < num_vars - 1:
-                m = cw.reshape(-1, 1)
-                root, dl = self.tree.commit(m)
-                layer_mats.append(m)
-                layer_dls.append(dl)
-                layer_roots.append(root)
-                t = t.observe(root)
-            else:
-                final_layer = cw
-                t = t.observe(final_layer)
-
-        # 3. Query phase (natural order, mirrors fri/prover._open_one).
-        t, positions = sample_positions(t, n, self.num_queries)
-        a = query_layer_indices(positions, n, num_vars)
-        half0 = n >> 1
-
-        def open_batch(mtx: Array, dl: list[Array], idx: Array) -> Opening:
-            return jax.vmap(lambda i: self.tree.open(mtx, dl, i))(idx)
-
-        comp = LayerOpening(
-            open_batch(codeword, prover_data.digest_layers, a[0]),
-            open_batch(codeword, prover_data.digest_layers, a[0] + half0),
+        # 2. Interleaved sumcheck + codeword fold (num_vars rounds): the first
+        #    num_vars−1 ride the shared commit-and-fold round; the final round
+        #    is peeled — its folded layer goes in the clear, no commit.
+        carry: _OpenCarry = (cw, current_mle, current_claim, z)
+        carry, t, msgs = fold_rounds(
+            _SumcheckFoldRound(CommitFoldRound(self.code, self.tree)),
+            carry,
+            t,
+            num_vars - 1,
         )
-        layer_opens = []
-        for layer in range(1, num_vars):
-            half = n >> (layer + 1)
-            m, dl = layer_mats[layer - 1], layer_dls[layer - 1]
-            layer_opens.append(
-                LayerOpening(
-                    open_batch(m, dl, a[layer]),
-                    open_batch(m, dl, a[layer] + half),
-                )
-            )
-        proof = BasefoldProof(uni_msgs, layer_roots, final_layer, comp, layer_opens)
+        cw, current_mle, current_claim, zs = carry
+        zero_val, one_val = _sumcheck_msg(current_mle, current_claim, zs)
+        t = t.observe(jnp.stack([zero_val, one_val]))
+        t, beta = t.sample()
+        final_layer = self.code.fold(cw, beta.reshape(()))
+        t = t.observe(final_layer)
+        uni_msgs = [uni for uni, _ in msgs] + [(zero_val, one_val)]
+        layers = [layer for _, layer in msgs]
+
+        # 3. Query phase (natural order, shared with fri).
+        t, comp, layer_opens = open_query_phase(
+            self.tree, t, codeword, prover_data.digest_layers, layers, self.num_queries
+        )
+        proof = BasefoldProof(
+            uni_msgs, [layer.root for layer in layers], final_layer, comp, layer_opens
+        )
         return values, proof, t
 
 

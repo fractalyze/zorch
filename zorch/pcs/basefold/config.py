@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.pcs.fri.config import LayerOpening
+from zorch.pcs.fold import LayerOpening
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_ceil_usize

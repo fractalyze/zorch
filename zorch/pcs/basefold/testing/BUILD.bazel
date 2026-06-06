@@ -15,6 +15,7 @@ py_test(
         "//zorch/commit:merkle",
         "//zorch/commit/testing:koalabear16",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/pcs:fold",
         "//zorch/pcs/basefold",
         "//zorch/poly",
         "//zorch/testkit:random_field",
