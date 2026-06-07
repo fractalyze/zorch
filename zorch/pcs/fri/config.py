@@ -4,8 +4,8 @@
 FRI is transparent, so the prover and verifier hold the *same* public params —
 the degenerate case of the PCS prover-key/verifier-key split (no secret to keep
 asymmetric). `FriParams` is that shared object. The query-phase machinery
-(`LayerOpening`, the Fiat-Shamir position derivation) is scheme-neutral and
-lives in `zorch.pcs.fold`.
+(the pre-fold pair-leaf round, the Fiat-Shamir position derivation) is
+scheme-neutral and lives in `zorch.pcs.fold`.
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ from jax import Array
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.pcs.fold import LayerOpening
 
 FriCommitment: TypeAlias = Array  # stacked Merkle roots, one per committed poly
 
@@ -49,20 +48,22 @@ class FriParams:
 
 @partial(
     jax.tree_util.register_dataclass,
-    data_fields=["value", "layer_roots", "final_layer", "f_lo", "f_hi", "layers"],
+    data_fields=["value", "fri_roots", "final_layer", "f_opening", "query_openings"],
     meta_fields=[],
 )
 @dataclass(frozen=True)
 class FriProof:
-    """value = claimed f(z); layer_roots = roots of committed fold layers
-    1..num_rounds-1; final_layer = the last (cleartext, constant) codeword;
-    f_lo/f_hi/layers carry the query openings, batched over the query axis.
+    """value = claimed f(z); fri_roots = pair-leaf commitment roots of the
+    quotient's fold layers 0..num_rounds-1 (the round commits the *pre-fold*
+    layer's conjugate pairs, then folds); final_layer = the last (cleartext,
+    constant) codeword; f_opening = `f`'s conjugate-pair leaf, used to rebuild the
+    quotient at layer 0; query_openings = each fold layer's opened pair-leaf.
+    All openings are batched over the query axis.
 
     A registered pytree so it crosses the open/verify `@jit` boundary."""
 
     value: Array
-    layer_roots: list[Array]
+    fri_roots: list[Array]
     final_layer: Array
-    f_lo: Opening  # base-codeword conjugate pair, to rebuild the quotient
-    f_hi: Opening
-    layers: list[LayerOpening]  # committed layers 1 .. num_rounds-1
+    f_opening: Opening  # base-codeword conjugate-pair leaf (row [Q, 2])
+    query_openings: list[Opening]  # committed fold layers 0 .. num_rounds-1

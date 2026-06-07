@@ -3,17 +3,19 @@
 
 To open `f` at `z` with claim `v`, the prover shows the quotient
 `g(x) = (f(x) − v)/(x − z)` is low degree: `g` is a polynomial of degree
-`deg f − 1` exactly when `v = f(z)`. `g` is never committed separately — the
-verifier rebuilds its codeword from the already-committed `f` at queried points —
-so `open` Merkle-commits only the folded layers and threads the transcript through
-the fold challenges. This is the structural opposite of KZG on the same PCS seam:
-interactive, Merkle-backed, no SRS, and entirely field/NTT arithmetic that lowers
-on both CPU and GPU (no MSM). The query phase is device-batched — positions are a
-device int32 array and each Merkle opening is one `vmap` over them, no host indices
-or per-query loop — while the fold phase stays a Python `for` over rounds: each
-round Merkle-commits a half-size layer, so the loop is not `scan`-shaped (see
-docs/conventions.md). Scope: a single base-field polynomial per opening, fixed
-small parameters — a demonstration of the seam, not a hardened prover.
+`deg f − 1` exactly when `v = f(z)`. `g` is never opened from a separate
+commitment — the verifier rebuilds its layer-0 pair from the already-committed
+`f` at the queried points and checks it against the committed fold chain — so
+`open` Merkle-commits `g`'s fold layers (conjugate-pair leaves, pre-fold) and
+threads the transcript through the fold challenges. This is the structural
+opposite of KZG on the same PCS seam: interactive, Merkle-backed, no SRS, and
+entirely field/NTT arithmetic that lowers on both CPU and GPU (no MSM). The query
+phase is device-batched — positions are a device int32 array and each Merkle
+opening is one `vmap` over them — while the fold phase stays a Python `for` over
+rounds: each round Merkle-commits a half-size layer, so the loop is not
+`scan`-shaped (see docs/conventions.md). Scope: a single base-field polynomial
+per opening, fixed small parameters — a demonstration of the seam, not a hardened
+prover.
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.pcs.fold import CommitFoldRound, open_query_phase
+from zorch.pcs.fold import PreFoldPairCommitRound, open_rows, sample_positions
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
 from zorch.prove import fold_rounds
 from zorch.transcript import Transcript
@@ -47,18 +49,20 @@ def _eval_poly(coeffs: Array, z: Array) -> Array:
 
 @partial(
     jax.tree_util.register_dataclass,
-    data_fields=["coeffs", "matrix", "digest_layers"],
+    data_fields=["coeffs", "codeword", "leaves", "digest_layers"],
     meta_fields=[],
 )
 @dataclass(frozen=True)
 class FriCommittedPoly:
     """One committed polynomial's retained witness: ascending coefficients, the
-    `[n, 1]` codeword matrix (the Merkle leaves), and its digest layers.
+    raw `[n]` codeword (the DEEP quotient divides it pointwise), the `[n//2, 2]`
+    conjugate-pair leaves (the Merkle commitment), and its digest layers.
 
     A registered pytree so it crosses the `open` `@jit` boundary."""
 
     coeffs: Array
-    matrix: Array
+    codeword: Array
+    leaves: Array
     digest_layers: list[Array]
 
 
@@ -84,16 +88,17 @@ class FriProver:
 
     def __post_init__(self) -> None:
         def commit_one(coeffs: Array) -> FriCommittedPoly:
-            matrix = self.params.code.encode(coeffs).reshape(-1, 1)
-            _root, digest_layers = self.params.tree.commit(matrix)
-            return FriCommittedPoly(coeffs, matrix, digest_layers)
+            codeword = self.params.code.encode(coeffs)
+            leaves = self.params.code.pair_leaves(codeword)
+            _root, digest_layers = self.params.tree.commit(leaves)
+            return FriCommittedPoly(coeffs, codeword, leaves, digest_layers)
 
         object.__setattr__(self, "_commit_one", jax.jit(commit_one))
         object.__setattr__(self, "_open_one_jit", jax.jit(self._open_one))
 
     def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
-        """RS-encode each coefficient vector and Merkle-commit the codeword.
-        Returns stacked roots and the prover data needed to open."""
+        """RS-encode each coefficient vector and Merkle-commit its codeword's
+        conjugate-pair leaves. Returns stacked roots and the prover data."""
         committed = [self._commit_one(coeffs) for coeffs in polys]
         roots = [poly.digest_layers[-1][0] for poly in committed]
         return jnp.stack(roots), FriProverData(tuple(committed))
@@ -125,35 +130,36 @@ class FriProver:
         v: Array,
         t: Transcript,
     ) -> tuple[Transcript, FriProof]:
-        matrix, digest_layers = committed.matrix, committed.digest_layers
         params = self.params
-        domain = params.code.domain()
-        f_codeword = matrix.reshape(-1)
-        quotient = (f_codeword - v) / (domain - z)  # layer 0, rebuilt from f at verify
+        code, tree = params.code, params.tree
+        domain = code.domain()
+        # Layer 0 is the DEEP quotient, derived from f; the round commits it
+        # before folding (like every layer), and the verifier rebuilds this same
+        # pair from f's opened leaf to bind the commitment chain to f.
+        quotient = (committed.codeword - v) / (domain - z)
 
-        t = t.observe(digest_layers[-1][0])  # bind the f commitment root
+        t = t.observe(committed.digest_layers[-1][0])  # bind the f commitment root
         cw, t, layers = fold_rounds(
-            CommitFoldRound(params.code, params.tree),
-            quotient,
-            t,
-            params.num_rounds - 1,
+            PreFoldPairCommitRound(code, tree), quotient, t, params.num_rounds
         )
-        # Final round, peeled: the fully folded layer goes in the clear, no commit.
-        t, beta = t.sample()
-        final_layer = params.code.fold(cw, beta.reshape(()))
+        final_layer = cw
         t = t.observe(final_layer)
 
-        t, base, layer_opens = open_query_phase(
-            params.code,
-            params.tree,
-            t,
-            matrix,
-            digest_layers,
-            layers,
-            params.num_queries,
+        n = code.block_len
+        t, positions = sample_positions(t, n, params.num_queries)
+        a = code.layer_positions(positions, params.num_rounds)
+        f_opening = open_rows(tree, committed.leaves, committed.digest_layers, a[0])
+        query_openings = [
+            open_rows(tree, layer.leaves, layer.digest_layers, a[i])
+            for i, layer in enumerate(layers)
+        ]
+        return t, FriProof(
+            v,
+            [layer.root for layer in layers],
+            final_layer,
+            f_opening,
+            query_openings,
         )
-        layer_roots = [layer.root for layer in layers]
-        return t, FriProof(v, layer_roots, final_layer, base.lo, base.hi, layer_opens)
 
 
 if TYPE_CHECKING:

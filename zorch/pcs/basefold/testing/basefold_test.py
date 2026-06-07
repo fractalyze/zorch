@@ -68,20 +68,27 @@ class BasefoldTest(absltest.TestCase):
     def test_proof_pytree_round_trips(self) -> None:
         from zorch.commit.merkle import Opening
         from zorch.pcs.basefold.config import BasefoldProof
-        from zorch.pcs.fold import LayerOpening
 
-        op = Opening(row=jnp.zeros((2, 3), dtype=F), path=[jnp.zeros((2, 8), dtype=F)])
+        # num_vars = 1: one fold round (one fri root, one pair-leaf opening), one
+        # committed matrix of width 3 opened at the query positions.
+        comp = Opening(
+            row=jnp.zeros((2, 3), dtype=F), path=[jnp.zeros((2, 8), dtype=F)]
+        )
+        pair = Opening(
+            row=jnp.zeros((2, 2), dtype=F), path=[jnp.zeros((2, 8), dtype=F)]
+        )
         proof = BasefoldProof(
             univariate_messages=[(jnp.array(1, F), jnp.array(2, F))],
             fri_roots=[jnp.zeros(8, dtype=F)],
             final_poly=jnp.zeros(2, dtype=F),
-            component_opening=LayerOpening(op, op),
-            query_openings=[LayerOpening(op, op)],
+            component_openings=[comp],
+            query_openings=[pair],
         )
         leaves, treedef = jax.tree_util.tree_flatten(proof)
         restored = jax.tree_util.tree_unflatten(treedef, leaves)
         self.assertEqual(len(restored.univariate_messages), 1)
         self.assertEqual(restored.final_poly.shape, (2,))
+        self.assertEqual(len(restored.component_openings), 1)
 
     def test_commit_retains_mle_and_codeword(self) -> None:
         bf, rs, _tree, S = _basefold()
@@ -162,10 +169,10 @@ class BasefoldOpenTest(absltest.TestCase):
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
         z = _rand_ef(8, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
-        comp = proof.component_opening
-        bad_lo = dataclasses.replace(comp.lo, row=comp.lo.row + jnp.array(1, EF))
+        comp = proof.component_openings[0]
+        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, EF))
         bad = dataclasses.replace(
-            proof, component_opening=dataclasses.replace(comp, lo=bad_lo)
+            proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
         ok, _ = verifier.verify(root, [z], values, bad, _transcript())
         self.assertFalse(bool(ok))
@@ -192,10 +199,10 @@ class BasefoldOpenTest(absltest.TestCase):
         )
         z = _rand_ef(15, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
-        comp = proof.component_opening
-        bad_lo = dataclasses.replace(comp.lo, row=comp.lo.row + jnp.array(1, EF))
+        comp = proof.component_openings[0]
+        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, EF))
         bad = dataclasses.replace(
-            proof, component_opening=dataclasses.replace(comp, lo=bad_lo)
+            proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
         ok, _ = verifier.verify(root, [z], values, bad, _transcript())
         self.assertFalse(bool(ok))
@@ -236,27 +243,80 @@ class BasefoldOpenTest(absltest.TestCase):
         ok, _ = verifier.verify(wrong_root, [z], values, proof, _transcript())
         self.assertFalse(bool(ok))
 
-    def test_verify_rolls_fold_replay_into_scan(self) -> None:
-        # The sumcheck-reduction Fiat-Shamir replay lowers to one lax.scan over
-        # the homogeneous fold rounds (a stablehlo.while), so its poseidon2
-        # permute markers stop scaling with num_vars — the verifier traces the
-        # round body once instead of once per fold layer (#185). A regression
-        # that unrolls the replay reintroduces the per-round markers and fails
-        # the count-equality below.
-        def permute_markers(log_s: int) -> tuple[int, str]:
-            prover, verifier, root, pdata, _mle, _ = self._commit(log_s=log_s, K=2)
-            z = _rand_ef(40 + log_s, (log_s,))
-            values, proof, _ = prover.open(pdata, [z], _transcript())
-            # _verify_body is jitted; .lower() isn't on the field's Callable type.
-            verify_body: Any = verifier._verify_body
-            text = verify_body.lower(root, z, values, proof, _transcript()).as_text()
-            return text.count('"poseidon2:'), text
+    def _batch_commit(
+        self, log_s: int, widths: tuple[int, ...], code_cls: type = ReedSolomon
+    ) -> tuple[BasefoldProver, BasefoldVerifier, list, list, list, int]:
+        S = 1 << log_s
+        code = code_cls(message_len=S, blowup=2, dtype=EF)
+        _, _, tree = koalabear16_merkle()
+        prover = BasefoldProver(code, tree, num_queries=4)
+        verifier = BasefoldVerifier(code, tree, num_queries=4)
+        roots, pdatas, mles = [], [], []
+        for r, w in enumerate(widths):
+            mle = _rand_ef(20 + r, (S, w))
+            root, pdata = prover.commit([mle[:, k] for k in range(w)])
+            roots.append(root)
+            pdatas.append(pdata)
+            mles.append(mle)
+        return prover, verifier, roots, pdatas, mles, log_s
 
-        shallow_n, shallow_text = permute_markers(2)
-        deep_n, _ = permute_markers(4)
-        self.assertIn("stablehlo.while", shallow_text)
-        self.assertGreater(shallow_n, 0)
-        self.assertEqual(shallow_n, deep_n)
+    def test_batch_open_verify_two_matrices_distinct_widths(self) -> None:
+        # The #169 deliverable: two separately committed matrices of different
+        # widths, reduced to one FRI by the staggered RLC, round-trip.
+        prover, verifier, roots, pdatas, mles, log_s = self._batch_commit(
+            log_s=3, widths=(2, 3)
+        )
+        z = _rand_ef(30, (log_s,))
+        values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
+        for vals, mle in zip(values, mles, strict=True):
+            self.assertEqual(vals.tolist(), eval_mle(mle, z, axis=0).tolist())
+        ok, _ = verifier.verify_batch(roots, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+
+    def test_batch_open_verify_bit_reversed_code(self) -> None:
+        prover, verifier, roots, pdatas, _mles, log_s = self._batch_commit(
+            log_s=3, widths=(1, 2, 1), code_cls=BitReversedReedSolomon
+        )
+        z = _rand_ef(31, (log_s,))
+        values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
+        ok, _ = verifier.verify_batch(roots, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+
+    def test_batch_verify_rejects_wrong_round_root(self) -> None:
+        prover, verifier, roots, pdatas, _mles, log_s = self._batch_commit(
+            log_s=3, widths=(2, 3)
+        )
+        z = _rand_ef(32, (log_s,))
+        values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
+        bad_roots = [roots[0] + jnp.ones_like(roots[0]), roots[1]]
+        ok, _ = verifier.verify_batch(bad_roots, [z], values, proof, _transcript())
+        self.assertFalse(bool(ok))
+
+    def test_batch_verify_rejects_tampered_component_opening(self) -> None:
+        prover, verifier, roots, pdatas, _mles, log_s = self._batch_commit(
+            log_s=3, widths=(2, 3)
+        )
+        z = _rand_ef(33, (log_s,))
+        values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
+        co = proof.component_openings[1]
+        bad_co = dataclasses.replace(co, row=co.row + jnp.array(1, EF))
+        bad = dataclasses.replace(
+            proof, component_openings=[proof.component_openings[0], bad_co]
+        )
+        ok, _ = verifier.verify_batch(roots, [z], values, bad, _transcript())
+        self.assertFalse(bool(ok))
+
+    def test_verify_replay_lowers_to_scan(self) -> None:
+        # The interleaved sumcheck + fold-challenge replay rides one lax.scan (a
+        # stablehlo.while), so the verifier traces the round body once instead of
+        # once per fold layer (#185). A regression that unrolls the replay drops
+        # the while.
+        prover, verifier, root, pdata, _mle, _ = self._commit(log_s=4, K=2)
+        z = _rand_ef(44, (4,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        verify_body: Any = verifier._verify_body
+        text = verify_body.lower([root], z, [values], proof, _transcript()).as_text()
+        self.assertIn("stablehlo.while", text)
 
     def test_open_compiles_once_per_shape(self) -> None:
         log_s, K = 3, 2  # message_len = 1<<log_s = 8 rows; z has log_s vars

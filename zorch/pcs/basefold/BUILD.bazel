@@ -5,6 +5,7 @@ py_library(
     name = "basefold",
     srcs = [
         "__init__.py",
+        "batching.py",
         "config.py",
         "prover.py",
         "verifier.py",

@@ -24,3 +24,21 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "batching_test",
+    size = "small",
+    srcs = ["batching_test.py"],
+    # Real-poseidon2 transcript permute lowers to a composite CI's published
+    # jaxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
+    tags = ["local_only"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/pcs/basefold",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

@@ -130,6 +130,12 @@ class ReedSolomon:
         )
         return fri_fold_values(lo, hi, beta, domain[positions])
 
+    def pair_leaves(self, codeword: Array) -> Array:
+        """Natural order: conjugates sit a half-layer apart, so leaf `p` is
+        `(codeword[p], codeword[p + half])`."""
+        half = codeword.shape[0] // 2
+        return jnp.stack([codeword[:half], codeword[half:]], axis=1)
+
     def check_final(self, final: Array, claim: Array) -> Array:
         """A message-length-1 RS codeword is the constant polynomial on any
         domain, so base-code membership and message == `claim` collapse into one
@@ -235,6 +241,11 @@ class BitReversedReedSolomon:
     def pair_indices(self, positions: Array, level: int) -> tuple[Array, Array]:
         """Bit-reversed order: the pair landing at `positions` is adjacent."""
         return positions * 2, positions * 2 + 1
+
+    def pair_leaves(self, codeword: Array) -> Array:
+        """Bit-reversed order: conjugates are adjacent, so leaf `p` is the pair
+        `(codeword[2p], codeword[2p + 1])`."""
+        return codeword.reshape(codeword.shape[0] // 2, 2)
 
     def layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
         """Bit-reversed order: each fold halves the index, `a_i = q >> (i+1)`."""
