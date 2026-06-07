@@ -1,6 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """BasefoldProver.commit — RS low-degree-extension + Merkle, against an independent
 reconstruction of the same codeword + root."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -277,6 +278,24 @@ class BasefoldOpenTest(absltest.TestCase):
                 _rand_ef(seed, (S, K)), _rand_ef(seed + 100, (log_s,))
             ).block_until_ready()
         self.assertEqual(run._cache_size(), 1)
+
+    def test_open_eager_reuses_one_compiled_zone(self) -> None:
+        # Standalone (no enclosing jit), `open` must reuse one compiled zone
+        # across calls — the prover owns a jit zone like fri/the basefold
+        # verifier, so the `open_query_phase` vmap closure traces once instead
+        # of eagerly per call (#186). Each call passes a freshly built
+        # transcript, so a cache hit also exercises the #177 value-equality
+        # contract (no fresh-identity leaf rides the meta).
+        prover, _verifier, _root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
+        for seed in (2, 3, 4):
+            values, _proof, _ = prover.open(
+                pdata, [_rand_ef(seed, (log_s,))], _transcript()
+            )
+            values.block_until_ready()
+        # _open_body is jitted; _cache_size() isn't on the field's Callable type.
+        # (private JAX API; may change on jax upgrade.)
+        open_body: Any = prover._open_body
+        self.assertEqual(open_body._cache_size(), 1)
 
 
 if __name__ == "__main__":

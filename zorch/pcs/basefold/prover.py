@@ -19,8 +19,8 @@ with the code's fold) and proves the folded codeword with a query phase.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -112,6 +112,16 @@ class BasefoldProver:
     code: FoldableCode
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
+    # Jitted open body: an eager replay re-traces the `open_query_phase` vmap
+    # closure per call (issue #186). Mirrors the verifier's `_verify_body` and
+    # fri's `_open_one_jit`; unlike basefold `commit` — which rides the jagged
+    # seam's enclosing jit — `open` is reached eagerly via `stacked_open`.
+    _open_body: Callable[..., tuple[Array, BasefoldProof, Transcript]] = field(
+        init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_open_body", jax.jit(self._open_traced))
 
     def commit(
         self, polys: Sequence[Array]
@@ -139,17 +149,27 @@ class BasefoldProver:
                 f"BaseFold opens the matrix at one shared point, got {len(points)}"
             )
         z = points[0]  # (log_S,)
+        num_vars = z.shape[0]
+        # Eager shape guards, ahead of the jit zone (mirrors the verifier).
+        if num_vars < 1:
+            raise ValueError("BaseFold opens over at least one variable, got none")
+        if prover_data.mle.shape[0] != (1 << num_vars):
+            raise ValueError(
+                f"point dimension {num_vars} doesn't match MLE height "
+                f"{prover_data.mle.shape[0]} (expected 2^{num_vars})"
+            )
+        return self._open_body(prover_data, z, transcript)
+
+    def _open_traced(
+        self,
+        prover_data: BasefoldProverData,
+        z: Array,
+        transcript: Transcript,
+    ) -> tuple[Array, BasefoldProof, Transcript]:
         mle, codeword = prover_data.mle, prover_data.codeword  # [S,K], [n,K]
         dtype = z.dtype
         K = mle.shape[1]
         num_vars = z.shape[0]
-        if num_vars < 1:
-            raise ValueError("BaseFold opens over at least one variable, got none")
-        if mle.shape[0] != (1 << num_vars):
-            raise ValueError(
-                f"point dimension {num_vars} doesn't match MLE height "
-                f"{mle.shape[0]} (expected 2^{num_vars})"
-            )
         t = transcript
         # Bind the matrix commitment root into the transcript so every fold/query
         # challenge depends on it (the FS commit step, mirroring `fri`). `verify`
