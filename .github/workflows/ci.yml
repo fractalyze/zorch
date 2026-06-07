@@ -59,6 +59,14 @@ jobs:
       - name: Run bazel test
         run: bazel --bazelrc=.bazelrc.ci test --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
 
+      # Capture the runner-local test.log a failed test leaves behind — the CI
+      # stream only carries the FAIL summary, not the gtest output.
+      - name: Upload bazel test logs
+        if: ${{ failure() }}
+        uses: fractalyze/.github/.github/actions/upload-bazel-testlogs@main
+        with:
+          name: bazel-test-logs-${{ matrix.backend }}
+
   pre-commit:
     if: github.actor != 'fractalyze-dev'
     runs-on: ubuntu-latest
