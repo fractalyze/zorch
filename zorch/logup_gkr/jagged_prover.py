@@ -35,14 +35,16 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
 
+from zorch.fusion import fused_region
 from zorch.logup_gkr.circuit import JaggedGkrLayer, _pad_neutral, _segment_gather
 from zorch.logup_gkr.prover import Carry, logup_combine
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -52,7 +54,12 @@ from zorch.poly.univariate import (
     eval_coeffs,
 )
 from zorch.round import Round
-from zorch.transcript import Transcript, sample_challenge
+from zorch.sumcheck.prover import (
+    SUMCHECK_MARKER,
+    SUMCHECK_MARKER_VERSION,
+    _state_leaves,
+)
+from zorch.transcript import DuplexState, DuplexTranscript, Transcript, sample_challenge
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
@@ -101,6 +108,38 @@ def _round_metadata(
         )
         meta.append((_segment_gather(counts, padded), col_index, pair_index))
         counts = pairs
+    return meta
+
+
+def _flatten_meta(
+    meta: list[tuple[Array | None, Array, Array]],
+) -> tuple[list[Array], list[bool]]:
+    """Flatten the per-round `(gather, col_index, pair_index)` schedule into a flat
+    operand list for the marker, dropping the `None` gathers (rounds needing no
+    re-pad). The returned `gather_present` mask is the static structure
+    `_unflatten_meta` rebuilds the tuples by -- it carries no array data, so it
+    stays a Python value rather than a marker operand."""
+    present = [gather is not None for gather, _, _ in meta]
+    ops: list[Array] = []
+    for gather, col_index, pair_index in meta:
+        if gather is not None:
+            ops.append(gather)
+        ops.extend((col_index, pair_index))
+    return ops, present
+
+
+def _unflatten_meta(
+    ops: Sequence[Array], present: list[bool]
+) -> list[tuple[Array | None, Array, Array]]:
+    """Inverse of `_flatten_meta`: rebuild the per-round meta tuples from the flat
+    marker operands and the static presence mask."""
+    meta: list[tuple[Array | None, Array, Array]] = []
+    p = 0
+    for has_gather in present:
+        gather = ops[p] if has_gather else None
+        p += int(has_gather)
+        meta.append((gather, ops[p], ops[p + 1]))
+        p += 2
     return meta
 
 
@@ -223,10 +262,49 @@ def prove_jagged_layer(
     naturals = jnp.stack([jnp.array(j, eval_point.dtype) for j in range(_DEGREE + 1)])
     inv_vand = compute_inv_vandermonde(_DEGREE, eval_point.dtype)
 
+    head = (n0, n1, d0, d1, eq_row, eq_int, eval_point, lam, claim)
+    tail = (meta, naturals, inv_vand, nrv, niv, challenge_limbs)
+    # Mark only a DuplexTranscript with a dedicated-fusion permutation, mirroring
+    # `sumcheck.prover.prove`: the marker threads the sponge's leaves as operands.
+    # The marked path decomposes through the same `_run_jagged_rounds`, so it is
+    # byte-identical to the plain loop -- a vendor codegens it register-resident
+    # over the sparse layout from the `row_counts` attribute (zkx#544). `transcript`
+    # is passed positionally (not in a pre-built tuple) so the isinstance narrows it.
+    if isinstance(transcript, DuplexTranscript) and transcript.has_dedicated_fusion:
+        out = _prove_jagged_marked(layer, *head, transcript, *tail)
+    else:
+        out = _run_jagged_rounds(*head, transcript, *tail)
+    challenges, advanced, polys, fn0, fn1, fd0, fd1 = out
+    proof = JaggedLayerProof(lam, claim, polys, fn0, fn1, fd0, fd1)
+    return challenges, advanced, proof
+
+
+def _run_jagged_rounds(
+    n0: Array,
+    n1: Array,
+    d0: Array,
+    d1: Array,
+    eq_row: Array,
+    eq_int: Array,
+    eval_point: Array,
+    lam: Array,
+    claim: Array,
+    transcript: Transcript,
+    meta: list[tuple[Array | None, Array, Array]],
+    naturals: Array,
+    inv_vand: Array,
+    nrv: int,
+    niv: int,
+    challenge_limbs: int,
+) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
+    """The per-round jagged sumcheck loop, shared by the plain and marked paths so
+    the `zorch.sumcheck` marker decomposes byte-identically. Returns the bound
+    point (challenges reversed), the advanced transcript, the stacked round
+    polynomials, and the four folded pair openings."""
+    one = jnp.ones((), eval_point.dtype)
     eq_adj = one
     pad_adj = one
     point = eval_point
-    opening_claim = claim  # the loop rebinds claim to each round's reduction
     polys: list[Array] = []
     challenges: list[Array] = []
     for rnd in range(nrv + niv):
@@ -279,10 +357,114 @@ def prove_jagged_layer(
             eq_int = _bind_lsb(eq_int, r)
         point = point[:-1]
 
-    proof = JaggedLayerProof(
-        lam, opening_claim, jnp.stack(polys), n0[0], n1[0], d0[0], d1[0]
+    return (
+        jnp.stack(challenges[::-1]),
+        transcript,
+        jnp.stack(polys),
+        n0[0],
+        n1[0],
+        d0[0],
+        d1[0],
     )
-    return jnp.stack(challenges[::-1]), transcript, proof
+
+
+def _prove_jagged_marked(
+    layer: JaggedGkrLayer,
+    n0: Array,
+    n1: Array,
+    d0: Array,
+    d1: Array,
+    eq_row: Array,
+    eq_int: Array,
+    eval_point: Array,
+    lam: Array,
+    claim: Array,
+    transcript: DuplexTranscript,
+    meta: list[tuple[Array | None, Array, Array]],
+    naturals: Array,
+    inv_vand: Array,
+    nrv: int,
+    niv: int,
+    challenge_limbs: int,
+) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
+    """Wrap `_run_jagged_rounds` in the hash-agnostic `zorch.sumcheck` composite,
+    Fiat-Shamir INSIDE, so the body is the *same* loop and the result is
+    bit-identical to the plain path.
+
+    The static per-round schedule (`meta`), the interpolation tables
+    (`naturals`/`inv_vand`), and `eval_point` ride as **explicit operands** -- they
+    are tracer-valued under `@jit`, and only *closed-over* tracers are rejected by
+    `lax.composite`, so passing them positionally keeps the leading auto-lifted
+    operands the round-constant set alone (the emitter parses those by position).
+    The duplex sponge threads through as the five `DuplexState` leaves; the FS
+    permutation rides as the nested `poseidon2:` marker inside `sample_challenge`.
+    `row_counts` rides as the `array<i64>` attribute the vendor bounds each
+    segment's reduction with (zkx#544); `fold_order`/`poly_form` declare the
+    jagged LSB / coefficient-form contract (the dense defaults are MSB / value).
+    """
+    perm, rate = transcript.permutation, transcript.rate
+    leaves = _state_leaves(transcript.state)
+    meta_ops, gather_present = _flatten_meta(meta)
+    n_meta = len(meta_ops)
+
+    def body(*operands: Array, **_attrs: object) -> tuple[Array, ...]:
+        bn0, bn1, bd0, bd1, beq_row, beq_int, beval, blam, bclaim = operands[:9]
+        idx = 9
+        lv = operands[idx : idx + len(leaves)]
+        idx += len(leaves)
+        bmeta = _unflatten_meta(operands[idx : idx + n_meta], gather_present)
+        idx += n_meta
+        bnaturals, binv_vand = operands[idx], operands[idx + 1]
+        challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds(
+            bn0,
+            bn1,
+            bd0,
+            bd1,
+            beq_row,
+            beq_int,
+            beval,
+            blam,
+            bclaim,
+            DuplexTranscript(perm, rate, DuplexState(*lv)),
+            bmeta,
+            bnaturals,
+            binv_vand,
+            nrv,
+            niv,
+            challenge_limbs,
+        )
+        # `_run_jagged_rounds` types its transcript as the generic `Transcript`;
+        # here it is the DuplexTranscript built just above, so read its leaves back.
+        leaves_out = _state_leaves(cast(DuplexTranscript, t).state)
+        return (fn0, fn1, fd0, fd1, polys, challenges, *leaves_out)
+
+    out = fused_region(
+        body,
+        n0,
+        n1,
+        d0,
+        d1,
+        eq_row,
+        eq_int,
+        eval_point,
+        lam,
+        claim,
+        *leaves,
+        *meta_ops,
+        naturals,
+        inv_vand,
+        name=SUMCHECK_MARKER,
+        version=SUMCHECK_MARKER_VERSION,
+        degree=_DEGREE,
+        num_vars=nrv + niv,
+        num_factors=4,
+        row_counts=np.asarray(layer.row_counts, dtype=np.int64),
+        fold_order="lsb",
+        poly_form="coefficient",
+    )
+    fn0, fn1, fd0, fd1, polys, challenges, *out_leaves = out
+    t = DuplexTranscript(perm, rate, DuplexState(*out_leaves))
+    return challenges, t, polys, fn0, fn1, fd0, fd1
 
 
 class JaggedGkrLayerRound(Round):
