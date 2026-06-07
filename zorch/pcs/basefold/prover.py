@@ -5,16 +5,16 @@
 native-NTT Reed-Solomon today) followed by a Merkle commit of the codeword rows.
 Unlike `kzg`/`fri` — which commit each polynomial in the batch independently and
 return one root per poly — BaseFold is a **matrix commitment**: the columns share
-one code domain and the
-Merkle leaves are codeword *rows* spanning all columns, so the whole batch binds
-under a single root. That single-root commitment is what the jagged structure bind
-(`JaggedPcsProver`) hashes against. Both halves are already-fused substrate ops, so the
-commit is one `@jit`-able device zone with no host sync.
+one code domain and the Merkle leaves are codeword *rows* spanning all columns, so
+the whole batch binds under a single root.
 
-`open` is the interleaved-sumcheck BaseFold opening: it evaluates the matrix's K
-columns at one shared point, RLC-batches them into a single codeword, then folds
-the MLE and the codeword by the same per-round challenge (a sumcheck interleaved
-with the code's fold) and proves the folded codeword with a query phase.
+`open` is the BaseFold batch open: it reduces one or more *separately committed*
+matrices, evaluated at a shared point, to a single FRI. Each matrix's columns are
+combined with the others' by a staggered partial-Lagrange RLC into one codeword
+and one MLE; an interleaved sumcheck folds that MLE while the FRI folds the
+codeword by the same per-round challenge, the round committing the *pre-fold*
+layer's conjugate-pair leaves before sampling the fold challenge. A single matrix
+is the degenerate one-round batch.
 """
 
 from __future__ import annotations
@@ -30,12 +30,14 @@ from jax import Array
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
-from zorch.pcs.basefold.config import (
-    BasefoldCommitment,
-    BasefoldProof,
-    sample_rlc_coeffs,
+from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
+from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldProof
+from zorch.pcs.fold import (
+    PairCommittedLayer,
+    PreFoldPairCommitRound,
+    open_rows,
+    sample_positions,
 )
-from zorch.pcs.fold import CommitFoldRound, CommittedLayer, open_query_phase
 from zorch.poly.multilinear import eval_mle, mle_fold
 from zorch.prove import fold_rounds
 from zorch.round import Round
@@ -54,14 +56,13 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class BasefoldProverData:
     """Retained witness from `BasefoldProver.commit`: the Merkle digest layers
-    over the codeword, the message-domain MLE `[S, K]` (the sumcheck folds
-    it), the codeword `[block_len, K]` (the fold halves it and Merkle opens it),
-    plus per-column widths. A pytree so `commit`/`open` ride a `@jit` zone."""
+    over the codeword, the message-domain MLE `[S, K]` (the sumcheck folds it),
+    the codeword `[block_len, K]` (the fold halves it and Merkle opens it), plus
+    per-column widths. A pytree so `commit`/`open` ride a `@jit` zone."""
 
     digest_layers: list[Array]
     mle: Array  # [S, K] message-domain columns
     codeword: Array  # [block_len, K] codeword (Merkle leaves = its rows)
-    # len-1 today (one MLE per commit); reserved for batch-commit in P3.
     widths: tuple[int, ...]
 
 
@@ -84,17 +85,19 @@ _OpenCarry = tuple[Array, Array, Array, Array]
 
 
 @dataclass(frozen=True)
-class _SumcheckFoldRound(Round):
-    """One interleaved-sumcheck round: emit + observe the degree-1 sumcheck
-    message, run the shared commit-and-fold tail, then fold the MLE and reduce
-    the running claim by the tail's β — the sumcheck and the codeword fold by
-    the same challenge. msg = (sumcheck message, the tail's `CommittedLayer`)."""
+class _SumcheckPairFoldRound(Round):
+    """One interleaved-sumcheck round of the batch open: emit + observe the
+    degree-1 sumcheck message, run the shared pre-fold pair-commit tail (commit
+    the layer's pairs, observe the root, sample β, fold the codeword), then fold
+    the MLE and reduce the running claim by the tail's β — sumcheck and codeword
+    fold by the same challenge. msg = (sumcheck message, the tail's
+    `PairCommittedLayer`)."""
 
-    tail: CommitFoldRound
+    tail: PreFoldPairCommitRound
 
     def __call__(
         self, carry: _OpenCarry, transcript: Transcript
-    ) -> tuple[_OpenCarry, Transcript, tuple[tuple[Array, Array], CommittedLayer]]:
+    ) -> tuple[_OpenCarry, Transcript, tuple[tuple[Array, Array], PairCommittedLayer]]:
         cw, mle, claim, zs = carry
         zero_val, one_val = _sumcheck_msg(mle, claim, zs)
         t = transcript.observe(jnp.stack([zero_val, one_val]))
@@ -112,11 +115,12 @@ class BasefoldProver:
     code: FoldableCode
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
-    # Jitted open body: an eager replay re-traces the `open_query_phase` vmap
-    # closure per call (issue #186). Mirrors the verifier's `_verify_body` and
-    # fri's `_open_one_jit`; unlike basefold `commit` — which rides the jagged
-    # seam's enclosing jit — `open` is reached eagerly via `stacked_open`.
-    _open_body: Callable[..., tuple[Array, BasefoldProof, Transcript]] = field(
+    # Jitted open body: an eager replay re-traces the per-round pair-leaf
+    # `open_rows` vmaps per call (issue #186). Mirrors the verifier's
+    # `_verify_body` and fri's `_open_one_jit`; unlike basefold `commit` — which
+    # rides the jagged seam's enclosing jit — `open` is reached eagerly via
+    # `stacked_open`.
+    _open_body: Callable[..., tuple[list[Array], BasefoldProof, Transcript]] = field(
         init=False, repr=False, compare=False
     )
 
@@ -144,78 +148,110 @@ class BasefoldProver:
         points: Sequence[Array],
         transcript: Transcript,
     ) -> tuple[Array, BasefoldProof, Transcript]:
+        """Open a single committed matrix — the degenerate one-round batch, the
+        `PcsProver` seam shape. Returns `(values, proof, transcript)` with
+        `values` the matrix's per-column evaluations `[K]`."""
+        values, proof, t = self.open_batch([prover_data], points, transcript)
+        return values[0], proof, t
+
+    def open_batch(
+        self,
+        rounds: Sequence[BasefoldProverData],
+        points: Sequence[Array],
+        transcript: Transcript,
+    ) -> tuple[list[Array], BasefoldProof, Transcript]:
+        """Batch-open the committed matrices `rounds` at the shared point.
+
+        Returns `(values, proof, transcript)` where `values[r]` is round `r`'s
+        per-column evaluations `[w_r]`. A single-element `rounds` is the
+        degenerate (un-batched) open.
+        """
         if len(points) != 1:
             raise ValueError(
-                f"BaseFold opens the matrix at one shared point, got {len(points)}"
+                f"BaseFold opens the matrices at one shared point, got {len(points)}"
             )
+        if not rounds:
+            raise ValueError("BaseFold opens at least one committed matrix, got none")
         z = points[0]  # (log_S,)
         num_vars = z.shape[0]
         # Eager shape guards, ahead of the jit zone (mirrors the verifier).
         if num_vars < 1:
             raise ValueError("BaseFold opens over at least one variable, got none")
-        if prover_data.mle.shape[0] != (1 << num_vars):
-            raise ValueError(
-                f"point dimension {num_vars} doesn't match MLE height "
-                f"{prover_data.mle.shape[0]} (expected 2^{num_vars})"
-            )
-        return self._open_body(prover_data, z, transcript)
+        for pd in rounds:
+            if pd.mle.shape[0] != (1 << num_vars):
+                raise ValueError(
+                    f"point dimension {num_vars} doesn't match MLE height "
+                    f"{pd.mle.shape[0]} (expected 2^{num_vars})"
+                )
+        return self._open_body(list(rounds), z, transcript)
 
     def _open_traced(
         self,
-        prover_data: BasefoldProverData,
+        rounds: Sequence[BasefoldProverData],
         z: Array,
         transcript: Transcript,
-    ) -> tuple[Array, BasefoldProof, Transcript]:
-        mle, codeword = prover_data.mle, prover_data.codeword  # [S,K], [n,K]
+    ) -> tuple[list[Array], BasefoldProof, Transcript]:
         dtype = z.dtype
-        K = mle.shape[1]
         num_vars = z.shape[0]
         t = transcript
-        # Bind the matrix commitment root into the transcript so every fold/query
-        # challenge depends on it (the FS commit step, mirroring `fri`). `verify`
-        # observes the same root.
-        t = t.observe(prover_data.digest_layers[-1][0])
+        # 1. Bind every commitment root into the transcript (the FS commit step,
+        #    mirroring `fri`). `verify` observes the same roots in the same order.
+        for pd in rounds:
+            t = t.observe(pd.digest_layers[-1][0])
 
-        # 1. Per-column evals (one eq-expansion, batched over the K columns), then
-        #    RLC-batch the K columns into one MLE/codeword.
-        values = eval_mle(mle, z, axis=0)  # (K,)
-        t = t.observe(values)
-        t, coeffs = sample_rlc_coeffs(t, K, dtype)
-        current_mle = (mle * coeffs).sum(axis=1)  # (S,)
-        cw = (codeword * coeffs).sum(axis=1)  # (n,)
-        current_claim = (values * coeffs).sum()
+        # 2. Per-matrix, per-column evaluations at z; observe each as sampled.
+        values = []
+        for pd in rounds:
+            vals = eval_mle(pd.mle, z, axis=0)  # (w_r,)
+            t = t.observe(vals)
+            values.append(vals)
 
-        # 2. Interleaved sumcheck + codeword fold (num_vars rounds): the first
-        #    num_vars−1 ride the shared commit-and-fold round; the final round
-        #    is peeled — its folded layer goes in the clear, no commit.
+        # 3. Staggered partial-Lagrange RLC over the total column width, then
+        #    collapse every matrix's columns into one MLE / codeword / claim.
+        total_width = sum(int(pd.mle.shape[1]) for pd in rounds)
+        t, coeffs = sample_staggered_coeffs(t, total_width, dtype)
+        current_mle = batch_staggered([pd.mle for pd in rounds], coeffs)  # (S,)
+        cw = batch_staggered([pd.codeword for pd in rounds], coeffs)  # (n,)
+        current_claim = batch_staggered(values, coeffs)  # scalar
+        # Domain separation: bind the fold-round count (mirrors the reference).
+        t = t.observe(jnp.asarray(num_vars, dtype))
+
+        # 4. Interleaved sumcheck + pre-fold pair-leaf FRI fold, num_vars rounds.
+        #    Every round commits its pre-fold layer; the final folded codeword
+        #    (length `blowup`) is the cleartext final poly.
         carry: _OpenCarry = (cw, current_mle, current_claim, z)
         carry, t, msgs = fold_rounds(
-            _SumcheckFoldRound(CommitFoldRound(self.code, self.tree)),
+            _SumcheckPairFoldRound(PreFoldPairCommitRound(self.code, self.tree)),
             carry,
             t,
-            num_vars - 1,
+            num_vars,
         )
-        cw, current_mle, current_claim, zs = carry
-        zero_val, one_val = _sumcheck_msg(current_mle, current_claim, zs)
-        t = t.observe(jnp.stack([zero_val, one_val]))
-        t, beta = t.sample()
-        final_layer = self.code.fold(cw, beta.reshape(()))
-        t = t.observe(final_layer)
-        uni_msgs = [uni for uni, _ in msgs] + [(zero_val, one_val)]
+        final_poly = carry[0]
+        uni_msgs = [uni for uni, _ in msgs]
         layers = [layer for _, layer in msgs]
+        # Bind the cleartext final codeword before sampling queries, so the query
+        # positions depend on it (the IOPP terminal binding; `verify` mirrors).
+        t = t.observe(final_poly)
 
-        # 3. Query phase (pair layout from the code seam, shared with fri).
-        t, comp, layer_opens = open_query_phase(
-            self.code,
-            self.tree,
-            t,
-            codeword,
-            prover_data.digest_layers,
-            layers,
-            self.num_queries,
-        )
+        # 5. Query phase: shared positions; open every matrix at the full index
+        #    and every fold layer's pair-leaf at its halved index.
+        n = self.code.block_len
+        t, positions = sample_positions(t, n, self.num_queries)
+        a = self.code.layer_positions(positions, num_vars)
+        component_openings = [
+            open_rows(self.tree, pd.codeword, pd.digest_layers, positions)
+            for pd in rounds
+        ]
+        query_openings = [
+            open_rows(self.tree, layer.leaves, layer.digest_layers, a[i])
+            for i, layer in enumerate(layers)
+        ]
         proof = BasefoldProof(
-            uni_msgs, [layer.root for layer in layers], final_layer, comp, layer_opens
+            uni_msgs,
+            [layer.root for layer in layers],
+            final_poly,
+            component_openings,
+            query_openings,
         )
         return values, proof, t
 
@@ -225,4 +261,4 @@ if TYPE_CHECKING:
     _pcs_prover: type[
         PcsProver[BasefoldCommitment, BasefoldProverData, BasefoldProof]
     ] = BasefoldProver
-    _fold_round: type[ProverRound] = _SumcheckFoldRound
+    _fold_round: type[ProverRound] = _SumcheckPairFoldRound

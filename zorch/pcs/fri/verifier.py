@@ -2,10 +2,11 @@
 """FRI verifier: rebuild the quotient from `f`, then check fold consistency.
 
 For each query the verifier reconstructs the quotient `g` at the conjugate pair
-from the *committed* `f` values — `g(x) = (f(x) − v)/(x − z)` — so a false claim
-`v ≠ f(z)` yields a non-low-degree `g` that fails both the per-layer fold check
-and the final-layer constant check. It never trusts a prover-sent layer-0 oracle.
-All arithmetic (NTT domain, field divide, Merkle rebuild) lowers on CPU and GPU.
+from the *committed* `f` values — `g(x) = (f(x) − v)/(x − z)` — and binds that
+pair to the committed layer-0 leaf, so a false claim `v ≠ f(z)` yields a
+non-low-degree `g` that fails both the per-layer fold check and the final-layer
+constant check. It never trusts a prover-sent layer-0 oracle. All arithmetic
+(NTT domain, field divide, Merkle rebuild) lowers on CPU and GPU.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.pcs.fold import sample_positions, verify_openings
+from zorch.pcs.fold import sample_positions, verify_fold_chain, verify_openings
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
 from zorch.transcript import Transcript
 
@@ -52,15 +53,14 @@ class FriVerifier:
                 f"values={values.shape[0]}, proof={len(proof)}"
             )
         # Fail loud on a structurally short proof: the replay scan iterates over
-        # whatever layer_roots it is handed, so a missing layer would silently
-        # skip a round's checks rather than error (cf. the same guard in the
-        # basefold verifier). Eager, ahead of the jit zone.
+        # whatever fri_roots it is handed, so a missing layer would silently skip
+        # a round's checks rather than error. Eager, ahead of the jit zone.
         rounds = self.params.num_rounds
         for pf in proof:
-            if len(pf.layer_roots) != rounds - 1 or len(pf.layers) != rounds - 1:
+            if len(pf.fri_roots) != rounds or len(pf.query_openings) != rounds:
                 raise ValueError(
-                    f"malformed proof: expected {rounds - 1} fold layers, got "
-                    f"{len(pf.layer_roots)} roots / {len(pf.layers)} openings"
+                    f"malformed proof: expected {rounds} fold layers, got "
+                    f"{len(pf.fri_roots)} roots / {len(pf.query_openings)} openings"
                 )
         t = transcript
         oks = []
@@ -73,70 +73,52 @@ class FriVerifier:
         self, f_root: Array, z: Array, v: Array, pf: FriProof, t: Transcript
     ) -> tuple[Transcript, Array]:
         params = self.params
-        n = params.code.block_len
+        code, tree = params.code, params.tree
+        n = code.block_len
+        num_rounds = params.num_rounds
 
-        # Replay Fiat-Shamir: fold challenges, then query positions. The first
-        # num_rounds-1 rounds each observe the next layer's committed root, so
-        # they ride one lax.scan; the final round observes the cleartext final
-        # layer and is peeled (docs/conventions.md "Loops").
+        # Replay Fiat-Shamir: each round observes its pre-fold commitment root
+        # before sampling β, so all num_rounds rounds are homogeneous and ride
+        # one lax.scan (a stablehlo.while), then the cleartext final layer.
         t = t.observe(f_root)
 
         def fold_round(t: Transcript, root: Array) -> tuple[Transcript, Array]:
-            t, beta = t.sample()
             t = t.observe(root)
+            t, beta = t.sample()
             return t, beta.reshape(())
 
-        betas: list[Array] = []
-        if params.num_rounds > 1:
-            t, head_betas = lax.scan(fold_round, t, jnp.stack(pf.layer_roots))
-            # Index, don't iterate: list(field_array) dispatches lax.sign under
-            # CUDA (cf. fri/prover._eval_poly).
-            betas = [head_betas[r] for r in range(params.num_rounds - 1)]
-        t, final_beta = t.sample()
+        t, betas_stacked = lax.scan(fold_round, t, jnp.stack(pf.fri_roots))
+        # Index, don't iterate: list(field_array) dispatches lax.sign under CUDA.
+        betas = [betas_stacked[r] for r in range(num_rounds)]
         t = t.observe(pf.final_layer)
-        betas.append(final_beta.reshape(()))
-        t, positions = sample_positions(t, n, params.num_queries)
-        a = params.code.layer_positions(positions, params.num_rounds)
 
         # The final fold layer must be a constant (degree 0). FRI binds no
         # external claim, so the layer's own head is the claimed message.
-        ok = params.code.check_final(pf.final_layer, pf.final_layer[0])
+        ok = code.check_final(pf.final_layer, pf.final_layer[0])
 
-        # Merkle: every opened pair must rebuild its committed root — layer 0's
-        # against f's root, each fold layer's against its committed root.
-        # Reconstruct all legs in one batched pass (#163).
-        lo0, hi0 = params.code.pair_indices(a[0], 0)
-        legs = [(f_root, lo0, pf.f_lo), (f_root, hi0, pf.f_hi)]
-        for layer in range(1, params.num_rounds):
-            lo_idx, hi_idx = params.code.pair_indices(a[layer], layer)
-            root = pf.layer_roots[layer - 1]
-            legs.append((root, lo_idx, pf.layers[layer - 1].lo))
-            legs.append((root, hi_idx, pf.layers[layer - 1].hi))
-        ok = ok & verify_openings(params.tree, legs)
+        t, positions = sample_positions(t, n, params.num_queries)
+        a = code.layer_positions(positions, num_rounds)
 
-        # Rebuild the layer-0 quotient at each point pair from f's leaves.
-        d0 = params.code.domain()
-        g_lo = (pf.f_lo.row[:, 0] - v) / (d0[lo0] - z)
-        g_hi = (pf.f_hi.row[:, 0] - v) / (d0[hi0] - z)
+        # Merkle: f's pair-leaf rebuilds f's root at a[0]; each fold layer's
+        # pair-leaf rebuilds its committed root at a[i]. One batched pass (#163).
+        legs = [(f_root, a[0], pf.f_opening)]
+        for i in range(num_rounds):
+            legs.append((pf.fri_roots[i], a[i], pf.query_openings[i]))
+        ok = ok & verify_openings(tree, legs)
 
-        for i in range(params.num_rounds):
-            if i == 0:
-                lo_val, hi_val = g_lo, g_hi
-            else:
-                lo_val = pf.layers[i - 1].lo.row[:, 0]
-                hi_val = pf.layers[i - 1].hi.row[:, 0]
-            folded = params.code.fold_values(lo_val, hi_val, betas[i], a[i], i)
-            # The fold output lands at position a[i] in layer i+1 — the lo or
-            # hi of that layer's opened pair, decided by the code's layout.
-            if i < params.num_rounds - 1:
-                next_lo_idx, _ = params.code.pair_indices(a[i + 1], i + 1)
-                nxt = pf.layers[i]
-                expected = jnp.where(
-                    a[i] == next_lo_idx, nxt.lo.row[:, 0], nxt.hi.row[:, 0]
-                )
-            else:
-                expected = pf.final_layer[a[i]]
-            ok = ok & jnp.all(folded == expected)
+        # Rebuild the layer-0 quotient pair from f's opened leaf and bind it to
+        # the committed layer-0 pair — this is what ties the fold chain to f.
+        lo0, hi0 = code.pair_indices(a[0], 0)
+        domain = code.domain()
+        f_lo = pf.f_opening.row[:, 0]
+        f_hi = pf.f_opening.row[:, 1]
+        g_lo = (f_lo - v) / (domain[lo0] - z)
+        g_hi = (f_hi - v) / (domain[hi0] - z)
+        layer0 = pf.query_openings[0].row  # (Q, 2)
+        ok = ok & jnp.all(g_lo == layer0[:, 0]) & jnp.all(g_hi == layer0[:, 1])
+
+        # Each layer's opened pair folds to the next layer's / the final layer.
+        ok = ok & verify_fold_chain(code, pf.query_openings, betas, a, pf.final_layer)
         return t, ok
 
 

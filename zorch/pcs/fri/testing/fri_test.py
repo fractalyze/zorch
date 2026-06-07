@@ -86,7 +86,7 @@ class FriRoundTripTest(absltest.TestCase):
         # over whatever roots it's handed, so a short list would silently skip a
         # round's checks without the eager guard.
         roots, values, proofs = self._prove()
-        short = dataclasses.replace(proofs[0], layer_roots=[], layers=[])
+        short = dataclasses.replace(proofs[0], fri_roots=[], query_openings=[])
         with self.assertRaises(ValueError):
             self.verifier.verify(roots, [self.z], values, [short], _transcript())
 

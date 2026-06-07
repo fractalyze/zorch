@@ -1,10 +1,12 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """BaseFold verifier — the `PcsVerifier` half of the multilinear PCS.
 
-`verify` rebuilds the queried codeword leaves from the committed root and checks
-the fold consistency plus the jagged opening sumchecks. It holds only the
-public params (`code` for the block geometry and fold, `tree` for the Merkle
-config) — never the prover's retained codeword.
+`verify` rebuilds the queried codeword leaves from the committed roots and checks
+the fold consistency of the batch open: the staggered RLC of the committed
+matrices' opened rows must agree with the batched codeword's first pair-leaf, and
+each fold layer's opened pair must fold to the next layer's, down to the constant
+final poly. It holds only the public params (`code` for the block geometry and
+fold, `tree` for the Merkle config) — never the prover's retained codeword.
 """
 
 from __future__ import annotations
@@ -19,12 +21,9 @@ from jax import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
-from zorch.pcs.basefold.config import (
-    BasefoldCommitment,
-    BasefoldProof,
-    sample_rlc_coeffs,
-)
-from zorch.pcs.fold import sample_positions, verify_openings
+from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
+from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldProof
+from zorch.pcs.fold import sample_positions, verify_fold_chain, verify_openings
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -56,64 +55,83 @@ class BasefoldVerifier:
         proof: BasefoldProof,
         transcript: Transcript,
     ) -> tuple[Array, Transcript]:
+        """Verify a single-matrix open — the degenerate one-round batch, the
+        `PcsVerifier` seam shape."""
+        return self.verify_batch([commitment], points, [values], proof, transcript)
+
+    def verify_batch(
+        self,
+        commitments: Sequence[BasefoldCommitment],
+        points: Sequence[Array],
+        values: Sequence[Array],
+        proof: BasefoldProof,
+        transcript: Transcript,
+    ) -> tuple[Array, Transcript]:
         if len(points) != 1:
             raise ValueError(
-                f"BaseFold opens the matrix at one shared point, got {len(points)}"
+                f"BaseFold opens the matrices at one shared point, got {len(points)}"
+            )
+        if not (len(commitments) == len(values) == len(proof.component_openings)):
+            raise ValueError(
+                f"batch mismatch: {len(commitments)} commitments, {len(values)} "
+                f"value vectors, {len(proof.component_openings)} component openings"
             )
         z = points[0]
         num_vars = z.shape[0]
-        # Fail loud on a structurally malformed proof — a short message/layer list
-        # would otherwise let the round loop silently skip checks (cf. the same
-        # guard in `round.VerifyChain`). Eager guards, ahead of the jit zone.
         if self.code.message_len != (1 << num_vars):
             raise ValueError(
                 f"point dimension {num_vars} doesn't match message_len "
                 f"{self.code.message_len} (expected 2^{num_vars})"
             )
+        # Fail loud on a structurally malformed proof — a short message/layer list
+        # would otherwise let the round loop silently skip checks.
         if (
             len(proof.univariate_messages) != num_vars
-            or len(proof.fri_roots) != num_vars - 1
-            or len(proof.query_openings) != num_vars - 1
+            or len(proof.fri_roots) != num_vars
+            or len(proof.query_openings) != num_vars
         ):
             raise ValueError(
-                f"malformed proof: expected {num_vars} sumcheck messages and "
-                f"{num_vars - 1} fold layers, got {len(proof.univariate_messages)} / "
+                f"malformed proof: expected {num_vars} sumcheck messages / fold "
+                f"layers, got {len(proof.univariate_messages)} / "
                 f"{len(proof.fri_roots)} / {len(proof.query_openings)}"
             )
-        return self._verify_body(commitment, z, values, proof, transcript)
+        return self._verify_body(list(commitments), z, list(values), proof, transcript)
 
     def _verify_traced(
         self,
-        commitment: BasefoldCommitment,
+        commitments: list[Array],
         z: Array,
-        values: Array,
+        values: list[Array],
         proof: BasefoldProof,
         transcript: Transcript,
     ) -> tuple[Array, Transcript]:
         dtype = z.dtype
-        K = values.shape[0]
         n = self.code.block_len
         num_vars = z.shape[0]
-        t = transcript
-        # Bind the commitment root into the transcript (mirrors `open`).
-        t = t.observe(commitment)
-
-        # Re-derive the RLC coeffs + batched claim (mirror open).
-        t = t.observe(values)
-        t, coeffs = sample_rlc_coeffs(t, K, dtype)
-        current_claim = (values * coeffs).sum()
-
-        # Replay the sumcheck reduction + fold challenges. The first num_vars-1
-        # rounds are homogeneous — each observes the next fold layer's committed
-        # root — so they ride one lax.scan; the final round is peeled because it
-        # observes the cleartext final poly, not a root. The verifier's replay is
-        # scan-shaped where the prover's fold_rounds is not: the prover *commits* a
-        # shrinking layer each round (ragged), the verifier only *observes*
-        # equal-shape roots (docs/conventions.md "Loops").
         one = jnp.ones((), dtype)
-        z_rev = z[::-1]  # z_rev[r] binds the variable folded in round r
+        t = transcript
+
+        # Re-derive the batch weights + initial claim (mirror open's FS order):
+        # bind every commitment root, observe every matrix's claims, sample the
+        # staggered coeffs, then bind the fold-round count.
+        for root in commitments:
+            t = t.observe(root)
+        for vals in values:
+            t = t.observe(vals)
+        total_width = sum(int(v.shape[0]) for v in values)
+        t, coeffs = sample_staggered_coeffs(t, total_width, dtype)
+        current_claim = batch_staggered(list(values), coeffs)
+        t = t.observe(jnp.asarray(num_vars, dtype))
+
+        # Replay the interleaved sumcheck + fold challenges. Every round observes
+        # its pre-fold pair-leaf commitment root before sampling β, so all
+        # num_vars rounds are homogeneous (no peeled final round) and ride one
+        # lax.scan — the poseidon2 permute markers stop scaling with num_vars
+        # (#185). z_rev[r] binds the variable folded in round r.
+        z_rev = z[::-1]
         zero_vals = jnp.stack([m[0] for m in proof.univariate_messages])
         one_vals = jnp.stack([m[1] for m in proof.univariate_messages])
+        fri_roots = jnp.stack(proof.fri_roots)
 
         def fold_round(
             carry: tuple[Transcript, Array, Array],
@@ -124,80 +142,57 @@ class BasefoldVerifier:
             expected = (one - last) * zero_val + last * one_val
             ok = ok & (claim == expected)
             t = t.observe(jnp.stack([zero_val, one_val]))
+            t = t.observe(root)
             t, beta = t.sample()
             beta = beta.reshape(())
-            t = t.observe(root)
             return (t, zero_val + beta * one_val, ok), beta
 
-        ok = jnp.bool_(True)
-        betas: list[Array] = []
-        if num_vars > 1:
-            (t, current_claim, ok), head_betas = lax.scan(
-                fold_round,
-                (t, current_claim, ok),
-                (zero_vals[:-1], one_vals[:-1], z_rev[:-1], jnp.stack(proof.fri_roots)),
-            )
-            # Index, don't iterate: list(field_array) dispatches lax.sign under
-            # CUDA (cf. fri/prover._eval_poly).
-            betas = [head_betas[r] for r in range(num_vars - 1)]
+        (t, current_claim, ok), betas_stacked = lax.scan(
+            fold_round,
+            (t, current_claim, jnp.bool_(True)),
+            (zero_vals, one_vals, z_rev, fri_roots),
+        )
+        # Index, don't iterate: list(field_array) dispatches lax.sign under CUDA.
+        betas = [betas_stacked[r] for r in range(num_vars)]
 
-        # Peel the final round: it observes the cleartext final poly and runs the
-        # IOPP terminal membership check instead of committing another layer.
-        zero_val, one_val = zero_vals[-1], one_vals[-1]
-        expected = (one - z_rev[-1]) * zero_val + z_rev[-1] * one_val
-        ok = ok & (current_claim == expected)
-        t = t.observe(jnp.stack([zero_val, one_val]))
-        t, final_beta = t.sample()
-        final_beta = final_beta.reshape(())
-        t = t.observe(proof.final_poly)
-        current_claim = zero_val + final_beta * one_val
-        betas.append(final_beta)
+        # IOPP terminal membership: the fully folded codeword is the base-code
+        # encoding of the final claim (a constant on the order-blowup domain).
         ok = ok & self.code.check_final(proof.final_poly, current_claim)
 
-        # Query phase (pair layout from the code seam, mirrors
-        # fri/verifier._verify_one).
+        # Bind the cleartext final codeword before sampling queries (mirror open).
+        t = t.observe(proof.final_poly)
+
+        # Query phase: shared positions; per-layer leaf index off the code seam.
         t, positions = sample_positions(t, n, self.num_queries)
         a = self.code.layer_positions(positions, num_vars)
 
-        # Every opened pair must rebuild its layer's committed root: layer 0's
-        # against the commitment, each fold layer's against its fri root. Collect
-        # the lo/hi legs and reconstruct them in one batched pass (#163).
-        lo0, hi0 = self.code.pair_indices(a[0], 0)
+        # Merkle: every component matrix rebuilds its commitment at the query
+        # positions, every fold layer's pair-leaf rebuilds its fri root at the
+        # halved index. One batched pass per leaf-row width (#163).
         legs = [
-            (commitment, lo0, proof.component_opening.lo),
-            (commitment, hi0, proof.component_opening.hi),
+            (commitments[r], positions, proof.component_openings[r])
+            for r in range(len(commitments))
         ]
-        for layer in range(1, num_vars):
-            lo_idx, hi_idx = self.code.pair_indices(a[layer], layer)
-            root = proof.fri_roots[layer - 1]
-            legs.append((root, lo_idx, proof.query_openings[layer - 1].lo))
-            legs.append((root, hi_idx, proof.query_openings[layer - 1].hi))
+        for i in range(num_vars):
+            legs.append((proof.fri_roots[i], a[i], proof.query_openings[i]))
         ok = ok & verify_openings(self.tree, legs)
 
-        # Rebuild layer-0 batched values from the opened ORIGINAL rows (RLC),
-        # then fold each layer and check it reaches the next layer / final poly.
-        # This loop stays unrolled (unlike the FS replay above): fold_values is
-        # one lax.fft plus a few field ops per level, so it already traces in
-        # O(1) per round — scanning it would add a control-flow boundary for no
-        # trace+lower win (docs/conventions.md "Loops").
-        lo_val = (proof.component_opening.lo.row * coeffs).sum(axis=-1)  # (Q,)
-        hi_val = (proof.component_opening.hi.row * coeffs).sum(axis=-1)
-        for i in range(num_vars):
-            if i > 0:
-                lo_val = proof.query_openings[i - 1].lo.row[:, 0]
-                hi_val = proof.query_openings[i - 1].hi.row[:, 0]
-            folded = self.code.fold_values(lo_val, hi_val, betas[i], a[i], i)
-            if i < num_vars - 1:
-                # The fold lands at a[i] in layer i+1 — the lo or hi of
-                # that layer's opened pair, decided by the code's layout.
-                next_lo_idx, _ = self.code.pair_indices(a[i + 1], i + 1)
-                nxt = proof.query_openings[i]
-                expected = jnp.where(
-                    a[i] == next_lo_idx, nxt.lo.row[:, 0], nxt.hi.row[:, 0]
-                )
-            else:
-                expected = proof.final_poly[a[i]]
-            ok = ok & jnp.all(folded == expected)
+        # Fold consistency. The staggered RLC of the opened component rows is the
+        # batched codeword at `positions`; it must be the right leg of fold layer
+        # 0's opened pair. Then each layer's pair folds to the next layer's
+        # opened value, down to the final poly.
+        comp_val = batch_staggered(
+            [co.row for co in proof.component_openings], coeffs
+        )  # (Q,) batched value at `positions`
+        lo0, _ = self.code.pair_indices(a[0], 0)
+        leaf0 = proof.query_openings[0].row  # (Q, 2)
+        in_leaf0 = jnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1])
+        ok = ok & jnp.all(comp_val == in_leaf0)
+
+        # Each layer's opened pair folds to the next layer's / the final poly.
+        ok = ok & verify_fold_chain(
+            self.code, proof.query_openings, betas, a, proof.final_poly
+        )
         return ok, t
 
 

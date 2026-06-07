@@ -30,6 +30,15 @@ class FoldableCode(LinearCode, Protocol):
         """Fold a layer by `beta`, halving its length (prover side)."""
         ...
 
+    def pair_leaves(self, codeword: Array) -> Array:
+        """Arrange a layer's codeword into its conjugate-pair leaves `[n//2, 2]`:
+        row `p` is `(codeword[lo], codeword[hi])` for `(lo, hi) =
+        pair_indices(p, level)`, so committing these leaves lets one Merkle path
+        open both legs of the pair that folds to position `p`. The layout is the
+        code's identity (natural order pairs a half-layer apart, bit-reversed
+        order adjacently), so it lives behind the seam with `fold`."""
+        ...
+
     def fold_values(
         self, lo: Array, hi: Array, beta: Array, positions: Array, level: int
     ) -> Array:
