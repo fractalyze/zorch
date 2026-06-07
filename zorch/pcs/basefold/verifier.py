@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
@@ -103,24 +103,55 @@ class BasefoldVerifier:
         t, coeffs = sample_rlc_coeffs(t, K, dtype)
         current_claim = (values * coeffs).sum()
 
-        # Replay the sumcheck reduction + fold challenges.
+        # Replay the sumcheck reduction + fold challenges. The first num_vars-1
+        # rounds are homogeneous — each observes the next fold layer's committed
+        # root — so they ride one lax.scan; the final round is peeled because it
+        # observes the cleartext final poly, not a root. The verifier's replay is
+        # scan-shaped where the prover's fold_rounds is not: the prover *commits* a
+        # shrinking layer each round (ragged), the verifier only *observes*
+        # equal-shape roots (docs/conventions.md "Loops").
         one = jnp.ones((), dtype)
-        ok = jnp.bool_(True)
-        betas = []
-        for r in range(num_vars):
-            zero_val, one_val = proof.univariate_messages[r]
-            last = z[-(r + 1)]
+        z_rev = z[::-1]  # z_rev[r] binds the variable folded in round r
+        zero_vals = jnp.stack([m[0] for m in proof.univariate_messages])
+        one_vals = jnp.stack([m[1] for m in proof.univariate_messages])
+
+        def fold_round(
+            carry: tuple[Transcript, Array, Array],
+            xs: tuple[Array, Array, Array, Array],
+        ) -> tuple[tuple[Transcript, Array, Array], Array]:
+            t, claim, ok = carry
+            zero_val, one_val, last, root = xs
             expected = (one - last) * zero_val + last * one_val
-            ok = ok & (current_claim == expected)
+            ok = ok & (claim == expected)
             t = t.observe(jnp.stack([zero_val, one_val]))
             t, beta = t.sample()
             beta = beta.reshape(())
-            betas.append(beta)
-            current_claim = zero_val + beta * one_val
-            if r < num_vars - 1:
-                t = t.observe(proof.fri_roots[r])
-            else:
-                t = t.observe(proof.final_poly)
+            t = t.observe(root)
+            return (t, zero_val + beta * one_val, ok), beta
+
+        ok = jnp.bool_(True)
+        betas: list[Array] = []
+        if num_vars > 1:
+            (t, current_claim, ok), head_betas = lax.scan(
+                fold_round,
+                (t, current_claim, ok),
+                (zero_vals[:-1], one_vals[:-1], z_rev[:-1], jnp.stack(proof.fri_roots)),
+            )
+            # Index, don't iterate: list(field_array) dispatches lax.sign under
+            # CUDA (cf. fri/prover._eval_poly).
+            betas = [head_betas[r] for r in range(num_vars - 1)]
+
+        # Peel the final round: it observes the cleartext final poly and runs the
+        # IOPP terminal membership check instead of committing another layer.
+        zero_val, one_val = zero_vals[-1], one_vals[-1]
+        expected = (one - z_rev[-1]) * zero_val + z_rev[-1] * one_val
+        ok = ok & (current_claim == expected)
+        t = t.observe(jnp.stack([zero_val, one_val]))
+        t, final_beta = t.sample()
+        final_beta = final_beta.reshape(())
+        t = t.observe(proof.final_poly)
+        current_claim = zero_val + final_beta * one_val
+        betas.append(final_beta)
         ok = ok & self.code.check_final(proof.final_poly, current_claim)
 
         # Query phase (pair layout from the code seam, mirrors
@@ -145,6 +176,10 @@ class BasefoldVerifier:
 
         # Rebuild layer-0 batched values from the opened ORIGINAL rows (RLC),
         # then fold each layer and check it reaches the next layer / final poly.
+        # This loop stays unrolled (unlike the FS replay above): fold_values is
+        # one lax.fft plus a few field ops per level, so it already traces in
+        # O(1) per round — scanning it would add a control-flow boundary for no
+        # trace+lower win (docs/conventions.md "Loops").
         lo_val = (proof.component_opening.lo.row * coeffs).sum(axis=-1)  # (Q,)
         hi_val = (proof.component_opening.hi.row * coeffs).sum(axis=-1)
         for i in range(num_vars):
