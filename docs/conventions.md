@@ -273,3 +273,26 @@ statement Python drops under `-O`, so under optimization a positive check or an
 `assert False` negative silently no-ops and a broken invariant passes unnoticed;
 `self.assert*` are method calls that always run. CI invokes the suite via
 `pytest`; each file stays runnable standalone through `absltest.main()`.
+
+### Agnostic tests and goldens
+
+zorch is proving-scheme- and zkVM-agnostic (the repo's defining non-negotiable,
+[`../README.md`](../README.md)), so its tests must read as the library's own —
+no consumer identity leaks in.
+
+- **Name no consumer or zkVM.** Test names, helper names, and comments don't
+  mention a downstream (`_matches_whir_zorch`, `_sp1_input_hash`, "SP1's
+  reference fixture"). A future reader neither knows nor needs to know what the
+  consumer is, and the name rots when that consumer moves.
+- **Self-anchor the golden** to zorch's own deterministic output. Don't drag in
+  machinery whose sole purpose is to chase an external impl — a `SplitMix64`
+  ported only to match a consumer's RNG stream, a config-fingerprint hash zorch
+  never computes. Once an external anchor is shown not to reproduce, it is dead
+  weight; drop it.
+- **The cross-impl check is one-time, not a fixture.** Validate zorch output
+  against an independent prover of the same circuit once, record it on the issue,
+  and don't bake that external anchor into the suite. In the committed golden,
+  one neutral provenance line ("checked once against an independent prover") is
+  the whole comment.
+- **Reuse fixtures.** Grep the package before writing a helper — a near-duplicate
+  of an existing `random_first_layer` is churn.
