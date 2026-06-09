@@ -48,11 +48,8 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - uses: actions/checkout@v4
-      - uses: bazel-contrib/setup-bazel@0.9.1
-        with:
-          bazelisk-cache: true
-          disk-cache: ${{ github.workflow }}-${{ matrix.backend }}
-          repository-cache: true
+      # No setup-bazel: it's for ephemeral runners and clobbers the box's
+      # ~/.bazelrc; on self-hosted runners bazel/caches already persist.
       # `.bazelrc.ci` filters the `local_only` (composite-vmap) tests out of CI —
       # they need a jaxlib CI's published wheel isn't; see .bazelrc.ci. They run
       # under a local `bazel test //...`.
