@@ -37,6 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, cast
 
 import jax
@@ -68,12 +69,29 @@ if TYPE_CHECKING:
 _DEGREE = 3
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[
+        "lam",
+        "claim",
+        "round_polys",
+        "numerator_0",
+        "numerator_1",
+        "denominator_0",
+        "denominator_1",
+    ],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class JaggedLayerProof:
     """One jagged GKR layer's sumcheck transcript: the batching challenge and
     opening claim the layer entered with (the per-layer anchors a consumer
     diffs first when a byte-match diverges mid-pyramid), the coefficient-form
-    round polynomials, and the final pair openings."""
+    round polynomials, and the final pair openings.
+
+    A pytree (every field is an `Array`, like the dense `sumcheck.RoundMsg`) so
+    it can be returned across a `jax.jit` boundary -- the per-layer jit the
+    chained prover wraps each round in."""
 
     lam: Array
     claim: Array
@@ -467,6 +485,37 @@ def _prove_jagged_marked(
     return challenges, t, polys, fn0, fn1, fd0, fd1
 
 
+def _prove_jagged_layer_round(
+    layer: JaggedGkrLayer,
+    challenge_limbs: int,
+    carry: Carry,
+    transcript: Transcript,
+) -> tuple[Carry, Transcript, JaggedLayerProof]:
+    """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
+    the layer, observe the openings, and fold the carry with the child selector.
+
+    Module-level (not a method) so `JaggedGkrLayerRound`'s optional `jax.jit`
+    can close over `(layer, challenge_limbs)` via `functools.partial` without
+    capturing `self` -- a `self`-closure would make the round refer to itself,
+    deferring its (and its layer's) release past the chain's one-live-layer
+    bound (`ChainedJaggedProveTest`)."""
+    num_eval, den_eval, eval_point = carry
+    transcript, lam = sample_challenge(transcript, num_eval.dtype, challenge_limbs)
+    claim = lam * num_eval + den_eval
+    point, transcript, proof = prove_jagged_layer(
+        layer, lam, claim, eval_point, transcript, challenge_limbs=challenge_limbs
+    )
+    n0, n1 = proof.numerator_0, proof.numerator_1
+    d0, d1 = proof.denominator_0, proof.denominator_1
+    transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
+    transcript, r = sample_challenge(transcript, num_eval.dtype, challenge_limbs)
+    num_eval = n0 + (n1 - n0) * r
+    den_eval = d0 + (d1 - d0) * r
+    # MSB-first point + the pyramid's child selector as the low (last) bit.
+    eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+    return (num_eval, den_eval, eval_point), transcript, proof
+
+
 class JaggedGkrLayerRound(Round):
     """Prove one jagged GKR layer; the chain of these (floor outward) is the
     jagged GKR prover, threading the same `(num_eval, den_eval, eval_point)`
@@ -477,39 +526,30 @@ class JaggedGkrLayerRound(Round):
     The shared head `prover.bind_output` works unchanged for a jagged output
     when `challenge_limbs == 1`; a consumer squeezing multi-limb challenges
     owns its binding glue.
+
+    With `jit=True` the per-layer prove is wrapped in `jax.jit`, closing over
+    the (non-pytree) layer so only `(carry, transcript)` are traced. Each round
+    instance then compiles once and dispatches the cached executable on later
+    calls -- a consumer reusing the round across the pyramid's warm iters pays
+    the per-layer trace + composite build once, not per call. The pyramid stays
+    a host-orchestrated Python loop of these (one `jit` per layer, never one
+    `jit` over the whole pyramid -- it does not fit at scale; see
+    `prover.LogupSumcheckRound`).
     """
 
-    def __init__(self, layer: JaggedGkrLayer, challenge_limbs: int = 1) -> None:
-        self.layer = layer
-        self.challenge_limbs = challenge_limbs
+    def __init__(
+        self, layer: JaggedGkrLayer, challenge_limbs: int = 1, *, jit: bool = False
+    ) -> None:
+        # `partial` closes over the layer (and limb count), not `self`, so the
+        # round holds no reference to itself -- the chain can drop it (and free
+        # its layer) the moment the next round is built.
+        body = partial(_prove_jagged_layer_round, layer, challenge_limbs)
+        self._call = jax.jit(body) if jit else body
 
     def __call__(
         self, carry: Carry, transcript: Transcript
     ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-        num_eval, den_eval, eval_point = carry
-        transcript, lam = sample_challenge(
-            transcript, num_eval.dtype, self.challenge_limbs
-        )
-        claim = lam * num_eval + den_eval
-        point, transcript, proof = prove_jagged_layer(
-            self.layer,
-            lam,
-            claim,
-            eval_point,
-            transcript,
-            challenge_limbs=self.challenge_limbs,
-        )
-        n0, n1 = proof.numerator_0, proof.numerator_1
-        d0, d1 = proof.denominator_0, proof.denominator_1
-        transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
-        transcript, r = sample_challenge(
-            transcript, num_eval.dtype, self.challenge_limbs
-        )
-        num_eval = n0 + (n1 - n0) * r
-        den_eval = d0 + (d1 - d0) * r
-        # MSB-first point + the pyramid's child selector as the low (last) bit.
-        eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
-        return (num_eval, den_eval, eval_point), transcript, proof
+        return self._call(carry, transcript)
 
 
 if TYPE_CHECKING:
