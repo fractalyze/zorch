@@ -45,6 +45,7 @@ py_library(
     deps = [
         "//zorch/hash:permutation",
         requirement("jax"),
+        requirement("zk_dtypes"),
     ],
 )
 

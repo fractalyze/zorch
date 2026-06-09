@@ -1,6 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from unittest import mock
+
 import jax
 import jax.numpy as jnp
 import zk_dtypes
@@ -10,7 +12,7 @@ from jax import tree_util
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import DuplexTranscript, sample_challenge
+from zorch.transcript import DuplexTranscript, GrindError, sample_challenge
 
 F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 
@@ -154,6 +156,105 @@ class TranscriptJitCacheTest(absltest.TestCase):
         zone(DuplexTranscript.new(koalabear16_perm(), rate=8))
         # _cache_size() is a private JAX API; may change on jax upgrade.
         self.assertEqual(zone._cache_size(), 1)
+
+
+@absltest.skipIf(
+    _CPU_BACKEND,
+    "ZKX CPU scan array-carry bug (GPU-correct); remove when fractalyze/zkx#500 lands",
+)
+class GrindTest(absltest.TestCase):
+    """Proof-of-work grind over the duplex sponge: search the full witness space
+    for a witness whose squeezed challenge has `pow_bits` zero low bits, plus the
+    verifier `check_witness` the prover and verifier must agree on."""
+
+    def _seeded(self) -> DuplexTranscript:
+        # A non-degenerate sponge so the first witness isn't the trivial zero
+        # (an all-zero sponge maps the zero witness to a zero challenge, which
+        # satisfies any pow_bits and would mask the search).
+        return cheap_transcript(F).observe(rand_field(11, (5,), F))
+
+    def test_check_witness_accepts_grind_result(self) -> None:
+        for pow_bits in (0, 4, 12):
+            _, witness = self._seeded().grind(pow_bits)
+            _, ok = self._seeded().check_witness(pow_bits, witness)
+            self.assertTrue(bool(ok), f"pow_bits={pow_bits}")
+
+    def test_high_pow_bits_clears(self) -> None:
+        # Acceptance: a pow_bits far past a single window's reach still resolves
+        # to a witness the verifier accepts.
+        _, witness = self._seeded().grind(22)
+        _, ok = self._seeded().check_witness(22, witness)
+        self.assertTrue(bool(ok))
+
+    def test_search_spans_windows(self) -> None:
+        # The fix: a single-window search covers only its first `chunk`
+        # candidates, so once the satisfying witness lands past that window it
+        # must keep advancing to reach it. A tiny window forces many advances to
+        # the same witness a single large window finds directly -- a capped
+        # search would instead miss it and return a different (invalid) witness.
+        small, large = 1 << 8, 1 << 16
+        _, near = self._seeded().grind(14, chunk=small)
+        _, far = self._seeded().grind(14, chunk=large)
+        self.assertEqual(int(near.astype(jnp.uint32)), int(far.astype(jnp.uint32)))
+        self.assertGreater(int(near.astype(jnp.uint32)), small)
+        _, ok = self._seeded().check_witness(14, near)
+        self.assertTrue(bool(ok))
+
+    def test_prover_and_verifier_states_agree(self) -> None:
+        prover, witness = self._seeded().grind(8)
+        verifier, ok = self._seeded().check_witness(8, witness)
+        self.assertTrue(bool(ok))
+        for a, b in zip(
+            tree_util.tree_leaves(prover), tree_util.tree_leaves(verifier), strict=True
+        ):
+            self.assertTrue(bool(jnp.all(a == b)))
+
+    def test_exhausted_search_raises_loudly(self) -> None:
+        # Sweeping the whole field is too slow to trigger naturally, so inject an
+        # exhausted search (found=False) returning a witness that fails the
+        # check, and assert grind surfaces it rather than returning an unverified
+        # witness.
+        bad = self._a_failing_witness(8)
+        with mock.patch.object(DuplexTranscript, "_grind_search", return_value=bad):
+            with self.assertRaises(GrindError):
+                self._seeded().grind(8)
+
+    def test_rejects_out_of_range_pow_bits(self) -> None:
+        with self.assertRaises(ValueError):
+            self._seeded().grind(32)
+        with self.assertRaises(ValueError):
+            self._seeded().check_witness(-1, jnp.zeros((), F))
+
+    def test_check_witness_rejects_off_domain_witness(self) -> None:
+        # The witness must be a scalar base-field element -- the domain grind
+        # enumerates -- so the verifier accepts exactly what the prover searched.
+        seeded = self._seeded()
+        with self.assertRaises(ValueError):
+            seeded.check_witness(8, jnp.zeros((2,), F))  # non-scalar
+        with self.assertRaises(ValueError):
+            seeded.check_witness(8, jnp.zeros((), zk_dtypes.koalabearx4_mont))  # not F
+
+    def test_grind_rejects_non_positive_chunk(self) -> None:
+        with self.assertRaises(ValueError):
+            self._seeded().grind(8, chunk=0)
+
+    def test_field_wider_than_uint32_raises_loudly(self) -> None:
+        # The uint32 counter/bit-check (jax x64 off) can't represent a field
+        # whose order exceeds 32 bits; both entry points must say so plainly
+        # rather than fail with an opaque narrowing-convert error.
+        wide = zk_dtypes.goldilocks_mont
+        with self.assertRaises(GrindError):
+            cheap_transcript(wide).grind(8)
+        with self.assertRaises(GrindError):
+            cheap_transcript(wide).check_witness(8, jnp.zeros((), wide))
+
+    def _a_failing_witness(self, pow_bits: int) -> jnp.ndarray:
+        base = self._seeded()
+        for cand in range(256):
+            _, ok = base.check_witness(pow_bits, jnp.array(cand, F))
+            if not bool(ok):
+                return jnp.array(cand, F)
+        raise AssertionError("expected a failing witness within range")
 
 
 if __name__ == "__main__":

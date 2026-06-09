@@ -13,10 +13,50 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import jax.numpy as jnp
-from jax import Array, lax
+from jax import Array, jit, lax, vmap
 from jax.tree_util import register_dataclass
+from zk_dtypes import pfinfo
 
 from zorch.hash.permutation import Permutation
+
+# Candidate window for the grind search: each `lax.while_loop` step tests this
+# many witnesses at once (static shape), trading device memory for fewer
+# host-visible iterations.
+_GRIND_CHUNK = 1 << 16
+
+
+class GrindError(RuntimeError):
+    """Raised when a proof-of-work grind cannot return a valid witness -- either
+    the field is too wide for the uint32 search (needs x64) or the searched
+    candidate range was exhausted without a hit. The loud-failure contract that
+    stops an unverified witness from ever being returned."""
+
+
+def _validate_pow_bits(pow_bits: int) -> None:
+    if not 0 <= pow_bits < 32:
+        raise ValueError(f"pow_bits must be in [0, 32), got {pow_bits}")
+
+
+def _pow_satisfied(sample: Array, pow_bits: int) -> Array:
+    """The proof-of-work predicate: the challenge's low `pow_bits` canonical bits
+    are all zero. Shared by `check_witness` and the grind search so the prover's
+    search and the verifier's check can never drift."""
+    mask = jnp.uint32((1 << pow_bits) - 1)
+    return (sample.astype(jnp.uint32) & mask) == jnp.uint32(0)
+
+
+def _require_uint32_field(field_dtype: Any) -> int:
+    """The witness counter and the canonical bit-check are both uint32 (jax x64
+    is off), so the field's order must fit 32 bits. Return the modulus, or raise
+    loudly for a wider field -- otherwise the narrowing canonical convert fails
+    with an opaque backend error instead of a clear one."""
+    modulus = pfinfo(field_dtype).modulus
+    if modulus > 2**32:
+        raise GrindError(
+            f"field order {modulus} needs more than 32 bits; the uint32 grind "
+            "(jax x64 off) cannot represent its canonical witnesses"
+        )
+    return modulus
 
 
 class Transcript(Protocol):
@@ -25,6 +65,17 @@ class Transcript(Protocol):
     def observe(self, values: Array) -> Self: ...
     def sample(self, n: int = 1) -> tuple[Self, Array]: ...
     def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
+
+
+class GrindingTranscript(Transcript, Protocol):
+    """A `Transcript` that also supports a proof-of-work grind. Split from the
+    base seam because grinding is meaningful only for a transcript that squeezes
+    a field element to check leading-zero bits against -- a consumer that needs a
+    PoW witness type-narrows to this, and a transcript that cannot grind never
+    has to pretend it can."""
+
+    def check_witness(self, pow_bits: int, witness: Array) -> tuple[Self, Array]: ...
+    def grind(self, pow_bits: int) -> tuple[Self, Array]: ...
 
 
 def sample_challenge(
@@ -207,7 +258,120 @@ class DuplexTranscript:
         per-primitive pattern-match (the repo's fusion contract)."""
         return self.observe(values).sample(n)
 
+    def check_witness(
+        self, pow_bits: int, witness: Array
+    ) -> tuple[DuplexTranscript, Array]:
+        """Observe `witness`, squeeze one challenge, and report whether its low
+        `pow_bits` canonical bits are zero -- the verifier-side proof-of-work
+        check, and the predicate `grind` searches against. `witness` must be a
+        scalar element of the transcript's field -- the domain `grind`
+        enumerates -- so the verifier accepts exactly the witness space the
+        prover searched (`observe` itself would bitcast-flatten any array).
+        Fully jit-traceable, so a verifier runs it inside its own `@jit` zone.
+        Returns the advanced transcript (observe + one sample applied), so prover
+        and verifier reach the same state from the same witness."""
+        _validate_pow_bits(pow_bits)
+        field_dtype = self.state.sponge_state.dtype
+        _require_uint32_field(field_dtype)
+        if witness.shape != () or witness.dtype != field_dtype:
+            raise ValueError(
+                f"witness must be a scalar {field_dtype} field element (the grind "
+                f"search's domain), got shape {witness.shape} dtype {witness.dtype}"
+            )
+        advanced, sample = self.observe(witness).sample(1)
+        return advanced, _pow_satisfied(sample[0], pow_bits)
+
+    @partial(jit, static_argnames=("pow_bits", "chunk"))
+    def _grind_search(self, pow_bits: int, chunk: int) -> Array:
+        """Search canonical witnesses `0, 1, 2, ...` for the lowest one whose
+        challenge has `pow_bits` zero low bits. Each `lax.while_loop` step tests
+        a whole `chunk`-wide window IN PARALLEL -- `vmap` over the window, not a
+        sequential `lax.map` -- and keeps the lowest-index hit; the loop only
+        tiles windows because the full field cannot be vmapped at once (memory),
+        and it early-exits at the first window that hits. For a typical
+        `pow_bits` the hit is in the first window, so the loop runs once. Returns
+        the winning witness (or the trailing fallback on exhaustion -- `grind`
+        re-checks it before returning). Fields wider than 32 bits raise (the
+        uint32 counter/bit-check would need x64); koalabear-class fields are
+        searched in full."""
+        field_dtype = self.state.sponge_state.dtype
+        modulus = _require_uint32_field(field_dtype)
+        # Search the whole field, but cap `base` below the uint32 wrap point so
+        # `base + chunk` stays in range. For a koalabear-class field this is the
+        # field order; the cap only bites a field whose order nears 2**32.
+        bound = jnp.uint32(min(modulus, 2**32 - chunk))
+        offsets = jnp.arange(chunk, dtype=jnp.uint32)
+
+        def satisfies(witness: Array) -> Array:
+            _, sample = self.observe(witness).sample(1)
+            return _pow_satisfied(sample[0], pow_bits)
+
+        def cond(carry: tuple[Array, Array, Array]) -> Array:
+            found, base, _ = carry
+            return jnp.logical_and(jnp.logical_not(found), base < bound)
+
+        def body(carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
+            found, base, best = carry
+            candidates = (base + offsets).astype(field_dtype)
+            hits = vmap(satisfies)(candidates)
+            any_hit = jnp.any(hits)
+            first = jnp.min(jnp.where(hits, offsets, jnp.uint32(chunk)))
+            index = jnp.where(any_hit, first, jnp.uint32(0)).astype(jnp.int32)
+            return (
+                jnp.logical_or(found, any_hit),
+                base + jnp.uint32(chunk),
+                jnp.where(any_hit, candidates[index], best),
+            )
+
+        init = (jnp.bool_(False), jnp.uint32(0), jnp.zeros((), field_dtype))
+        _found, _base, witness = lax.while_loop(cond, body, init)
+        return witness
+
+    def grind(
+        self, pow_bits: int, *, chunk: int = _GRIND_CHUNK
+    ) -> tuple[DuplexTranscript, Array]:
+        """Find a proof-of-work witness and return the transcript advanced past
+        it. Searches canonical witnesses `0, 1, 2, ...` for the lowest one whose
+        observation squeezes a challenge with `pow_bits` zero low bits, then
+        advances the transcript by `check_witness(pow_bits, witness)` -- so a
+        verifier replaying `check_witness` on the witness reaches the identical
+        state.
+
+        A single-window search covers only its first `chunk` candidates and
+        silently returns an invalid witness once `pow_bits` outgrows it; the
+        windowed search (`_grind_search`) instead keeps advancing, and grind
+        **validates the result before returning** -- raising `GrindError` rather
+        than handing back an unverified witness. The host-side validation makes
+        `grind` an eager (prover-side) call; the verifier's `check_witness` stays
+        jit-traceable.
+
+        Returning the lowest-index witness is soundness-neutral: a PoW witness is
+        a work-proof, not a secret or nonce, so the security is the ~2**pow_bits
+        work to find *any* satisfying witness -- enforced by the verifier's
+        `check_witness`, independent of which witness is returned or how much of
+        the field is scanned (the range only has to contain one). Selection and
+        the search bound are completeness/efficiency choices, not soundness ones;
+        a range too small to hold a witness raises rather than degrading
+        silently."""
+        _validate_pow_bits(pow_bits)
+        if chunk < 1:
+            raise ValueError(f"chunk must be >= 1, got {chunk}")
+        field_dtype = self.state.sponge_state.dtype
+        if pow_bits == 0:
+            # No work required: the canonical zero witness always passes.
+            witness = jnp.zeros((), field_dtype)
+            return self.check_witness(pow_bits, witness)[0], witness
+        witness = self._grind_search(pow_bits, chunk)
+        advanced, ok = self.check_witness(pow_bits, witness)
+        if not bool(ok):
+            raise GrindError(
+                f"no proof-of-work witness with {pow_bits} zero bits found "
+                "within the searched candidate range"
+            )
+        return advanced, witness
+
 
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[Transcript] = DuplexTranscript
+    _grinding: type[GrindingTranscript] = DuplexTranscript
