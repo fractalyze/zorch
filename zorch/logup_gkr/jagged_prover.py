@@ -453,8 +453,10 @@ def _prove_jagged_marked(
         )
         # `_run_jagged_rounds` types its transcript as the generic `Transcript`;
         # here it is the DuplexTranscript built just above, so read its leaves back.
+        # Result order is the recognizer's contract, shared with the dense
+        # `_prove_marked`: [folded][5 sponge leaves][round polys][challenges].
         leaves_out = _state_leaves(cast(DuplexTranscript, t).state)
-        return (fn0, fn1, fd0, fd1, polys, challenges, *leaves_out)
+        return (fn0, fn1, fd0, fd1, *leaves_out, polys, challenges)
 
     out = fused_region(
         body,
@@ -480,7 +482,7 @@ def _prove_jagged_marked(
         fold_order="lsb",
         poly_form="coefficient",
     )
-    fn0, fn1, fd0, fd1, polys, challenges, *out_leaves = out
+    fn0, fn1, fd0, fd1, *out_leaves, polys, challenges = out
     t = DuplexTranscript(perm, rate, DuplexState(*out_leaves))
     return challenges, t, polys, fn0, fn1, fd0, fd1
 
