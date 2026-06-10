@@ -14,11 +14,13 @@ and the one the k-ary schemes this seam serves use. The padded form is what
 siblings like any others. A binary tree on a power-of-two height never pads,
 so the arity-2 layout is exactly the historical one.
 
-Each layer is one `vmap` over its nodes, and the fold unrolls (layer count is
-static), so no host-driven loop appears. An internal layer batches one
+Each layer is one `vmap` over its nodes: an internal layer batches one
 `compress` = one permute; the leaf layer batches one `hash` = one permute per
 absorbed block. Those collapse to one GPU kernel per permute once the
-permutation itself is captured to a kernel (the poseidon2 fusion path, #25).
+permutation itself is captured to a kernel (the poseidon2 fusion path, #25). A
+binary tree folds the layers with one `lax.scan` so the traced body is O(1) in
+tree height — the unrolled fold dominated the trace-commit compile; a k-ary
+tree keeps the unrolled fold (see `_build` for why).
 
 When both blocks lower to a hash-dedicated fusion marker (`has_dedicated_fusion`),
 `commit` wraps the whole tree in one `zorch.merkle_commit` composite — a
@@ -48,6 +50,18 @@ from zorch.utils.bits import is_power_of_two
 # hash identity from the nested `permute` marker, so adding a hash never touches
 # this marker or MerkleTree — see the module docstring.
 MERKLE_COMMIT_MARKER = "zorch.merkle_commit"
+
+
+def _regular_fold_height(leaf_count: int, arity: int) -> int | None:
+    """Number of fold levels iff `leaf_count == arity ** height` with at least
+    one level — a tree no level pads. A regular tree folds with one scan; an
+    irregular one (or a single leaf, which needs no fold) keeps the unrolled
+    per-level-padding fold (see `MerkleTree._build`)."""
+    height, size = 0, 1
+    while size < leaf_count:
+        size *= arity
+        height += 1
+    return height if size == leaf_count and height >= 1 else None
 
 
 @partial(jax.tree_util.register_dataclass, data_fields=["row", "path"], meta_fields=[])
@@ -133,21 +147,64 @@ class MerkleTree:
     def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
         """The traced commit body: vmap the leaf hash, fold arity-sized groups
         per layer down to the root. Wrapped by `commit` as one
-        `zorch.merkle_commit` region."""
+        `zorch.merkle_commit` region.
+
+        A binary tree (always power-of-two, so no level ever pads) folds with one
+        `lax.scan`, tracing the per-layer compress once: the commit body is then
+        O(1) in tree height, not `height` unrolled copies. The unrolled fold
+        dominated the trace-commit compile, the same lever #163/#182 pulled on
+        the verifier reconstruct. k-ary trees keep the unrolled fold — partly
+        because per-level padding a fixed-shape scan can't express, and partly
+        because the k-ary compress inside a loop crashes the CPU emitter
+        (zkx#606); binary is the common, padding-free case."""
         layer = jax.vmap(self._leaf_hasher.hash)(matrix)
+        # Scan only the binary path; the height (always regular for a power-of-
+        # two binary tree) is computed only there, never for the unrolled fold.
+        if (
+            self.arity == 2
+            and (height := _regular_fold_height(layer.shape[0], self.arity)) is not None
+        ):
+            return self._fold_scan(layer, height)
+        return self._fold_unrolled(layer)
+
+    def _fold_unrolled(self, layer: Array) -> tuple[Array, list[Array]]:
+        """Fold the leaf layer to the root one level at a time, completing a
+        short top level with zero digests (the irregular-arity path; see
+        `_build`). The padded form is stored, so an opening adjacent to a
+        boundary reads its zero siblings from the layer like any others."""
         digest_layers = [layer]
         while layer.shape[0] > 1:
             rem = layer.shape[0] % self.arity
             if rem:
-                # Complete the level with zero digests and store the padded
-                # form: an opening adjacent to the boundary reads its zero
-                # siblings from the layer like any others.
                 pad = jnp.zeros((self.arity - rem, self.digest_elems), layer.dtype)
                 layer = jnp.concatenate([layer, pad])
                 digest_layers[-1] = layer
             groups = layer.reshape(-1, self.arity, self.digest_elems)
             layer = jax.vmap(self._compressor.compress)(groups)
             digest_layers.append(layer)
+        return digest_layers[-1][0], digest_layers
+
+    def _fold_scan(self, leaf_layer: Array, height: int) -> tuple[Array, list[Array]]:
+        """Fold a regular tree (`leaf_count == arity ** height`) with one scan.
+
+        The scan carries a full-width working buffer whose live prefix shrinks by
+        `arity` each level; one `compress` body is traced for all `height`
+        levels. Each level's live prefix is the next `digest_layers` entry, so
+        the per-level outputs are sliced back to the exact ragged shapes the
+        unrolled fold produced — byte-identical, but O(1) in height. The buffer
+        compresses its padding too; that waste only runs on a backend without the
+        merkle-commit emitter (the GPU vendor replaces the whole region), and the
+        sliced-off tail never reaches a digest layer."""
+        n, a, d = leaf_layer.shape[0], self.arity, self.digest_elems
+
+        def fold_level(buf: Array, _: None) -> tuple[Array, Array]:
+            compressed = jax.vmap(self._compressor.compress)(buf.reshape(n // a, a, d))
+            return jnp.zeros_like(buf).at[: n // a].set(compressed), compressed
+
+        _, stacked = jax.lax.scan(fold_level, leaf_layer, xs=None, length=height)
+        digest_layers = [leaf_layer]
+        for level in range(height):
+            digest_layers.append(stacked[level, : n // a ** (level + 1)])
         return digest_layers[-1][0], digest_layers
 
     def open(
