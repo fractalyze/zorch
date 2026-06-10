@@ -21,6 +21,12 @@ py_library(
     deps = [requirement("jax")],
 )
 
+py_library(
+    name = "jit_cache",
+    srcs = ["jit_cache.py"],
+    visibility = ["//zorch:__subpackages__"],
+)
+
 # Public: consumers' IOP tests reuse the same cheap test transcript as
 # zorch's own tests (promoted per-target, like logup_gkr/testing).
 py_library(

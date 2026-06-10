@@ -136,6 +136,16 @@ class SpongeTest(absltest.TestCase):
                 st = perm.permute(st)
             self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])), f"len {n}")
 
+    def test_value_equality_across_fresh_instances(self) -> None:
+        # A sponge seats in static jit-zone keys (#214): equal params over
+        # value-equal permutations must compare and hash equal regardless of
+        # instance identity, and a param change must break equality.
+        a = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        b = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+        self.assertNotEqual(a, Sponge(koalabear16_perm(), SpongeParams(rate=4, out=8)))
+
     def test_hash_vmap_matches_unbatched(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         a = jnp.arange(16, dtype=F)

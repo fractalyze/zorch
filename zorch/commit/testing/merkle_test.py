@@ -377,6 +377,17 @@ class MerkleTreeTest(absltest.TestCase):
         text = jax.jit(tree.commit).lower(matrix).as_text()
         self.assertNotIn(MERKLE_COMMIT_MARKER, text)
 
+    def test_value_equality_across_fresh_instances(self) -> None:
+        # A tree seats in static jit-zone keys (#214): same-config builds must
+        # compare and hash equal regardless of instance identity, and a config
+        # change must break equality.
+        _, _, a = koalabear16_merkle()
+        _, _, b = koalabear16_merkle()
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+        _, _, c = koalabear16_merkle(rate=4, out=4, chunk=4)
+        self.assertNotEqual(a, c)
+
 
 class KaryMerkleTreeTest(absltest.TestCase):
     """k-ary commit/open/reconstruct — structural, like the binary suite.

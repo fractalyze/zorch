@@ -14,6 +14,7 @@ py_test(
         "//zorch/coding:reed_solomon",
         "//zorch/commit/testing:koalabear16",
         "//zorch/pcs/fri",
+        "//zorch/testkit:jit_cache",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),

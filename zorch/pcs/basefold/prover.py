@@ -19,8 +19,8 @@ is the degenerate one-round batch.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -115,32 +115,11 @@ class BasefoldProver:
     code: FoldableCode
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
-    # Jitted open body: an eager replay re-traces the per-round pair-leaf
-    # `open_rows` vmaps per call (issue #186). Mirrors the verifier's
-    # `_verify_body` and fri's `_open_one_jit`; unlike basefold `commit` — which
-    # rides the jagged seam's enclosing jit — `open` is reached eagerly via
-    # `stacked_open`.
-    _open_body: Callable[..., tuple[list[Array], BasefoldProof, Transcript]] = field(
-        init=False, repr=False, compare=False
-    )
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_open_body", jax.jit(self._open_traced))
 
     def commit(
         self, polys: Sequence[Array]
     ) -> tuple[BasefoldCommitment, BasefoldProverData]:
-        # The columns share one message length S; encode each column separately
-        # (encode lowers to lax.fft today, which requires 1-D input on
-        # extension-field dtypes, so the batched transpose trick doesn't
-        # generalise). O(K) encodes — fine at current column counts; revisit
-        # if K grows. Stack the codewords into [n, K].
-        mle = jnp.stack(polys, axis=1)
-        codeword = jnp.stack([self.code.encode(p) for p in polys], axis=1)
-        root, layers = self.tree.commit(codeword)
-        return root, BasefoldProverData(
-            digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
-        )
+        return _commit_body(self.code, self.tree, list(polys))
 
     def open(
         self,
@@ -183,77 +162,106 @@ class BasefoldProver:
                     f"point dimension {num_vars} doesn't match MLE height "
                     f"{pd.mle.shape[0]} (expected 2^{num_vars})"
                 )
-        return self._open_body(list(rounds), z, transcript)
+        return _open_batch_body(self, list(rounds), z, transcript)
 
-    def _open_traced(
-        self,
-        rounds: Sequence[BasefoldProverData],
-        z: Array,
-        transcript: Transcript,
-    ) -> tuple[list[Array], BasefoldProof, Transcript]:
-        dtype = z.dtype
-        num_vars = z.shape[0]
-        t = transcript
-        # 1. Bind every commitment root into the transcript (the FS commit step,
-        #    mirroring `fri`). `verify` observes the same roots in the same order.
-        for pd in rounds:
-            t = t.observe(pd.digest_layers[-1][0])
 
-        # 2. Per-matrix, per-column evaluations at z; observe each as sampled.
-        values = []
-        for pd in rounds:
-            vals = eval_mle(pd.mle, z, axis=0)  # (w_r,)
-            t = t.observe(vals)
-            values.append(vals)
+# Jitted commit body: standalone (outside the jagged seam's enclosing jit), an
+# eager commit dispatches the per-column encode ffts and the Merkle
+# fused_region op-by-op; inside an enclosing jit it traces straight through.
+# Keyed on code + tree, not the prover: commit never reads num_queries, so
+# provers differing only there must not compile twice (static keys compare by
+# value — #214).
+@partial(jax.jit, static_argnames=("code", "tree"))
+def _commit_body(
+    code: FoldableCode, tree: MerkleTree, polys: list[Array]
+) -> tuple[BasefoldCommitment, BasefoldProverData]:
+    # The columns share one message length S; encode each column separately
+    # (encode lowers to lax.fft today, which requires 1-D input on
+    # extension-field dtypes, so the batched transpose trick doesn't
+    # generalise). O(K) encodes — fine at current column counts; revisit
+    # if K grows. Stack the codewords into [n, K].
+    mle = jnp.stack(polys, axis=1)
+    codeword = jnp.stack([code.encode(p) for p in polys], axis=1)
+    root, layers = tree.commit(codeword)
+    return root, BasefoldProverData(
+        digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
+    )
 
-        # 3. Staggered partial-Lagrange RLC over the total column width, then
-        #    collapse every matrix's columns into one MLE / codeword / claim.
-        total_width = sum(int(pd.mle.shape[1]) for pd in rounds)
-        t, coeffs = sample_staggered_coeffs(t, total_width, dtype)
-        current_mle = batch_staggered([pd.mle for pd in rounds], coeffs)  # (S,)
-        cw = batch_staggered([pd.codeword for pd in rounds], coeffs)  # (n,)
-        current_claim = batch_staggered(values, coeffs)  # scalar
-        # Domain separation: bind the fold-round count (mirrors the reference).
-        t = t.observe(jnp.asarray(num_vars, dtype))
 
-        # 4. Interleaved sumcheck + pre-fold pair-leaf FRI fold, num_vars rounds.
-        #    Every round commits its pre-fold layer; the final folded codeword
-        #    (length `blowup`) is the cleartext final poly.
-        carry: _OpenCarry = (cw, current_mle, current_claim, z)
-        carry, t, msgs = fold_rounds(
-            _SumcheckPairFoldRound(PreFoldPairCommitRound(self.code, self.tree)),
-            carry,
-            t,
-            num_vars,
-        )
-        final_poly = carry[0]
-        uni_msgs = [uni for uni, _ in msgs]
-        layers = [layer for _, layer in msgs]
-        # Bind the cleartext final codeword before sampling queries, so the query
-        # positions depend on it (the IOPP terminal binding; `verify` mirrors).
-        t = t.observe(final_poly)
+# Jitted open body: an eager replay re-traces the per-round pair-leaf
+# `open_rows` vmaps per call (issue #186); unlike `commit` — which the jagged
+# seam also reaches inside its enclosing jit — `open` is reached eagerly via
+# `stacked_open`. The prover is the static key (by value, #214).
+@partial(jax.jit, static_argnames=("prover",))
+def _open_batch_body(
+    prover: BasefoldProver,
+    rounds: Sequence[BasefoldProverData],
+    z: Array,
+    transcript: Transcript,
+) -> tuple[list[Array], BasefoldProof, Transcript]:
+    dtype = z.dtype
+    num_vars = z.shape[0]
+    t = transcript
+    # 1. Bind every commitment root into the transcript (the FS commit step,
+    #    mirroring `fri`). `verify` observes the same roots in the same order.
+    for pd in rounds:
+        t = t.observe(pd.digest_layers[-1][0])
 
-        # 5. Query phase: shared positions; open every matrix at the full index
-        #    and every fold layer's pair-leaf at its halved index.
-        n = self.code.block_len
-        t, positions = sample_positions(t, n, self.num_queries)
-        a = self.code.layer_positions(positions, num_vars)
-        component_openings = [
-            open_rows(self.tree, pd.codeword, pd.digest_layers, positions)
-            for pd in rounds
-        ]
-        query_openings = [
-            open_rows(self.tree, layer.leaves, layer.digest_layers, a[i])
-            for i, layer in enumerate(layers)
-        ]
-        proof = BasefoldProof(
-            uni_msgs,
-            [layer.root for layer in layers],
-            final_poly,
-            component_openings,
-            query_openings,
-        )
-        return values, proof, t
+    # 2. Per-matrix, per-column evaluations at z; observe each as sampled.
+    values = []
+    for pd in rounds:
+        vals = eval_mle(pd.mle, z, axis=0)  # (w_r,)
+        t = t.observe(vals)
+        values.append(vals)
+
+    # 3. Staggered partial-Lagrange RLC over the total column width, then
+    #    collapse every matrix's columns into one MLE / codeword / claim.
+    total_width = sum(int(pd.mle.shape[1]) for pd in rounds)
+    t, coeffs = sample_staggered_coeffs(t, total_width, dtype)
+    current_mle = batch_staggered([pd.mle for pd in rounds], coeffs)  # (S,)
+    cw = batch_staggered([pd.codeword for pd in rounds], coeffs)  # (n,)
+    current_claim = batch_staggered(values, coeffs)  # scalar
+    # Domain separation: bind the fold-round count (mirrors the reference).
+    t = t.observe(jnp.asarray(num_vars, dtype))
+
+    # 4. Interleaved sumcheck + pre-fold pair-leaf FRI fold, num_vars rounds.
+    #    Every round commits its pre-fold layer; the final folded codeword
+    #    (length `blowup`) is the cleartext final poly.
+    carry: _OpenCarry = (cw, current_mle, current_claim, z)
+    carry, t, msgs = fold_rounds(
+        _SumcheckPairFoldRound(PreFoldPairCommitRound(prover.code, prover.tree)),
+        carry,
+        t,
+        num_vars,
+    )
+    final_poly = carry[0]
+    uni_msgs = [uni for uni, _ in msgs]
+    layers = [layer for _, layer in msgs]
+    # Bind the cleartext final codeword before sampling queries, so the query
+    # positions depend on it (the IOPP terminal binding; `verify` mirrors).
+    t = t.observe(final_poly)
+
+    # 5. Query phase: shared positions; open every matrix at the full index
+    #    and every fold layer's pair-leaf at its halved index.
+    n = prover.code.block_len
+    t, positions = sample_positions(t, n, prover.num_queries)
+    a = prover.code.layer_positions(positions, num_vars)
+    component_openings = [
+        open_rows(prover.tree, pd.codeword, pd.digest_layers, positions)
+        for pd in rounds
+    ]
+    query_openings = [
+        open_rows(prover.tree, layer.leaves, layer.digest_layers, a[i])
+        for i, layer in enumerate(layers)
+    ]
+    proof = BasefoldProof(
+        uni_msgs,
+        [layer.root for layer in layers],
+        final_poly,
+        component_openings,
+        query_openings,
+    )
+    return values, proof, t
 
 
 if TYPE_CHECKING:

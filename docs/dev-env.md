@@ -18,6 +18,21 @@ compilation an order of magnitude slower, which shows up as multi-minute test
 export PYTHONPATH="$PWD"           # import top-level modules directly
 ```
 
+## Running the test suite
+
+The local loop is pytest (`pip install -r requirements-dev.in` once per venv).
+Run it parallel by default — the suites are dominated by per-test fixed cost
+(jit tracing + XLA compile), not data size, so workers scale them down to the
+slowest single test:
+
+```sh
+pytest -n <physical cores>     # e.g. -n 16 on a 32-thread box
+```
+
+Drop `-n` only when chasing one test's output interactively. `bazel test //...`
+remains the single source of truth for "all tests pass"
+([`conventions.md`](conventions.md)); it parallelizes per target on its own.
+
 ## Developing against a local ZKX checkout
 
 Plugin resolution order is `ZKX_GPU_PLUGIN_PATH` > the wheel's bundled `.so` >

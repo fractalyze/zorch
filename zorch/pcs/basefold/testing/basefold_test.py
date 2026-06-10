@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-from typing import Any
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -18,9 +18,15 @@ from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.merkle import MerkleTree
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
-from zorch.pcs.basefold.verifier import BasefoldVerifier
+from zorch.pcs.basefold.prover import (
+    BasefoldProver,
+    BasefoldProverData,
+    _commit_body,
+    _open_batch_body,
+)
+from zorch.pcs.basefold.verifier import BasefoldVerifier, _verify_batch_body
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 
@@ -89,6 +95,20 @@ class BasefoldTest(absltest.TestCase):
         self.assertEqual(len(restored.univariate_messages), 1)
         self.assertEqual(restored.final_poly.shape, (2,))
         self.assertEqual(len(restored.component_openings), 1)
+
+    def test_commit_eager_reuses_one_compiled_zone_across_instances(self) -> None:
+        # Standalone (no enclosing jit), `commit` must reuse one compiled zone
+        # across calls, across freshly built same-config provers, and across
+        # provers differing only in num_queries (which commit never reads) —
+        # the zone is module-level, keyed on (code, tree) by value (#214).
+        calls: list[Callable[[], object]] = []
+        for num_queries in (4, 8):
+            bf, _rs, _tree, S = _basefold()
+            bf = dataclasses.replace(bf, num_queries=num_queries)
+            for offset in (0, 1, 2):
+                mle = jnp.arange(S * 2, dtype=F).reshape(S, 2) + F(offset)
+                calls.append(functools.partial(bf.commit, _columns(mle)))
+        assert_single_trace(self, _commit_body, calls)
 
     def test_commit_retains_mle_and_codeword(self) -> None:
         bf, rs, _tree, S = _basefold()
@@ -232,6 +252,15 @@ class BasefoldOpenTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one variable"):
             prover.open(pdata, [_rand_ef(3, (0,))], _transcript())
 
+    def test_verify_rejects_empty_point(self) -> None:
+        # The verifier mirrors the prover's guard: with zero variables the fold
+        # replay would index an empty layer list inside the jit zone.
+        prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=1)
+        z = _rand_ef(3, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        with self.assertRaisesRegex(ValueError, "at least one variable"):
+            verifier.verify(root, [_rand_ef(3, (0,))], values, proof, _transcript())
+
     def test_verify_rejects_wrong_root(self) -> None:
         # Directly exercises the commitment-root binding: verifying a valid proof
         # against a different root must fail (the FS challenges diverge and the
@@ -314,8 +343,9 @@ class BasefoldOpenTest(absltest.TestCase):
         prover, verifier, root, pdata, _mle, _ = self._commit(log_s=4, K=2)
         z = _rand_ef(44, (4,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
-        verify_body: Any = verifier._verify_body
-        text = verify_body.lower([root], z, [values], proof, _transcript()).as_text()
+        text = _verify_batch_body.lower(
+            verifier, [root], z, [values], proof, _transcript()
+        ).as_text()
         self.assertIn("stablehlo.while", text)
 
     def test_open_compiles_once_per_shape(self) -> None:
@@ -339,23 +369,22 @@ class BasefoldOpenTest(absltest.TestCase):
             ).block_until_ready()
         self.assertEqual(run._cache_size(), 1)
 
-    def test_open_eager_reuses_one_compiled_zone(self) -> None:
+    def test_open_eager_reuses_one_compiled_zone_across_instances(self) -> None:
         # Standalone (no enclosing jit), `open` must reuse one compiled zone
-        # across calls — the prover owns a jit zone like fri/the basefold
-        # verifier, so the `open_query_phase` vmap closure traces once instead
-        # of eagerly per call (#186). Each call passes a freshly built
-        # transcript, so a cache hit also exercises the #177 value-equality
-        # contract (no fresh-identity leaf rides the meta).
-        prover, _verifier, _root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
-        for seed in (2, 3, 4):
-            values, _proof, _ = prover.open(
-                pdata, [_rand_ef(seed, (log_s,))], _transcript()
-            )
-            values.block_until_ready()
-        # _open_body is jitted; _cache_size() isn't on the field's Callable type.
-        # (private JAX API; may change on jax upgrade.)
-        open_body: Any = prover._open_body
-        self.assertEqual(open_body._cache_size(), 1)
+        # across calls (#186) AND across freshly built same-config provers —
+        # the zone is module-level and its static key compares the prover by
+        # value (#214), so per-test instances stop re-tracing. Each call also
+        # passes a freshly built transcript (the #177 value-equality contract).
+        calls: list[Callable[[], object]] = []
+        for _ in (0, 1):
+            prover, _verifier, _root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
+            for seed in (2, 3, 4):
+                calls.append(
+                    functools.partial(
+                        prover.open, pdata, [_rand_ef(seed, (log_s,))], _transcript()
+                    )
+                )
+        assert_single_trace(self, _open_batch_body, calls)
 
 
 if __name__ == "__main__":

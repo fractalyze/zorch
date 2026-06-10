@@ -160,6 +160,28 @@ class ReedSolomonTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             ReedSolomon(message_len=4, blowup=3, dtype=F)
 
+    def test_value_equality_across_fresh_instances(self) -> None:
+        # A code seats in static jit-zone keys (#214): same-config builds must
+        # compare and hash equal regardless of instance identity, and every
+        # config axis — geometry, dtype, coset shift, layout — must break it.
+        a = ReedSolomon(message_len=8, blowup=2, dtype=F)
+        b = ReedSolomon(message_len=8, blowup=2, dtype=F)
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+        self.assertNotEqual(a, ReedSolomon(message_len=8, blowup=4, dtype=F))
+        self.assertNotEqual(a, ReedSolomon(message_len=8, blowup=2, dtype=EF))
+        shift = jnp.array(3, dtype=F)
+        s = ReedSolomon(message_len=8, blowup=2, dtype=F, coset_shift=shift)
+        t = ReedSolomon(message_len=8, blowup=2, dtype=F, coset_shift=shift)
+        self.assertEqual(s, t)
+        self.assertEqual(hash(s), hash(t))
+        self.assertNotEqual(a, s)
+        br_a = BitReversedReedSolomon(message_len=8, blowup=2, dtype=F)
+        br_b = BitReversedReedSolomon(message_len=8, blowup=2, dtype=F)
+        self.assertEqual(br_a, br_b)
+        self.assertEqual(hash(br_a), hash(br_b))
+        self.assertNotEqual(br_a, a)
+
 
 class BitReversedReedSolomonTest(absltest.TestCase):
     def test_implements_foldable_code_protocol(self) -> None:

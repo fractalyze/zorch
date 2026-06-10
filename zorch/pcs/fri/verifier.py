@@ -11,8 +11,9 @@ constant check. It never trusts a prover-sent layer-0 oracle. All arithmetic
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING
 
 import jax
@@ -30,13 +31,6 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class FriVerifier:
     params: FriParams
-    # Jitted per-poly verify body (issue #140); one compile serves the batch.
-    _verify_one_jit: Callable[..., tuple[Transcript, Array]] = field(
-        init=False, repr=False, compare=False
-    )
-
-    def __post_init__(self) -> None:
-        object.__setattr__(self, "_verify_one_jit", jax.jit(self._verify_one))
 
     def verify(
         self,
@@ -65,61 +59,64 @@ class FriVerifier:
         t = transcript
         oks = []
         for f_root, z, v, pf in zip(commitment, points, values, proof):
-            t, ok = self._verify_one_jit(f_root, z, v, pf, t)
+            t, ok = _verify_one(self.params, f_root, z, v, pf, t)
             oks.append(ok)
         return jnp.all(jnp.stack(oks)), t
 
-    def _verify_one(
-        self, f_root: Array, z: Array, v: Array, pf: FriProof, t: Transcript
-    ) -> tuple[Transcript, Array]:
-        params = self.params
-        code, tree = params.code, params.tree
-        n = code.block_len
-        num_rounds = params.num_rounds
 
-        # Replay Fiat-Shamir: each round observes its pre-fold commitment root
-        # before sampling β, so all num_rounds rounds are homogeneous and ride
-        # one lax.scan (a stablehlo.while), then the cleartext final layer.
-        t = t.observe(f_root)
+# Jitted per-poly verify body (issue #140); one compile serves the batch. The
+# params are the static key (by value, #214).
+@partial(jax.jit, static_argnames=("params",))
+def _verify_one(
+    params: FriParams, f_root: Array, z: Array, v: Array, pf: FriProof, t: Transcript
+) -> tuple[Transcript, Array]:
+    code, tree = params.code, params.tree
+    n = code.block_len
+    num_rounds = params.num_rounds
 
-        def fold_round(t: Transcript, root: Array) -> tuple[Transcript, Array]:
-            t = t.observe(root)
-            t, beta = t.sample()
-            return t, beta.reshape(())
+    # Replay Fiat-Shamir: each round observes its pre-fold commitment root
+    # before sampling β, so all num_rounds rounds are homogeneous and ride
+    # one lax.scan (a stablehlo.while), then the cleartext final layer.
+    t = t.observe(f_root)
 
-        t, betas_stacked = lax.scan(fold_round, t, jnp.stack(pf.fri_roots))
-        # Index, don't iterate: list(field_array) dispatches lax.sign under CUDA.
-        betas = [betas_stacked[r] for r in range(num_rounds)]
-        t = t.observe(pf.final_layer)
+    def fold_round(t: Transcript, root: Array) -> tuple[Transcript, Array]:
+        t = t.observe(root)
+        t, beta = t.sample()
+        return t, beta.reshape(())
 
-        # The final fold layer must be a constant (degree 0). FRI binds no
-        # external claim, so the layer's own head is the claimed message.
-        ok = code.check_final(pf.final_layer, pf.final_layer[0])
+    t, betas_stacked = lax.scan(fold_round, t, jnp.stack(pf.fri_roots))
+    # Index, don't iterate: list(field_array) dispatches lax.sign under CUDA.
+    betas = [betas_stacked[r] for r in range(num_rounds)]
+    t = t.observe(pf.final_layer)
 
-        t, positions = sample_positions(t, n, params.num_queries)
-        a = code.layer_positions(positions, num_rounds)
+    # The final fold layer must be a constant (degree 0). FRI binds no
+    # external claim, so the layer's own head is the claimed message.
+    ok = code.check_final(pf.final_layer, pf.final_layer[0])
 
-        # Merkle: f's pair-leaf rebuilds f's root at a[0]; each fold layer's
-        # pair-leaf rebuilds its committed root at a[i]. One batched pass (#163).
-        legs = [(f_root, a[0], pf.f_opening)]
-        for i in range(num_rounds):
-            legs.append((pf.fri_roots[i], a[i], pf.query_openings[i]))
-        ok = ok & verify_openings(tree, legs)
+    t, positions = sample_positions(t, n, params.num_queries)
+    a = code.layer_positions(positions, num_rounds)
 
-        # Rebuild the layer-0 quotient pair from f's opened leaf and bind it to
-        # the committed layer-0 pair — this is what ties the fold chain to f.
-        lo0, hi0 = code.pair_indices(a[0], 0)
-        domain = code.domain()
-        f_lo = pf.f_opening.row[:, 0]
-        f_hi = pf.f_opening.row[:, 1]
-        g_lo = (f_lo - v) / (domain[lo0] - z)
-        g_hi = (f_hi - v) / (domain[hi0] - z)
-        layer0 = pf.query_openings[0].row  # (Q, 2)
-        ok = ok & jnp.all(g_lo == layer0[:, 0]) & jnp.all(g_hi == layer0[:, 1])
+    # Merkle: f's pair-leaf rebuilds f's root at a[0]; each fold layer's
+    # pair-leaf rebuilds its committed root at a[i]. One batched pass (#163).
+    legs = [(f_root, a[0], pf.f_opening)]
+    for i in range(num_rounds):
+        legs.append((pf.fri_roots[i], a[i], pf.query_openings[i]))
+    ok = ok & verify_openings(tree, legs)
 
-        # Each layer's opened pair folds to the next layer's / the final layer.
-        ok = ok & verify_fold_chain(code, pf.query_openings, betas, a, pf.final_layer)
-        return t, ok
+    # Rebuild the layer-0 quotient pair from f's opened leaf and bind it to
+    # the committed layer-0 pair — this is what ties the fold chain to f.
+    lo0, hi0 = code.pair_indices(a[0], 0)
+    domain = code.domain()
+    f_lo = pf.f_opening.row[:, 0]
+    f_hi = pf.f_opening.row[:, 1]
+    g_lo = (f_lo - v) / (domain[lo0] - z)
+    g_hi = (f_hi - v) / (domain[hi0] - z)
+    layer0 = pf.query_openings[0].row  # (Q, 2)
+    ok = ok & jnp.all(g_lo == layer0[:, 0]) & jnp.all(g_hi == layer0[:, 1])
+
+    # Each layer's opened pair folds to the next layer's / the final layer.
+    ok = ok & verify_fold_chain(code, pf.query_openings, betas, a, pf.final_layer)
+    return t, ok
 
 
 if TYPE_CHECKING:

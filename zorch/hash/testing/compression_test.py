@@ -80,6 +80,18 @@ class CompressionTest(absltest.TestCase):
         out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
         self.assertTrue(bool(jnp.array_equal(out, _PLONKY3_COMPRESS_2X8)))
 
+    def test_value_equality_across_fresh_instances(self) -> None:
+        # A compressor seats in static jit-zone keys (#214): equal params over
+        # value-equal permutations must compare and hash equal regardless of
+        # instance identity, and a param change must break equality.
+        a = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        b = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+        self.assertNotEqual(
+            a, Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=4))
+        )
+
     def test_compress_vmap_matches_unbatched(self) -> None:
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
         a = jnp.arange(16, dtype=F).reshape(2, 8)

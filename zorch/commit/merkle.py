@@ -94,6 +94,19 @@ class MerkleTree:
             leaf_hasher.has_dedicated_fusion and compressor.has_dedicated_fusion
         )
 
+    # Value equality/hash for static jit-zone keys (#214) — identity equality
+    # re-traces per instance. Both blocks compare by value themselves.
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, MerkleTree):
+            return NotImplemented
+        return (self._leaf_hasher, self._compressor) == (
+            other._leaf_hasher,
+            other._compressor,
+        )
+
+    def __hash__(self) -> int:
+        return hash((self._leaf_hasher, self._compressor))
+
     def commit(self, matrix: Array) -> tuple[Array, list[Array]]:
         """Commit a (height, width) matrix.
 

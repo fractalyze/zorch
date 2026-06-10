@@ -11,6 +11,7 @@ four tamper paths (each must reject).
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import jax.numpy as jnp
 from absl.testing import absltest
@@ -29,9 +30,10 @@ from zorch.pcs.jagged.prover import (
     JaggedProverData,
     _compress_column_claims,
 )
-from zorch.pcs.jagged.verifier import JaggedPcsVerifier
+from zorch.pcs.jagged.verifier import JaggedPcsVerifier, _verify_device
 from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck.verifier import SumcheckRound as VSumcheckRound
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 from zorch.verify import verify as outer_verify
@@ -122,6 +124,25 @@ class JaggedOpeningTest(absltest.TestCase):
             commitment, z_row, column_claims, pdata.layout, proof, _t()
         )
         self.assertTrue(bool(ok))
+
+    def test_verify_reuses_one_compiled_zone_across_instances(self) -> None:
+        # Freshly built same-config verifiers must share one module-level
+        # replay zone — the static keys compare by value (#214), mirroring
+        # commit_test's prover-side pin.
+        _v, commitment, z_row, column_claims, pdata, proof = self._opened()
+        calls = [
+            functools.partial(
+                _stack()[1].verify,
+                commitment,
+                z_row,
+                column_claims,
+                pdata.layout,
+                proof,
+                _t(),
+            )
+            for _ in (0, 1)
+        ]
+        assert_single_trace(self, _verify_device, calls)
 
     def test_k4_round_trip_verifies(self) -> None:
         # K > 1: the stacked eq-combine is exercised by the full opening path
