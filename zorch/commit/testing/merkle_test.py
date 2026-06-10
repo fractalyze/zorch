@@ -148,6 +148,25 @@ class MerkleTreeTest(absltest.TestCase):
             bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
+    def test_commit_rolls_layer_fold_into_scan(self) -> None:
+        # The prover commit folds the tree layers with one scan, not `log2(N)`
+        # unrolled compresses: the lowered form carries a single while loop and
+        # its composite count is independent of tree height, so commit's
+        # trace+lower is O(1) in depth, not O(depth). The unrolled fold
+        # dominated the trace-commit compile; the verifier reconstruct was
+        # already rolled this way (#163/#182).
+        _, _, tree = koalabear16_merkle()
+
+        def lowered(height: int) -> str:
+            matrix = jnp.zeros((height, 8), F)
+            return jax.jit(tree.commit).lower(matrix).as_text()
+
+        shallow, deep = lowered(4), lowered(64)  # depth 2 vs depth 6
+        self.assertIn("stablehlo.while", shallow)  # the fold is a scan, not unrolled
+        self.assertEqual(  # a deeper tree adds no unrolled region
+            shallow.count("stablehlo.composite"), deep.count("stablehlo.composite")
+        )
+
     def test_reconstruct_root_rolls_path_into_scan(self) -> None:
         # The leaf->root fold is one scan, not `depth` unrolled compresses: the
         # lowered form carries a single while loop and its op count is
