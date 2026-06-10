@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import re
 from collections.abc import Callable
 
 import jax
@@ -51,12 +52,21 @@ class BasefoldTest(absltest.TestCase):
         K = 3
         mle = jnp.arange(S * K, dtype=F).reshape(S, K)  # [S, K]
         root, pdata = bf.commit(_columns(mle))
-        # Independent reconstruction: column-wise RS-encode then Merkle.
-        codeword = rs.encode(mle.T).T  # [S*blowup, K]
+        # Independent reconstruction: column-wise RS-encode then Merkle (the
+        # commit itself encodes the columns as one batch).
+        codeword = jnp.stack([rs.encode(mle[:, j]) for j in range(K)], axis=1)
         exp_root, _ = tree.commit(codeword)
         self.assertEqual(root.tolist(), exp_root.tolist())
         self.assertIsInstance(pdata, BasefoldProverData)
         self.assertEqual(pdata.widths, (K,))
+
+    def test_commit_encodes_the_matrix_as_one_fft(self) -> None:
+        # The columns share one message length, so the whole matrix encodes as
+        # a single batched NTT kernel — not width per-column ffts (#144).
+        bf, rs, tree, S = _basefold()
+        polys = [jnp.arange(S, dtype=F) + F(j) for j in range(3)]
+        hlo = _commit_body.lower(rs, tree, polys).as_text()
+        self.assertEqual(len(re.findall(r"stablehlo\.fft", hlo)), 1)
 
     def test_prover_data_pytree_round_trips(self) -> None:
         bf, rs, tree, S = _basefold()
