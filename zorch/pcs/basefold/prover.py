@@ -175,13 +175,12 @@ class BasefoldProver:
 def _commit_body(
     code: FoldableCode, tree: MerkleTree, polys: list[Array]
 ) -> tuple[BasefoldCommitment, BasefoldProverData]:
-    # The columns share one message length S; encode each column separately
-    # (encode lowers to lax.fft today, which requires 1-D input on
-    # extension-field dtypes, so the batched transpose trick doesn't
-    # generalise). O(K) encodes — fine at current column counts; revisit
-    # if K grows. Stack the codewords into [n, K].
+    # The columns share one message length S, so the whole matrix encodes as
+    # one [K, S] batch — a single NTT kernel (the LinearCode seam batches over
+    # leading axes) — transposed into the [n, K] row-leaf layout the Merkle
+    # commit expects.
     mle = jnp.stack(polys, axis=1)
-    codeword = jnp.stack([code.encode(p) for p in polys], axis=1)
+    codeword = code.encode(mle.T).T
     root, layers = tree.commit(codeword)
     return root, BasefoldProverData(
         digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
