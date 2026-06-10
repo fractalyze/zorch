@@ -86,17 +86,18 @@ class ReedSolomon:
         self.dtype = dtype
         self.coset_shift = coset_shift
         # Coset eval scales coeffs by [1, h, h^2, ..., h^{n-1}]; precompute it
-        # once since h and n are fixed. Built as a cumulative product because
-        # `jnp.arange` raises on extension dtypes (iota unsupported), so the
-        # exponent ramp cannot be formed the usual way.
+        # once since h and n are fixed. Built by log-doubling — powers[m:2m] =
+        # powers[:m] * h^m — because `jnp.arange` raises on extension dtypes
+        # (iota unsupported) and a sequential `jnp.cumprod` is one
+        # O(n)-depth kernel, paid eagerly at construction.
         self._coset_powers = None
         if coset_shift is not None:
-            seq = (
-                jnp.full((self.block_len,), coset_shift, dtype)
-                .at[0]
-                .set(jnp.ones((), dtype))
-            )
-            self._coset_powers = jnp.cumprod(seq)
+            powers = jnp.ones((1,), dtype)
+            step = jnp.asarray(coset_shift, dtype)
+            while powers.shape[0] < self.block_len:
+                powers = jnp.concatenate([powers, powers * step])
+                step = step * step
+            self._coset_powers = powers
         self._key: tuple | None = None
 
     # Value equality/hash for static jit-zone keys — the LinearCode seam
