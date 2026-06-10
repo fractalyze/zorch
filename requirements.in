@@ -9,10 +9,10 @@
 # (native finite-field dtypes) arrives transitively via jax.
 absl-py
 numpy
-jax==0.0.5.dev20260610045259
-jaxlib==0.0.5.dev20260610045259
+jax==0.0.5.dev20260610125851
+jaxlib==0.0.5.dev20260610125851
 jax-cuda12-plugin==0.0.5.dev20260524000415
-zkx-cuda-pjrt==0.0.5.dev20260610045259
+zkx-cuda-pjrt==0.0.5.dev20260610125851
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
