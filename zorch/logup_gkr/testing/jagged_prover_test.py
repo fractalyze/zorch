@@ -454,8 +454,8 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         layer = random_jagged_layer(7, self.ROW_COUNTS)
         lam, z = rand_field(17, (), KB), rand_field(18, (self.NRV + 2,), KB)
         claim = self._virtual_claim(layer, lam, z)
-        # Return only the bound point (a JAX array): prove_jagged_layer's proof is
-        # a plain dataclass, not a pytree, so make_jaxpr can't return it directly.
+        # Return only the bound point (a JAX array): the marker check only needs
+        # the jaxpr's primitives, and the point alone keeps the traced output small.
         jaxpr = jax.make_jaxpr(
             lambda l_, c_, z_: prove_jagged_layer(
                 layer, l_, c_, z_, cheap_transcript(KB)
@@ -488,6 +488,69 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         row_counts = attrs["row_counts"]
         row_counts = getattr(row_counts, "val", row_counts)
         self.assertEqual([int(c) for c in row_counts], list(self.ROW_COUNTS))
+
+
+class JaggedGkrLayerRoundJitTest(absltest.TestCase):
+    """`JaggedGkrLayerRound(layer, jit=True)` compiles the per-layer prove once
+    and dispatches the cached executable on later calls -- the lever that turns
+    the ~20-layer pyramid's per-call composite re-trace into a single trace per
+    layer. The jit boundary must be a pure dispatch change: carry, proof, and
+    advanced transcript byte-identical to the eager round, on both the plain
+    (cheap transcript) and the marked-composite (poseidon) paths the consumer
+    drives.
+
+    A small base-field layer over the cheap permutation keeps this fast: jit
+    forces XLA to *compile* the round, and compiling the marked path's
+    `zorch.sumcheck` composite -- whose body runs the poseidon2 Fiat-Shamir
+    permutation -- is a multi-minute XLA CPU-backend compile regardless of
+    layer size, so the marked path is not unit-testable here. It does not need
+    to be: jit wraps `_run` identically on both paths (a pure dispatch-time
+    change), so `jit(marked) == eager(marked)` follows from this test
+    (`jit == eager` on the loop) composed with `ProveJaggedMarkedTest`
+    (`marked == eager plain`); the full-scale jitted marked prove is validated
+    on GPU by the sp1-zorch bench's byte-match anchors."""
+
+    # niv = 1 (two interactions), nrv = 2: an odd segment (3) and a saturated
+    # one (1), both row and interaction rounds, in a few-element layer.
+    ROW_COUNTS = (3, 1)
+    NRV = 2
+
+    def _run(
+        self, *, jit: bool, transcript: Transcript
+    ) -> tuple[tuple[Array, Array, Array], Transcript, JaggedLayerProof]:
+        layer = random_jagged_layer(7, self.ROW_COUNTS)
+        carry = (
+            rand_field(111, (), KB),
+            rand_field(112, (), KB),
+            rand_field(113, (self.NRV + 1,), KB),  # niv = 1 for two interactions
+        )
+        round_ = JaggedGkrLayerRound(layer, jit=jit)
+        return round_(carry, transcript)
+
+    def test_jit_matches_eager_plain_path(self) -> None:
+        # Cheap transcript -> unmarked loop, jitted; byte-identical to eager.
+        (gnum, gden, gpt), gt, gproof = self._run(
+            jit=True, transcript=cheap_transcript(KB)
+        )
+        (wnum, wden, wpt), wt, wproof = self._run(
+            jit=False, transcript=cheap_transcript(KB)
+        )
+        self.assertTrue(bool(jnp.all(gnum == wnum)))
+        self.assertTrue(bool(jnp.all(gden == wden)))
+        self.assertTrue(bool(jnp.all(gpt == wpt)))
+        for f in fields(JaggedLayerProof):
+            self.assertTrue(
+                bool(jnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
+                f"proof.{f.name} diverged under jit",
+            )
+        if not isinstance(gt, DuplexTranscript) or not isinstance(wt, DuplexTranscript):
+            raise AssertionError("both paths must thread the DuplexTranscript back")
+        gs, ws = gt.state, wt.state
+        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
+        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
+        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
+        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
+        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
 
 
 if __name__ == "__main__":
