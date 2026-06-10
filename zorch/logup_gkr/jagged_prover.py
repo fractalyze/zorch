@@ -421,7 +421,7 @@ def _prove_jagged_marked(
     `lax.composite`, so passing them positionally keeps the leading auto-lifted
     operands the round-constant set alone (the emitter parses those by position).
     The duplex sponge threads through as the five `DuplexState` leaves; the FS
-    permutation rides as the nested `poseidon2:` marker inside `sample_challenge`.
+    permutation rides as the nested `zorch.poseidon2` marker inside `sample_challenge`.
     `row_counts` rides as the `array<i64>` attribute the vendor bounds each
     segment's reduction with (zkx#544); `fold_order`/`poly_form` declare the
     jagged LSB / coefficient-form contract (the dense defaults are MSB / value).

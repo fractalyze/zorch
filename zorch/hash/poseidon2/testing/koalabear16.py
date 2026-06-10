@@ -17,6 +17,14 @@ from zorch.hash.poseidon2.poseidon2 import Poseidon2
 
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
+# This parameterization's marker metadata as StableHLO prints it (dict keys
+# alphabetical) — shared by the emission contract test and the vmap/auto-lift
+# survival test so the expected text lives once.
+KOALABEAR16_POSEIDON2_ATTRS = (
+    f"composite_attributes = {{alpha = {_ALPHA} : i64, external_rounds = {_ER} : i64,"
+    f" internal_rounds = {_IR} : i64, width = {_WIDTH} : i64}}"
+)
+
 # Canonical-u32 constants from the pinned Plonky3 koala-bear poseidon2-16.
 _EXTERNAL_INITIAL = [
     [

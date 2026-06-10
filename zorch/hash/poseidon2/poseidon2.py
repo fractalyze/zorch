@@ -4,8 +4,10 @@ The permutation is one function (all rounds) wrapped in a `jax.lax.composite`
 (`fused_region`): zkx's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. With the standard external matrix the region is named
-`poseidon2:W:E:I:S` and routes to zkx's dedicated, params-driven Poseidon2Fusion
-emitter; a non-standard external matrix falls back to the generic
+`zorch.poseidon2`, the permutation shape riding as `composite.attributes`
+(`width`/`external_rounds`/`internal_rounds`/`alpha`), and routes to zkx's
+dedicated, params-driven Poseidon2Fusion emitter; a non-standard external
+matrix falls back to the generic
 `zorch.fused_region` marker (whose generic LoopFusion would compile a full
 permute into one register-spilling kernel). The body is kept straight-line:
 rounds are unrolled (fixed, small counts) and the linear layers use the
@@ -30,6 +32,12 @@ from zorch.hash.poseidon2.params import Poseidon2Params
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
+
+POSEIDON2_MARKER = "zorch.poseidon2"
+# Marker revision riding as `composite.version`. zkx recognizes the marker by
+# name + attributes and deliberately does not gate on the version; it exists so
+# a future contract change can be staged without renaming the marker.
+POSEIDON2_MARKER_VERSION = 1
 
 
 class Poseidon2:
@@ -70,11 +78,8 @@ class Poseidon2:
         matrix would be silently ignored there; otherwise keep the generic marker
         (LoopFusion lowers the real body, staying correct).
         """
-        p = self._p
         if self._uses_standard_external:
-            return (
-                f"poseidon2:{p.width}:{p.external_rounds}:{p.internal_rounds}:{p.alpha}"
-            )
+            return POSEIDON2_MARKER
         return FUSED_REGION_MARKER
 
     def permute(self, state: Array) -> Array:
@@ -125,7 +130,10 @@ class Poseidon2:
             ext_term_rc: Array,
             diag: Array,
             off_diag: Array,
+            **_attrs: object,
         ) -> Array:
+            # `_attrs` is marker metadata passed through on both the composite
+            # and inline paths — the decomposition itself does not read it.
             ext_init = ext_init_rc.reshape(e_rounds, w)
             ext_term = ext_term_rc.reshape(e_rounds, w)
             s = apply_external(s)  # initial pre-MDS
@@ -149,7 +157,24 @@ class Poseidon2:
             p.internal_j_scale,
         )
 
-        return fused_region(permutation, *operands, name=self._fused_region_name)
+        # On the dedicated marker the permutation shape rides as
+        # `composite.attributes` — the zkx recognizer's contract: all four ints
+        # are required (it maps `alpha` to its s-box degree). The body ignores
+        # them (metadata only); the generic marker stays attrs-free.
+        marker_attrs: dict[str, int] = (
+            {
+                "version": POSEIDON2_MARKER_VERSION,
+                "width": w,
+                "external_rounds": e_rounds,
+                "internal_rounds": i_rounds,
+                "alpha": alpha,
+            }
+            if self.has_dedicated_fusion
+            else {}
+        )
+        return fused_region(
+            permutation, *operands, name=self._fused_region_name, **marker_attrs
+        )
 
 
 if TYPE_CHECKING:
