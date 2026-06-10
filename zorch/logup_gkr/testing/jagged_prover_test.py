@@ -246,6 +246,22 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         self.assertTrue(bool(num_eval == eval_mle(_interleave(n0, n1), new_point)))
         self.assertTrue(bool(den_eval == eval_mle(_interleave(d0, d1), new_point)))
 
+    def test_proof_records_bound_point(self) -> None:
+        # The carry appends the child selector as the last bit, so the
+        # retained point is the next carry's eval_point minus that bit — the
+        # invariant a wire consumer reads the point through.
+        layer = random_jagged_layer(121, (3, 1, 5, 2))
+        carry = (
+            rand_field(131, (), KB),
+            rand_field(132, (), KB),
+            rand_field(133, (5,), KB),
+        )
+        (_, _, new_point), _, proof = JaggedGkrLayerRound(layer)(
+            carry, cheap_transcript(KB)
+        )
+        self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
+        self.assertTrue(bool(jnp.all(proof.point == new_point[:-1])))
+
     def test_proof_records_lam_and_opening_claim(self) -> None:
         # The per-layer anchors a consumer diffs when a transcript diverges
         # mid-pyramid: the round's sampled lam and the opening claim it
@@ -399,7 +415,11 @@ class ProveJaggedMarkedTest(absltest.TestCase):
             niv,
             challenge_limbs,
         )
-        return challenges, t, JaggedLayerProof(lam, claim, polys, fn0, fn1, fd0, fd1)
+        return (
+            challenges,
+            t,
+            JaggedLayerProof(lam, claim, polys, challenges, fn0, fn1, fd0, fd1),
+        )
 
     def _virtual_claim(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> Array:
         n0, n1, d0, d1 = virtual_planes(layer, self.NRV)

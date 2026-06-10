@@ -123,9 +123,17 @@ class LogupSumcheckRound(Round):
 
 @dataclass(frozen=True)
 class LayerProof:
-    """One GKR layer's sumcheck transcript: round polynomials + final openings."""
+    """One GKR layer's sumcheck transcript: round polynomials, the bound
+    point, and the final openings.
+
+    `point` exists for wire serialization: a consumer emitting per-layer
+    (point, openings) records reads it here instead of replaying the
+    transcript or peeking at the chain carry's layout. A verifier derives its
+    own point from the transcript replay and must never read this field — it
+    is prover-asserted, not transcript-bound."""
 
     round_polys: Array  # (num_variables, degree + 1), each round's univariate
+    point: Array  # the bound point, MSB-first (the sampled challenges in order)
     numerator_0: Array
     numerator_1: Array
     denominator_0: Array
@@ -187,7 +195,7 @@ class GkrLayerRound(Round):
         # MSB-first point + the pyramid's child selector as the low (last) bit.
         eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
 
-        proof = LayerProof(round_polys, n0, n1, d0, d1)
+        proof = LayerProof(round_polys, point, n0, n1, d0, d1)
         return (num_eval, den_eval, eval_point), transcript, proof
 
 

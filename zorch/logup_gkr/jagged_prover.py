@@ -75,6 +75,7 @@ _DEGREE = 3
         "lam",
         "claim",
         "round_polys",
+        "point",
         "numerator_0",
         "numerator_1",
         "denominator_0",
@@ -87,15 +88,20 @@ class JaggedLayerProof:
     """One jagged GKR layer's sumcheck transcript: the batching challenge and
     opening claim the layer entered with (the per-layer anchors a consumer
     diffs first when a byte-match diverges mid-pyramid), the coefficient-form
-    round polynomials, and the final pair openings.
+    round polynomials, the bound point, and the final pair openings.
 
     A pytree (every field is an `Array`, like the dense `sumcheck.RoundMsg`) so
     it can be returned across a `jax.jit` boundary -- the per-layer jit the
-    chained prover wraps each round in."""
+    chained prover wraps each round in.
+
+    `point` is retained for wire serialization despite being replay-derivable
+    — `LayerProof.point` carries the rationale and the
+    verifier-must-never-read rule."""
 
     lam: Array
     claim: Array
     round_polys: Array  # (num_variables, _DEGREE + 1), ascending coefficients
+    point: Array  # the bound point, MSB-first (the sampled challenges reversed)
     numerator_0: Array
     numerator_1: Array
     denominator_0: Array
@@ -292,9 +298,9 @@ def prove_jagged_layer(
         out = _prove_jagged_marked(layer, *head, transcript, *tail)
     else:
         out = _run_jagged_rounds(*head, transcript, *tail)
-    challenges, advanced, polys, fn0, fn1, fd0, fd1 = out
-    proof = JaggedLayerProof(lam, claim, polys, fn0, fn1, fd0, fd1)
-    return challenges, advanced, proof
+    bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
+    proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
+    return bound_point, advanced, proof
 
 
 def _run_jagged_rounds(
