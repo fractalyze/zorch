@@ -1,0 +1,9 @@
+# Local pytest dev-loop dependencies. Not part of the wheel and not in
+# requirements_lock_3_11.txt: the hermetic bazel CI runs each test as its own
+# py_test and needs neither pytest nor xdist.
+#
+#   pip install -r requirements-dev.in
+#
+# Why xdist and how to invoke: docs/dev-env.md "Running the test suite".
+pytest
+pytest-xdist
