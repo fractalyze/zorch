@@ -12,7 +12,7 @@ from zk_dtypes import koalabear_mont as F
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.basefold.prover import BasefoldProver
-from zorch.pcs.jagged.prover import JaggedPcsProver
+from zorch.pcs.jagged.prover import JaggedPcsProver, _commit_device
 
 
 def _jagged_pcs(log_s: int = 2, blowup: int = 2) -> JaggedPcsProver:
@@ -33,16 +33,22 @@ class JaggedPcsTest(unittest.TestCase):
         self.assertEqual(commitment.shape, (8,))  # koalabear16 digest width
         self.assertTrue(hasattr(pdata.basefold_prover_data, "digest_layers"))
 
-    def test_compile_once_per_tier(self) -> None:
-        c = _jagged_pcs()
+    def test_compile_once_per_tier_across_instances(self) -> None:
         # Three height vectors, all total_area == 14 -> same tier log_m=5,
         # and all have the same block count (2), so only heights vary within
         # the tier — confirming that height variation alone does not retrace.
-        for hv in ([5, 9], [7, 7], [10, 4]):
-            c.commit(_blocks(hv), log_stacking_height=2)
-        self.assertEqual(
-            c._commit._cache_size(), 1
-        )  # _cache_size() is a private JAX API; may change on jax upgrade
+        # The second, freshly built same-config prover must also hit the same
+        # module-level zone: its static key compares by value (#214).
+        # Snapshot-compare _cache_size() (private JAX API; may change on jax
+        # upgrade): other tests may already have seeded this config's entry, so
+        # assert no growth after the first call rather than an absolute count.
+        size_after_first = None
+        for c in (_jagged_pcs(), _jagged_pcs()):
+            for hv in ([5, 9], [7, 7], [10, 4]):
+                c.commit(_blocks(hv), log_stacking_height=2)
+                if size_after_first is None:
+                    size_after_first = _commit_device._cache_size()
+        self.assertEqual(_commit_device._cache_size(), size_after_first)
 
     def test_binding_moves_root(self) -> None:
         c = _jagged_pcs()

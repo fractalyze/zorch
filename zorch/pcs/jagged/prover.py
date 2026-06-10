@@ -31,7 +31,7 @@ import functools
 import operator
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
@@ -361,17 +361,35 @@ class JaggedProverData:
     cfg: JaggedStaticConfig
 
 
+# The jit'd device-commit zone. The blocks are static keys — by value (#214),
+# so same-config instances (one per test, in practice) share one trace.
+@partial(jax.jit, static_argnames=("prover", "sponge", "compressor"))
+def _commit_device(
+    prover: BasefoldProver,
+    sponge: Sponge,
+    compressor: Compression,
+    mle: Array,
+    structure: Array,
+) -> tuple[Array, BasefoldProverData]:
+    # The seam commits a Sequence of column MLEs; BaseFold binds them jointly
+    # under one root (a matrix commitment), which the structure bind below
+    # hashes against.
+    columns = [mle[:, j] for j in range(mle.shape[1])]
+    root, prover_data = prover.commit(columns)
+    structure_hash = sponge.hash(structure)
+    bound = compressor.compress(jnp.stack([root, structure_hash]))
+    return bound, prover_data
+
+
 class JaggedPcsProver:
     """Commits variable-height blocks via an injected multilinear `PcsProver` and
     opens them at a row point, binding the jagged structure into the commitment.
 
     `sponge` / `compressor` perform the structure bind (the jagged layer owns it,
-    not the PCS). The jit'd device commit zone is built once in `__init__`,
-    capturing `prover` / `sponge` / `compressor`, keyed on the MLE + structure
-    shapes, so it compiles once per (area tier, block count).
+    not the PCS). The jit'd device commit zone (`_commit_device`) is keyed on
+    the blocks by value plus the MLE + structure shapes, so it compiles once
+    per (area tier, block count) and shares across same-config instances.
     """
-
-    _commit: Any  # jax.jit-wrapped device-commit closure, built in __init__
 
     def __init__(
         self, prover: BasefoldProver, sponge: Sponge, compressor: Compression
@@ -389,19 +407,6 @@ class JaggedPcsProver:
         self.prover = prover
         self.sponge = sponge
         self.compressor = compressor
-
-        @jax.jit
-        def _commit(mle: Array, structure: Array) -> tuple[Array, Any]:
-            # The seam commits a Sequence of column MLEs; BaseFold binds them
-            # jointly under one root (a matrix commitment), which the structure
-            # bind below hashes against.
-            columns = [mle[:, j] for j in range(mle.shape[1])]
-            root, prover_data = prover.commit(columns)
-            structure_hash = sponge.hash(structure)
-            bound = compressor.compress(jnp.stack([root, structure_hash]))
-            return bound, prover_data
-
-        self._commit = _commit
 
     @property
     def bf_prover(self) -> BasefoldProver:
@@ -421,7 +426,9 @@ class JaggedPcsProver:
         mle = packed.reshape(layout.K, layout.S).T  # [S, K]
         structure = _structure_vec(layout)
         col_prefix_sums, offsets, cfg = _indicator_inputs(layout)
-        bound, basefold_prover_data = self._commit(mle, structure)
+        bound, basefold_prover_data = _commit_device(
+            self.prover, self.sponge, self.compressor, mle, structure
+        )
         prover_data = JaggedProverData(
             basefold_prover_data=basefold_prover_data,
             dense=packed,

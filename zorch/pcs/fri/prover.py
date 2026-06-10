@@ -20,8 +20,8 @@ prover.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -76,30 +76,11 @@ class FriProverData:
 @dataclass(frozen=True)
 class FriProver:
     params: FriParams
-    # Jitted per-poly commit/open bodies (issue #140); unlike basefold — whose
-    # commit rides the jagged seam's enclosing jit — fri is called standalone,
-    # so it owns its zones. One compile serves the batch.
-    _commit_one: Callable[..., FriCommittedPoly] = field(
-        init=False, repr=False, compare=False
-    )
-    _open_one_jit: Callable[..., tuple[Transcript, FriProof]] = field(
-        init=False, repr=False, compare=False
-    )
-
-    def __post_init__(self) -> None:
-        def commit_one(coeffs: Array) -> FriCommittedPoly:
-            codeword = self.params.code.encode(coeffs)
-            leaves = self.params.code.pair_leaves(codeword)
-            _root, digest_layers = self.params.tree.commit(leaves)
-            return FriCommittedPoly(coeffs, codeword, leaves, digest_layers)
-
-        object.__setattr__(self, "_commit_one", jax.jit(commit_one))
-        object.__setattr__(self, "_open_one_jit", jax.jit(self._open_one))
 
     def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
         """RS-encode each coefficient vector and Merkle-commit its codeword's
         conjugate-pair leaves. Returns stacked roots and the prover data."""
-        committed = [self._commit_one(coeffs) for coeffs in polys]
+        committed = [_commit_one(self.params, coeffs) for coeffs in polys]
         roots = [poly.digest_layers[-1][0] for poly in committed]
         return jnp.stack(roots), FriProverData(tuple(committed))
 
@@ -118,48 +99,62 @@ class FriProver:
         t = transcript
         for committed, z in zip(prover_data.polys, points):
             v = _eval_poly(committed.coeffs, z)
-            t, proof = self._open_one_jit(committed, z, v, t)
+            t, proof = _open_one(self.params, committed, z, v, t)
             values.append(v)
             proofs.append(proof)
         return jnp.stack(values), proofs, t
 
-    def _open_one(
-        self,
-        committed: FriCommittedPoly,
-        z: Array,
-        v: Array,
-        t: Transcript,
-    ) -> tuple[Transcript, FriProof]:
-        params = self.params
-        code, tree = params.code, params.tree
-        domain = code.domain()
-        # Layer 0 is the DEEP quotient, derived from f; the round commits it
-        # before folding (like every layer), and the verifier rebuilds this same
-        # pair from f's opened leaf to bind the commitment chain to f.
-        quotient = (committed.codeword - v) / (domain - z)
 
-        t = t.observe(committed.digest_layers[-1][0])  # bind the f commitment root
-        cw, t, layers = fold_rounds(
-            PreFoldPairCommitRound(code, tree), quotient, t, params.num_rounds
-        )
-        final_layer = cw
-        t = t.observe(final_layer)
+# Jitted per-poly commit/open bodies (issue #140); unlike basefold — whose
+# commit rides the jagged seam's enclosing jit — fri is called standalone, so
+# it owns its zones. Module-level with the params as the static key — by value
+# (#214), so same-config instances (one per test, in practice) share one
+# trace. One compile serves the batch.
+@partial(jax.jit, static_argnames=("params",))
+def _commit_one(params: FriParams, coeffs: Array) -> FriCommittedPoly:
+    codeword = params.code.encode(coeffs)
+    leaves = params.code.pair_leaves(codeword)
+    _root, digest_layers = params.tree.commit(leaves)
+    return FriCommittedPoly(coeffs, codeword, leaves, digest_layers)
 
-        n = code.block_len
-        t, positions = sample_positions(t, n, params.num_queries)
-        a = code.layer_positions(positions, params.num_rounds)
-        f_opening = open_rows(tree, committed.leaves, committed.digest_layers, a[0])
-        query_openings = [
-            open_rows(tree, layer.leaves, layer.digest_layers, a[i])
-            for i, layer in enumerate(layers)
-        ]
-        return t, FriProof(
-            v,
-            [layer.root for layer in layers],
-            final_layer,
-            f_opening,
-            query_openings,
-        )
+
+@partial(jax.jit, static_argnames=("params",))
+def _open_one(
+    params: FriParams,
+    committed: FriCommittedPoly,
+    z: Array,
+    v: Array,
+    t: Transcript,
+) -> tuple[Transcript, FriProof]:
+    code, tree = params.code, params.tree
+    domain = code.domain()
+    # Layer 0 is the DEEP quotient, derived from f; the round commits it
+    # before folding (like every layer), and the verifier rebuilds this same
+    # pair from f's opened leaf to bind the commitment chain to f.
+    quotient = (committed.codeword - v) / (domain - z)
+
+    t = t.observe(committed.digest_layers[-1][0])  # bind the f commitment root
+    cw, t, layers = fold_rounds(
+        PreFoldPairCommitRound(code, tree), quotient, t, params.num_rounds
+    )
+    final_layer = cw
+    t = t.observe(final_layer)
+
+    n = code.block_len
+    t, positions = sample_positions(t, n, params.num_queries)
+    a = code.layer_positions(positions, params.num_rounds)
+    f_opening = open_rows(tree, committed.leaves, committed.digest_layers, a[0])
+    query_openings = [
+        open_rows(tree, layer.leaves, layer.digest_layers, a[i])
+        for i, layer in enumerate(layers)
+    ]
+    return t, FriProof(
+        v,
+        [layer.root for layer in layers],
+        final_layer,
+        f_opening,
+        query_openings,
+    )
 
 
 if TYPE_CHECKING:

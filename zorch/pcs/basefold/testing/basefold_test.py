@@ -18,8 +18,12 @@ from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.merkle import MerkleTree
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
-from zorch.pcs.basefold.verifier import BasefoldVerifier
+from zorch.pcs.basefold.prover import (
+    BasefoldProver,
+    BasefoldProverData,
+    _open_batch_body,
+)
+from zorch.pcs.basefold.verifier import BasefoldVerifier, _verify_batch_body
 from zorch.poly.multilinear import eval_mle
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
@@ -314,8 +318,9 @@ class BasefoldOpenTest(absltest.TestCase):
         prover, verifier, root, pdata, _mle, _ = self._commit(log_s=4, K=2)
         z = _rand_ef(44, (4,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
-        verify_body: Any = verifier._verify_body
-        text = verify_body.lower([root], z, [values], proof, _transcript()).as_text()
+        text = _verify_batch_body.lower(
+            verifier, [root], z, [values], proof, _transcript()
+        ).as_text()
         self.assertIn("stablehlo.while", text)
 
     def test_open_compiles_once_per_shape(self) -> None:
@@ -339,23 +344,28 @@ class BasefoldOpenTest(absltest.TestCase):
             ).block_until_ready()
         self.assertEqual(run._cache_size(), 1)
 
-    def test_open_eager_reuses_one_compiled_zone(self) -> None:
+    def test_open_eager_reuses_one_compiled_zone_across_instances(self) -> None:
         # Standalone (no enclosing jit), `open` must reuse one compiled zone
-        # across calls — the prover owns a jit zone like fri/the basefold
-        # verifier, so the `open_query_phase` vmap closure traces once instead
-        # of eagerly per call (#186). Each call passes a freshly built
-        # transcript, so a cache hit also exercises the #177 value-equality
-        # contract (no fresh-identity leaf rides the meta).
-        prover, _verifier, _root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
-        for seed in (2, 3, 4):
-            values, _proof, _ = prover.open(
-                pdata, [_rand_ef(seed, (log_s,))], _transcript()
-            )
-            values.block_until_ready()
-        # _open_body is jitted; _cache_size() isn't on the field's Callable type.
-        # (private JAX API; may change on jax upgrade.)
-        open_body: Any = prover._open_body
-        self.assertEqual(open_body._cache_size(), 1)
+        # across calls (#186) AND across freshly built same-config provers —
+        # the zone is module-level and its static key compares the prover by
+        # value (#214), so per-test instances stop re-tracing. Each call also
+        # passes a freshly built transcript (the #177 value-equality contract).
+        # Snapshot-compare _cache_size() (private JAX API; may change on jax
+        # upgrade): other tests may already have seeded this config's entry, so
+        # assert no growth after the first call rather than an absolute count.
+        size_after_first: int | None = None
+        for instance_seed in (0, 1):
+            prover, _verifier, _root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
+            for seed in (2, 3, 4):
+                values, _proof, _ = prover.open(
+                    pdata, [_rand_ef(seed, (log_s,))], _transcript()
+                )
+                values.block_until_ready()
+                if size_after_first is None:
+                    body: Any = _open_batch_body
+                    size_after_first = body._cache_size()
+        body = _open_batch_body
+        self.assertEqual(body._cache_size(), size_after_first)
 
 
 if __name__ == "__main__":
