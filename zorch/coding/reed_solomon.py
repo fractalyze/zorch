@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import jax.numpy as jnp
+import numpy as np
 import zk_dtypes
 from jax import Array, lax
 
@@ -96,6 +97,34 @@ class ReedSolomon:
                 .set(jnp.ones((), dtype))
             )
             self._coset_powers = jnp.cumprod(seq)
+        self._key: tuple | None = None
+
+    # Value equality/hash: a code seats in static jit-zone keys on the PCS seam
+    # (inside provers/verifiers passed as static args), where identity equality
+    # makes every freshly built same-config instance a new cache entry and
+    # re-traces the zone (#214). The key is cached host-side because jit
+    # dispatch compares static args per call, and `tobytes` on the live
+    # coset-shift array would cost a device->host sync each time (the
+    # Poseidon2Params pattern).
+    def _value_key(self) -> tuple:
+        if self._key is None:
+            shift = (
+                None
+                if self.coset_shift is None
+                else np.asarray(self.coset_shift).tobytes()
+            )
+            self._key = (self.message_len, self.block_len, self.dtype, shift)
+        return self._key
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, ReedSolomon):
+            return NotImplemented
+        return self._value_key() == other._value_key()
+
+    def __hash__(self) -> int:
+        return hash(self._value_key())
 
     def encode(self, message: Array) -> Array:
         if message.shape[-1] != self.message_len:
@@ -205,6 +234,16 @@ class BitReversedReedSolomon:
         self.message_len = message_len
         self.block_len = self._natural.block_len
         self.dtype = dtype
+
+    # Value equality/hash via the wrapped natural-order code (see ReedSolomon);
+    # the isinstance gate keeps the two layouts distinct.
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, BitReversedReedSolomon):
+            return NotImplemented
+        return self._natural == other._natural
+
+    def __hash__(self) -> int:
+        return hash((BitReversedReedSolomon, self._natural))
 
     def encode(self, message: Array) -> Array:
         cw = self._natural.encode(message)

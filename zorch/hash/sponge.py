@@ -68,6 +68,22 @@ class Sponge:
         self.rate = params.rate
         self.out = params.out
 
+    # Value equality/hash, like the Permutation contract it builds on: a sponge
+    # seats in static jit-zone keys on the PCS seam, where identity equality
+    # makes every freshly built same-config instance a new cache entry and
+    # re-traces the zone (#214).
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Sponge):
+            return NotImplemented
+        return (self._permutation, self.rate, self.out) == (
+            other._permutation,
+            other.rate,
+            other.out,
+        )
+
+    def __hash__(self) -> int:
+        return hash((self._permutation, self.rate, self.out))
+
     @property
     def has_dedicated_fusion(self) -> bool:
         """Whether the permutation lowers to a hash-dedicated fusion marker, so a

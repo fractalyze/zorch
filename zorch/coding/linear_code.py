@@ -7,6 +7,13 @@ codeword over a single field dtype (`block_len > message_len`; the rate is
 axes — many polynomials, or a matrix of rows — ride through untouched.
 Reed-Solomon is one implementation; any other linear code (Brakedown, ...)
 drops in unchanged.
+
+Implementations MUST define value-based `__eq__`/`__hash__` over their full
+parameter surface, like the Permutation seam: a code seats in static jit-zone
+keys (inside provers/verifiers passed as static args), where identity equality
+silently re-traces the zone on every freshly built same-config instance
+(#214). A Protocol cannot enforce this — each implementation carries it
+(`ReedSolomon`, `BitReversedReedSolomon`).
 """
 
 from __future__ import annotations

@@ -61,6 +61,22 @@ class Compression:
         self.arity = params.arity
         self.chunk = params.chunk
 
+    # Value equality/hash, like the Permutation contract it builds on: a
+    # compressor seats in static jit-zone keys on the PCS seam, where identity
+    # equality makes every freshly built same-config instance a new cache entry
+    # and re-traces the zone (#214).
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Compression):
+            return NotImplemented
+        return (self._permutation, self.arity, self.chunk) == (
+            other._permutation,
+            other.arity,
+            other.chunk,
+        )
+
+    def __hash__(self) -> int:
+        return hash((self._permutation, self.arity, self.chunk))
+
     @property
     def has_dedicated_fusion(self) -> bool:
         """Whether the permutation lowers to a hash-dedicated fusion marker, so a
