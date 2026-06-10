@@ -1,10 +1,18 @@
-"""Layer-by-layer binary Merkle commitment — scheme-agnostic, on Sponge + Compression.
+"""Layer-by-layer k-ary Merkle commitment — scheme-agnostic, on Sponge + Compression.
 
 `commit` hashes each matrix row to a leaf digest (Sponge), then folds sibling
-pairs per layer (Compression) down to a single root, returning
-`(raw_root, digest_layers)` (leaf digests first, root last). It adds NO domain
-separator — that, the proof layout, and the verify error codes are scheme-specific
-and live in the consumer (e.g. whir-zorch's SMCS).
+groups per layer (Compression, whose `arity` sets the tree's) down to a single
+root, returning `(raw_root, digest_layers)` (leaf digests first, root last).
+It adds NO domain separator — that, the proof layout, and the verify error codes
+are scheme-specific and live in the consumer (e.g. whir-zorch's SMCS).
+
+A level whose node count is not a multiple of the arity is completed with
+zero digests — the only convention that keeps a k-ary tree well-defined on
+power-of-two heights (e.g. 2^k leaves under arity 4 leave a 2-node top level),
+and the one the k-ary schemes this seam serves use. The padded form is what
+`digest_layers` stores, so an opening near the boundary can read its zero
+siblings like any others. A binary tree on a power-of-two height never pads,
+so the arity-2 layout is exactly the historical one.
 
 Each layer is one `vmap` over its nodes, and the fold unrolls (layer count is
 static), so no host-driven loop appears. An internal layer batches one
@@ -52,23 +60,24 @@ class Opening:
     batch under `jax.vmap` and trace under `jit`."""
 
     row: Array
-    path: list[Array]  # each (digest_elems,)
+    path: list[Array]  # each (digest_elems,) for arity 2, (arity-1, digest_elems) above
 
 
 class MerkleTree:
-    """A binary Merkle commitment over a single matrix.
+    """A k-ary Merkle commitment over a single matrix.
 
     `leaf_hasher` squeezes each row to a `digest_elems`-element leaf; `compressor`
-    folds two digests into one. They must agree on digest size
-    (`leaf_hasher.out == compressor.chunk`), and the compressor must be 2-to-1.
+    folds `compressor.arity` digests into one — the tree's arity follows it.
+    They must agree on digest size (`leaf_hasher.out == compressor.chunk`).
+
+    Arity 2 keeps the historical path layout (each path entry one sibling,
+    shape `(digest_elems,)`); a wider arity carries the whole sibling group per
+    level, shape `(arity-1, digest_elems)`. The batched `reconstruct_roots`
+    fast path stays binary-only — its sole consumer is the binary fold-PCS
+    query machinery.
     """
 
     def __init__(self, leaf_hasher: Sponge, compressor: Compression) -> None:
-        if compressor.arity != 2:
-            raise ValueError(
-                f"MerkleTree builds a binary tree; compressor arity must be 2, "
-                f"got {compressor.arity}"
-            )
         if leaf_hasher.out != compressor.chunk:
             raise ValueError(
                 f"leaf digest size ({leaf_hasher.out}) must equal compressor "
@@ -76,6 +85,7 @@ class MerkleTree:
             )
         self._leaf_hasher = leaf_hasher
         self._compressor = compressor
+        self.arity = compressor.arity
         self.digest_elems = compressor.chunk
         # Wrap the whole commit in the agnostic composite only when both blocks
         # lower to a hash-dedicated marker the vendor can expand; otherwise the
@@ -85,14 +95,19 @@ class MerkleTree:
         )
 
     def commit(self, matrix: Array) -> tuple[Array, list[Array]]:
-        """Commit a (height, width) matrix, height a power of two.
+        """Commit a (height, width) matrix.
 
         Returns `(raw_root (digest_elems,), digest_layers)`, where digest_layers
-        runs leaf digests -> ... -> root, each (nodes_at_level, digest_elems).
+        runs leaf digests -> ... -> root, each (nodes_at_level, digest_elems)
+        in the zero-padded form (see the module docstring).
+
+        A binary tree keeps its historical power-of-two-height contract — its
+        pad-free layout is what the fold-PCS query machinery indexes; k-ary
+        consumers commit any height via the per-level padding.
         """
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2-D, got ndim={matrix.ndim}")
-        if not is_power_of_two(matrix.shape[0]):
+        if self.arity == 2 and not is_power_of_two(matrix.shape[0]):
             raise ValueError(
                 f"matrix height ({matrix.shape[0]}) must be a power of two"
             )
@@ -103,13 +118,22 @@ class MerkleTree:
         return self._build(matrix)
 
     def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
-        """The traced commit body: vmap the leaf hash, fold pairs per layer down
-        to the root. Wrapped by `commit` as one `zorch.merkle_commit` region."""
+        """The traced commit body: vmap the leaf hash, fold arity-sized groups
+        per layer down to the root. Wrapped by `commit` as one
+        `zorch.merkle_commit` region."""
         layer = jax.vmap(self._leaf_hasher.hash)(matrix)
         digest_layers = [layer]
         while layer.shape[0] > 1:
-            pairs = layer.reshape(-1, 2, self.digest_elems)
-            layer = jax.vmap(self._compressor.compress)(pairs)
+            rem = layer.shape[0] % self.arity
+            if rem:
+                # Complete the level with zero digests and store the padded
+                # form: an opening adjacent to the boundary reads its zero
+                # siblings from the layer like any others.
+                pad = jnp.zeros((self.arity - rem, self.digest_elems), layer.dtype)
+                layer = jnp.concatenate([layer, pad])
+                digest_layers[-1] = layer
+            groups = layer.reshape(-1, self.arity, self.digest_elems)
+            layer = jax.vmap(self._compressor.compress)(groups)
             digest_layers.append(layer)
         return digest_layers[-1][0], digest_layers
 
@@ -130,8 +154,16 @@ class MerkleTree:
         path = []
         idx = index
         for level in range(len(digest_layers) - 1):  # leaf layer up to below root
-            path.append(digest_layers[level][idx ^ 1])
-            idx //= 2
+            if self.arity == 2:
+                path.append(digest_layers[level][idx ^ 1])
+            else:
+                # The whole sibling group except the node itself, in level
+                # order: slot j of the entry is group position j + (j >= pos).
+                pos = idx % self.arity
+                group_start = (idx // self.arity) * self.arity
+                j = jnp.arange(self.arity - 1)
+                path.append(digest_layers[level][group_start + j + (j >= pos)])
+            idx //= self.arity
         return Opening(row=matrix[index], path=path)
 
     def _fold_with_sibling(
@@ -145,6 +177,21 @@ class MerkleTree:
         left = jnp.where(is_left, node, sibling)
         right = jnp.where(is_left, sibling, node)
         return self._compressor.compress(jnp.stack([left, right])), idx // 2
+
+    def _fold_with_siblings(
+        self, node: Array, idx: Array, siblings: Array
+    ) -> tuple[Array, Array]:
+        """k-ary dual of `_fold_with_sibling`: re-insert `node` at its group
+        position among `siblings` `(arity-1, digest_elems)` by data-select (no
+        Python branch, so the fold traces under `vmap`), compress the group,
+        and return the parent with `idx` divided for the level above."""
+        pos = idx % self.arity
+        i = jnp.arange(self.arity)
+        # Slot i holds the sibling that `open` packed for it (skipping the
+        # node's own slot), except slot pos, which holds the node.
+        gathered = siblings[jnp.clip(i - (i > pos), 0, self.arity - 2)]
+        group = jnp.where((i == pos)[:, None], node[None, :], gathered)
+        return self._compressor.compress(group), idx // self.arity
 
     def reconstruct_root(self, index: int | Array, opening: Opening) -> Array:
         """Rebuild the raw root from an `opening`'s row + path (leaf-first).
@@ -162,10 +209,12 @@ class MerkleTree:
         # rather than h unrolled copies. The unrolled fold dominated the
         # verifier's trace+lower across its per-layer reconstruct chains (#163).
         def fold(
-            carry: tuple[Array, Array], sibling: Array
+            carry: tuple[Array, Array], siblings: Array
         ) -> tuple[tuple[Array, Array], None]:
             node, idx = carry
-            return self._fold_with_sibling(node, idx, sibling), None
+            if self.arity == 2:
+                return self._fold_with_sibling(node, idx, siblings), None
+            return self._fold_with_siblings(node, idx, siblings), None
 
         (node, _), _ = jax.lax.scan(fold, (node, index), jnp.stack(opening.path))
         return node
@@ -186,6 +235,11 @@ class MerkleTree:
         `reconstruct_root` call — is the point: the folding verifiers reconstruct
         one pair per fold layer, and that per-layer loop dominated their
         trace+lower (#163)."""
+        if self.arity != 2:
+            raise NotImplementedError(
+                "reconstruct_roots is binary-only: its consumer is the binary "
+                "fold-PCS query machinery; use vmap(reconstruct_root) for k-ary"
+            )
 
         def one(row: Array, index: Array, path: Array, mask: Array) -> Array:
             node = self._leaf_hasher.hash(row)
@@ -207,6 +261,6 @@ class MerkleTree:
 
     def verify(self, root: Array, index: int, opening: Opening) -> bool:
         """Rebuild the root from the row + path; compare to the committed root."""
-        if not 0 <= index < (1 << len(opening.path)):
+        if not 0 <= index < self.arity ** len(opening.path):
             return False
         return bool(jnp.array_equal(self.reconstruct_root(index, opening), root))

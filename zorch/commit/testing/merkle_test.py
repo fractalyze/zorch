@@ -374,5 +374,80 @@ class MerkleTreeTest(absltest.TestCase):
         self.assertNotIn(MERKLE_COMMIT_MARKER, text)
 
 
+class KaryMerkleTreeTest(absltest.TestCase):
+    """k-ary commit/open/reconstruct — structural, like the binary suite.
+
+    The k-ary layout's byte-match against a concrete scheme (pil2-stark's
+    arity-2/3/4 trees) lives in its consumer (zisk-zorch), keeping this suite
+    scheme-agnostic."""
+
+    def test_commit_layer_shapes_arity4(self) -> None:
+        _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)
+        matrix = jnp.arange(128, dtype=F).reshape(16, 8)
+        raw_root, layers = tree.commit(matrix)
+        self.assertEqual([l.shape for l in layers], [(16, 4), (4, 4), (1, 4)])
+        self.assertEqual(raw_root.shape, (4,))
+
+    def test_open_verify_roundtrip_arity4(self) -> None:
+        _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)
+        matrix = jnp.arange(128, dtype=F).reshape(16, 8)
+        root, layers = tree.commit(matrix)
+        for i in range(16):
+            op = tree.open(matrix, layers, i)
+            self.assertEqual([p.shape for p in op.path], [(3, 4), (3, 4)])
+            self.assertTrue(bool(tree.verify(root, i, op)))
+
+    def test_commit_pads_incomplete_top_level_with_zero_digests(self) -> None:
+        # 2^5 leaves under arity 4 leave a 2-node top level; the level is
+        # completed with zero digests (the padded form is stored), so the root
+        # exists and an opening adjacent to the boundary still verifies.
+        _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)
+        matrix = jnp.arange(32 * 8, dtype=F).reshape(32, 8)
+        root, layers = tree.commit(matrix)
+        self.assertEqual([l.shape for l in layers], [(32, 4), (8, 4), (4, 4), (1, 4)])
+        zero = jnp.zeros((4,), F)
+        self.assertTrue(bool(jnp.array_equal(layers[2][2], zero)))
+        self.assertTrue(bool(jnp.array_equal(layers[2][3], zero)))
+        for i in (0, 7, 31):
+            self.assertTrue(bool(tree.verify(root, i, tree.open(matrix, layers, i))))
+
+    def test_open_verify_roundtrip_arity3_with_padding(self) -> None:
+        # Every level of a 4-leaf arity-3 tree pads (4 -> pad 6 -> 2 -> pad 3
+        # -> 1), so the roundtrip covers sibling reads from both pad slots.
+        _, _, tree = koalabear16_merkle(out=4, arity=3, chunk=4)
+        matrix = jnp.arange(32, dtype=F).reshape(4, 8)
+        root, layers = tree.commit(matrix)
+        for i in range(4):
+            self.assertTrue(bool(tree.verify(root, i, tree.open(matrix, layers, i))))
+
+    @absltest.skip(
+        "zkx CPU mis-routes the batched k-ary compress permute to the binary "
+        "poseidon2_merkle_compress kernel (shape mismatch crash); single-index "
+        "reconstruct_root passes. Tracked as fractalyze/zkx#606."
+    )
+    def test_vmap_open_reconstruct_arity4(self) -> None:
+        # The k-ary fold must trace under vmap like the binary one: a batched
+        # open -> reconstruct_root over every leaf recovers the committed root.
+        _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)
+        matrix = jnp.arange(128, dtype=F).reshape(16, 8)
+        root, layers = tree.commit(matrix)
+        indices = jnp.arange(16)
+        openings = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        roots = jax.vmap(tree.reconstruct_root)(indices, openings)
+        self.assertTrue(
+            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+        )
+
+    def test_reconstruct_roots_rejects_kary(self) -> None:
+        _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)
+        with self.assertRaises(NotImplementedError):
+            tree.reconstruct_roots(
+                jnp.zeros((1, 8), F),
+                jnp.zeros((1,), jnp.int32),
+                jnp.zeros((1, 2, 4), F),
+                jnp.ones((1, 2), bool),
+            )
+
+
 if __name__ == "__main__":
     absltest.main()
