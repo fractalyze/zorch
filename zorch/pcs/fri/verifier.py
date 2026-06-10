@@ -64,9 +64,8 @@ class FriVerifier:
         return jnp.all(jnp.stack(oks)), t
 
 
-# Jitted per-poly verify body (issue #140). Module-level with the params as
-# the static key — by value (#214), so same-config instances (one per test, in
-# practice) share one trace. One compile serves the batch.
+# Jitted per-poly verify body (issue #140); one compile serves the batch. The
+# params are the static key (by value, #214).
 @partial(jax.jit, static_argnames=("params",))
 def _verify_one(
     params: FriParams, f_root: Array, z: Array, v: Array, pf: FriProof, t: Transcript

@@ -94,10 +94,8 @@ class MerkleTree:
             leaf_hasher.has_dedicated_fusion and compressor.has_dedicated_fusion
         )
 
-    # Value equality/hash: a tree seats in static jit-zone keys on the PCS seam
-    # (inside provers/verifiers passed as static args), where identity equality
-    # makes every freshly built same-config instance a new cache entry and
-    # re-traces the zone (#214). Both blocks compare by value themselves.
+    # Value equality/hash for static jit-zone keys (#214) — identity equality
+    # re-traces per instance. Both blocks compare by value themselves.
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MerkleTree):
             return NotImplemented

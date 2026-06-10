@@ -120,8 +120,8 @@ def _inner_leaf_check(
 
 # The jit'd S1-S0 replay zone: replayed eagerly, every composite interprets
 # its decomposition op-by-op in Python, which dominated the opening round trip
-# (issue #140). The blocks and the structure/cfg are static keys — by value
-# (#214), so same-config instances (one per test, in practice) share one trace.
+# (issue #140). The blocks and the structure/cfg are static keys (by value,
+# #214).
 @partial(
     jax.jit,
     static_argnames=("bf_verifier", "sponge", "compressor", "structure", "cfg"),

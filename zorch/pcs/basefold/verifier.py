@@ -98,9 +98,7 @@ class BasefoldVerifier:
 
 
 # Jitted verify body: an eager replay interprets each composite op-by-op in
-# Python (issue #140). Module-level with the verifier as the static key — by
-# value (#214), so same-config instances (one per test, in practice) share one
-# trace.
+# Python (issue #140). The verifier is the static key (by value, #214).
 @partial(jax.jit, static_argnames=("verifier",))
 def _verify_batch_body(
     verifier: BasefoldVerifier,

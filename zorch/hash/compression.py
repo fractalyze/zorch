@@ -61,10 +61,8 @@ class Compression:
         self.arity = params.arity
         self.chunk = params.chunk
 
-    # Value equality/hash, like the Permutation contract it builds on: a
-    # compressor seats in static jit-zone keys on the PCS seam, where identity
-    # equality makes every freshly built same-config instance a new cache entry
-    # and re-traces the zone (#214).
+    # Value equality/hash for static jit-zone keys, like the Permutation
+    # contract it builds on (#214) — identity equality re-traces per instance.
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Compression):
             return NotImplemented

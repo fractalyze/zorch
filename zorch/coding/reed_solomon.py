@@ -99,13 +99,11 @@ class ReedSolomon:
             self._coset_powers = jnp.cumprod(seq)
         self._key: tuple | None = None
 
-    # Value equality/hash: a code seats in static jit-zone keys on the PCS seam
-    # (inside provers/verifiers passed as static args), where identity equality
-    # makes every freshly built same-config instance a new cache entry and
-    # re-traces the zone (#214). The key is cached host-side because jit
-    # dispatch compares static args per call, and `tobytes` on the live
-    # coset-shift array would cost a device->host sync each time (the
-    # Poseidon2Params pattern).
+    # Value equality/hash for static jit-zone keys — the LinearCode seam
+    # contract (#214). The key is cached host-side because jit dispatch
+    # compares static args per call, and `tobytes` on the live coset-shift
+    # array would cost a device->host sync each time (the Poseidon2Params
+    # pattern).
     def _value_key(self) -> tuple:
         if self._key is None:
             shift = (

@@ -165,13 +165,12 @@ class BasefoldProver:
         return _open_batch_body(self, list(rounds), z, transcript)
 
 
-# Jitted commit body: standalone (outside the jagged seam's enclosing jit),
-# an eager commit dispatches the per-column encode ffts and the Merkle
-# fused_region op-by-op (#214). Module-level with the static keys compared by
-# value, so same-config instances (one per test, in practice) share one trace;
-# inside an enclosing jit it traces straight through. Keyed on code + tree
-# rather than the prover: commit never reads num_queries, so provers differing
-# only there must not compile twice.
+# Jitted commit body: standalone (outside the jagged seam's enclosing jit), an
+# eager commit dispatches the per-column encode ffts and the Merkle
+# fused_region op-by-op; inside an enclosing jit it traces straight through.
+# Keyed on code + tree, not the prover: commit never reads num_queries, so
+# provers differing only there must not compile twice (static keys compare by
+# value — #214).
 @partial(jax.jit, static_argnames=("code", "tree"))
 def _commit_body(
     code: FoldableCode, tree: MerkleTree, polys: list[Array]
@@ -190,11 +189,9 @@ def _commit_body(
 
 
 # Jitted open body: an eager replay re-traces the per-round pair-leaf
-# `open_rows` vmaps per call (issue #186). Module-level with the prover as the
-# static key — by value (#214), so same-config instances (one per test, in
-# practice) share one trace; unlike `commit` — which the jagged seam also
-# reaches inside its enclosing jit — `open` is reached eagerly via
-# `stacked_open`.
+# `open_rows` vmaps per call (issue #186); unlike `commit` — which the jagged
+# seam also reaches inside its enclosing jit — `open` is reached eagerly via
+# `stacked_open`. The prover is the static key (by value, #214).
 @partial(jax.jit, static_argnames=("prover",))
 def _open_batch_body(
     prover: BasefoldProver,
