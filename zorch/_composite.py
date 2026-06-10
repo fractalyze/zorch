@@ -13,6 +13,15 @@ This fallback is pure jaxlib-compat infrastructure, not marker-specific
 semantics, so it lives here once. Every zorch composite marker routes through
 it — `fused_region`, `constraint_eval`, and the name-routed markers that go via
 `fused_region` (poseidon2, merkle commit, the sumcheck round body).
+
+`lax.composite` re-traces its decomposition on EVERY emission (no trace cache
+in jax), so a hot identical-aval emission site pays the full Python body per
+call. The cache deliberately does NOT live here: most call sites pass fresh
+closures (identity keys would grow a cache unboundedly), and a shared cache
+would need private jax internals. Instead, hoist the hot site into a
+module-level value-keyed `jax.jit(..., inline=True)` zone whose static key
+includes `has_composite_op()` — the traced body differs across the flag, and
+tests monkeypatch it — see `zorch.hash.poseidon2.poseidon2._permute_body`.
 """
 
 from __future__ import annotations
@@ -33,6 +42,16 @@ except ImportError:  # pragma: no cover - jaxlib MLIR bindings unavailable
 # Arrays for a name-routed region a vendor expands (e.g. a whole-tree commit
 # returning (root, layers)). Both paths below preserve it.
 _Region = TypeVar("_Region")
+
+
+def has_composite_op() -> bool:
+    """Whether emission takes the marker path (vs the inline fallback).
+
+    The supported read for jit-zone static cache keys: a zone whose body
+    emits a composite must key on this value (see the module docstring) —
+    reading the module global at call time keeps test monkeypatches of
+    `_HAS_COMPOSITE_OP` visible."""
+    return _HAS_COMPOSITE_OP
 
 
 def composite_or_inline(
