@@ -38,6 +38,8 @@ import jax.numpy as jnp
 from jax import Array
 from jax.tree_util import register_dataclass
 
+from zorch.coding.foldable_code import FoldableCode
+from zorch.commit.merkle import MerkleTree
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
@@ -361,11 +363,15 @@ class JaggedProverData:
     cfg: JaggedStaticConfig
 
 
-# The jit'd device-commit zone. The blocks are static keys — by value (#214),
-# so same-config instances (one per test, in practice) share one trace.
-@partial(jax.jit, static_argnames=("prover", "sponge", "compressor"))
+# The jit'd device-commit zone. Keyed on code + tree, not the basefold
+# prover: commit never reads num_queries (see basefold `_commit_body`), so
+# provers differing only there must not compile twice (static keys compare by
+# value — #214). The throwaway default prover below exists only at trace time,
+# to reach `commit` through its public seam.
+@partial(jax.jit, static_argnames=("code", "tree", "sponge", "compressor"))
 def _commit_device(
-    prover: BasefoldProver,
+    code: FoldableCode,
+    tree: MerkleTree,
     sponge: Sponge,
     compressor: Compression,
     mle: Array,
@@ -375,7 +381,7 @@ def _commit_device(
     # under one root (a matrix commitment), which the structure bind below
     # hashes against.
     columns = [mle[:, j] for j in range(mle.shape[1])]
-    root, prover_data = prover.commit(columns)
+    root, prover_data = BasefoldProver(code, tree).commit(columns)
     structure_hash = sponge.hash(structure)
     bound = compressor.compress(jnp.stack([root, structure_hash]))
     return bound, prover_data
@@ -386,9 +392,8 @@ class JaggedPcsProver:
     opens them at a row point, binding the jagged structure into the commitment.
 
     `sponge` / `compressor` perform the structure bind (the jagged layer owns it,
-    not the PCS). The jit'd device commit zone (`_commit_device`) is keyed on
-    the blocks by value plus the MLE + structure shapes, so it compiles once
-    per (area tier, block count) and shares across same-config instances.
+    not the PCS). The device commit zone is `_commit_device`, mirrored by the
+    verifier's `_verify_device`.
     """
 
     def __init__(
@@ -427,7 +432,12 @@ class JaggedPcsProver:
         structure = _structure_vec(layout)
         col_prefix_sums, offsets, cfg = _indicator_inputs(layout)
         bound, basefold_prover_data = _commit_device(
-            self.prover, self.sponge, self.compressor, mle, structure
+            self.prover.code,
+            self.prover.tree,
+            self.sponge,
+            self.compressor,
+            mle,
+            structure,
         )
         prover_data = JaggedProverData(
             basefold_prover_data=basefold_prover_data,

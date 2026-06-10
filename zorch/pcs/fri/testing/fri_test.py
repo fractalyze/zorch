@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import jax.numpy as jnp
 import zk_dtypes
@@ -11,8 +12,9 @@ from jax import Array
 from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.fri.config import DeepFoldableCode, FriParams
-from zorch.pcs.fri.prover import FriProver
+from zorch.pcs.fri.prover import FriProver, _commit_one
 from zorch.pcs.fri.verifier import FriVerifier
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
@@ -36,6 +38,24 @@ def _transcript() -> DuplexTranscript:
 class DeepFoldableCodeTest(absltest.TestCase):
     def test_reed_solomon_satisfies_protocol(self) -> None:
         self.assertIsInstance(_params().code, DeepFoldableCode)
+
+
+class FriCommitCacheTest(absltest.TestCase):
+    def test_commit_zone_ignores_open_only_params(self) -> None:
+        # commit reads only code/tree, so params differing in the open-side
+        # knobs (num_rounds / num_queries) — and freshly built same-config
+        # instances — must share one compiled commit zone (#214).
+        coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
+        calls = [
+            functools.partial(
+                FriProver(
+                    dataclasses.replace(_params(), num_rounds=r, num_queries=q)
+                ).commit,
+                [coeffs],
+            )
+            for r, q in ((2, 3), (1, 5))
+        ]
+        assert_single_trace(self, _commit_one, calls)
 
 
 class FriRoundTripTest(absltest.TestCase):

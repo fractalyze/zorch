@@ -57,6 +57,8 @@ py_library(
         "//zorch:prove",
         "//zorch:round",
         "//zorch:transcript",
+        "//zorch/coding:foldable_code",
+        "//zorch/commit:merkle",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/pcs/basefold",

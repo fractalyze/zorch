@@ -4,7 +4,9 @@ the structure binding actually moves the root."""
 
 from __future__ import annotations
 
+import functools
 import unittest
+from collections.abc import Callable
 
 import jax.numpy as jnp
 from zk_dtypes import koalabear_mont as F
@@ -13,13 +15,16 @@ from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.basefold.prover import BasefoldProver
 from zorch.pcs.jagged.prover import JaggedPcsProver, _commit_device
+from zorch.testkit.jit_cache import assert_single_trace
 
 
-def _jagged_pcs(log_s: int = 2, blowup: int = 2) -> JaggedPcsProver:
+def _jagged_pcs(
+    log_s: int = 2, blowup: int = 2, num_queries: int = 4
+) -> JaggedPcsProver:
     S = 1 << log_s
     rs = ReedSolomon(message_len=S, blowup=blowup, dtype=F)
     sponge, comp, tree = koalabear16_merkle()
-    return JaggedPcsProver(BasefoldProver(rs, tree), sponge, comp)
+    return JaggedPcsProver(BasefoldProver(rs, tree, num_queries), sponge, comp)
 
 
 def _blocks(heights: list[int]) -> list[jnp.ndarray]:
@@ -37,18 +42,16 @@ class JaggedPcsTest(unittest.TestCase):
         # Three height vectors, all total_area == 14 -> same tier log_m=5,
         # and all have the same block count (2), so only heights vary within
         # the tier — confirming that height variation alone does not retrace.
-        # The second, freshly built same-config prover must also hit the same
-        # module-level zone: its static key compares by value (#214).
-        # Snapshot-compare _cache_size() (private JAX API; may change on jax
-        # upgrade): other tests may already have seeded this config's entry, so
-        # assert no growth after the first call rather than an absolute count.
-        size_after_first = None
-        for c in (_jagged_pcs(), _jagged_pcs()):
+        # The freshly built same-config prover and the prover differing only
+        # in num_queries (which commit never reads) must also hit the same
+        # module-level zone: its static keys compare by value (#214).
+        calls: list[Callable[[], object]] = []
+        for c in (_jagged_pcs(), _jagged_pcs(), _jagged_pcs(num_queries=8)):
             for hv in ([5, 9], [7, 7], [10, 4]):
-                c.commit(_blocks(hv), log_stacking_height=2)
-                if size_after_first is None:
-                    size_after_first = _commit_device._cache_size()
-        self.assertEqual(_commit_device._cache_size(), size_after_first)
+                calls.append(
+                    functools.partial(c.commit, _blocks(hv), log_stacking_height=2)
+                )
+        assert_single_trace(self, _commit_device, calls)
 
     def test_binding_moves_root(self) -> None:
         c = _jagged_pcs()

@@ -29,8 +29,9 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
+from zorch.commit.merkle import MerkleTree
 from zorch.pcs.fold import PreFoldPairCommitRound, open_rows, sample_positions
-from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
+from zorch.pcs.fri.config import DeepFoldableCode, FriCommitment, FriParams, FriProof
 from zorch.prove import fold_rounds
 from zorch.transcript import Transcript
 
@@ -80,7 +81,9 @@ class FriProver:
     def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
         """RS-encode each coefficient vector and Merkle-commit its codeword's
         conjugate-pair leaves. Returns stacked roots and the prover data."""
-        committed = [_commit_one(self.params, coeffs) for coeffs in polys]
+        committed = [
+            _commit_one(self.params.code, self.params.tree, coeffs) for coeffs in polys
+        ]
         roots = [poly.digest_layers[-1][0] for poly in committed]
         return jnp.stack(roots), FriProverData(tuple(committed))
 
@@ -105,15 +108,18 @@ class FriProver:
         return jnp.stack(values), proofs, t
 
 
-# Jitted per-poly commit/open bodies (issue #140), like basefold's commit and
-# open zones. Module-level with the params as the static key — by value
-# (#214), so same-config instances (one per test, in practice) share one
-# trace. One compile serves the batch.
-@partial(jax.jit, static_argnames=("params",))
-def _commit_one(params: FriParams, coeffs: Array) -> FriCommittedPoly:
-    codeword = params.code.encode(coeffs)
-    leaves = params.code.pair_leaves(codeword)
-    _root, digest_layers = params.tree.commit(leaves)
+# Jitted per-poly commit/open bodies (issue #140), like basefold's zones; one
+# compile serves the batch. Commit is keyed on code + tree, not the whole
+# FriParams: it never reads the open-side knobs (num_rounds / num_queries), so
+# params differing only there must not compile twice (static keys compare by
+# value — #214).
+@partial(jax.jit, static_argnames=("code", "tree"))
+def _commit_one(
+    code: DeepFoldableCode, tree: MerkleTree, coeffs: Array
+) -> FriCommittedPoly:
+    codeword = code.encode(coeffs)
+    leaves = code.pair_leaves(codeword)
+    _root, digest_layers = tree.commit(leaves)
     return FriCommittedPoly(coeffs, codeword, leaves, digest_layers)
 
 
