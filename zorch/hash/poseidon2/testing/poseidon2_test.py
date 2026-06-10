@@ -10,9 +10,14 @@ from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 import zorch._composite as _composite
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
+from zorch.hash.poseidon2.poseidon2 import (
+    POSEIDON2_MARKER,
+    POSEIDON2_MARKER_VERSION,
+    Poseidon2,
+)
 from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
+    KOALABEAR16_POSEIDON2_ATTRS,
     koalabear16_params,
     koalabear16_perm,
 )
@@ -46,21 +51,24 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
     )
     def test_permute_emits_poseidon2_named_composite(self) -> None:
-        # The standard-MDS permute marks its region "poseidon2:W:E:I:S" so zkx
-        # routes it to the dedicated Poseidon2Fusion emitter. W=16, E=4, I=20,
-        # alpha=3 for koalabear-16.
+        # The standard-MDS permute marks its region "zorch.poseidon2" so zkx
+        # routes it to the dedicated Poseidon2Fusion emitter; the permutation
+        # shape rides as composite.attributes — all four ints are required by
+        # the zkx recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
         p = koalabear16_perm()
         txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
-        self.assertIn("poseidon2:16:4:20:3", txt)
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        self.assertIn(f'"{POSEIDON2_MARKER}"', composite_line)
+        self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, composite_line)
+        self.assertIn(f"version = {POSEIDON2_MARKER_VERSION}", composite_line)
         # Exactly the 6 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
         # diag, off_diag]. A closed-over external matrix is lifted to a leading
         # 7th operand (jax.lax.composite prepends consts) and breaks the
         # Poseidon2Fusion operand ABI — the e2e GPU failure this guards against.
-        composite_line = next(
-            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
-        )
-        operands = composite_line.split('"poseidon2:16:4:20:3"')[1].split("{")[0]
+        operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 6, composite_line)
 
     @absltest.skipUnless(
@@ -68,13 +76,14 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     )
     def test_custom_external_matrix_uses_generic_marker(self) -> None:
         # The GPU Poseidon2Fusion emitter hardcodes the standard M4-circulant
-        # MDS, so a non-standard external matrix must NOT take the poseidon2:
-        # route — it falls back to the generic zorch.fused_region marker
-        # (LoopFusion lowers the real body) to stay correct.
+        # MDS, so a non-standard external matrix must NOT take the
+        # zorch.poseidon2 route — it falls back to the generic
+        # zorch.fused_region marker (LoopFusion lowers the real body) to stay
+        # correct.
         custom = jnp.arange(16 * 16, dtype=F).reshape(16, 16)
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=custom))
         txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
-        self.assertNotIn("poseidon2:", txt)
+        self.assertNotIn(POSEIDON2_MARKER, txt)
         self.assertIn("zorch.fused_region", txt)
 
 

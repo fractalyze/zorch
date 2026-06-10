@@ -7,6 +7,7 @@ import zk_dtypes
 from absl.testing import absltest
 from jaxlib.mlir.dialects import stablehlo
 
+from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr.prover import LogupSumcheckRound
 from zorch.sumcheck import prover
@@ -194,8 +195,8 @@ class ProveMarkedTest(absltest.TestCase):
     @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_marker_and_nested_permute_survive_lowering(self) -> None:
         # The whole sumcheck lowers under the hash-agnostic zorch.sumcheck marker;
-        # the FS permute survives as a nested poseidon2: marker the vendor reads to
-        # run the sponge in-kernel, and the per-round combine as a nested
+        # the FS permute survives as a nested zorch.poseidon2 marker the vendor
+        # reads to run the sponge in-kernel, and the per-round combine as a nested
         # zorch.sumcheck.combine marker the vendor inlines generically.
         a = rand_field(40, (1 << 4,), KB)
         b = rand_field(41, (1 << 4,), KB)
@@ -204,7 +205,7 @@ class ProveMarkedTest(absltest.TestCase):
         text = jax.jit(lambda x, y: prove(rnd, [x, y], t0)).lower(a, b).as_text()
         self.assertIn(SUMCHECK_MARKER, text)
         self.assertIn(SUMCHECK_COMBINE_MARKER, text)
-        self.assertIn("poseidon2:", text)
+        self.assertIn(f'"{POSEIDON2_MARKER}"', text)
 
 
 if __name__ == "__main__":

@@ -21,8 +21,9 @@ from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
+from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER, Poseidon2
 from zorch.hash.poseidon2.testing.koalabear16 import (
+    KOALABEAR16_POSEIDON2_ATTRS,
     koalabear16_params,
     koalabear16_perm,
 )
@@ -338,13 +339,16 @@ class MerkleTreeTest(absltest.TestCase):
     @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_commit_lowers_to_merkle_commit_composite(self) -> None:
         # commit wraps the whole tree in one hash-agnostic zorch.merkle_commit
-        # composite; the leaf/fold permutes survive as nested poseidon2: markers
-        # the vendor expander reads to pick the per-block emitters.
+        # composite; the leaf/fold permutes survive as nested zorch.poseidon2
+        # markers the vendor expander reads to pick the per-block emitters. The
+        # permutes are vmap'd and their round constants auto-lift, so this also
+        # guards that composite.attributes survive both transformations.
         _, _, tree = koalabear16_merkle()
         matrix = jnp.arange(32, dtype=F).reshape(4, 8)
         text = jax.jit(tree.commit).lower(matrix).as_text()
         self.assertIn(MERKLE_COMMIT_MARKER, text)
-        self.assertIn("poseidon2:", text)
+        self.assertIn(f'"{POSEIDON2_MARKER}"', text)
+        self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, text)
 
     @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_commit_skips_composite_when_not_dedicated(self) -> None:

@@ -35,7 +35,7 @@ as a single register-resident kernel — reduce → Fiat-Shamir → fold looped 
 the MLE state and the sponge never round-tripping HBM between rounds. The marker
 is transparent (callers still just call `prove`) and carries computation, not
 parameters: no pre-sampled challenges (FS stays inside the body scan), no hash
-identity (it rides as a nested `poseidon2:` marker whose round constants auto-lift,
+identity (it rides as a nested `zorch.poseidon2` marker whose round constants auto-lift,
 exactly as `merkle_commit` keeps the hash off its marker). Unrecognized — a vendor
 without the emitter, or a jaxlib without `stablehlo.CompositeOp` — it decomposes to
 the same scan, byte-identical and sound. A test `CheapPermutation`
@@ -207,7 +207,7 @@ class SumcheckSummand(Protocol):
 # `composite.attributes` (`degree`/`num_vars`/`num_factors`), not the name — named,
 # typed, and optional-extensible (the recognizer's contract, vs a brittle
 # positional name suffix). The combine is a body sub-region and the hash rides as a
-# nested `poseidon2:` marker (round constants auto-lift), so the marker names no
+# nested `zorch.poseidon2` marker (round constants auto-lift), so the marker names no
 # hash and carries no pre-sampled challenges.
 SUMCHECK_MARKER = "zorch.sumcheck"
 # Marker revision the zkx `SumcheckRecognizer` gates on (`composite.version`).
@@ -217,7 +217,7 @@ SUMCHECK_MARKER_VERSION = 1
 # factors) inside the sumcheck scan, so a vendor inlines it generically rather
 # than hardcoding one combine (#113). Carries the computation, not
 # params: operands are `[lifted factors][combine scalars]` and the body is
-# `round.combine`; found by recursive search like the nested `poseidon2:` marker.
+# `round.combine`; found by recursive search like the nested `zorch.poseidon2` marker.
 SUMCHECK_COMBINE_MARKER = "zorch.sumcheck.combine"
 SUMCHECK_COMBINE_MARKER_VERSION = 1
 
@@ -359,7 +359,7 @@ def _prove_marked(
     rides as `composite.attributes` under `version` 1 — the recognizer's
     contract; the body ignores them (metadata only). The duplex sponge threads
     through as the five `DuplexState` leaves (the
-    mutable carry); the FS permutation rides as the nested `poseidon2:` marker
+    mutable carry); the FS permutation rides as the nested `zorch.poseidon2` marker
     inside `observe_and_sample`, whose round constants auto-lift into this
     composite's operands — so the marker names no hash and carries no pre-sampled
     challenges. Operands: `[factor tables][combine scalars][5 sponge leaves]` plus

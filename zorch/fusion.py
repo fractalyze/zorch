@@ -12,7 +12,7 @@ the body (fixed, small counts) and the linear layers use the normal-form helpers
 (not `jnp.dot`/`reduce`/`gather`). Use `lax` primitives over `jnp` wrappers
 (`lax.select`, not `jnp.where`): a `jnp` wrapper's internal `jit` lowers to a
 call inside the body, which the single-kernel rewriter rejects. Name-routed
-markers with a dedicated emitter (`zorch.sumcheck`, `poseidon2:`) are exempt —
+markers with a dedicated emitter (`zorch.sumcheck`, `zorch.poseidon2`) are exempt —
 their emitters tolerate reductions and calls. Loop-carrying large-N rounds
 await the in-kernel-loop emitter; see fractalyze/zorch#25.
 
@@ -49,7 +49,7 @@ def fused_region(
     inline (see the module docstring).
 
     A non-default `name` routes the region to a dedicated zkx emitter instead of
-    the generic one — e.g. a `poseidon2:W:E:I:S` region goes to `Poseidon2Fusion`
+    the generic one — e.g. a `zorch.poseidon2` region goes to `Poseidon2Fusion`
     rather than the generic `LoopFusion` (unusable for a full hash permutation).
     The `operands` must then follow that emitter's ABI. Such a region need not be
     single-kernel: a vendor may expand it into a chain (e.g. `zorch.merkle_commit`
