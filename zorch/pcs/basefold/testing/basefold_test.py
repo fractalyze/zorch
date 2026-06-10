@@ -104,8 +104,9 @@ class BasefoldTest(absltest.TestCase):
         # entry, so assert no growth after the first call rather than an
         # absolute count.
         size_after_first: int | None = None
-        for instance_seed in (0, 1):
+        for num_queries in (4, 8):  # commit never reads num_queries: same zone
             bf, _rs, _tree, S = _basefold()
+            bf = dataclasses.replace(bf, num_queries=num_queries)
             for offset in (0, 1, 2):
                 mle = jnp.arange(S * 2, dtype=F).reshape(S, 2) + F(offset)
                 root, _pdata = bf.commit(_columns(mle))

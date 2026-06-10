@@ -119,7 +119,7 @@ class BasefoldProver:
     def commit(
         self, polys: Sequence[Array]
     ) -> tuple[BasefoldCommitment, BasefoldProverData]:
-        return _commit_body(self, list(polys))
+        return _commit_body(self.code, self.tree, list(polys))
 
     def open(
         self,
@@ -167,12 +167,14 @@ class BasefoldProver:
 
 # Jitted commit body: standalone (outside the jagged seam's enclosing jit),
 # an eager commit dispatches the per-column encode ffts and the Merkle
-# fused_region op-by-op (#214). Module-level with the prover as the static
-# key — by value, so same-config instances (one per test, in practice) share
-# one trace; inside an enclosing jit it traces straight through.
-@partial(jax.jit, static_argnames=("prover",))
+# fused_region op-by-op (#214). Module-level with the static keys compared by
+# value, so same-config instances (one per test, in practice) share one trace;
+# inside an enclosing jit it traces straight through. Keyed on code + tree
+# rather than the prover: commit never reads num_queries, so provers differing
+# only there must not compile twice.
+@partial(jax.jit, static_argnames=("code", "tree"))
 def _commit_body(
-    prover: BasefoldProver, polys: list[Array]
+    code: FoldableCode, tree: MerkleTree, polys: list[Array]
 ) -> tuple[BasefoldCommitment, BasefoldProverData]:
     # The columns share one message length S; encode each column separately
     # (encode lowers to lax.fft today, which requires 1-D input on
@@ -180,8 +182,8 @@ def _commit_body(
     # generalise). O(K) encodes — fine at current column counts; revisit
     # if K grows. Stack the codewords into [n, K].
     mle = jnp.stack(polys, axis=1)
-    codeword = jnp.stack([prover.code.encode(p) for p in polys], axis=1)
-    root, layers = prover.tree.commit(codeword)
+    codeword = jnp.stack([code.encode(p) for p in polys], axis=1)
+    root, layers = tree.commit(codeword)
     return root, BasefoldProverData(
         digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
     )
