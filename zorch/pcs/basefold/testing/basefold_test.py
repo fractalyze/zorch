@@ -258,6 +258,15 @@ class BasefoldOpenTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least one variable"):
             prover.open(pdata, [_rand_ef(3, (0,))], _transcript())
 
+    def test_verify_rejects_empty_point(self) -> None:
+        # The verifier mirrors the prover's guard: with zero variables the fold
+        # replay would index an empty layer list inside the jit zone.
+        prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=1)
+        z = _rand_ef(3, (log_s,))
+        values, proof, _ = prover.open(pdata, [z], _transcript())
+        with self.assertRaisesRegex(ValueError, "at least one variable"):
+            verifier.verify(root, [_rand_ef(3, (0,))], values, proof, _transcript())
+
     def test_verify_rejects_wrong_root(self) -> None:
         # Directly exercises the commitment-root binding: verifying a valid proof
         # against a different root must fail (the FS challenges diverge and the

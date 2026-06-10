@@ -71,6 +71,10 @@ class BasefoldVerifier:
             )
         z = points[0]
         num_vars = z.shape[0]
+        # Eager shape guards, ahead of the jit zone (mirrors the prover): with
+        # zero variables the fold replay below would index an empty layer list.
+        if num_vars < 1:
+            raise ValueError("BaseFold opens over at least one variable, got none")
         if self.code.message_len != (1 << num_vars):
             raise ValueError(
                 f"point dimension {num_vars} doesn't match message_len "
