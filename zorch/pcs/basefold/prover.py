@@ -119,17 +119,7 @@ class BasefoldProver:
     def commit(
         self, polys: Sequence[Array]
     ) -> tuple[BasefoldCommitment, BasefoldProverData]:
-        # The columns share one message length S; encode each column separately
-        # (encode lowers to lax.fft today, which requires 1-D input on
-        # extension-field dtypes, so the batched transpose trick doesn't
-        # generalise). O(K) encodes — fine at current column counts; revisit
-        # if K grows. Stack the codewords into [n, K].
-        mle = jnp.stack(polys, axis=1)
-        codeword = jnp.stack([self.code.encode(p) for p in polys], axis=1)
-        root, layers = self.tree.commit(codeword)
-        return root, BasefoldProverData(
-            digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
-        )
+        return _commit_body(self, list(polys))
 
     def open(
         self,
@@ -175,11 +165,34 @@ class BasefoldProver:
         return _open_batch_body(self, list(rounds), z, transcript)
 
 
+# Jitted commit body: standalone (outside the jagged seam's enclosing jit),
+# an eager commit dispatches the per-column encode ffts and the Merkle
+# fused_region op-by-op (#214). Module-level with the prover as the static
+# key — by value, so same-config instances (one per test, in practice) share
+# one trace; inside an enclosing jit it traces straight through.
+@partial(jax.jit, static_argnames=("prover",))
+def _commit_body(
+    prover: BasefoldProver, polys: list[Array]
+) -> tuple[BasefoldCommitment, BasefoldProverData]:
+    # The columns share one message length S; encode each column separately
+    # (encode lowers to lax.fft today, which requires 1-D input on
+    # extension-field dtypes, so the batched transpose trick doesn't
+    # generalise). O(K) encodes — fine at current column counts; revisit
+    # if K grows. Stack the codewords into [n, K].
+    mle = jnp.stack(polys, axis=1)
+    codeword = jnp.stack([prover.code.encode(p) for p in polys], axis=1)
+    root, layers = prover.tree.commit(codeword)
+    return root, BasefoldProverData(
+        digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
+    )
+
+
 # Jitted open body: an eager replay re-traces the per-round pair-leaf
 # `open_rows` vmaps per call (issue #186). Module-level with the prover as the
 # static key — by value (#214), so same-config instances (one per test, in
-# practice) share one trace; unlike basefold `commit` — which rides the jagged
-# seam's enclosing jit — `open` is reached eagerly via `stacked_open`.
+# practice) share one trace; unlike `commit` — which the jagged seam also
+# reaches inside its enclosing jit — `open` is reached eagerly via
+# `stacked_open`.
 @partial(jax.jit, static_argnames=("prover",))
 def _open_batch_body(
     prover: BasefoldProver,

@@ -21,6 +21,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.basefold.prover import (
     BasefoldProver,
     BasefoldProverData,
+    _commit_body,
     _open_batch_body,
 )
 from zorch.pcs.basefold.verifier import BasefoldVerifier, _verify_batch_body
@@ -93,6 +94,27 @@ class BasefoldTest(absltest.TestCase):
         self.assertEqual(len(restored.univariate_messages), 1)
         self.assertEqual(restored.final_poly.shape, (2,))
         self.assertEqual(len(restored.component_openings), 1)
+
+    def test_commit_eager_reuses_one_compiled_zone_across_instances(self) -> None:
+        # Standalone (no enclosing jit), `commit` must reuse one compiled zone
+        # across calls and across freshly built same-config provers — the zone
+        # is module-level and its static key compares the prover by value
+        # (#214). Snapshot-compare _cache_size() (private JAX API; may change
+        # on jax upgrade): other tests may already have seeded this config's
+        # entry, so assert no growth after the first call rather than an
+        # absolute count.
+        size_after_first: int | None = None
+        for instance_seed in (0, 1):
+            bf, _rs, _tree, S = _basefold()
+            for offset in (0, 1, 2):
+                mle = jnp.arange(S * 2, dtype=F).reshape(S, 2) + F(offset)
+                root, _pdata = bf.commit(_columns(mle))
+                root.block_until_ready()
+                if size_after_first is None:
+                    body: Any = _commit_body
+                    size_after_first = body._cache_size()
+        body = _commit_body
+        self.assertEqual(body._cache_size(), size_after_first)
 
     def test_commit_retains_mle_and_codeword(self) -> None:
         bf, rs, _tree, S = _basefold()

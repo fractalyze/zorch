@@ -105,9 +105,8 @@ class FriProver:
         return jnp.stack(values), proofs, t
 
 
-# Jitted per-poly commit/open bodies (issue #140); unlike basefold — whose
-# commit rides the jagged seam's enclosing jit — fri is called standalone, so
-# it owns its zones. Module-level with the params as the static key — by value
+# Jitted per-poly commit/open bodies (issue #140), like basefold's commit and
+# open zones. Module-level with the params as the static key — by value
 # (#214), so same-config instances (one per test, in practice) share one
 # trace. One compile serves the batch.
 @partial(jax.jit, static_argnames=("params",))
