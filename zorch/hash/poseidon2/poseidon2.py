@@ -17,11 +17,14 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
+from functools import partial
 from typing import TYPE_CHECKING
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
+from zorch import _composite
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
     apply_external_standard,
@@ -87,94 +90,110 @@ class Poseidon2:
             raise ValueError(
                 f"state must be a 1-D array of shape ({self.width},), got {state.shape}"
             )
-        p = self._p
-        alpha = p.alpha
-        w, e_rounds, i_rounds = self.width, p.external_rounds, p.internal_rounds
+        return _permute_body(self, state, _composite.has_composite_op())
 
-        # The external MDS must not be a closed-over array on the named-emitter
-        # path: jax.lax.composite lifts closed-over consts to leading operands, so
-        # the matrix would leak in as a 7th operand and break the Poseidon2Fusion
-        # 6-operand ABI. The standard matrix applies via integer literals (no
-        # capture); a custom matrix takes the generic LoopFusion fallback, which
-        # lowers the real body, so the closed array is harmless there.
-        if self._uses_standard_external:
 
-            def apply_external(s: Array) -> Array:
-                return apply_external_standard(s)
+# Module-level jit zone so the permutation body traces once per (params, state
+# aval) process-wide: `lax.composite` re-traces its decomposition on every
+# emission, and one PCS open emits hundreds of identical-aval permutes (every
+# Merkle level, leaf hash, and transcript observe/sample) — the uncached
+# re-trace of this body dominated the first-trace-per-config floor (#216).
+# The permutation is the static key, compared by value (#214); `inline=True`
+# splices the cached jaxpr into the enclosing trace, so the emitted module
+# (one composite marker per permute) is unchanged. `has_composite_op` is a
+# pure cache key: `composite_or_inline` reads the flag itself at trace time,
+# but the traced body differs across its values (marker vs inlined fallback),
+# so a flip must not replay a stale entry.
+@partial(jax.jit, static_argnames=("perm", "has_composite_op"), inline=True)
+def _permute_body(perm: Poseidon2, state: Array, has_composite_op: bool) -> Array:
+    p = perm._p
+    alpha = p.alpha
+    w, e_rounds, i_rounds = perm.width, p.external_rounds, p.internal_rounds
 
-        else:
-            mds = p.external_matrix
+    # The external MDS must not be a closed-over array on the named-emitter
+    # path: jax.lax.composite lifts closed-over consts to leading operands, so
+    # the matrix would leak in as a 7th operand and break the Poseidon2Fusion
+    # 6-operand ABI. The standard matrix applies via integer literals (no
+    # capture); a custom matrix takes the generic LoopFusion fallback, which
+    # lowers the real body, so the closed array is harmless there.
+    if perm._uses_standard_external:
 
-            def apply_external(s: Array) -> Array:
-                return apply_matrix(mds, s)
+        def apply_external(s: Array) -> Array:
+            return apply_external_standard(s)
 
-        # +rc -> sbox(all lanes) -> MDS
-        def external_round(s: Array, rc: Array) -> Array:
-            return apply_external(jnp.power(s + rc, alpha))
+    else:
+        mds = p.external_matrix
 
-        # +rc(lane0) -> sbox(lane0) -> diffusion (off_diag scales the J term)
-        def internal_round(s: Array, rc0: Array, diag: Array, off_diag: Array) -> Array:
-            s0 = jnp.power(s[0] + rc0, alpha)
-            # concatenate, not s.at[0].set: a static-index set lowers to scatter,
-            # which would split the fused kernel.
-            s = jnp.concatenate([s0[None], s[1:]])
-            return apply_internal(diag, s, off_diag)
+        def apply_external(s: Array) -> Array:
+            return apply_matrix(mds, s)
 
-        # The decomposition takes the Poseidon2Fusion ABI operands explicitly so
-        # the marked region carries them in order: round constants flattened
-        # row-major, int_rc the lane-0 column, off_diag scaling the J term.
-        def permutation(
-            s: Array,
-            ext_init_rc: Array,
-            int_rc: Array,
-            ext_term_rc: Array,
-            diag: Array,
-            off_diag: Array,
-            **_attrs: object,
-        ) -> Array:
-            # `_attrs` is marker metadata passed through on both the composite
-            # and inline paths — the decomposition itself does not read it.
-            ext_init = ext_init_rc.reshape(e_rounds, w)
-            ext_term = ext_term_rc.reshape(e_rounds, w)
-            s = apply_external(s)  # initial pre-MDS
-            for i in range(e_rounds):
-                s = external_round(s, ext_init[i])
-            for i in range(i_rounds):
-                s = internal_round(s, int_rc[i], diag, off_diag)
-            for i in range(e_rounds):
-                s = external_round(s, ext_term[i])
-            return s
+    # +rc -> sbox(all lanes) -> MDS
+    def external_round(s: Array, rc: Array) -> Array:
+        return apply_external(jnp.power(s + rc, alpha))
 
-        # ABI operands [state, ext_init_rc, int_rc, ext_term_rc, diag, off_diag].
-        # The internal matrix is internal_j_scale*J + Diag(internal_diag); the
-        # ABI's off_diag operand carries the J scale (params normalize None to 1).
-        operands = (
-            state,
-            p.external_constants_initial.reshape(-1),
-            p.internal_constants[:, 0],
-            p.external_constants_terminal.reshape(-1),
-            p.internal_diag,
-            p.internal_j_scale,
-        )
+    # +rc(lane0) -> sbox(lane0) -> diffusion (off_diag scales the J term)
+    def internal_round(s: Array, rc0: Array, diag: Array, off_diag: Array) -> Array:
+        s0 = jnp.power(s[0] + rc0, alpha)
+        # concatenate, not s.at[0].set: a static-index set lowers to scatter,
+        # which would split the fused kernel.
+        s = jnp.concatenate([s0[None], s[1:]])
+        return apply_internal(diag, s, off_diag)
 
-        # On the dedicated marker the permutation shape rides as
-        # `composite.attributes` — the zkx recognizer's contract: all four ints
-        # are required (it maps `alpha` to its s-box degree). The body ignores
-        # them (metadata only); the generic marker stays attrs-free.
-        marker_attrs: dict[str, int] = (
-            {
-                "version": POSEIDON2_MARKER_VERSION,
-                "width": w,
-                "external_rounds": e_rounds,
-                "internal_rounds": i_rounds,
-                "alpha": alpha,
-            }
-            if self.has_dedicated_fusion
-            else {}
-        )
-        return fused_region(
-            permutation, *operands, name=self._fused_region_name, **marker_attrs
-        )
+    # The decomposition takes the Poseidon2Fusion ABI operands explicitly so
+    # the marked region carries them in order: round constants flattened
+    # row-major, int_rc the lane-0 column, off_diag scaling the J term.
+    def permutation(
+        s: Array,
+        ext_init_rc: Array,
+        int_rc: Array,
+        ext_term_rc: Array,
+        diag: Array,
+        off_diag: Array,
+        **_attrs: object,
+    ) -> Array:
+        # `_attrs` is marker metadata passed through on both the composite
+        # and inline paths — the decomposition itself does not read it.
+        ext_init = ext_init_rc.reshape(e_rounds, w)
+        ext_term = ext_term_rc.reshape(e_rounds, w)
+        s = apply_external(s)  # initial pre-MDS
+        for i in range(e_rounds):
+            s = external_round(s, ext_init[i])
+        for i in range(i_rounds):
+            s = internal_round(s, int_rc[i], diag, off_diag)
+        for i in range(e_rounds):
+            s = external_round(s, ext_term[i])
+        return s
+
+    # ABI operands [state, ext_init_rc, int_rc, ext_term_rc, diag, off_diag].
+    # The internal matrix is internal_j_scale*J + Diag(internal_diag); the
+    # ABI's off_diag operand carries the J scale (params normalize None to 1).
+    operands = (
+        state,
+        p.external_constants_initial.reshape(-1),
+        p.internal_constants[:, 0],
+        p.external_constants_terminal.reshape(-1),
+        p.internal_diag,
+        p.internal_j_scale,
+    )
+
+    # On the dedicated marker the permutation shape rides as
+    # `composite.attributes` — the zkx recognizer's contract: all four ints
+    # are required (it maps `alpha` to its s-box degree). The body ignores
+    # them (metadata only); the generic marker stays attrs-free.
+    marker_attrs: dict[str, int] = (
+        {
+            "version": POSEIDON2_MARKER_VERSION,
+            "width": w,
+            "external_rounds": e_rounds,
+            "internal_rounds": i_rounds,
+            "alpha": alpha,
+        }
+        if perm.has_dedicated_fusion
+        else {}
+    )
+    return fused_region(
+        permutation, *operands, name=perm._fused_region_name, **marker_attrs
+    )
 
 
 if TYPE_CHECKING:

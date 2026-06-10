@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +15,7 @@ from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
     POSEIDON2_MARKER_VERSION,
     Poseidon2,
+    _permute_body,
 )
 from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
@@ -21,6 +23,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
+from zorch.testkit.jit_cache import assert_single_trace
 
 
 class Poseidon2Koalabear16Test(absltest.TestCase):
@@ -35,6 +38,15 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         batch = jax.vmap(p.permute)(jnp.stack([x, x]))
         self.assertTrue(bool(jnp.array_equal(batch[0], KOALABEAR16_EXPECTED)))
         self.assertTrue(bool(jnp.array_equal(batch[1], KOALABEAR16_EXPECTED)))
+
+    def test_permute_reuses_one_trace_across_instances(self) -> None:
+        # Freshly built same-params permutations must share one module-level
+        # permute trace — the static key compares by value (#214). Without the
+        # zone, every composite emission re-traced the permutation body, which
+        # dominated the PCS first-trace-per-config cost (#216).
+        x = jnp.arange(16, dtype=F)
+        calls = [functools.partial(koalabear16_perm().permute, x) for _ in (0, 1)]
+        assert_single_trace(self, _permute_body, calls)
 
     def test_inline_fallback_byte_matches(self) -> None:
         # The published-wheel path (no CompositeOp): fused_region runs the

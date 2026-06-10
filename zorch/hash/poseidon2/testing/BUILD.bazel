@@ -24,6 +24,7 @@ py_test(
     deps = [
         ":koalabear16",
         "//zorch:_composite",
+        "//zorch/testkit:jit_cache",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

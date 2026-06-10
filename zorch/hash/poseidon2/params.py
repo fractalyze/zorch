@@ -145,7 +145,15 @@ class Poseidon2Params:
         return self._value_key() == other._value_key()
 
     def __hash__(self) -> int:
-        return hash(self._value_key())
+        # Memoized like `_key`: the permute jit zone hashes the params on
+        # every dispatch, and CPython never caches tuple hashes (nor bytes
+        # hashes from 3.13), so a bare hash(key) would re-SipHash the
+        # constant-matrix bytes per permute call.
+        h = self.__dict__.get("_hash")
+        if h is None:
+            h = hash(self._value_key())
+            object.__setattr__(self, "_hash", h)
+        return h
 
     @property
     def uses_standard_external_matrix(self) -> bool:
