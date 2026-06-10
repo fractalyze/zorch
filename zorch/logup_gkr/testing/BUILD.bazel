@@ -85,7 +85,7 @@ py_test(
 
 py_test(
     name = "prover_test",
-    size = "medium",
+    size = "small",
     srcs = ["prover_test.py"],
     deps = [
         ":testing",
