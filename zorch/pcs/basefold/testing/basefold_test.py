@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
-from typing import Any
+from collections.abc import Callable
 
 import jax
 import jax.numpy as jnp
@@ -26,6 +26,7 @@ from zorch.pcs.basefold.prover import (
 )
 from zorch.pcs.basefold.verifier import BasefoldVerifier, _verify_batch_body
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 
@@ -97,25 +98,17 @@ class BasefoldTest(absltest.TestCase):
 
     def test_commit_eager_reuses_one_compiled_zone_across_instances(self) -> None:
         # Standalone (no enclosing jit), `commit` must reuse one compiled zone
-        # across calls and across freshly built same-config provers — the zone
-        # is module-level and its static key compares the prover by value
-        # (#214). Snapshot-compare _cache_size() (private JAX API; may change
-        # on jax upgrade): other tests may already have seeded this config's
-        # entry, so assert no growth after the first call rather than an
-        # absolute count.
-        size_after_first: int | None = None
-        for num_queries in (4, 8):  # commit never reads num_queries: same zone
+        # across calls, across freshly built same-config provers, and across
+        # provers differing only in num_queries (which commit never reads) —
+        # the zone is module-level, keyed on (code, tree) by value (#214).
+        calls: list[Callable[[], object]] = []
+        for num_queries in (4, 8):
             bf, _rs, _tree, S = _basefold()
             bf = dataclasses.replace(bf, num_queries=num_queries)
             for offset in (0, 1, 2):
                 mle = jnp.arange(S * 2, dtype=F).reshape(S, 2) + F(offset)
-                root, _pdata = bf.commit(_columns(mle))
-                root.block_until_ready()
-                if size_after_first is None:
-                    body: Any = _commit_body
-                    size_after_first = body._cache_size()
-        body = _commit_body
-        self.assertEqual(body._cache_size(), size_after_first)
+                calls.append(functools.partial(bf.commit, _columns(mle)))
+        assert_single_trace(self, _commit_body, calls)
 
     def test_commit_retains_mle_and_codeword(self) -> None:
         bf, rs, _tree, S = _basefold()
@@ -382,22 +375,16 @@ class BasefoldOpenTest(absltest.TestCase):
         # the zone is module-level and its static key compares the prover by
         # value (#214), so per-test instances stop re-tracing. Each call also
         # passes a freshly built transcript (the #177 value-equality contract).
-        # Snapshot-compare _cache_size() (private JAX API; may change on jax
-        # upgrade): other tests may already have seeded this config's entry, so
-        # assert no growth after the first call rather than an absolute count.
-        size_after_first: int | None = None
-        for instance_seed in (0, 1):
+        calls: list[Callable[[], object]] = []
+        for _ in (0, 1):
             prover, _verifier, _root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
             for seed in (2, 3, 4):
-                values, _proof, _ = prover.open(
-                    pdata, [_rand_ef(seed, (log_s,))], _transcript()
+                calls.append(
+                    functools.partial(
+                        prover.open, pdata, [_rand_ef(seed, (log_s,))], _transcript()
+                    )
                 )
-                values.block_until_ready()
-                if size_after_first is None:
-                    body: Any = _open_batch_body
-                    size_after_first = body._cache_size()
-        body = _open_batch_body
-        self.assertEqual(body._cache_size(), size_after_first)
+        assert_single_trace(self, _open_batch_body, calls)
 
 
 if __name__ == "__main__":

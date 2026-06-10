@@ -18,6 +18,7 @@ py_test(
         "//zorch/pcs:fold",
         "//zorch/pcs/basefold",
         "//zorch/poly",
+        "//zorch/testkit:jit_cache",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
