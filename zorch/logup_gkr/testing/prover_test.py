@@ -226,6 +226,18 @@ class GkrProverTest(absltest.TestCase):
         first_round = proofs[0].round_polys[0]
         self.assertTrue(bool(first_round[0] + first_round[1] == claim))
 
+    def test_proof_records_bound_point(self) -> None:
+        # The carry appends the child selector as the last bit, so the
+        # retained point is the next carry's eval_point minus that bit — the
+        # invariant a wire consumer reads the point through.
+        first = random_first_layer(19, 2, 2)
+        layers = build_pyramid(first)
+        output = extract_outputs(layers[-1])
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+        (_, _, new_point), _, proof = GkrLayerRound(layers[-2])(carry, transcript)
+        self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
+        self.assertTrue(bool(jnp.all(proof.point == new_point[:-1])))
+
     def test_deterministic_under_fixed_transcript(self) -> None:
         first = random_first_layer(17, 1, 3)
         _, _, a, _ = prove_gkr(first)
