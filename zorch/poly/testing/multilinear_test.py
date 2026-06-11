@@ -1,11 +1,18 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Tests for poly.multilinear: eval_mle, mle_fold (base field)."""
+"""Tests for poly.multilinear: eval_mle, mle_fold, mle_coeffs_to_evals,
+mle_evals_to_coeffs (base field)."""
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.poly.multilinear import eval_mle, mle_fold
+from zorch.poly.multilinear import (
+    eval_mle,
+    mle_coeffs_to_evals,
+    mle_evals_to_coeffs,
+    mle_fold,
+)
 
 F = zk_dtypes.koalabear_mont
 
@@ -62,6 +69,61 @@ class MleFoldTest(absltest.TestCase):
         self.assertEqual(out.shape, (2, 4))
         for r in range(2):
             self.assertTrue(bool(jnp.all(out[r] == mle_fold(evals[r], beta))))
+
+
+class MleCoeffEvalTransformTest(absltest.TestCase):
+    def test_coeffs_to_evals_is_subset_sum(self) -> None:
+        # eval at vertex v = Σ coeffs[c] over c whose support is a subset of v
+        # (the monomial x^c is 1 at v iff c ⊆ v). Small values: no field wrap.
+        coeffs = jnp.array([3, 1, 4, 1, 5, 9, 2, 6], dtype=F)
+        evals = mle_coeffs_to_evals(coeffs)
+        for v in range(8):
+            want = sum(int(coeffs[c]) for c in range(8) if (c & v) == c)
+            self.assertTrue(bool(evals[v] == jnp.array(want, dtype=F)), msg=f"v={v}")
+
+    def test_roundtrips_both_directions(self) -> None:
+        coeffs = jnp.array([7, 2, 9, 0, 1, 8, 3, 4, 6, 5, 2, 1, 9, 0, 4, 7], dtype=F)
+        self.assertTrue(
+            bool(jnp.all(mle_evals_to_coeffs(mle_coeffs_to_evals(coeffs)) == coeffs))
+        )
+        evals = jnp.arange(16, dtype=F)
+        self.assertTrue(
+            bool(jnp.all(mle_coeffs_to_evals(mle_evals_to_coeffs(evals)) == evals))
+        )
+
+    def test_evals_agree_with_eval_mle_at_vertices(self) -> None:
+        # The produced evals are the MLE on the hypercube: eval_mle at a boolean
+        # vertex must return that entry (ties the transform to eval_mle).
+        evals = mle_coeffs_to_evals(jnp.array([3, 1, 4, 1, 5, 9, 2, 6], dtype=F))
+        for v in range(8):
+            self.assertTrue(bool(eval_mle(evals, _vertex(v, 3)) == evals[v]))
+
+    def test_leading_axes_ride_through(self) -> None:
+        rows = jnp.arange(2 * 4, dtype=F).reshape(2, 4)
+        out = mle_coeffs_to_evals(rows)
+        self.assertEqual(out.shape, (2, 4))
+        for r in range(2):
+            self.assertTrue(bool(jnp.all(out[r] == mle_coeffs_to_evals(rows[r]))))
+
+    def test_degenerate_single_element_is_identity(self) -> None:
+        # n = 1 (zero variables): the scan must no-op, not crash on a (…, 2, 0)
+        # reshape (lax.scan traces the body even at length 0).
+        one = jnp.array([7], dtype=F)
+        self.assertTrue(bool(mle_coeffs_to_evals(one)[0] == 7))
+        self.assertTrue(bool(mle_evals_to_coeffs(one)[0] == 7))
+
+    def test_lowers_to_a_scan_independent_of_k(self) -> None:
+        # The per-bit butterfly is one fixed lax.scan, not a k-deep unroll: the
+        # traced graph must carry a `while` and its op count must NOT grow with k
+        # (a k-deep unroll would add a kernel per bit — the cost reed_solomon's
+        # "no hand-rolled butterfly" note warns about).
+        def lowered(k: int) -> str:
+            a = jnp.arange(1 << k, dtype=F)
+            return jax.jit(mle_evals_to_coeffs).lower(a).as_text()
+
+        small, large = lowered(3), lowered(10)
+        self.assertIn("while", small)
+        self.assertEqual(small.count("subtract"), large.count("subtract"))
 
 
 if __name__ == "__main__":
