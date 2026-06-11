@@ -1,6 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import functools
 from unittest import mock
 
 import jax
@@ -10,9 +11,18 @@ from absl.testing import absltest
 from jax import tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import DuplexTranscript, GrindError, sample_challenge
+from zorch.transcript import (
+    DuplexTranscript,
+    GrindError,
+    _check_witness_body,
+    _observe_and_sample_body,
+    _observe_body,
+    _sample_body,
+    sample_challenge,
+)
 
 F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 
@@ -21,12 +31,13 @@ F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 # non-deterministic). Skip the duplex tests on CPU until it lands. See
 # fractalyze/zkx#500.
 _CPU_BACKEND = jax.default_backend() == "cpu"
-
-
-@absltest.skipIf(
+_skip_on_cpu_scan_bug = absltest.skipIf(
     _CPU_BACKEND,
     "ZKX CPU scan array-carry bug (GPU-correct); remove when fractalyze/zkx#500 lands",
 )
+
+
+@_skip_on_cpu_scan_bug
 class DuplexTranscriptTest(absltest.TestCase):
     """The real duplex-sponge transcript: a device-side JAX pytree that threads
     functionally under @jit. observe absorbs into the sponge; sample squeezes
@@ -157,11 +168,39 @@ class TranscriptJitCacheTest(absltest.TestCase):
         # _cache_size() is a private JAX API; may change on jax upgrade.
         self.assertEqual(zone._cache_size(), 1)
 
+    def test_sample_reuses_one_cached_zone(self) -> None:
+        # Eager sample must hit the module-level zone: repeated calls and
+        # fresh same-config instances add no trace (#226 — the eager Python
+        # loop used to re-trace the permutation graph on every call).
+        calls = [
+            functools.partial(cheap_transcript(F).sample, 3),
+            functools.partial(cheap_transcript(F).sample, 3),
+        ]
+        assert_single_trace(self, _sample_body, calls)
 
-@absltest.skipIf(
-    _CPU_BACKEND,
-    "ZKX CPU scan array-carry bug (GPU-correct); remove when fractalyze/zkx#500 lands",
-)
+    @_skip_on_cpu_scan_bug
+    def test_observe_family_reuses_cached_zones(self) -> None:
+        # The scan-bearing ops (duplex-only: the cheap permutation's scan hits
+        # zkx#500 on CPU), same contract as sample above.
+        v = rand_field(11, (5,), F)
+        w = jnp.zeros((), F)
+        new = functools.partial(DuplexTranscript.new, koalabear16_perm(), rate=8)
+        assert_single_trace(
+            self, _observe_body, [functools.partial(new().observe, v) for _ in (0, 1)]
+        )
+        assert_single_trace(
+            self,
+            _observe_and_sample_body,
+            [functools.partial(new().observe_and_sample, v, 2) for _ in (0, 1)],
+        )
+        assert_single_trace(
+            self,
+            _check_witness_body,
+            [functools.partial(new().check_witness, 4, w) for _ in (0, 1)],
+        )
+
+
+@_skip_on_cpu_scan_bug
 class GrindTest(absltest.TestCase):
     """Proof-of-work grind over the duplex sponge: search the full witness space
     for a witness whose squeezed challenge has `pow_bits` zero low bits, plus the

@@ -193,45 +193,7 @@ class DuplexTranscript:
         """Absorb `values` (any field, flattened to the base field) into the
         transcript. The absorb is one `lax.scan` over the flat input, so the
         compiled graph size is independent of `len(values)`."""
-        base_dtype = self.state.sponge_state.dtype
-        flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
-        if flat.shape[0] == 0:
-            return self
-
-        rate = self.rate
-        permutation = self.permutation
-
-        def step(
-            carry: tuple[Array, Array, Array], x: Array
-        ) -> tuple[tuple[Array, Array, Array], None]:
-            in_buf, in_pos, sponge = carry
-            in_buf = in_buf.at[in_pos].set(x)
-            new_in_pos = in_pos + 1
-            full = new_in_pos == rate
-
-            def perm(args: tuple[Array, Array]) -> tuple[Array, Array]:
-                sp, ib = args
-                # Full block: new_in_pos == rate, so the whole rate lane is `ib`.
-                new_sponge = _absorb_permute(permutation, sp, ib, new_in_pos, rate)
-                return new_sponge, jnp.zeros_like(ib)
-
-            sponge, in_buf = lax.cond(full, perm, lambda a: a, (sponge, in_buf))
-            in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
-            return (in_buf, in_pos_out, sponge), None
-
-        init = (self.state.input_buffer, self.state.in_pos, self.state.sponge_state)
-        (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
-
-        # If the final scan step permuted (in_pos == 0 at exit), the post-permute
-        # sponge prefix is the fresh output; otherwise the next sample permutes.
-        last_was_perm = in_pos == 0
-        out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
-        output_buffer = jnp.where(
-            last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
-        )
-        return self._with_state(
-            DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos)
-        )
+        return _observe_body(self, values)
 
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
         # Permute when input is pending or the output buffer is drained.
@@ -242,12 +204,7 @@ class DuplexTranscript:
         return t._with_state(replace(t.state, out_pos=out_pos)), item
 
     def sample(self, n: int = 1) -> tuple[DuplexTranscript, Array]:
-        t = self
-        outs = []
-        for _ in range(n):
-            t, x = t._sample_one()
-            outs.append(x.reshape(()))
-        return t, jnp.stack(outs)
+        return _sample_body(self, n)
 
     def observe_and_sample(
         self, values: Array, n: int = 1
@@ -256,7 +213,7 @@ class DuplexTranscript:
         Fiat-Shamir primitive (commit -> challenge). One method so the absorb and
         squeeze fuse into a single kernel under `@jit` by construction, never by a
         per-primitive pattern-match (the repo's fusion contract)."""
-        return self.observe(values).sample(n)
+        return _observe_and_sample_body(self, values, n)
 
     def check_witness(
         self, pow_bits: int, witness: Array
@@ -278,8 +235,7 @@ class DuplexTranscript:
                 f"witness must be a scalar {field_dtype} field element (the grind "
                 f"search's domain), got shape {witness.shape} dtype {witness.dtype}"
             )
-        advanced, sample = self.observe(witness).sample(1)
-        return advanced, _pow_satisfied(sample[0], pow_bits)
+        return _check_witness_body(self, witness, pow_bits)
 
     @partial(jit, static_argnames=("pow_bits", "chunk"))
     def _grind_search(self, pow_bits: int, chunk: int) -> Array:
@@ -369,6 +325,83 @@ class DuplexTranscript:
                 "within the searched candidate range"
             )
         return advanced, witness
+
+
+# Module-level cached zones behind DuplexTranscript's public ops. Outside jit,
+# the Python-loop `sample` re-traces its `lax.cond` branches — the full
+# permutation graph included — on EVERY call, and `observe`'s eager `lax.scan`
+# pays the same. Routing through module-level jit makes every eager call site
+# hit one process-wide cache: `permutation`/`rate` are static meta_fields with
+# value-equality keys (#214), so fresh same-config transcripts reuse the trace.
+# `inline=True` keeps call sites already inside a jit zone byte-identical:
+# without it the zone stays a nested pjit call in the outer jaxpr, which stops
+# the permutation's round constants from auto-lifting into the
+# `zorch.sumcheck` composite envelope (the operand layout zkx expands).
+
+
+@partial(jit, static_argnames=("n",), inline=True)
+def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+    outs = []
+    for _ in range(n):
+        t, x = t._sample_one()
+        outs.append(x.reshape(()))
+    return t, jnp.stack(outs)
+
+
+@partial(jit, inline=True)
+def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
+    base_dtype = t.state.sponge_state.dtype
+    flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
+    if flat.shape[0] == 0:
+        return t
+
+    rate = t.rate
+    permutation = t.permutation
+
+    def step(
+        carry: tuple[Array, Array, Array], x: Array
+    ) -> tuple[tuple[Array, Array, Array], None]:
+        in_buf, in_pos, sponge = carry
+        in_buf = in_buf.at[in_pos].set(x)
+        new_in_pos = in_pos + 1
+        full = new_in_pos == rate
+
+        def perm(args: tuple[Array, Array]) -> tuple[Array, Array]:
+            sp, ib = args
+            # Full block: new_in_pos == rate, so the whole rate lane is `ib`.
+            new_sponge = _absorb_permute(permutation, sp, ib, new_in_pos, rate)
+            return new_sponge, jnp.zeros_like(ib)
+
+        sponge, in_buf = lax.cond(full, perm, lambda a: a, (sponge, in_buf))
+        in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
+        return (in_buf, in_pos_out, sponge), None
+
+    init = (t.state.input_buffer, t.state.in_pos, t.state.sponge_state)
+    (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
+
+    # If the final scan step permuted (in_pos == 0 at exit), the post-permute
+    # sponge prefix is the fresh output; otherwise the next sample permutes.
+    last_was_perm = in_pos == 0
+    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
+    output_buffer = jnp.where(
+        last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
+    )
+    return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
+
+
+@partial(jit, static_argnames=("n",), inline=True)
+def _observe_and_sample_body(
+    t: DuplexTranscript, values: Array, n: int
+) -> tuple[DuplexTranscript, Array]:
+    return _sample_body(_observe_body(t, values), n)
+
+
+@partial(jit, static_argnames=("pow_bits",), inline=True)
+def _check_witness_body(
+    t: DuplexTranscript, witness: Array, pow_bits: int
+) -> tuple[DuplexTranscript, Array]:
+    advanced, sample = _sample_body(_observe_body(t, witness), 1)
+    return advanced, _pow_satisfied(sample[0], pow_bits)
 
 
 if TYPE_CHECKING:

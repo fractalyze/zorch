@@ -90,6 +90,7 @@ py_test(
     deps = [
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/testkit:jit_cache",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
