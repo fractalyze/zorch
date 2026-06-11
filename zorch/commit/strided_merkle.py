@@ -24,8 +24,10 @@ marker also carries ``rows_per_query`` as a composite attribute, so a vendor's
 expander knows the stride of the bottom levels. The wrapping passes only
 ``matrix`` (the round constants auto-lift), so this stays scheme-agnostic.
 
-This is the prover-side commitment plus its opening accessors; reconstructing a
-root from opened rows is the verifier's job and lives with the consuming scheme.
+This carries the prover-side commitment and opening accessors plus the
+verifier-side `open` / `reconstruct_root` (device-indexed, `vmap`-able), the
+strided analogs of `MerkleTree.open` / `reconstruct_root` the query phase of a
+folding PCS (e.g. WHIR) needs.
 """
 
 from __future__ import annotations
@@ -34,7 +36,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree
+from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
 from zorch.fusion import fused_region
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
@@ -184,3 +186,64 @@ class StridedMerkleTree:
             siblings.append(layer[index ^ 1])
             index >>= 1
         return jnp.stack(siblings)
+
+    def open(
+        self, matrix: Array, digest_layers: list[Array], index: int | Array
+    ) -> Opening:
+        """Device-side opening of query ``index``: the opened coset
+        ``matrix[index :: query_stride]`` `(rows_per_query, width)` plus the stored
+        sibling path (query layer up to just below the root). The verifier-side
+        analog of `opened_rows` + `query_merkle_proof`, but `index` may be a
+        traced (device-sampled) value, so `vmap` over `index` opens a batch of
+        queries. The strided levels below the query layer are NOT in the path —
+        `reconstruct_root` recomputes them from the coset.
+
+        Index validity is a prover-side precondition — enforced eagerly for a
+        concrete index, skipped under tracing where `verify` owns out-of-range
+        rejection (mirrors `MerkleTree.open`)."""
+        stride = self.query_stride(matrix.shape[0])
+        if not isinstance(index, jax.core.Tracer) and not 0 <= index < stride:
+            raise IndexError(f"query index {index} out of range [0, {stride})")
+        rows = matrix[index + stride * jnp.arange(self._rows_per_query)]
+        path = []
+        idx = index
+        for layer in digest_layers[:-1]:  # query layer up to below root
+            path.append(layer[idx ^ 1])
+            idx = idx // 2
+        return Opening(row=rows, path=path)
+
+    def reconstruct_root(self, index: int | Array, opening: Opening) -> Array:
+        """Rebuild the raw root from a strided `opening`. Collapse the opened coset
+        (`opening.row`, `(rows_per_query, width)`) to its query-layer node by a
+        plain adjacent-pair fold of the row hashes — that is how the unstored
+        strided levels recombine one residue class — then climb `opening.path` (the
+        stored siblings) by the query-index parity.
+
+        Returns the root Array, not a verdict (a separator-binding consumer
+        rebinds it before comparing). Single-index; batch by `vmap`-ing over
+        `(index, opening)`. Mirrors `MerkleTree.reconstruct_root`."""
+        # Collapse the coset to its query-layer node with the same scanned
+        # regular-binary fold `_build` uses for the stored tree — one compress
+        # body traced once (not unrolled per level), even under an outer vmap
+        # (#163). `rows_per_query == 1` adds no strided level: the lone hashed
+        # row is already the node (and `_fold_scan` can't take a zero-height
+        # tree, mirroring `_build`'s single-node guard).
+        leaves = jax.vmap(self._leaf_hasher.hash)(opening.row)  # (rows_per_query, d)
+        if self._rows_per_query == 1:
+            query_node = leaves[0]
+        else:
+            query_node, _ = self._top._fold_scan(
+                leaves, log2_strict_usize(self._rows_per_query)
+            )
+        if not opening.path:
+            return query_node
+
+        def fold(
+            carry: tuple[Array, Array], sibling: Array
+        ) -> tuple[tuple[Array, Array], None]:
+            return self._top._fold_with_sibling(*carry, sibling), None
+
+        (root, _), _ = jax.lax.scan(
+            fold, (query_node, jnp.asarray(index)), jnp.stack(opening.path)
+        )
+        return root

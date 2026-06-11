@@ -16,7 +16,7 @@ from jax import Array
 from zk_dtypes import koalabear_mont as F
 
 from zorch._composite import _HAS_COMPOSITE_OP
-from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree
+from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -106,6 +106,86 @@ class StridedMerkleTest(absltest.TestCase):
         root, layers = strided.commit(_matrix(8))
         self.assertEqual([l.shape for l in layers], [(1, 8)])
         self.assertTrue(bool(jnp.array_equal(layers[-1][0], root)))
+
+    def test_device_open_matches_host_accessors(self) -> None:
+        """`open` (device-indexed) returns the same coset + sibling path as the
+        host `opened_rows` / `query_merkle_proof`."""
+        _, _, strided = _stack(rows_per_query=4)
+        matrix = _matrix(16)
+        _, layers = strided.commit(matrix)
+        for index in range(strided.query_stride(16)):
+            opening = strided.open(matrix, layers, index)
+            self.assertTrue(
+                bool(jnp.array_equal(opening.row, strided.opened_rows(matrix, index)))
+            )
+            host_path = strided.query_merkle_proof(layers, index)
+            self.assertTrue(bool(jnp.array_equal(jnp.stack(opening.path), host_path)))
+
+    def test_device_reconstruct_root_roundtrip(self) -> None:
+        """`open` -> `reconstruct_root` rebuilds the committed root for every query,
+        across rows_per_query in {1, 4}."""
+        for rpq in (1, 4):
+            sponge, comp, strided = _stack(rows_per_query=rpq)
+            matrix = _matrix(16)
+            root, layers = strided.commit(matrix)
+            for index in range(strided.query_stride(16)):
+                opening = strided.open(matrix, layers, index)
+                rebuilt = strided.reconstruct_root(index, opening)
+                self.assertTrue(
+                    bool(jnp.array_equal(rebuilt, root)), msg=f"rpq={rpq} q={index}"
+                )
+
+    def test_device_reconstruct_root_vmaps_over_traced_indices(self) -> None:
+        """A batch of device-sampled query indices opens + reconstructs under one
+        `jit`+`vmap` (the jit-clean query phase WHIR needs)."""
+        _, _, strided = _stack(rows_per_query=4)
+        matrix = _matrix(16)
+        root, layers = strided.commit(matrix)
+        indices = jnp.arange(strided.query_stride(16), dtype=jnp.int32)
+
+        @jax.jit
+        def open_and_rebuild(idx: Array) -> Array:
+            opening = jax.vmap(lambda i: strided.open(matrix, layers, i))(idx)
+            return jax.vmap(strided.reconstruct_root)(idx, opening)
+
+        roots = open_and_rebuild(indices)
+        self.assertEqual(roots.shape, (4, 8))
+        for q in range(4):
+            self.assertTrue(bool(jnp.array_equal(roots[q], root)), msg=f"q={q}")
+
+    def test_reconstruct_root_rejects_tampered_row(self) -> None:
+        """A corrupted opened coset must not rebuild the committed root."""
+        _, _, strided = _stack(rows_per_query=4)
+        matrix = _matrix(16)
+        root, layers = strided.commit(matrix)
+        opening = strided.open(matrix, layers, 1)
+        tampered = Opening(
+            row=opening.row.at[0, 0].add(jnp.ones((), F)), path=opening.path
+        )
+        rebuilt = strided.reconstruct_root(1, tampered)
+        self.assertFalse(bool(jnp.array_equal(rebuilt, root)))
+
+    def test_open_rejects_out_of_range_index(self) -> None:
+        """A concrete query index outside [0, query_stride) trips the eager
+        prover-side precondition (skipped only under tracing)."""
+        _, _, strided = _stack(rows_per_query=4)
+        matrix = _matrix(16)
+        _, layers = strided.commit(matrix)
+        with self.assertRaises(IndexError):
+            strided.open(matrix, layers, strided.query_stride(16))
+
+    def test_reconstruct_root_empty_path_when_rows_per_query_equals_height(
+        self,
+    ) -> None:
+        """rows_per_query == height collapses the whole column to the root: the
+        opening carries no path and reconstruct returns the query-layer node."""
+        _, _, strided = _stack(rows_per_query=8)
+        matrix = _matrix(8)
+        root, layers = strided.commit(matrix)
+        opening = strided.open(matrix, layers, 0)
+        self.assertEqual(opening.path, [])
+        rebuilt = strided.reconstruct_root(0, opening)
+        self.assertTrue(bool(jnp.array_equal(rebuilt, root)))
 
     @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_commit_wraps_in_merkle_commit_marker(self) -> None:
