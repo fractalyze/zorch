@@ -20,6 +20,7 @@ ______________________________________________________________________
 | Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT | [`coding.md`](coding.md)                                  |
 | The sumcheck block — design rationale & gotchas                 | [`sumcheck.md`](sumcheck.md)                                          |
 | LogUp-GKR — fractional-sum circuit, prover/verifier round duals | [`logup-gkr.md`](logup-gkr.md)                                       |
+| Stage composition — the seam contract between prove stages, nested chains, glue rounds | [`stage-composition.md`](stage-composition.md)        |
 | Building a prover on zorch — the consumer/zorch boundary, injection points, conventions | [`building-a-zkvm-prover.md`](building-a-zkvm-prover.md) |
 
 ## Fusion north star

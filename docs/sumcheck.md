@@ -33,7 +33,8 @@ description.
 the carry + transcript, so chains nest. `prove` / `verify` are the *homogeneous*
 case — one round repeated per variable, the sumcheck inner loop; the chains are
 the *heterogeneous* case — distinct rounds in sequence, e.g. one GKR layer per
-link.
+link. How a multi-stage prover composes from chains — the seam carry contract
+and glue rounds — is [`stage-composition.md`](stage-composition.md).
 
 **The verifier reduces; the PCS closes.** `verify` stops at the point-claim
 `(point, final_claim)`. The final `final_claim == f(point)` check needs the
