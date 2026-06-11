@@ -78,7 +78,9 @@ class WhirProof:
     query_pow_witnesses: grinding witness before each round's query phase
         (`num_rounds`).
     initial_opening: round 0's strided opening of the initial committed codeword
-        at the round's query cosets (`row` carries the query axis).
+        matrix at the round's query cosets (`row` is `(Q, 2^k, num_polys)`; the
+        verifier μ-combines the columns); later rounds open the single re-encoded
+        codeword.
     codeword_openings: round `r`'s strided opening of round `r−1`'s re-encoded
         codeword, for `r` in `1..num_rounds` (length `num_rounds − 1`).
     final_poly: the last round's folded MLE coefficients, sent in the clear; the
