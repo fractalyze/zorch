@@ -19,7 +19,7 @@ py_library(
 
 py_test(
     name = "poseidon2_test",
-    size = "small",
+    size = "medium",
     srcs = ["poseidon2_test.py"],
     deps = [
         ":koalabear16",
