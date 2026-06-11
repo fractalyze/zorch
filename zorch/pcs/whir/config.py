@@ -1,0 +1,95 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+"""WHIR parameters and proof type. Co-located with the scheme like `BasefoldProof`
+in `basefold/config.py` — there is no shared `proof.py` in `pcs/`, so each scheme
+keeps its proof beside its prover/verifier.
+
+WHIR is a multilinear PCS that, unlike fri/basefold, does NOT fold a codeword in
+place: each round folds the *MLE* by `k_whir` sumcheck sub-folds and re-encodes
+the folded MLE as a fresh, shrinking Reed-Solomon codeword (commit + out-of-domain
+sample), then opens the *previous* round's codeword at strided query cosets for
+consistency. `code` is therefore an RS **encoder** (re-applied per round at a
+halving message length), not a `FoldableCode`; `tree` is the query-strided Merkle
+commitment whose `rows_per_query = 2^k_whir` coset is one opened leaf.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import partial
+from typing import TypeAlias
+
+import jax
+from jax import Array
+
+from zorch.commit.merkle import Opening
+
+# A single Merkle root binding the committed codeword. The initial commitment and
+# every re-encoded round share this wire type.
+WhirCommitment: TypeAlias = Array
+
+
+@dataclass(frozen=True)
+class WhirParams:
+    """The per-protocol WHIR knobs both prover and verifier read. Frozen and
+    hashable so it rides a prover/verifier `@jit` static key by value (#214).
+
+    k_whir: variables folded per WHIR round (the strided coset width is
+        `2^k_whir`).
+    num_queries: query repetitions per round; its length is the WHIR round count.
+        Placeholder counts, not soundness-calibrated.
+    folding_pow_bits / query_pow_bits: grinding work after each sumcheck message
+        and before each query phase. May be 0 (the self-test runs grind-free)."""
+
+    k_whir: int
+    num_queries: tuple[int, ...]
+    folding_pow_bits: int = 0
+    query_pow_bits: int = 0
+
+
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[
+        "sumcheck_polys",
+        "codeword_roots",
+        "ood_values",
+        "folding_pow_witnesses",
+        "query_pow_witnesses",
+        "initial_opening",
+        "codeword_openings",
+        "final_poly",
+    ],
+    meta_fields=[],
+)
+@dataclass(frozen=True)
+class WhirProof:
+    """One WHIR open proof: per-round sumcheck messages, the re-encoded codeword
+    commitments with their out-of-domain answers, the grinding witnesses, the
+    strided query openings, and the final folded polynomial in the clear.
+
+    sumcheck_polys: per sumcheck fold (`num_rounds·k_whir` total), the degree-2
+        message as evaluations `(s(1), s(2))`; `s(0)` is recovered from the
+        running claim.
+    codeword_roots: the re-encoded codeword's Merkle root, one per non-final
+        round (length `num_rounds − 1`).
+    ood_values: the out-of-domain evaluation answered each non-final round
+        (length `num_rounds − 1`).
+    folding_pow_witnesses: grinding witness after each sumcheck message
+        (`num_rounds·k_whir`).
+    query_pow_witnesses: grinding witness before each round's query phase
+        (`num_rounds`).
+    initial_opening: round 0's strided opening of the initial committed codeword
+        at the round's query cosets (`row` carries the query axis).
+    codeword_openings: round `r`'s strided opening of round `r−1`'s re-encoded
+        codeword, for `r` in `1..num_rounds` (length `num_rounds − 1`).
+    final_poly: the last round's folded MLE coefficients, sent in the clear; the
+        terminal constraint ties it to the running claim.
+    """
+
+    sumcheck_polys: list[Array]
+    codeword_roots: list[Array]
+    ood_values: list[Array]
+    folding_pow_witnesses: list[Array]
+    query_pow_witnesses: list[Array]
+    initial_opening: Opening
+    codeword_openings: list[Opening]
+    final_poly: Array
