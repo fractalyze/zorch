@@ -136,14 +136,6 @@ class ReedSolomon:
         coeffs = jnp.concatenate([message, jnp.zeros(tail, self.dtype)], axis=-1)
         if self._coset_powers is not None:
             coeffs = coeffs * self._coset_powers
-        if coeffs.ndim > 1 and _base_dtype(self.dtype) != self.dtype:
-            # zkx's EF→base NTT decomposition rejects leading batch dims
-            # (layout-assignment failure, zkx#637; `jax.vmap` lowers to the
-            # same batched fft and fails identically): per-row 1-D NTTs until
-            # that lands.
-            flat = coeffs.reshape(-1, n)
-            rows = lax.map(lambda row: lax.fft(row, "FFT", n), flat)
-            return rows.reshape(coeffs.shape)
         return lax.fft(coeffs, "FFT", n)
 
     def domain(self) -> Array:

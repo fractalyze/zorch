@@ -135,8 +135,8 @@ class ReedSolomonTest(absltest.TestCase):
 
     def test_encode_batched_rows_extension_field(self) -> None:
         # The LinearCode seam promises leading batch axes ride through on any
-        # field dtype; extension dtypes take the per-row NTT fallback inside
-        # `encode` and must match the 1-D encode row by row, coset included.
+        # field dtype: a [rows, k] extension-field message must match the 1-D
+        # encode row by row, coset included.
         k, blowup, rows = 4, 2, 3
         shift = jnp.array(3, dtype=EF)
         for coset_shift in (None, shift):
