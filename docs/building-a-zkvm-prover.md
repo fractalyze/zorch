@@ -91,7 +91,9 @@ schedule and any genuinely new, reusable fold — which goes upstream into
 `zorch` gives the `Round` abstraction and the chain/scan drivers; the consumer
 decides the *stage sequence* and the *carry* passed between stages. Whether the
 driver is an explicit function threading `(transcript, state)` or a chain of
-`Round`s is a consumer choice — both are valid. Either way the coordinator glue
+`Round`s is a consumer choice — both are valid, and
+[`stage-composition.md`](stage-composition.md) records the seam contract and
+the glue-as-rounds shape for the chain form. Either way the coordinator glue
 (sort order, protocol-derived sizes, the preamble observes, the stage→stage
 handoffs) is the consumer's, because it encodes the reference's exact
 transcript.
