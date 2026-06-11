@@ -37,3 +37,22 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "strided_merkle_test",
+    size = "small",
+    srcs = ["strided_merkle_test.py"],
+    # composite-vmap; CI's published jaxlib can't run it (see merkle_test).
+    tags = ["local_only"],
+    deps = [
+        "//zorch:_composite",
+        "//zorch/commit:merkle",
+        "//zorch/commit:strided_merkle",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
