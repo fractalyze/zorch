@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import jax
 import jax.numpy as jnp
@@ -87,16 +87,13 @@ class WhirVerifier:
         }
         if bad:
             raise ValueError(f"malformed WHIR proof: {bad} (got, expected)")
+        num_polys = proof.initial_opening.row.shape[-1]
+        if values.ndim != 1 or values.shape[0] != num_polys:
+            raise ValueError(
+                f"values must be 1-D of length num_polys ({num_polys}), got shape "
+                f"{values.shape}"
+            )
         return _verify_body(self, commitment, z, values, proof, transcript)
-
-
-def _coset_values_ef(row: Array, ef: Any) -> Array:
-    """The opened coset's `2^k` values as extension elements: round 0 opens the
-    base-field initial codeword (`(Q, 2^k, 1)`), later rounds the EF re-encode
-    stored as base-field limbs (`(Q, 2^k, limbs)`)."""
-    if row.shape[-1] == 1:
-        return row[..., 0].astype(ef)
-    return lax.bitcast_convert_type(row, ef)
 
 
 @partial(jax.jit, static_argnames=("verifier",))
@@ -116,8 +113,12 @@ def _verify_body(
     limbs = efinfo(ef).degree
     one = jnp.ones((), ef)
 
+    # Mirror the prover: bind commitment + per-column values, sample μ, and take
+    # the running claim as the μ-power combine of the columns' claimed evals.
     t = transcript.observe(commitment)
-    claim = values
+    t = t.observe(values)
+    t, mu = sample_challenge(t, ef, limbs)
+    claim = eval_coeffs(values, mu)
     ok = jnp.bool_(True)
 
     all_alphas: list[Array] = []
@@ -171,7 +172,13 @@ def _verify_body(
         domain = cur_code.domain()
         coset_idx = positions[:, None] + stride * jnp.arange(1 << k)
         coset_pts = domain[coset_idx]  # (Q, 2^k)
-        coset_vals = _coset_values_ef(opening.row, ef)  # (Q, 2^k)
+        # Round 0 opens the committed matrix — μ-combine its columns (mirroring
+        # the prover's batch combine); later rounds open the single EF re-encode
+        # stored as base-field limbs — bitcast back.
+        if r == 0:
+            coset_vals = eval_coeffs(opening.row.astype(ef), mu)  # (Q, 2^k)
+        else:
+            coset_vals = lax.bitcast_convert_type(opening.row, ef)  # (Q, 2^k)
         ys = jax.vmap(lambda v, p: binary_k_fold(v, alphas, p))(coset_vals, coset_pts)
         query_roots.append(domain[positions].astype(ef))
 

@@ -36,7 +36,7 @@ from zorch.pcs.whir._math import (
 )
 from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.multilinear import mle_evals_to_coeffs
+from zorch.poly.multilinear import eval_mle, mle_evals_to_coeffs
 from zorch.poly.univariate import eval_coeffs
 from zorch.sumcheck.prover import fold_pair
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
@@ -52,13 +52,14 @@ if TYPE_CHECKING:
 )
 @dataclass(frozen=True)
 class WhirProverData:
-    """Retained witness from `WhirProver.commit`: the message-domain MLE the
-    sumcheck folds, the initial RS codeword (its strided rows are the Merkle
-    leaves the round-0 queries open), and the codeword's Merkle digest layers.
-    A pytree so `commit`/`open` ride a `@jit` zone."""
+    """Retained witness from `WhirProver.commit`: the message-domain columns
+    `mle` `(S, num_polys)` the open μ-combines then sumcheck-folds, the initial RS
+    codeword matrix `(block_len, num_polys)` (its strided rows are the Merkle
+    leaves the round-0 queries open), and the codeword's Merkle digest layers. A
+    pytree so `commit`/`open` ride a `@jit` zone."""
 
-    mle: Array
-    codeword: Array
+    mle: Array  # (S, num_polys)
+    codeword: Array  # (block_len, num_polys)
     digest_layers: list[Array]
 
 
@@ -73,23 +74,22 @@ class WhirProver:
     params: WhirParams
 
     def commit(self, polys: Sequence[Array]) -> tuple[WhirCommitment, WhirProverData]:
-        """Bind a single multilinear, given by its `2^m` hypercube evaluations.
-        Re-expresses it in the coefficient basis, RS-encodes to the initial
-        codeword, and strided-Merkle-commits the codeword's `2^k_whir` query
-        cosets. Slice 2a commits one polynomial (no μ-batch)."""
-        if len(polys) != 1:
-            raise ValueError(
-                f"WHIR slice 2a commits a single polynomial, got {len(polys)}"
-            )
-        poly = polys[0]
-        if poly.ndim != 1:
-            raise ValueError(f"polynomial must be 1-D hypercube evals, got {poly.ndim}")
-        if poly.shape[0] != self.code.message_len:
-            raise ValueError(
-                f"polynomial length {poly.shape[0]} != code message_len "
-                f"{self.code.message_len}"
-            )
-        return _commit_body(self.code, self.tree, poly)
+        """Bind a batch of multilinears sharing one point, each given by its
+        `2^m` hypercube evaluations. Each column is RS-encoded; the codeword
+        matrix binds under one query-strided Merkle root (a matrix commitment,
+        like BaseFold). `open` reduces the columns to one polynomial by a μ-power
+        random linear combination."""
+        if not polys:
+            raise ValueError("WHIR commits at least one polynomial, got none")
+        for p in polys:
+            if p.ndim != 1:
+                raise ValueError(f"each polynomial must be 1-D, got ndim {p.ndim}")
+            if p.shape[0] != self.code.message_len:
+                raise ValueError(
+                    f"polynomial length {p.shape[0]} != code message_len "
+                    f"{self.code.message_len}"
+                )
+        return _commit_body(self.code, self.tree, list(polys))
 
     def open(
         self,
@@ -97,9 +97,9 @@ class WhirProver:
         points: Sequence[Array],
         transcript: Transcript,
     ) -> tuple[Array, WhirProof, Transcript]:
-        """Open the committed multilinear at the single point `points[0]`,
-        threading Fiat-Shamir. Returns `(value, proof, transcript)` with `value`
-        the evaluation `f̂(z)`."""
+        """Open the committed batch at the single point `points[0]`, threading
+        Fiat-Shamir. Returns `(values, proof, transcript)` with `values` the
+        per-column evaluations `f̂ᵢ(z)` `(num_polys,)`."""
         if len(points) != 1:
             raise ValueError(f"WHIR opens at one point, got {len(points)}")
         z = points[0]
@@ -115,17 +115,19 @@ class WhirProver:
 
 
 # Jitted commit body, keyed on code + tree by value (#214): standalone, an eager
-# commit dispatches the encode NTT + Merkle fused_region op-by-op. The MLE is
-# re-expressed in the coefficient basis, RS-encoded, and committed as a
-# single-column `(block_len, 1)` matrix whose `2^k_whir` strided rows one query
-# opens. `mle` (the message-domain evals) and the codeword are retained for `open`.
+# commit dispatches the encode NTT + Merkle fused_region op-by-op. Each column's
+# evals become coefficients and RS-encode (one batched NTT over the leading axis);
+# the `(block_len, num_polys)` codeword matrix commits under one strided root whose
+# `2^k_whir` strided rows one query opens. `mle` (the message-domain columns) and
+# the codeword matrix are retained for `open`.
 @partial(jax.jit, static_argnames=("code", "tree"))
 def _commit_body(
-    code: ReedSolomon, tree: StridedMerkleTree, poly: Array
+    code: ReedSolomon, tree: StridedMerkleTree, polys: list[Array]
 ) -> tuple[WhirCommitment, WhirProverData]:
-    codeword = code.encode(mle_evals_to_coeffs(poly))[:, None]
+    mle = jnp.stack(polys, axis=1)  # (S, num_polys)
+    codeword = code.encode(mle_evals_to_coeffs(mle.T)).T  # (block_len, num_polys)
     root, layers = tree.commit(codeword)
-    return root, WhirProverData(mle=poly, codeword=codeword, digest_layers=layers)
+    return root, WhirProverData(mle=mle, codeword=codeword, digest_layers=layers)
 
 
 # Jitted open body (prover the static key by value): one round driver, not
@@ -150,11 +152,15 @@ def _open_body(
     limbs = efinfo(ef).degree
     one = jnp.ones((), ef)
 
-    f_evals = prover_data.mle.astype(ef)
-    w_evals = expand_eq_to_hypercube(z, one)
-    value = (f_evals * w_evals).sum()
-
+    # Bind the commitment + per-column evaluations, then reduce the batch to one
+    # polynomial by a μ-power RLC of the columns (eval_coeffs over the column
+    # axis = Σ μⁱ·colᵢ). A single committed column is the degenerate batch.
+    values = eval_mle(prover_data.mle, z, axis=0)  # (num_polys,)
     t = transcript.observe(prover_data.digest_layers[-1][0])  # bind initial root
+    t = t.observe(values)
+    t, mu = sample_challenge(t, ef, limbs)
+    f_evals = eval_coeffs(prover_data.mle.astype(ef), mu)  # (S,) combined column
+    w_evals = expand_eq_to_hypercube(z, one)
 
     sumcheck_polys: list[Array] = []
     folding_pow_witnesses: list[Array] = []
@@ -251,7 +257,7 @@ def _open_body(
         codeword_openings=codeword_openings,
         final_poly=final_poly,
     )
-    return value, proof, t
+    return values, proof, t
 
 
 if TYPE_CHECKING:

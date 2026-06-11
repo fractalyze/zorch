@@ -50,29 +50,46 @@ def _transcript() -> DuplexTranscript:
 
 class WhirTest(parameterized.TestCase):
     @parameterized.named_parameters(
-        ("m1round_k2", 2, 2),  # degenerate single round (no re-encode/OOD)
-        ("m2rounds_k2", 4, 2),  # re-encode + OOD + weight update + EF-limb cosets
-        ("k1_three_rounds", 3, 1),  # one variable folded per round
+        # (num_vars, k_whir, num_polys)
+        ("single_m1round_k2", 2, 2, 1),  # degenerate: 1 round, 1 poly
+        ("single_m2rounds_k2", 4, 2, 1),  # re-encode + OOD + EF-limb cosets
+        ("single_k1_three_rounds", 3, 1, 1),  # one variable folded per round
+        ("batch3_m2rounds_k2", 4, 2, 3),  # μ-batch across the full round machinery
+        ("batch5_k1", 3, 1, 5),  # μ-batch, fold one variable per round
     )
-    def test_open_verify_roundtrip(self, num_vars: int, k_whir: int) -> None:
+    def test_open_verify_roundtrip(
+        self, num_vars: int, k_whir: int, num_polys: int
+    ) -> None:
         prover, verifier = _whir(num_vars, k_whir)
-        poly = rand_field(0, (1 << num_vars,), F)
-        z = rand_ext_field(1, (num_vars,), F, EF)
-        root, prover_data = prover.commit([poly])
-        value, proof, _ = prover.open(prover_data, [z], _transcript())
-        ok, _ = verifier.verify(root, [z], value, proof, _transcript())
+        polys = [rand_field(i, (1 << num_vars,), F) for i in range(num_polys)]
+        z = rand_ext_field(99, (num_vars,), F, EF)
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        self.assertEqual(values.shape, (num_polys,))
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
     def test_verify_rejects_tampered_final_poly(self) -> None:
         prover, verifier = _whir(num_vars=4, k_whir=2)
-        poly = rand_field(2, (16,), F)
+        polys = [rand_field(i, (16,), F) for i in range(3)]
         z = rand_ext_field(3, (4,), F, EF)
-        root, prover_data = prover.commit([poly])
-        value, proof, _ = prover.open(prover_data, [z], _transcript())
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
         tampered = dataclasses.replace(
             proof, final_poly=proof.final_poly.at[0].add(jnp.ones((), EF))
         )
-        ok, _ = verifier.verify(root, [z], value, tampered, _transcript())
+        ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
+        self.assertFalse(bool(ok))
+
+    def test_verify_rejects_tampered_value(self) -> None:
+        """A wrong claimed per-column evaluation must not verify."""
+        prover, verifier = _whir(num_vars=4, k_whir=2)
+        polys = [rand_field(i, (16,), F) for i in range(3)]
+        z = rand_ext_field(3, (4,), F, EF)
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        bad = values.at[1].add(jnp.ones((), EF))
+        ok, _ = verifier.verify(root, [z], bad, proof, _transcript())
         self.assertFalse(bool(ok))
 
 
