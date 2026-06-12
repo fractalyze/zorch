@@ -11,7 +11,7 @@ own invariants.
 from __future__ import annotations
 
 import weakref
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import fields
 
 import jax
@@ -32,6 +32,7 @@ from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
     JaggedGkrLayerRound,
     JaggedLayerProof,
+    _jagged_round_zone,
     _round_metadata,
     _run_jagged_rounds,
     prove_jagged_layer,
@@ -47,6 +48,7 @@ from zorch.poly.multilinear import eval_mle
 from zorch.poly.univariate import compute_inv_vandermonde, eval_coeffs
 from zorch.round import ProveChain
 from zorch.sumcheck.prover import SUMCHECK_MARKER, SUMCHECK_MARKER_VERSION
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
@@ -571,6 +573,29 @@ class JaggedGkrLayerRoundJitTest(absltest.TestCase):
         self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
         self.assertEqual(int(gs.in_pos), int(ws.in_pos))
         self.assertEqual(int(gs.out_pos), int(ws.out_pos))
+
+    def test_fresh_rounds_over_one_shape_share_a_single_trace(self) -> None:
+        # The consumer that motivates jit=True rebuilds the chain every warm
+        # prove iteration (the generator giving lazy one-live-layer release),
+        # so it builds a fresh round per layer per iter. The module-level zone
+        # keys on layer shape, not instance, so those same-shape rounds reuse
+        # one trace; a per-instance jit would re-trace every pyramid layer on
+        # every iteration. Distinct seeds (different values, one shape) pin
+        # shape-keying, not value- or identity-keying.
+        carry = (
+            rand_field(111, (), KB),
+            rand_field(112, (), KB),
+            rand_field(113, (self.NRV + 1,), KB),
+        )
+
+        def make_call(seed: int) -> Callable[[], None]:
+            def _call() -> None:
+                layer = random_jagged_layer(seed, self.ROW_COUNTS)
+                JaggedGkrLayerRound(layer, jit=True)(carry, cheap_transcript(KB))
+
+            return _call
+
+        assert_single_trace(self, _jagged_round_zone, [make_call(s) for s in (7, 8, 9)])
 
 
 if __name__ == "__main__":

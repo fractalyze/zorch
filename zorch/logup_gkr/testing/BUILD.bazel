@@ -44,6 +44,7 @@ py_test(
         "//zorch/logup_gkr",
         "//zorch/poly",
         "//zorch/sumcheck",
+        "//zorch/testkit:jit_cache",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
