@@ -36,15 +36,26 @@ from jax import Array
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.poly.univariate import eval_coeffs
+from zorch.transcript import Transcript
 
 
 @runtime_checkable
 class WhirScheme(Protocol):
-    """The four scheme-specific maps of a WHIR opening. Implementations are frozen,
+    """The scheme-specific maps of a WHIR opening. Implementations are frozen,
     hashable (they ride a prover/verifier `@jit` static key) and their methods are
     jit-traceable pure functions. `mle` is the committed columns `(S, num_polys)`,
     `z` the opening point `(m,)`, `mu` the batch-combine challenge, `alphas` the
     `(m,)` stack of per-fold sumcheck challenges in fold order."""
+
+    def bind(
+        self, transcript: Transcript, commitment: Array, values: Array
+    ) -> Transcript:
+        """Bind the commitment and claimed values into the transcript before μ is
+        sampled. The default absorbs both — a standalone PCS must commit to what it
+        opens. A consumer whose larger protocol already bound the commitment in an
+        earlier stage (so WHIR opens against an existing commitment) overrides this
+        to a no-op, keeping the Fiat-Shamir stream byte-exact with that reference."""
+        ...
 
     def claimed_values(self, mle: Array, z: Array) -> Array:
         """The per-column claimed evaluations `(num_polys,)` the proof opens to."""
@@ -74,6 +85,11 @@ class EqWhirScheme:
     evaluated at `z`), and the final prefix is `eq(z, ᾱ)` with the folds bound
     LSB-first (hence the reversal, mirroring the `[0::2]/[1::2]` fold order). This
     is the self-test scheme and the behaviour the driver had before the seam."""
+
+    def bind(
+        self, transcript: Transcript, commitment: Array, values: Array
+    ) -> Transcript:
+        return transcript.observe(commitment).observe(values)
 
     def claimed_values(self, mle: Array, z: Array) -> Array:
         return eval_mle(mle, z, axis=0)

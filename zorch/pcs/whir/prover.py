@@ -260,8 +260,10 @@ def _open_body(
     # values, the μ-combined initial message, and the weight (plain MLE + eq by
     # default; prismalinear + möbius for SWIRL).
     values = _island_initial(prover, prover_data.mle, z)  # (num_polys,)
-    t = transcript.observe(prover_data.digest_layers[-1][0])  # bind initial root
-    t = t.observe(values)
+    # Bind the commitment + claimed values (the scheme decides how — the default
+    # absorbs both; a consumer whose outer protocol already bound the commitment
+    # no-ops this to stay byte-exact).
+    t = prover.scheme.bind(transcript, prover_data.digest_layers[-1][0], values)
     t, mu_wit = cast(GrindingTranscript, t).grind(params.mu_pow_bits)
     t, mu = sample_challenge(t, ef, limbs)
     f_evals, w_evals = _island_tables(prover, prover_data.mle, z, mu)
