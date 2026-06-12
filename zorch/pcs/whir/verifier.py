@@ -193,7 +193,7 @@ def _verify_body(
 
         if not is_last:
             cur_root = proof.codeword_roots[r]
-            cur_code = round_code(code, (r + 1) * k)
+            cur_code = round_code(code, r + 1, k, rate_increase=params.rate_increase)
 
     # Final constraint: the running claim equals the original opening term plus
     # every round's γ-weighted out-of-domain and in-domain consistency terms,

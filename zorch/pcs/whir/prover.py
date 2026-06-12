@@ -203,7 +203,7 @@ def _open_body(
         z0 = one
         next_codeword, next_layers, next_code = cur_codeword, cur_layers, cur_code
         if not is_last:
-            next_code = round_code(code, (r + 1) * k)
+            next_code = round_code(code, r + 1, k, rate_increase=params.rate_increase)
             next_codeword = lax.bitcast_convert_type(next_code.encode(g_coeffs), base)
             root, next_layers = tree.commit(next_codeword)
             t = t.observe(root)
