@@ -29,7 +29,7 @@ from zorch.pcs.whir.prover import WhirProver
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.pcs.whir.verifier import WhirVerifier
 from zorch.testkit.random_field import rand_ext_field, rand_field
-from zorch.transcript import DuplexTranscript
+from zorch.transcript import DuplexTranscript, Transcript
 
 
 @dataclasses.dataclass(frozen=True)
@@ -63,6 +63,19 @@ class _MobiusScheme(EqWhirScheme):
         x = alphas[::-1]  # same z↔fold pairing as eval_eq(z, alphas[::-1])
         one = jnp.ones((), z.dtype)
         return jnp.prod((one - x) * (one - z - z) + x * z)
+
+
+@dataclasses.dataclass(frozen=True)
+class _NoBindEqScheme(EqWhirScheme):
+    """Default opening, but `bind` is a no-op — the pattern a consumer uses when
+    its outer protocol already bound the commitment in an earlier stage (so WHIR
+    must NOT re-absorb it). Round-trips because prover and verifier skip the bind
+    symmetrically; proves the `bind` seam is threaded on both sides."""
+
+    def bind(
+        self, transcript: Transcript, commitment: Array, values: Array
+    ) -> Transcript:
+        return transcript
 
 
 def _whir(
@@ -163,6 +176,17 @@ class WhirTest(parameterized.TestCase):
         tampered = dataclasses.replace(proof, mu_pow_witness=w + jnp.ones((), w.dtype))
         ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
         self.assertFalse(bool(ok))
+
+    def test_open_verify_roundtrip_no_bind_scheme(self) -> None:
+        """A scheme whose `bind` is a no-op (the consumer pattern: commitment
+        already bound upstream) round-trips, proving the bind seam threads."""
+        prover, verifier = _whir(num_vars=4, k_whir=2, scheme=_NoBindEqScheme())
+        polys = [rand_field(i, (16,), F) for i in range(2)]
+        z = rand_ext_field(11, (4,), F, EF)
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
 
     def test_verify_rejects_tampered_final_poly(self) -> None:
         prover, verifier = _whir(num_vars=4, k_whir=2)
