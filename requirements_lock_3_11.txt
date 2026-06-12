@@ -212,17 +212,13 @@ scipy==1.17.1 \
     # via
     #   jax
     #   jaxlib
-zk-dtypes==0.0.5 \
-    --hash=sha256:06d1240f8d2a2190b675ef6d94f7785458fe96ae4fcefebbe51cb0a06ea4c2e0 \
-    --hash=sha256:3b237932ff3618611200e1eb9822a65ce8d9792c73a869aa21eac803e2e3d2c2 \
-    --hash=sha256:62c647c4f8c54426f06be887120ed491b83b919ac0400eedc18b628d544585f5 \
-    --hash=sha256:77bdbc091a2ec971283d33e43fa707f5191b712a4da9b713955b8a2e247f59d5 \
-    --hash=sha256:8bcaf192b3285fef83a96bad534c98acb15db668a517631a6ca0e505e0969005 \
-    --hash=sha256:f32ca72c604e3d566808e610a0f17a3eb4dbc905a95172c67ce09d8df993def9 \
-    --hash=sha256:f402bd9afbec82c97272f2ff80914b4a98c7ccea3f43e6d4e3f8485f41106159 \
-    --hash=sha256:f5998c80f707a765aa51f5735f2bd79817bcc7259d5be1fa80d323121f172603 \
-    --hash=sha256:f9ebbc31aef5dff5ac9fed404cb5b316ce2077014cca00fced33645df8cb0dde
-    # via jax
+zk-dtypes==0.0.6 \
+    --hash=sha256:65325d2f5436a6d981c0daf733afe9b2b6c3b09c40238050bc11ea7ef9deddf0 \
+    --hash=sha256:66d8a7fbba8bfc962f825f6e682ae224b95a5ea87ede18650adb1a2bf356b76f \
+    --hash=sha256:82d37aafb7173c9cf00ba3465352d6249deb8c064f12804e8b79fec56cc90d64
+    # via
+    #   -r requirements.in
+    #   jax
 zkbench==0.4.0 \
     --hash=sha256:60d6d265fbe87dc8c0fd18e16af01d6f1484ba08c4a5c5c1082fd0ac02acb5d3
     # via -r requirements.in

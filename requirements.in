@@ -6,13 +6,16 @@
 #
 # zorch is proving-scheme- and zkVM-agnostic, so it deliberately does NOT
 # depend on any zkVM package (riscv-witness, rw-constraints, …). zk_dtypes
-# (native finite-field dtypes) arrives transitively via jax.
+# (native finite-field dtypes) arrives via jax but is pinned here directly:
+# the jax extension-field lowering reads `efinfo.modulus_low_coeffs`, which
+# only exists from zk_dtypes 0.0.6, so the two must move together.
 absl-py
 numpy
 jax==0.0.5.dev20260612090739
 jaxlib==0.0.5.dev20260612090739
 jax-cuda12-plugin==0.0.5.dev20260524000415
 zkx-cuda-pjrt==0.0.5.dev20260612090739
+zk-dtypes==0.0.6
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
