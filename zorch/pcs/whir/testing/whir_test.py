@@ -125,6 +125,14 @@ class WhirTest(parameterized.TestCase):
         ("rate_inc_m3rounds_k2", 6, 2, 1, True),  # two re-encodes, rising rate
         ("rate_inc_batch3_k2", 4, 2, 3, True),  # μ-batch under rate-increase
         ("rate_inc_k1_matches_const", 3, 1, 1, True),  # k=1 ⇒ == constant-rate
+        # Final residual: num_rounds·k_whir < num_vars, so the last m−num_rounds·k
+        # variables ride out as final_poly's coefficients in the clear (the
+        # rate-increasing SWIRL shape). num_vars // k_whir sets the round count.
+        ("residual1_m5_k2", 5, 2, 1, False),  # 2 rounds fold 4 of 5 → 1 residual var
+        ("residual2_m5_k3", 5, 3, 1, False),  # 1 round folds 3 of 5 → 2 residual vars
+        ("residual1_batch3_m5_k2", 5, 2, 3, False),  # residual under the μ-batch
+        ("residual1_m5_k2_rate_inc", 5, 2, 1, True),  # residual + rate-increase
+        ("residual1_m7_k2", 7, 2, 1, False),  # 3 rounds fold 6 of 7 → 1 residual var
     )
     def test_open_verify_roundtrip(
         self, num_vars: int, k_whir: int, num_polys: int, rate_increase: bool
@@ -143,6 +151,10 @@ class WhirTest(parameterized.TestCase):
         ("const", 4, 2, 1, False),  # möbius weight, constant-rate schedule
         ("rate_inc", 4, 2, 1, True),  # möbius weight composes with rate-increase
         ("batch", 4, 2, 3, False),  # möbius weight under the μ-batch combine
+        # Residual with a non-eq weight: exercises the scheme-provided residual
+        # weight (`initial_weight(z[:r_dim])`) for the möbius kernel, not plain eq.
+        ("residual1", 5, 2, 1, False),  # 1 residual var, möbius
+        ("residual2", 5, 3, 1, False),  # 2 residual vars, möbius
     )
     def test_open_verify_roundtrip_mobius_scheme(
         self, num_vars: int, k_whir: int, num_polys: int, rate_increase: bool
