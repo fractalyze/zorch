@@ -4,10 +4,14 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
     name = "whir_test",
-    # ~3min: each (num_vars, k_whir, rate_increase) case jit-compiles a fresh
-    # open+verify shape, and the rate-increasing cases roughly doubled the matrix.
-    size = "large",
+    # Compile-bound: each parameterized (num_vars, k_whir, rate_increase, scheme)
+    # case jit-compiles a fresh open+verify graph. `shard_count` runs the cases
+    # across parallel processes (absltest honors bazel sharding) — the per-shard
+    # wall-clock is well under a `medium` timeout. For single-case iteration use
+    # `--test_filter=WhirTest.<case>`.
+    size = "medium",
     srcs = ["whir_test.py"],
+    shard_count = 4,
     # Real-poseidon2 transcript/commit permute lowers to a composite CI's
     # published jaxlib can't run; .bazelrc.ci excludes local_only (local bazel
     # runs it).

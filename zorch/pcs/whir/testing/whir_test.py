@@ -72,6 +72,7 @@ def _whir(
     blowup: int = 2,
     rate_increase: bool = False,
     scheme: WhirScheme | None = None,
+    pow_bits: int = 0,
 ) -> tuple[WhirProver, WhirVerifier]:
     perm = koalabear16_perm()
     sponge = Sponge(perm, SpongeParams(rate=8, out=8))
@@ -81,6 +82,9 @@ def _whir(
     params = WhirParams(
         k_whir=k_whir,
         num_queries=(num_queries,) * (num_vars // k_whir),
+        mu_pow_bits=pow_bits,
+        folding_pow_bits=pow_bits,
+        query_pow_bits=pow_bits,
         rate_increase=rate_increase,
     )
     scheme = scheme if scheme is not None else EqWhirScheme()
@@ -141,6 +145,24 @@ class WhirTest(parameterized.TestCase):
         values, proof, _ = prover.open(prover_data, [z], _transcript())
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
+
+    def test_open_verify_roundtrip_with_grinds(self) -> None:
+        """All three proof-of-work grinds active (μ, folding, query) round-trip,
+        and a tampered μ witness is rejected. The eager-driver / jitted-island
+        structure exists precisely so `grind(pow_bits>0)` runs (it validates on the
+        host and cannot be traced) — under the old single-`@jit` `open` this raised
+        `TracerBoolConversionError`."""
+        prover, verifier = _whir(num_vars=4, k_whir=2, pow_bits=4)
+        polys = [rand_field(i, (16,), F) for i in range(3)]
+        z = rand_ext_field(7, (4,), F, EF)
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+        w = proof.mu_pow_witness
+        tampered = dataclasses.replace(proof, mu_pow_witness=w + jnp.ones((), w.dtype))
+        ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
+        self.assertFalse(bool(ok))
 
     def test_verify_rejects_tampered_final_poly(self) -> None:
         prover, verifier = _whir(num_vars=4, k_whir=2)

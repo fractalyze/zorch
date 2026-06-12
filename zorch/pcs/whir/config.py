@@ -37,6 +37,8 @@ class WhirParams:
         `2^k_whir`).
     num_queries: query repetitions per round; its length is the WHIR round count.
         Placeholder counts, not soundness-calibrated.
+    mu_pow_bits: grinding work before sampling the batch-combine challenge μ. May
+        be 0.
     folding_pow_bits / query_pow_bits: grinding work after each sumcheck message
         and before each query phase. May be 0 (the self-test runs grind-free).
     rate_increase: which per-round codeword domain schedule to use. The message
@@ -50,6 +52,7 @@ class WhirParams:
 
     k_whir: int
     num_queries: tuple[int, ...]
+    mu_pow_bits: int = 0
     folding_pow_bits: int = 0
     query_pow_bits: int = 0
     rate_increase: bool = False
@@ -58,6 +61,7 @@ class WhirParams:
 @partial(
     jax.tree_util.register_dataclass,
     data_fields=[
+        "mu_pow_witness",
         "sumcheck_polys",
         "codeword_roots",
         "ood_values",
@@ -75,6 +79,8 @@ class WhirProof:
     commitments with their out-of-domain answers, the grinding witnesses, the
     strided query openings, and the final folded polynomial in the clear.
 
+    mu_pow_witness: the grinding witness for the batch-combine challenge μ (a
+        scalar; zero when `mu_pow_bits == 0`).
     sumcheck_polys: per sumcheck fold (`num_rounds·k_whir` total), the degree-2
         message as evaluations `(s(1), s(2))`; `s(0)` is recovered from the
         running claim.
@@ -96,6 +102,7 @@ class WhirProof:
         terminal constraint ties it to the running claim.
     """
 
+    mu_pow_witness: Array
     sumcheck_polys: list[Array]
     codeword_roots: list[Array]
     ood_values: list[Array]
