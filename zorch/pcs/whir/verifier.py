@@ -119,9 +119,11 @@ def _verify_body(
     # the running claim as the μ-power combine of the columns' claimed evals.
     t = transcript.observe(commitment)
     t = t.observe(values)
+    t, ok = cast(GrindingTranscript, t).check_witness(
+        params.mu_pow_bits, proof.mu_pow_witness
+    )
     t, mu = sample_challenge(t, ef, limbs)
     claim = eval_coeffs(values, mu)
-    ok = jnp.bool_(True)
 
     all_alphas: list[Array] = []
     z0s: list[Array] = []

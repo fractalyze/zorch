@@ -26,6 +26,7 @@ from jax import Array, lax
 from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import ReedSolomon
+from zorch.commit.merkle import Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
 from zorch.pcs.fold import sample_positions
 from zorch.pcs.whir._math import (
@@ -133,38 +134,137 @@ def _commit_body(
     return root, WhirProverData(mle=mle, codeword=codeword, digest_layers=layers)
 
 
-# Jitted open body (prover the static key by value): one round driver, not
-# `fold_rounds` over a FoldableCode. Each round runs `k_whir` degree-2 sumcheck
-# folds of `Σ f̂·ŵ`, re-encodes the folded MLE as a fresh shrinking RS codeword
-# (committed via the strided tree, out-of-domain sampled), opens the queried
-# codeword at strided cosets, then folds the out-of-domain and in-domain query
-# constraints into the weight by γ powers. The last round sends `f̂`'s
-# coefficients in the clear.
+# The open body is an EAGER driver over jitted compute islands, not one `@jit`
+# zone. WHIR grinds proof-of-work between every sumcheck fold and before every
+# query phase, and `Transcript.grind` (unlike `check_witness`) validates its
+# witness on the host — so it cannot be traced. Wrapping the whole driver in
+# `@jit` therefore breaks at any `pow_bits > 0` (the production case). Instead the
+# pure-array work fuses inside per-phase islands (each its own kernel; the
+# transcript's `observe`/`sample` are already jitted internally), the grinds run
+# eagerly on the host between them, and a Python loop threads the rounds. This
+# mirrors the structure the openvm reference prover uses to stay byte-exact under
+# real grinds.
+
+
 @partial(jax.jit, static_argnames=("prover",))
+def _island_initial(prover: WhirProver, mle: Array, z: Array) -> Array:
+    """The per-column claimed evaluations the proof opens to."""
+    return prover.scheme.claimed_values(mle, z)
+
+
+@partial(jax.jit, static_argnames=("prover",))
+def _island_tables(
+    prover: WhirProver, mle: Array, z: Array, mu: Array
+) -> tuple[Array, Array]:
+    """The initial sumcheck message `f̂` (μ-combined columns) and weight `ŵ`."""
+    return prover.scheme.combined_f_evals(mle, mu), prover.scheme.initial_weight(z)
+
+
+@jax.jit
+def _island_round_poly(f_evals: Array, w_evals: Array) -> Array:
+    """The degree-2 sumcheck message `[s(1), s(2)]` of `Σ f̂·ŵ`."""
+    f0, f1 = f_evals[0::2], f_evals[1::2]
+    w0, w1 = w_evals[0::2], w_evals[1::2]
+    s1 = (f1 * w1).sum()
+    s2 = ((f1 + f1 - f0) * (w1 + w1 - w0)).sum()
+    return jnp.stack([s1, s2])
+
+
+@jax.jit
+def _island_fold(f_evals: Array, w_evals: Array, alpha: Array) -> tuple[Array, Array]:
+    """Fold both tables at `alpha` (LSB-first, halving the length)."""
+    return (
+        fold_pair(f_evals[0::2], f_evals[1::2], alpha),
+        fold_pair(w_evals[0::2], w_evals[1::2], alpha),
+    )
+
+
+@jax.jit
+def _island_coeffs(f_evals: Array) -> Array:
+    """The folded MLE's coefficients `ĝ` (re-encoded, or sent in the clear)."""
+    return mle_evals_to_coeffs(f_evals)
+
+
+@partial(jax.jit, static_argnames=("prover", "r"))
+def _island_reencode(
+    prover: WhirProver, g_coeffs: Array, r: int
+) -> tuple[Array, Array, list[Array]]:
+    """RS-encode `ĝ` as round `r`'s fresh codeword and strided-Merkle-commit it."""
+    code = prover.code
+    next_code = round_code(
+        code, r + 1, prover.params.k_whir, rate_increase=prover.params.rate_increase
+    )
+    codeword = lax.bitcast_convert_type(next_code.encode(g_coeffs), code.dtype)
+    root, layers = prover.tree.commit(codeword)
+    return root, codeword, layers
+
+
+@jax.jit
+def _island_ood(g_coeffs: Array, z0: Array) -> Array:
+    """`ĝ` at the out-of-domain point (the coefficients as a univariate at `z0`)."""
+    return eval_coeffs(g_coeffs, z0)
+
+
+@partial(jax.jit, static_argnames=("prover",))
+def _island_query_open(
+    prover: WhirProver, codeword: Array, layers: list[Array], positions: Array
+) -> Opening:
+    """Open the queried codeword at every strided query coset."""
+    return jax.vmap(lambda i: prover.tree.open(codeword, layers, i))(positions)
+
+
+@partial(jax.jit, static_argnames=("prover", "r"))
+def _island_weight_update(
+    prover: WhirProver,
+    w_evals: Array,
+    gamma: Array,
+    z0: Array,
+    positions: Array,
+    r: int,
+) -> Array:
+    """Fold round `r`'s out-of-domain and in-domain query constraints into the
+    weight by γ powers (the OOD term takes `γ¹`, queries `γ²…`)."""
+    code, params = prover.code, prover.params
+    k = params.k_whir
+    dim = len(params.num_queries) * k - (r + 1) * k  # remaining variables
+    cur_code = round_code(code, r, k, rate_increase=params.rate_increase)
+    x_roots = cur_code.domain()[positions].astype(z0.dtype)  # (Q,) coset bases
+
+    def _query_weight(x_root: Array) -> Array:
+        zi = pow2_powers(x_root, k + 1)[-1]  # x_root^(2^k), folded-domain point
+        return eq_table(pow2_powers(zi, dim))
+
+    # Queries are independent, so one vmap + a γ-power-weighted reduction.
+    gpows = query_gamma_powers(gamma, params.num_queries[r])
+    query_tables = jax.vmap(_query_weight)(x_roots)  # (Q, 2^dim)
+    return (
+        w_evals
+        + gamma * eq_table(pow2_powers(z0, dim))
+        + (gpows[:, None] * query_tables).sum(0)
+    )
+
+
 def _open_body(
     prover: WhirProver,
     prover_data: WhirProverData,
     z: Array,
     transcript: Transcript,
 ) -> tuple[Array, WhirProof, Transcript]:
-    code, tree, params = prover.code, prover.tree, prover.params
+    code, params = prover.code, prover.params
     k = params.k_whir
     num_rounds = len(params.num_queries)
-    m = z.shape[0]
-    ef, base = z.dtype, code.dtype
+    ef = z.dtype
     limbs = efinfo(ef).degree
-    one = jnp.ones((), ef)
 
-    # Bind the commitment + per-column evaluations, then reduce the batch to one
-    # polynomial via the scheme's μ-power combine. The scheme also supplies the
-    # initial sumcheck message and weight (plain MLE + eq by default; prismalinear
-    # + möbius for SWIRL); everything below the seam is scheme-agnostic.
-    values = prover.scheme.claimed_values(prover_data.mle, z)  # (num_polys,)
+    # Bind the commitment + per-column evaluations; the scheme supplies the claimed
+    # values, the μ-combined initial message, and the weight (plain MLE + eq by
+    # default; prismalinear + möbius for SWIRL).
+    values = _island_initial(prover, prover_data.mle, z)  # (num_polys,)
     t = transcript.observe(prover_data.digest_layers[-1][0])  # bind initial root
     t = t.observe(values)
+    t, mu_wit = cast(GrindingTranscript, t).grind(params.mu_pow_bits)
     t, mu = sample_challenge(t, ef, limbs)
-    f_evals = prover.scheme.combined_f_evals(prover_data.mle, mu)  # (S,) combined
-    w_evals = prover.scheme.initial_weight(z)
+    f_evals, w_evals = _island_tables(prover, prover_data.mle, z, mu)
 
     sumcheck_polys: list[Array] = []
     folding_pow_witnesses: list[Array] = []
@@ -177,43 +277,28 @@ def _open_body(
 
     # The codeword the current round opens: round 0 the initial commit, later
     # rounds the previous round's re-encode.
-    cur_codeword, cur_layers, cur_code = (
-        prover_data.codeword,
-        prover_data.digest_layers,
-        code,
-    )
+    cur_codeword, cur_layers = prover_data.codeword, prover_data.digest_layers
 
     for r in range(num_rounds):
         is_last = r == num_rounds - 1
-        alphas: list[Array] = []
         for _ in range(k):
-            f0, f1 = f_evals[0::2], f_evals[1::2]
-            w0, w1 = w_evals[0::2], w_evals[1::2]
-            s1 = (f1 * w1).sum()
-            s2 = ((f1 + f1 - f0) * (w1 + w1 - w0)).sum()
-            s = jnp.stack([s1, s2])
+            s = _island_round_poly(f_evals, w_evals)
             t = t.observe(s)
             sumcheck_polys.append(s)
             t, wit = cast(GrindingTranscript, t).grind(params.folding_pow_bits)
             folding_pow_witnesses.append(wit)
             t, alpha = sample_challenge(t, ef, limbs)
-            alphas.append(alpha)
-            f_evals = fold_pair(f0, f1, alpha)
-            w_evals = fold_pair(w0, w1, alpha)
+            f_evals, w_evals = _island_fold(f_evals, w_evals, alpha)
 
-        g_coeffs = mle_evals_to_coeffs(f_evals)
-        # Placeholders kept correctly-typed (no Optional): overwritten when this
-        # is not the last round, unread otherwise.
-        z0 = one
-        next_codeword, next_layers, next_code = cur_codeword, cur_layers, cur_code
+        g_coeffs = _island_coeffs(f_evals)
+        z0 = jnp.ones((), ef)  # placeholder; set + read only when not the last round
+        next_codeword, next_layers = cur_codeword, cur_layers
         if not is_last:
-            next_code = round_code(code, r + 1, k, rate_increase=params.rate_increase)
-            next_codeword = lax.bitcast_convert_type(next_code.encode(g_coeffs), base)
-            root, next_layers = tree.commit(next_codeword)
+            root, next_codeword, next_layers = _island_reencode(prover, g_coeffs, r)
             t = t.observe(root)
             codeword_roots.append(root)
             t, z0 = sample_challenge(t, ef, limbs)
-            y0 = eval_coeffs(g_coeffs, z0)
+            y0 = _island_ood(g_coeffs, z0)
             t = t.observe(y0)
             ood_values.append(y0)
         else:
@@ -222,9 +307,11 @@ def _open_body(
 
         t, qwit = cast(GrindingTranscript, t).grind(params.query_pow_bits)
         query_pow_witnesses.append(qwit)
-        stride = cur_code.block_len >> k
+        stride = (
+            round_code(code, r, k, rate_increase=params.rate_increase).block_len >> k
+        )
         t, positions = sample_positions(t, stride, params.num_queries[r])
-        opening = jax.vmap(lambda i: tree.open(cur_codeword, cur_layers, i))(positions)
+        opening = _island_query_open(prover, cur_codeword, cur_layers, positions)
         if r == 0:
             initial_opening = opening
         else:
@@ -232,26 +319,12 @@ def _open_body(
 
         t, gamma = sample_challenge(t, ef, limbs)
         if not is_last:
-            dim = m - (r + 1) * k
-            x_roots = cur_code.domain()[positions].astype(ef)  # (Q,) coset bases
-
-            def _query_weight(x_root: Array) -> Array:
-                zi = pow2_powers(x_root, k + 1)[-1]  # x_root^(2^k), folded-domain pt
-                return eq_table(pow2_powers(zi, dim))
-
-            # γ folds OOD then each query into the weight; queries are independent,
-            # so one vmap + a γ-power-weighted reduction, not a Python loop.
-            gpows = query_gamma_powers(gamma, params.num_queries[r])
-            query_tables = jax.vmap(_query_weight)(x_roots)  # (Q, 2^dim)
-            w_evals = (
-                w_evals
-                + gamma * eq_table(pow2_powers(z0, dim))
-                + (gpows[:, None] * query_tables).sum(0)
-            )
-            cur_codeword, cur_layers, cur_code = next_codeword, next_layers, next_code
+            w_evals = _island_weight_update(prover, w_evals, gamma, z0, positions, r)
+            cur_codeword, cur_layers = next_codeword, next_layers
 
     assert initial_opening is not None
     proof = WhirProof(
+        mu_pow_witness=mu_wit,
         sumcheck_polys=sumcheck_polys,
         codeword_roots=codeword_roots,
         ood_values=ood_values,
