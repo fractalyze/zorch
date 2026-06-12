@@ -15,6 +15,7 @@ import dataclasses
 
 import jax.numpy as jnp
 from absl.testing import absltest, parameterized
+from jax import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -25,9 +26,43 @@ from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.hash.sponge import Sponge, SpongeParams
 from zorch.pcs.whir.config import WhirParams
 from zorch.pcs.whir.prover import WhirProver
+from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.pcs.whir.verifier import WhirVerifier
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.transcript import DuplexTranscript
+
+
+@dataclasses.dataclass(frozen=True)
+class _MobiusScheme(EqWhirScheme):
+    """A non-default `WhirScheme` for the seam test: opens the SWIRL-style
+    möbius-eq weight (per-variable kernel K(0)=1−2u, K(1)=u) instead of plain eq.
+    Inherits the μ-combine (`combined_f_evals`) unchanged and overrides only the
+    three weight-dependent maps. The table mirrors `expand_eq_to_hypercube`'s
+    LSB-add convention (so the driver's plain-eq out-of-domain / query weight
+    updates stay on the same hypercube), and `final_prefix` is that weight's
+    multilinear at the folds — a structurally different functional that round-trips
+    only if all hooks are threaded consistently through prover and verifier. Lives
+    in the test, not in zorch: möbius is SWIRL glue (the real one ships in the
+    openvm consumer)."""
+
+    def _table(self, u: Array) -> Array:
+        state = jnp.ones((1,), u.dtype)
+        for j in range(u.shape[0]):  # u[j] added as the new LSB, kernel (1−2u, u)
+            high = state * u[j]
+            low = state * (jnp.ones((), u.dtype) - u[j] - u[j])
+            state = jnp.column_stack([low, high]).flatten()
+        return state
+
+    def claimed_values(self, mle: Array, z: Array) -> Array:
+        return (mle.astype(z.dtype) * self._table(z)[:, None]).sum(0)
+
+    def initial_weight(self, z: Array) -> Array:
+        return self._table(z)
+
+    def final_prefix(self, z: Array, alphas: Array) -> Array:
+        x = alphas[::-1]  # same z↔fold pairing as eval_eq(z, alphas[::-1])
+        one = jnp.ones((), z.dtype)
+        return jnp.prod((one - x) * (one - z - z) + x * z)
 
 
 def _whir(
@@ -36,6 +71,7 @@ def _whir(
     num_queries: int = 3,
     blowup: int = 2,
     rate_increase: bool = False,
+    scheme: WhirScheme | None = None,
 ) -> tuple[WhirProver, WhirVerifier]:
     perm = koalabear16_perm()
     sponge = Sponge(perm, SpongeParams(rate=8, out=8))
@@ -47,7 +83,10 @@ def _whir(
         num_queries=(num_queries,) * (num_vars // k_whir),
         rate_increase=rate_increase,
     )
-    return WhirProver(code, tree, params), WhirVerifier(code, tree, params)
+    scheme = scheme if scheme is not None else EqWhirScheme()
+    return WhirProver(code, tree, params, scheme), WhirVerifier(
+        code, tree, params, scheme
+    )
 
 
 def _transcript() -> DuplexTranscript:
@@ -79,6 +118,27 @@ class WhirTest(parameterized.TestCase):
         root, prover_data = prover.commit(polys)
         values, proof, _ = prover.open(prover_data, [z], _transcript())
         self.assertEqual(values.shape, (num_polys,))
+        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        self.assertTrue(bool(ok))
+
+    @parameterized.named_parameters(
+        # (num_vars, k_whir, num_polys, rate_increase)
+        ("const", 4, 2, 1, False),  # möbius weight, constant-rate schedule
+        ("rate_inc", 4, 2, 1, True),  # möbius weight composes with rate-increase
+        ("batch", 4, 2, 3, False),  # möbius weight under the μ-batch combine
+    )
+    def test_open_verify_roundtrip_mobius_scheme(
+        self, num_vars: int, k_whir: int, num_polys: int, rate_increase: bool
+    ) -> None:
+        """A non-default scheme (möbius weight) threads through prover and verifier
+        and round-trips — the proof that the injection seam is wired both sides."""
+        prover, verifier = _whir(
+            num_vars, k_whir, rate_increase=rate_increase, scheme=_MobiusScheme()
+        )
+        polys = [rand_field(i, (1 << num_vars,), F) for i in range(num_polys)]
+        z = rand_ext_field(42, (num_vars,), F, EF)
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 

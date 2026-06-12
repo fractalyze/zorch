@@ -35,8 +35,8 @@ from zorch.pcs.whir._math import (
     round_code,
 )
 from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
-from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.multilinear import eval_mle, mle_evals_to_coeffs
+from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
+from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.poly.univariate import eval_coeffs
 from zorch.sumcheck.prover import fold_pair
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
@@ -67,11 +67,14 @@ class WhirProverData:
 class WhirProver:
     """WHIR PCS prover (`PcsProver`). `code` is the initial-round RS encoder (the
     round driver re-encodes at shrinking sizes); `tree` commits the codeword's
-    `2^k_whir`-row query cosets; `params` carries the per-round knobs."""
+    `2^k_whir`-row query cosets; `params` carries the per-round knobs; `scheme`
+    supplies the initial message + weight maps (default: a plain multilinear
+    opening — see `scheme.py`)."""
 
     code: ReedSolomon
     tree: StridedMerkleTree
     params: WhirParams
+    scheme: WhirScheme = EqWhirScheme()
 
     def commit(self, polys: Sequence[Array]) -> tuple[WhirCommitment, WhirProverData]:
         """Bind a batch of multilinears sharing one point, each given by its
@@ -153,14 +156,15 @@ def _open_body(
     one = jnp.ones((), ef)
 
     # Bind the commitment + per-column evaluations, then reduce the batch to one
-    # polynomial by a μ-power RLC of the columns (eval_coeffs over the column
-    # axis = Σ μⁱ·colᵢ). A single committed column is the degenerate batch.
-    values = eval_mle(prover_data.mle, z, axis=0)  # (num_polys,)
+    # polynomial via the scheme's μ-power combine. The scheme also supplies the
+    # initial sumcheck message and weight (plain MLE + eq by default; prismalinear
+    # + möbius for SWIRL); everything below the seam is scheme-agnostic.
+    values = prover.scheme.claimed_values(prover_data.mle, z)  # (num_polys,)
     t = transcript.observe(prover_data.digest_layers[-1][0])  # bind initial root
     t = t.observe(values)
     t, mu = sample_challenge(t, ef, limbs)
-    f_evals = eval_coeffs(prover_data.mle.astype(ef), mu)  # (S,) combined column
-    w_evals = expand_eq_to_hypercube(z, one)
+    f_evals = prover.scheme.combined_f_evals(prover_data.mle, mu)  # (S,) combined
+    w_evals = prover.scheme.initial_weight(z)
 
     sumcheck_polys: list[Array] = []
     folding_pow_witnesses: list[Array] = []
