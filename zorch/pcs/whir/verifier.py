@@ -33,6 +33,7 @@ from zorch.pcs.whir._math import (
     round_code,
 )
 from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
+from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.poly.eq import eval_eq
 from zorch.poly.univariate import eval_coeffs
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
@@ -43,12 +44,13 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class WhirVerifier:
-    """WHIR PCS verifier (`PcsVerifier`). `code`/`tree`/`params` must match the
-    prover's."""
+    """WHIR PCS verifier (`PcsVerifier`). `code`/`tree`/`params`/`scheme` must
+    match the prover's."""
 
     code: ReedSolomon
     tree: StridedMerkleTree
     params: WhirParams
+    scheme: WhirScheme = EqWhirScheme()
 
     def verify(
         self,
@@ -199,7 +201,7 @@ def _verify_body(
     # every round's γ-weighted out-of-domain and in-domain consistency terms,
     # each tying the final polynomial to a point the fold reduced to.
     final_poly = proof.final_poly
-    prefix = eval_eq(z, jnp.stack(all_alphas[::-1]))
+    prefix = verifier.scheme.final_prefix(z, jnp.stack(all_alphas))
     acc = prefix * final_poly[0]
     j = k
     for r in range(num_rounds):

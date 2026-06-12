@@ -8,6 +8,7 @@ py_library(
         "_math.py",
         "config.py",
         "prover.py",
+        "scheme.py",
         "verifier.py",
     ],
     visibility = ["//visibility:public"],
