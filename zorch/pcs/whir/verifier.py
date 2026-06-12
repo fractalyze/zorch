@@ -24,13 +24,13 @@ from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.strided_merkle import StridedMerkleTree
-from zorch.pcs.fold import sample_positions
 from zorch.pcs.whir._math import (
     binary_k_fold,
     interp_quadratic_012,
     pow2_powers,
     query_gamma_powers,
     round_code,
+    sample_query_positions,
 )
 from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
@@ -163,7 +163,9 @@ def _verify_body(
         )
         ok = ok & okw
         stride = cur_code.block_len >> k
-        t, positions = sample_positions(t, stride, params.num_queries[r])
+        t, positions = sample_query_positions(
+            t, stride, params.num_queries[r], code.dtype
+        )
 
         opening = proof.initial_opening if r == 0 else proof.codeword_openings[r - 1]
         rebuilt = jax.vmap(tree.reconstruct_root)(positions, opening)

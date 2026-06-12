@@ -11,10 +11,37 @@ unique to WHIR's coset fold and per-round geometry live here.)
 from __future__ import annotations
 
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
+from jax.typing import DTypeLike
 
 from zorch.coding.reed_solomon import ReedSolomon, fri_fold_values
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.transcript import Transcript
+
+
+def sample_query_positions(
+    transcript: Transcript, stride: int, count: int, dtype: DTypeLike
+) -> tuple[Transcript, Array]:
+    """Sample `count` WHIR query coset indices in `[0, stride)`, one transcript
+    squeeze each — NOT the single batched squeeze of `pcs.fold.sample_positions`.
+
+    WHIR's query phase draws its indices one squeeze at a time and reduces each on
+    its CANONICAL low limb. A batched squeeze reorders the draws relative to that
+    sequence, and a Montgomery-bit reduction picks different residues — either one
+    desynchronizes the post-query challenge and breaks a byte-match against that
+    convention, so WHIR cannot reuse the batched fri/basefold sampler. `stride` is
+    a power of two, so the canonical reduction equals the low-bit mask. `dtype` is
+    the base field the transcript squeezes (positions index a base-field
+    codeword)."""
+    if count == 0:
+        return transcript, jnp.empty((0,), jnp.int32)
+    positions = []
+    t = transcript
+    for _ in range(count):
+        t, raw = t.sample(1)
+        canonical = lax.bitcast_convert_type(raw, dtype).astype(jnp.uint32).reshape(-1)
+        positions.append((canonical[0] % stride).astype(jnp.int32))
+    return t, jnp.stack(positions)
 
 
 def round_code(

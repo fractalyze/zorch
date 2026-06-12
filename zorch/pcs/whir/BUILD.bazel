@@ -21,6 +21,7 @@ py_library(
         "//zorch/pcs:protocol",  # type-only (seam conformance pins)
         "//zorch/poly",
         "//zorch/sumcheck",
+        "//zorch/utils:bits",
         requirement("jax"),
     ],
 )

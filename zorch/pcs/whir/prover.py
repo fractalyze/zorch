@@ -28,12 +28,12 @@ from zk_dtypes import efinfo
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
-from zorch.pcs.fold import sample_positions
 from zorch.pcs.whir._math import (
     eq_table,
     pow2_powers,
     query_gamma_powers,
     round_code,
+    sample_query_positions,
 )
 from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
@@ -41,6 +41,7 @@ from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.poly.univariate import eval_coeffs
 from zorch.sumcheck.prover import fold_pair
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
+from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
@@ -110,10 +111,10 @@ class WhirProver:
         m = z.shape[0]
         k = self.params.k_whir
         num_rounds = len(self.params.num_queries)
-        if num_rounds * k != m:
+        if not (0 < num_rounds * k <= m):
             raise ValueError(
-                f"num_rounds·k_whir ({num_rounds}·{k}) must equal num_variables "
-                f"({m})"
+                f"num_rounds·k_whir ({num_rounds}·{k}) must fold between 1 and "
+                f"num_variables ({m}) inclusive"
             )
         return _open_body(self, prover_data, z, transcript)
 
@@ -226,7 +227,11 @@ def _island_weight_update(
     weight by γ powers (the OOD term takes `γ¹`, queries `γ²…`)."""
     code, params = prover.code, prover.params
     k = params.k_whir
-    dim = len(params.num_queries) * k - (r + 1) * k  # remaining variables
+    # Variables left in the weight after this round's folds. Derived from the
+    # table rather than `num_rounds·k` so a final residual (num_rounds·k < m,
+    # the rate-increasing case) sizes the OOD/query eq tables correctly; equals
+    # `m − (r+1)·k`, the former hardcoded value, when the fold is full.
+    dim = log2_strict_usize(w_evals.shape[0])
     cur_code = round_code(code, r, k, rate_increase=params.rate_increase)
     x_roots = cur_code.domain()[positions].astype(z0.dtype)  # (Q,) coset bases
 
@@ -312,7 +317,9 @@ def _open_body(
         stride = (
             round_code(code, r, k, rate_increase=params.rate_increase).block_len >> k
         )
-        t, positions = sample_positions(t, stride, params.num_queries[r])
+        t, positions = sample_query_positions(
+            t, stride, params.num_queries[r], code.dtype
+        )
         opening = _island_query_open(prover, cur_codeword, cur_layers, positions)
         if r == 0:
             initial_opening = opening
