@@ -29,6 +29,40 @@ but are deliberately left undecorated: they are the bodies a future marked
 fused region (`stablehlo.composite`) + zkx emitter will lower to one kernel
 (see `sumcheck.md`), not blanket-`@jit` candidates.
 
+### One `@jit` boundary per round — single-zone or per-island
+
+A round body needs **exactly one** `@jit` boundary around it — never zero (eager
+dispatch *decomposes* the fused composite, so the boundary is the perf lever, not
+just a cache) and never two (a nested `@jit` lowers to a *call* the single-kernel
+rewriter rejects, [`fusion.py`](../zorch/fusion.py)). Two shapes satisfy this,
+and which one a scheme uses is **forced by whether a host-side op interleaves the
+round loop**, not chosen for style:
+
+- **Single-zone** — one `@jit` over the whole `open` / `commit` body; the driver
+  loop and the round bodies stay plain Python inside it (`basefold`, `fri`:
+  `_open_*_body` wraps `fold_rounds`). Available only when the loop is
+  **host-op-free** — the `DuplexTranscript` `observe` / `sample` are device ops
+  and trace straight through.
+
+- **Per-island** — an **eager** Python driver loop, with each maximal
+  host-op-free compute span its own `@jit` (`jagged`'s per-layer rounds; `whir`'s
+  eager `_open_body` over `_island_*`). Required when a host op sits *inside* the
+  loop and so cannot be traced: a PoW `grind` (`pow_bits > 0` host-reads the
+  witness to validate it — `TracerBoolConversionError` under an outer `@jit`;
+  `pow_bits == 0` skips the read and traces), or a `sample_bits → int(...)` query
+  index. `whir`'s prover grinds between every fold, so it is per-island; its
+  **verifier** has no grind and stays single-zone.
+
+Both keep the *driver* out of `@jit` (the heterogeneous round loop is the
+host-orchestrator, never the fusion target) and treat the *round body* as the
+fusion unit — single-zone leaves the bodies undecorated inside the one enclosing
+`@jit`, per-island makes each its own `@jit`. A grind-bearing scheme **cannot** be
+single-zone; a grind-free one need not fragment into islands. Per-island costs a
+per-shape recompile of each island (WHIR's tables halve each round → recompiles
+per distinct shape), so hoist a shape-stable heavy composite (Poseidon2, an NTT)
+into its own island — it then lowers once instead of re-lowering inside every
+enclosing shape.
+
 ## Loops: `for` vs `lax.scan` vs `vmap`
 
 Three ways to repeat work; the **shape of the per-iteration output** picks one.
