@@ -38,12 +38,21 @@ class WhirParams:
     num_queries: query repetitions per round; its length is the WHIR round count.
         Placeholder counts, not soundness-calibrated.
     folding_pow_bits / query_pow_bits: grinding work after each sumcheck message
-        and before each query phase. May be 0 (the self-test runs grind-free)."""
+        and before each query phase. May be 0 (the self-test runs grind-free).
+    rate_increase: which per-round codeword domain schedule to use. The message
+        always shrinks by `2^k_whir` per round (the sumcheck folds). False (default)
+        keeps the rate fixed — the block length shrinks by `2^k_whir` too. True
+        shrinks the block length by only `2^1` per round (`log_rs -= 1`, decoupled
+        from `k_whir`), so the rate climbs every round: this is WHIR's
+        rate-increasing schedule (and what openvm-stark-backend / SWIRL emit, where
+        it is the source of WHIR's lower query count). The two coincide at
+        `k_whir == 1`. Prover and verifier must agree."""
 
     k_whir: int
     num_queries: tuple[int, ...]
     folding_pow_bits: int = 0
     query_pow_bits: int = 0
+    rate_increase: bool = False
 
 
 @partial(

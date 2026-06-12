@@ -31,7 +31,11 @@ from zorch.transcript import DuplexTranscript
 
 
 def _whir(
-    num_vars: int, k_whir: int, num_queries: int = 3, blowup: int = 2
+    num_vars: int,
+    k_whir: int,
+    num_queries: int = 3,
+    blowup: int = 2,
+    rate_increase: bool = False,
 ) -> tuple[WhirProver, WhirVerifier]:
     perm = koalabear16_perm()
     sponge = Sponge(perm, SpongeParams(rate=8, out=8))
@@ -39,7 +43,9 @@ def _whir(
     code = ReedSolomon(message_len=1 << num_vars, blowup=blowup, dtype=F)
     tree = StridedMerkleTree(sponge, comp, rows_per_query=1 << k_whir)
     params = WhirParams(
-        k_whir=k_whir, num_queries=(num_queries,) * (num_vars // k_whir)
+        k_whir=k_whir,
+        num_queries=(num_queries,) * (num_vars // k_whir),
+        rate_increase=rate_increase,
     )
     return WhirProver(code, tree, params), WhirVerifier(code, tree, params)
 
@@ -50,17 +56,24 @@ def _transcript() -> DuplexTranscript:
 
 class WhirTest(parameterized.TestCase):
     @parameterized.named_parameters(
-        # (num_vars, k_whir, num_polys)
-        ("single_m1round_k2", 2, 2, 1),  # degenerate: 1 round, 1 poly
-        ("single_m2rounds_k2", 4, 2, 1),  # re-encode + OOD + EF-limb cosets
-        ("single_k1_three_rounds", 3, 1, 1),  # one variable folded per round
-        ("batch3_m2rounds_k2", 4, 2, 3),  # μ-batch across the full round machinery
-        ("batch5_k1", 3, 1, 5),  # μ-batch, fold one variable per round
+        # (num_vars, k_whir, num_polys, rate_increase)
+        ("single_m1round_k2", 2, 2, 1, False),  # degenerate: 1 round, 1 poly
+        ("single_m2rounds_k2", 4, 2, 1, False),  # re-encode + OOD + EF-limb cosets
+        ("single_k1_three_rounds", 3, 1, 1, False),  # one variable folded per round
+        ("batch3_m2rounds_k2", 4, 2, 3, False),  # μ-batch across the round machinery
+        ("batch5_k1", 3, 1, 5, False),  # μ-batch, fold one variable per round
+        # Rate-increasing schedule (SWIRL / openvm-stark-backend): only diverges
+        # from constant-rate at k_whir > 1, where the re-encode domain shrinks by
+        # 2^1 (not 2^k) per round, so the rate climbs each round.
+        ("rate_inc_m2rounds_k2", 4, 2, 1, True),  # one rate-climbing re-encode
+        ("rate_inc_m3rounds_k2", 6, 2, 1, True),  # two re-encodes, rising rate
+        ("rate_inc_batch3_k2", 4, 2, 3, True),  # μ-batch under rate-increase
+        ("rate_inc_k1_matches_const", 3, 1, 1, True),  # k=1 ⇒ == constant-rate
     )
     def test_open_verify_roundtrip(
-        self, num_vars: int, k_whir: int, num_polys: int
+        self, num_vars: int, k_whir: int, num_polys: int, rate_increase: bool
     ) -> None:
-        prover, verifier = _whir(num_vars, k_whir)
+        prover, verifier = _whir(num_vars, k_whir, rate_increase=rate_increase)
         polys = [rand_field(i, (1 << num_vars,), F) for i in range(num_polys)]
         z = rand_ext_field(99, (num_vars,), F, EF)
         root, prover_data = prover.commit(polys)

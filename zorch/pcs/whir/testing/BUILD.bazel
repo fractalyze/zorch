@@ -4,7 +4,9 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
     name = "whir_test",
-    size = "small",
+    # ~3min: each (num_vars, k_whir, rate_increase) case jit-compiles a fresh
+    # open+verify shape, and the rate-increasing cases roughly doubled the matrix.
+    size = "large",
     srcs = ["whir_test.py"],
     # Real-poseidon2 transcript/commit permute lowers to a composite CI's
     # published jaxlib can't run; .bazelrc.ci excludes local_only (local bazel

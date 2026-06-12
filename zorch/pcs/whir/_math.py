@@ -17,15 +17,23 @@ from zorch.coding.reed_solomon import ReedSolomon, fri_fold_values
 from zorch.poly.eq import expand_eq_to_hypercube
 
 
-def round_code(code: ReedSolomon, fold: int) -> ReedSolomon:
-    """The RS code whose message length is `code`'s shrunk by `2^fold` (same
-    blowup, dtype, coset shift). WHIR round `r` queries `round_code(code,
-    r·k_whir)`; the re-encode at the end of round `r` produces
-    `round_code(code, (r+1)·k_whir)`."""
-    blowup = code.block_len // code.message_len
+def round_code(
+    code: ReedSolomon, r: int, k: int, *, rate_increase: bool = False
+) -> ReedSolomon:
+    """The RS code the WHIR codeword lives in at round `r` (round 0 is `code`).
+
+    The message length always shrinks by `2^(r·k)` — the `r·k` sumcheck folds
+    consumed by round `r`. The block length follows the chosen domain schedule:
+    `2^(r·k)` smaller in the constant-rate schedule (blowup fixed), or only `2^r`
+    smaller in the rate-increasing schedule (`log_rs -= 1` per round, decoupled
+    from `k`, the openvm-stark-backend / SWIRL schedule whose rate climbs each
+    round). The two coincide at `k == 1`. WHIR round `r` queries this code; the
+    re-encode at the end of round `r` produces `round_code(code, r+1, k, ...)`."""
+    message_len = code.message_len >> (r * k)
+    block_len = code.block_len >> (r if rate_increase else r * k)
     return ReedSolomon(
-        message_len=code.message_len >> fold,
-        blowup=blowup,
+        message_len=message_len,
+        blowup=block_len // message_len,
         dtype=code.dtype,
         coset_shift=code.coset_shift,
     )
