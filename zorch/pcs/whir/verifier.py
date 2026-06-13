@@ -35,6 +35,7 @@ from zorch.pcs.whir._math import (
 from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.poly.eq import eval_eq
+from zorch.poly.multilinear import mle_coeffs_to_evals
 from zorch.poly.univariate import eval_coeffs
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
 
@@ -67,10 +68,10 @@ class WhirVerifier:
         m = z.shape[0]
         k = self.params.k_whir
         num_rounds = len(self.params.num_queries)
-        if num_rounds * k != m:
+        if not (0 < num_rounds * k <= m):
             raise ValueError(
-                f"num_rounds·k_whir ({num_rounds}·{k}) must equal num_variables "
-                f"({m})"
+                f"num_rounds·k_whir ({num_rounds}·{k}) must fold between 1 and "
+                f"num_variables ({m}) inclusive"
             )
         # Fail loud on a structurally malformed proof — a short list would let the
         # round loop silently skip checks (mirrors BasefoldVerifier.verify_batch).
@@ -94,6 +95,15 @@ class WhirVerifier:
             raise ValueError(
                 f"values must be 1-D of length num_polys ({num_polys}), got shape "
                 f"{values.shape}"
+            )
+        # `final_poly` carries the 2^(m − num_rounds·k) residual coefficients in
+        # the clear (one coefficient at full fold); a wrong length would surface
+        # only as a cryptic shape error inside the jitted body.
+        r_dim = m - num_rounds * k
+        if proof.final_poly.ndim != 1 or proof.final_poly.shape[0] != (1 << r_dim):
+            raise ValueError(
+                f"final_poly must be 1-D of length 2^{r_dim} ({1 << r_dim}), got "
+                f"shape {proof.final_poly.shape}"
             )
         return _verify_body(self, commitment, z, values, proof, transcript)
 
@@ -203,14 +213,33 @@ def _verify_body(
     # Final constraint: the running claim equals the original opening term plus
     # every round's γ-weighted out-of-domain and in-domain consistency terms,
     # each tying the final polynomial to a point the fold reduced to.
+    #
+    # `folded = num_rounds·k_whir` variables are folded over the rounds; the
+    # remaining `r_dim = m − folded` are the residual the prover sends as
+    # `final_poly`'s coefficients in the clear (a constant when `folded == m`).
+    # The fold binds the weight table's LSB first and the table is MSB-first in
+    # `z` (`expand_eq_to_hypercube`), so the folded dims are the HIGH `folded`
+    # (`z[r_dim:]`) and the residual is the LOW `r_dim` (`z[:r_dim]`). The opening
+    # term factors into the weight over the folded dims (`scheme.final_prefix` at
+    # the fold challenges) times the residual ⟨f̂_residual, ŵ_residual⟩, where the
+    # residual weight is the same scheme weight restricted to the residual coords
+    # (a per-coordinate product, so `initial_weight(z[:r_dim])` gives it for eq
+    # and möbius alike).
+    folded = num_rounds * k
+    r_dim = m - folded
     final_poly = proof.final_poly
-    prefix = verifier.scheme.final_prefix(z, jnp.stack(all_alphas))
-    acc = prefix * final_poly[0]
+    prefix = verifier.scheme.final_prefix(z[r_dim:], jnp.stack(all_alphas))
+    if r_dim == 0:
+        suffix = final_poly[0]  # no residual: final_poly is the folded constant
+    else:
+        residual_weight = verifier.scheme.initial_weight(z[:r_dim])
+        suffix = (mle_coeffs_to_evals(final_poly) * residual_weight).sum()
+    acc = prefix * suffix
     j = k
     for r in range(num_rounds):
         gamma = gammas[r]
-        alpha_slc = all_alphas[j:m]
-        rem = m - j  # remaining variables after this round's folds
+        alpha_slc = all_alphas[j:folded]
+        rem = folded - j  # folds remaining after this round
 
         def _consistency(point: Array) -> Array:
             """The constraint term for a point reduced to round `r`: eq of the
