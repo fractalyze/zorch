@@ -760,11 +760,18 @@ def _run_jagged_rounds_padded(
         # interaction's eq_int column; interaction rounds use the dense stride-2
         # eq_int split. Both selections are in-bounds (sentinel-free), so the
         # wrong-phase one is harmless -- the live mask zeroes it out anyway.
+        # Both phases' weights are computed each round and `in_rows` selects one;
+        # the discarded phase's pair indices can fall outside its (smaller) eq
+        # table (a row round's `pair_lo` overruns `eq_int`, an interaction round's
+        # overruns `eq_row` when niv exceeds the row width). JAX clamps an
+        # out-of-bounds gather, but clamp explicitly so the selected value's
+        # in-bounds invariant doesn't ride on that and the dead branch stays safe.
         w = eq_int[sched["col"][rnd]]
-        eq0_row = eq_row[sched["pair_lo"][rnd]] * w
-        eq1_row = eq_row[sched["pair_hi"][rnd]] * w
-        eq0_int = eq_int[sched["pair_lo"][rnd]]
-        eq1_int = eq_int[sched["pair_hi"][rnd]]
+        lo, hi = sched["pair_lo"][rnd], sched["pair_hi"][rnd]
+        eq0_row = eq_row[jnp.minimum(lo, eq_row.shape[0] - 1)] * w
+        eq1_row = eq_row[jnp.minimum(hi, eq_row.shape[0] - 1)] * w
+        eq0_int = eq_int[jnp.minimum(lo, eq_int.shape[0] - 1)]
+        eq1_int = eq_int[jnp.minimum(hi, eq_int.shape[0] - 1)]
         eq0 = jnp.where(in_rows, eq0_row, eq0_int)
         eq1 = jnp.where(in_rows, eq1_row, eq1_int)
         eq0 = jnp.where(live_mask, eq0, jnp.zeros((), eq0.dtype))
@@ -1074,7 +1081,6 @@ def _expand_eq_prefix(
     n = point.shape[0]
     state = jnp.atleast_1d(scalar)
     state = jnp.concatenate([state, jnp.zeros((width - 1,), state.dtype)])
-    live = 1
     for j in range(n):
         coord = jnp.where(j < live_len, point[j], jnp.zeros((), point.dtype))
         # expand only the live prefix; build result[2i]/[2i+1] in place.
@@ -1083,7 +1089,6 @@ def _expand_eq_prefix(
         inter = jnp.stack([low, high], axis=-1).reshape(-1)[:width]
         do_expand = j < live_len
         state = jnp.where(do_expand, inter, state)
-        live = jnp.where(do_expand, live * 2, live)
     return state
 
 

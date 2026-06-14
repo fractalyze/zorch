@@ -392,14 +392,11 @@ def scan_build_jagged_pyramid(
     folded_counts = [tuple(pc // 2 for pc in counts) for counts in prepad_counts]
 
     # The planes ride a fixed-width buffer (live prefix front, neutral tail) so
-    # the scan carry stays shape-invariant. The widest intermediate is a
-    # transition's prepad buffer, which can exceed `first.height` when an odd
-    # segment pads up; size the buffer to cover every layer height AND every
-    # prepad height along the chain.
-    plane_width = max(
-        max(sum(counts) for counts in src_counts),
-        max(sum(counts) for counts in prepad_counts),
-    )
+    # the scan carry stays shape-invariant. A transition's prepad buffer is the
+    # widest intermediate -- an odd segment padding up to even makes it at least
+    # as wide as its own (and thus every smaller) layer height -- so the max
+    # prepad height alone sizes the buffer.
+    plane_width = max(sum(counts) for counts in prepad_counts)
     # Per-transition prepad / postpad gathers, each `_segment_gather` laid into
     # the fixed width and stacked as the scan xs.
     prepad_gathers = jnp.asarray(
