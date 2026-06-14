@@ -24,6 +24,7 @@ from zorch.coding.reed_solomon import (
     ReedSolomon,
     eval_domain,
     fri_fold,
+    fri_fold_k_values,
     fri_fold_values,
 )
 from zorch.testkit.random_field import rand_field
@@ -95,6 +96,42 @@ class ReedSolomonTest(absltest.TestCase):
             layer1[positions], layer1[positions + half], beta, positions, 1
         )
         self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_fri_fold_k_values_k2_equals_butterfly(self) -> None:
+        # The k-ary fold's k=2 case must equal the conjugate-pair butterfly: for
+        # points (x, -x), interpolation and fri_fold_values are the same map
+        # (independent formulas — Lagrange vs the closed-form butterfly).
+        x = rand_field(1, (), F)
+        fx, fnx, beta = rand_field(2, (), F), rand_field(3, (), F), rand_field(4, (), F)
+        group = jnp.stack([fx, fnx])
+        points = jnp.stack([x, -x])
+        self.assertEqual(
+            fri_fold_k_values(group, beta, points), fri_fold_values(fx, fnx, beta, x)
+        )
+
+    def test_fri_fold_k_values_matches_lagrange_oracle(self) -> None:
+        # A folding factor > 2 interpolates; check against an independent
+        # product-form Lagrange evaluation (k=4, extension-field values).
+        k = 4
+        group = rand_field(7, (k,), EF)
+        points = rand_field(8, (k,), F)
+        beta = rand_field(9, (), F)
+
+        def oracle(group: Array, points: Array, r: Array) -> Array:
+            acc = jnp.zeros((), group.dtype)
+            for i in range(k):
+                num = jnp.ones((), points.dtype)
+                den = jnp.ones((), points.dtype)
+                for j in range(k):
+                    if j != i:
+                        num = num * (r - points[j])
+                        den = den * (points[i] - points[j])
+                acc = acc + group[i] * (num / den)
+            return acc
+
+        self.assertEqual(
+            fri_fold_k_values(group, beta, points), oracle(group, points, beta)
+        )
 
     def test_check_final_accepts_only_the_constant_claim(self) -> None:
         rs = ReedSolomon(message_len=1, blowup=4, dtype=F)
