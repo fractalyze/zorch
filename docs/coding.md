@@ -57,6 +57,29 @@ layout is fold-stable: folding a bit-reversed layer yields the squared
 domain's codeword, again bit-reversed, so only the fold's x-gather and the
 index arithmetic differ — the fold math is shared (`fri_fold_values`).
 
+## k-ary folding is a generalization axis, not a second protocol
+
+Binary folding — a conjugate *pair* per step — is the `k = 2` case of folding a
+*group* of `k` points. The `KFoldableCode` seam adds that generalization
+*alongside* the pair seam, never in place of it: a `fold_factor` `k`,
+`group_leaves` (`[n//k, k]`), `group_indices` (the `k` leaf indices of one
+group), `fold_group` / `fold_group_values`, and `group_layer_positions` — each
+the k-ary mirror of a pair method. In natural order a group is the k-th-root
+coset `{p, p+n/k, …, p+(k-1)·n/k}` (the conjugate pair is exactly `k = 2`), a
+slice, so the same fusion-friendly layout holds. The single-group fold is the
+degree-`(k-1)` interpolant through the group's points evaluated at `β`
+(`fri_fold_k_values`); for `(x, −x)` it reduces to the conjugate butterfly.
+
+The two seams **coexist rather than collapse**. The binary `fold` is a
+closed-form butterfly; the k-ary fold is Lagrange interpolation, which at `k = 2`
+computes the same value but is strictly more work. So binary folding is *not*
+re-expressed as `k = 2` of the k-ary path — that would regress the binary path
+that the live consumers ride — and the pair methods stay byte- and
+XLA-identical. A consumer picks the seam its fold factor needs; `ReedSolomon`
+implements both (natural order). The k-ary `pcs/fold` query/fold-chain
+orchestration (`PreFoldKGroupCommitRound`, `verify_group_fold_chain`) mirrors the
+binary round the same additive way.
+
 ## Design rules
 
 - **A code is an object, not a call.** `ReedSolomon` is a class, not a function,

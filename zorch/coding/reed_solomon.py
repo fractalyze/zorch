@@ -15,14 +15,16 @@ zkx rather than fusing it by pattern-match.
 `fri_fold` is the codeword fold shared by every FRI-style scheme (FRI,
 Basefold, WHIR, STARK); the fold half of the seam delegates to it. It lives
 in this module so the fold's x-coordinates stay the *same* evaluation domain
-the encoder used. WHIR's k-ary generalization is deferred to its first
-consumer.
+the encoder used. The arbitrary-fold-factor (k-ary) generalization is
+`fri_fold_k_values` plus the `KFoldableCode` group seam — additive to the binary
+conjugate-pair fold, which stays the closed-form butterfly (see coding.md).
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import zk_dtypes
@@ -32,7 +34,7 @@ from zorch.poly.univariate import compute_lagrange_basis
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 
 if TYPE_CHECKING:
-    from zorch.coding.foldable_code import FoldableCode
+    from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 
 
 def _base_dtype(dtype: Any) -> Any:
@@ -77,15 +79,24 @@ class ReedSolomon:
         dtype: Any,
         *,
         coset_shift: Array | None = None,
+        fold_factor: int = 2,
     ) -> None:
         if not is_power_of_two(message_len):
             raise ValueError(f"message_len must be a power of two, got {message_len}")
         if not is_power_of_two(blowup):
             raise ValueError(f"blowup must be a power of two, got {blowup}")
+        if not is_power_of_two(fold_factor) or fold_factor < 2:
+            raise ValueError(
+                f"fold_factor must be a power of two >= 2, got {fold_factor}"
+            )
         self.message_len = message_len
         self.block_len = message_len * blowup
         self.dtype = dtype
         self.coset_shift = coset_shift
+        # The k-ary fold's static factor (KFoldableCode). The binary pair seam
+        # ignores it; default 2 keeps the binary path's jit-zone key unchanged.
+        self.fold_factor = fold_factor
+        self._log2_fold_factor = log2_strict_usize(fold_factor)
         # Coset eval scales coeffs by [1, h, h^2, ..., h^{n-1}]; precompute it
         # once since h and n are fixed. Built by log-doubling — powers[m:2m] =
         # powers[:m] * h^m — because `jnp.arange` raises on extension dtypes
@@ -113,7 +124,13 @@ class ReedSolomon:
                 if self.coset_shift is None
                 else np.asarray(self.coset_shift).tobytes()
             )
-            self._key = (self.message_len, self.block_len, self.dtype, shift)
+            self._key = (
+                self.message_len,
+                self.block_len,
+                self.dtype,
+                shift,
+                self.fold_factor,
+            )
         return self._key
 
     def __eq__(self, other: object) -> bool:
@@ -196,6 +213,91 @@ class ReedSolomon:
         for _ in range(level):
             shift = shift * shift
         return shift
+
+    # --- KFoldableCode: the k-ary fold seam, additive to the binary pair seam
+    # above. A k-ary fold groups the k entries of one folded point's k-th-root
+    # coset {p, p + n/k, ..., p + (k-1)n/k} (the natural-order generalization of
+    # the (x, -x) conjugate pair) and Lagrange-interpolates them at beta via
+    # `fri_fold_k_values`. The binary methods are left untouched (zorch#252).
+
+    def fold_group(self, codeword: Array, beta: Array) -> Array:
+        """KFoldableCode fold: regroup the layer into k-th-root cosets and
+        Lagrange-fold each at `beta`, dividing the length by `fold_factor`. The
+        level — and with it the coset shift — is read off the codeword length."""
+        k = self.fold_factor
+        n = codeword.shape[0]
+        # Fail loud at the seam boundary, the k-ary twin of fri_fold's n<2 guard:
+        # a layer too short to form one k-group would otherwise die in
+        # `_regroup`'s reshape with an opaque shape error. A real codeword length
+        # is a power of two, so n>=k already implies k divides n; n is static
+        # (shape), so this is vmap-safe.
+        if n < k:
+            raise ValueError(
+                f"fold_group requires a codeword length >= fold_factor {k}, got {n}"
+            )
+        level = log2_strict_usize(self.block_len // n) // self._log2_fold_factor
+        domain = eval_domain(
+            _base_dtype(codeword.dtype), n, shift=self._group_level_shift(level)
+        )
+        return self._fold_groups(
+            self._regroup(codeword, k), self._regroup(domain, k), beta
+        )
+
+    def group_leaves(self, codeword: Array) -> Array:
+        """Natural order: a k-th-root coset sits a sub-layer (`n // k`) apart, so
+        leaf `p` is `(codeword[p], codeword[p + n/k], ..., codeword[p +
+        (k-1)n/k])` — the k-ary `pair_leaves`."""
+        return self._regroup(codeword, self.fold_factor)
+
+    def group_indices(self, positions: Array, level: int) -> tuple[Array, ...]:
+        """Natural order: the k-th-root coset of layer `level` whose fold lands
+        at `positions` sits a sub-layer apart, and `positions` itself is the
+        landing (first) index."""
+        sub = self.block_len >> (self._log2_fold_factor * (level + 1))
+        return tuple(positions + m * sub for m in range(self.fold_factor))
+
+    def fold_group_values(
+        self, group: Array, beta: Array, positions: Array, level: int
+    ) -> Array:
+        """Fold opened k-groups of layer `level`; the x-coordinates are the
+        group's points on the layer's `(level`-times-`k`-th-powered) domain."""
+        n = self.block_len >> (self._log2_fold_factor * level)
+        domain = eval_domain(
+            _base_dtype(self.dtype), n, shift=self._group_level_shift(level)
+        )
+        points = domain[jnp.stack(self.group_indices(positions, level), axis=-1)]
+        return self._fold_groups(group, points, beta)
+
+    def group_layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
+        """Natural order: `a_i = q_i mod (n / k^{i+1})` with `q_0 = positions`,
+        `q_{i+1} = a_i`, elementwise over the query axis — the k-ary
+        `layer_positions`."""
+        indices = []
+        q = positions
+        for i in range(num_rounds):
+            a = q % (self.block_len >> (self._log2_fold_factor * (i + 1)))
+            indices.append(a)
+            q = a
+        return indices
+
+    def _fold_groups(self, groups: Array, points: Array, beta: Array) -> Array:
+        """vmap the single-group Lagrange fold (`fri_fold_k_values`) over the
+        group/query axis — the one place fold_group and fold_group_values share,
+        each supplying its own `groups`/`points` (full layer vs opened queries)."""
+        return jax.vmap(lambda g, p: fri_fold_k_values(g, beta, p))(groups, points)
+
+    def _regroup(self, layer: Array, k: int) -> Array:
+        """Reshape a length-`n` layer into its `[n // k, k]` k-th-root cosets:
+        row `p` is `layer[[p, p + n/k, ..., p + (k-1)n/k]]`. `reshape(k, n//k).T`
+        gathers that coset without an index array."""
+        return layer.reshape(k, layer.shape[0] // k).T
+
+    def _group_level_shift(self, level: int) -> Array | None:
+        """Layer `level`'s domain shift under k-ary folding, `coset_shift^(k^level)`
+        — each fold lands on the `k`-th-powered domain, raising the shift with it.
+        Since `k^level = 2^(log2(k)·level)`, this is exactly the binary
+        `_level_shift` at `log2(k)·level` squarings, so it delegates there."""
+        return self._level_shift(self._log2_fold_factor * level)
 
 
 def _bit_reverse_indices(positions: Array, n: int) -> Array:
@@ -369,3 +471,4 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[FoldableCode] = ReedSolomon
     _bitrev: type[FoldableCode] = BitReversedReedSolomon
+    _kary: type[KFoldableCode] = ReedSolomon

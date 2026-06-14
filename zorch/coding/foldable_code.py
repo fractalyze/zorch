@@ -69,3 +69,62 @@ class FoldableCode(LinearCode, Protocol):
         scalar `claim` — the IOPP terminal membership check, tied to the final
         sumcheck claim."""
         ...
+
+
+@runtime_checkable
+class KFoldableCode(LinearCode, Protocol):
+    """k-ary generalization of the FoldableCode seam: a layer folds by a static
+    `fold_factor` k, regrouping the k entries of one folded point's k-th-root
+    coset per step instead of a conjugate pair (the k=2 special case).
+
+    Additive to FoldableCode, not a replacement — a code may implement both
+    (ReedSolomon does). The binary pair seam is left untouched so the k=2 path
+    stays byte- and XLA-identical, while this k-group seam serves arbitrary-factor
+    consumers. The two do not collapse into one: the single-group fold is Lagrange
+    interpolation (`reed_solomon.fri_fold_k_values`), which at k=2 is the conjugate
+    butterfly's strictly costlier twin, so they coexist by design (zorch#252 F1).
+    Every method here is the k-ary mirror of a `FoldableCode` pair method, named
+    `*group*` to sit alongside it."""
+
+    fold_factor: int
+
+    def fold_group(self, codeword: Array, beta: Array) -> Array:
+        """Fold a layer by `beta`, dividing its length by `fold_factor` (prover
+        side) — the k-ary counterpart of `FoldableCode.fold`."""
+        ...
+
+    def group_leaves(self, codeword: Array) -> Array:
+        """Arrange a layer's codeword into its k-group leaves `[n // k, k]`: row
+        `p` holds the `fold_factor` entries `group_indices(p, level)` whose fold
+        lands at `p`, so one Merkle path opens the whole group. The k-ary
+        `pair_leaves`."""
+        ...
+
+    def group_indices(self, positions: Array, level: int) -> tuple[Array, ...]:
+        """The `fold_factor` leaf indices of layer `level`'s group whose fold
+        lands at `positions` in layer `level + 1` — the k-ary `pair_indices`,
+        returning k indices instead of a (lo, hi) pair."""
+        ...
+
+    def fold_group_values(
+        self, group: Array, beta: Array, positions: Array, level: int
+    ) -> Array:
+        """Fold opened k-groups of layer `level` at `positions` (verifier side).
+
+        `group` is `[Q, k]`, the layer's entries at `group_indices(positions,
+        level)`. Must agree with `fold_group`: with `g = group_indices(p, level)`,
+        `fold_group(layer, beta)[p] == fold_group_values(layer[g], beta, p,
+        level)`. The k-ary `fold_values`."""
+        ...
+
+    def group_layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
+        """Per-layer folded query indices for sampled `positions` under k-ary
+        folding: element `i` addresses layer `i`'s group via `group_indices` and
+        is where that fold lands in layer `i + 1`. The k-ary `layer_positions`."""
+        ...
+
+    def check_final(self, final: Array, claim: Array) -> Array:
+        """Whether the fully folded layer is the base-code encoding of the scalar
+        `claim` — identical to FoldableCode's terminal check (fold arity does not
+        change the constant-polynomial membership test)."""
+        ...
