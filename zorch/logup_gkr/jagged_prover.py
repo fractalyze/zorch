@@ -43,10 +43,17 @@ from typing import TYPE_CHECKING, cast
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import Array
+from jax import Array, lax
 
 from zorch.fusion import fused_region
-from zorch.logup_gkr.circuit import JaggedGkrLayer, _pad_neutral, _segment_gather
+from zorch.logup_gkr.circuit import (
+    JaggedGkrLayer,
+    _fixed_width_gather,
+    _gather_pad,
+    _pad_neutral,
+    _pad_to_width,
+    _segment_gather,
+)
 from zorch.logup_gkr.prover import Carry, logup_combine
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import (
@@ -612,6 +619,472 @@ class JaggedGkrLayerRound(Round):
         self, carry: Carry, transcript: Transcript
     ) -> tuple[Carry, Transcript, JaggedLayerProof]:
         return self._call(carry, transcript)
+
+
+def _padded_round_schedule(
+    row_counts: tuple[int, ...],
+    nrv: int,
+    niv: int,
+    max_rounds: int,
+    plane_width: int,
+) -> dict[str, np.ndarray]:
+    """Host-side per-round schedule for one layer, padded to the chain's fixed
+    `max_rounds` / `plane_width` so every layer's schedule stacks into one
+    shape-invariant `lax.scan` xs.
+
+    Each of `max_rounds` entries carries everything `_run_jagged_rounds`'s round
+    body reads off the static layout: the segment gather re-padding the plane
+    buffer (sentinels past the live rows resolve to the neutral fraction), the
+    `eq_row` pair lookups and the `eq_int` per-pair interaction weights for a row
+    round, the live pair count the materialized sum is masked to, and the
+    `active` / `in_rows` / `last_row` flags that drive the fixed loop. Rounds
+    past this layer's `nrv + niv` are INACTIVE -- a shorter floor layer must not
+    advance Fiat-Shamir there -- and rounds in `[nrv, nrv + niv)` are the dense
+    interaction rounds, so their gather is the identity over the live prefix and
+    their pair lookups are the stride-2 `eq_int` split.
+
+    Indices for inactive (or wrong-phase) rounds are filled with in-bounds zeros;
+    the live-pair mask and the `active` flag zero their contribution out.
+    """
+    half_width = plane_width // 2
+    sentinel = plane_width  # `_gather_pad` treats any index >= width as padding
+
+    gather = np.tile(np.arange(plane_width, dtype=np.int32), (max_rounds, 1))
+    pair_lo = np.zeros((max_rounds, half_width), dtype=np.int32)
+    pair_hi = np.zeros((max_rounds, half_width), dtype=np.int32)
+    col = np.zeros((max_rounds, half_width), dtype=np.int32)
+    live_pairs = np.zeros(max_rounds, dtype=np.int32)
+    active = np.zeros(max_rounds, dtype=bool)
+    in_rows = np.zeros(max_rounds, dtype=bool)
+    last_row = np.zeros(max_rounds, dtype=bool)
+
+    meta = _round_metadata(row_counts, nrv)
+    counts = row_counts
+    for k in range(nrv):
+        _, col_index, pair_index = meta[k]
+        padded = tuple(rc + rc % 2 for rc in counts)
+        live = sum(padded) // 2
+        gather[k] = _fixed_width_gather(counts, padded, plane_width)
+        ci = np.asarray(col_index, dtype=np.int32)
+        pi = np.asarray(pair_index, dtype=np.int32)
+        pair_lo[k, : pi.shape[0]] = pi * 2
+        pair_hi[k, : pi.shape[0]] = pi * 2 + 1
+        col[k, : ci.shape[0]] = ci
+        live_pairs[k] = live
+        active[k] = True
+        in_rows[k] = True
+        last_row[k] = k == nrv - 1
+        counts = tuple(p // 2 for p in padded)
+
+    for m in range(niv):
+        k = nrv + m
+        int_width = 1 << (niv - m)  # dense interaction width entering this round
+        half = int_width // 2
+        gather[k, :int_width] = np.arange(int_width, dtype=np.int32)
+        gather[k, int_width:] = sentinel
+        pair_lo[k, :half] = np.arange(half, dtype=np.int32) * 2
+        pair_hi[k, :half] = np.arange(half, dtype=np.int32) * 2 + 1
+        live_pairs[k] = half
+        active[k] = True
+
+    return {
+        "gather": gather,
+        "pair_lo": pair_lo,
+        "pair_hi": pair_hi,
+        "col": col,
+        "live_pairs": live_pairs,
+        "active": active,
+        "in_rows": in_rows,
+        "last_row": last_row,
+    }
+
+
+def _run_jagged_rounds_padded(
+    n0: Array,
+    n1: Array,
+    d0: Array,
+    d1: Array,
+    eq_row: Array,
+    eq_int: Array,
+    coords: Array,
+    lam: Array,
+    claim: Array,
+    transcript: Transcript,
+    sched: dict[str, Array],
+    naturals: Array,
+    inv_vand: Array,
+    niv: int,
+    max_rounds: int,
+    challenge_limbs: int,
+) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
+    """Fixed-width sibling of `_run_jagged_rounds`: run a fixed `max_rounds` loop
+    over neutral-padded buffers so a whole pyramid of differently-sized layers
+    shares one traced round body (the chain scans this once per layer).
+
+    The four planes ride a fixed `plane_width` buffer with the live prefix at the
+    front and the neutral fraction (n=0, d=1) in the tail; the per-round `sched`
+    re-pads and folds inside that width, masking the materialized sum to the live
+    pairs so the dead tail never enters it (field zero-adds are exact, so this is
+    byte-equal to `_run_jagged_rounds`'s live-only sum). `coords` is the bound
+    point's coordinates in round order (`eval_point` reversed), one per round.
+
+    INACTIVE rounds (`sched["active"]` false -- a shorter layer's padding rounds
+    past `nrv + niv`) select every carried value unchanged, the transcript's five
+    sponge leaves included, so the layer never over-advances Fiat-Shamir; the
+    chain is k separate sumchecks, not one joint scan, so this guard is what the
+    homogeneous `zorch.sumcheck` scan does not need."""
+    one = jnp.ones((), coords.dtype)
+    zero = jnp.zeros((), coords.dtype)
+    eq_adj = one
+    pad_adj = one
+    half_width = n0.shape[0] // 2
+    pair_axis = jnp.arange(half_width)
+    polys: list[Array] = []
+    challenges: list[Array] = []
+
+    for rnd in range(max_rounds):
+        active = sched["active"][rnd]
+        in_rows = sched["in_rows"][rnd]
+        last_row = sched["last_row"][rnd]
+        z_cur = coords[rnd]
+        gather = sched["gather"][rnd]
+        live_mask = (pair_axis < sched["live_pairs"][rnd]) & active
+
+        pn0, pn1, pd0, pd1 = (
+            _gather_pad(n0, gather, 0),
+            _gather_pad(n1, gather, 0),
+            _gather_pad(d0, gather, 1),
+            _gather_pad(d1, gather, 1),
+        )
+        # Row rounds weight each pair by its segment-local row-eq factor times its
+        # interaction's eq_int column; interaction rounds use the dense stride-2
+        # eq_int split. Both selections are in-bounds (sentinel-free), so the
+        # wrong-phase one is harmless -- the live mask zeroes it out anyway.
+        w = eq_int[sched["col"][rnd]]
+        eq0_row = eq_row[sched["pair_lo"][rnd]] * w
+        eq1_row = eq_row[sched["pair_hi"][rnd]] * w
+        eq0_int = eq_int[sched["pair_lo"][rnd]]
+        eq1_int = eq_int[sched["pair_hi"][rnd]]
+        eq0 = jnp.where(in_rows, eq0_row, eq0_int)
+        eq1 = jnp.where(in_rows, eq1_row, eq1_int)
+        eq0 = jnp.where(live_mask, eq0, jnp.zeros((), eq0.dtype))
+        eq1 = jnp.where(live_mask, eq1, jnp.zeros((), eq1.dtype))
+
+        eval_zero, eval_half, eq_sum = _paired_sums(pn0, pn1, pd0, pd1, eq0, eq1, lam)
+        poly = _round_coeffs(
+            eval_zero,
+            eval_half,
+            eq_sum,
+            eq_adj,
+            pad_adj,
+            z_cur,
+            claim,
+            naturals,
+            inv_vand,
+        )
+
+        observed = transcript.observe(poly)
+        observed, r = sample_challenge(observed, claim.dtype, challenge_limbs)
+        # Inactive rounds leave the sponge (all five leaves) and the sampled
+        # challenge untouched; the proof slot they emit is sliced off host-side.
+        transcript = _select_transcript(active, observed, transcript)
+        r = jnp.where(active, r, zero)
+        polys.append(jnp.where(active, poly, jnp.zeros_like(poly)))
+        challenges.append(r)
+
+        next_claim = eval_coeffs(poly, r)
+        next_pad = pad_adj * (z_cur * r + (one - z_cur) * (one - r))
+        fn0, fn1, fd0, fd1 = (_bind_lsb(a, r) for a in (pn0, pn1, pd0, pd1))
+        feq_row = _bind_lsb(eq_row, r)
+        feq_int = _bind_lsb(eq_int, r)
+
+        claim = jnp.where(active, next_claim, claim)
+        # Row rounds accumulate the bound row-eq mass into pad_adj; at the last
+        # row round it becomes the scalar eq_adj and pad_adj restarts to track the
+        # interaction variables' own mass (the `_run_jagged_rounds` boundary).
+        eq_adj = jnp.where(active & last_row, next_pad, eq_adj)
+        pad_adj = jnp.where(active, jnp.where(last_row, one, next_pad), pad_adj)
+        n0, n1, d0, d1 = (
+            _select_active(active, fa, pa)
+            for fa, pa in ((fn0, n0), (fn1, n1), (fd0, d0), (fd1, d1))
+        )
+        # eq_row folds on row rounds, eq_int on interaction rounds; the inactive
+        # guard subsumes the wrong-phase one (a fold there is discarded).
+        eq_row = _select_active(active & in_rows, feq_row, eq_row)
+        eq_int = _select_active(active & ~in_rows, feq_int, eq_int)
+        # The inactive padding rounds (a shorter layer's tail) leave the carry
+        # untouched via the selects above. Under `lax.scan` that dead-fold +
+        # select chain can alias into a live earlier round and corrupt its poly
+        # (an XLA scan-body value-numbering hazard; the same family
+        # `zerocheck.jagged` documents). Materialize the per-round carry behind an
+        # optimization barrier so each round's state is independent.
+        claim, eq_adj, pad_adj, n0, n1, d0, d1, eq_row, eq_int = (
+            lax.optimization_barrier(
+                (claim, eq_adj, pad_adj, n0, n1, d0, d1, eq_row, eq_int)
+            )
+        )
+
+    return (
+        jnp.stack(challenges[::-1]),
+        transcript,
+        jnp.stack(polys),
+        n0[0],
+        n1[0],
+        d0[0],
+        d1[0],
+    )
+
+
+def _select_active(active: Array, folded: Array, kept: Array) -> Array:
+    """Fixed-width fold-back: a fold halves the live prefix, so re-pad it to the
+    kept buffer's width before the select keeps it on active rounds (and the
+    unchanged buffer otherwise)."""
+    padded = jnp.concatenate([folded, jnp.zeros_like(folded)])[: kept.shape[0]]
+    return jnp.where(active, padded, kept)
+
+
+def _select_transcript(
+    active: Array, advanced: Transcript, kept: Transcript
+) -> Transcript:
+    """Select the advanced sponge on active rounds, the unchanged one otherwise,
+    leaf by leaf -- the transcript-neutral guard a shorter layer's padding rounds
+    need. Both are `DuplexTranscript`s built off the same permutation/rate."""
+    a = cast(DuplexTranscript, advanced)
+    k = cast(DuplexTranscript, kept)
+    sel = lambda x, y: jnp.where(active, x, y)
+    return DuplexTranscript(
+        a.permutation,
+        a.rate,
+        DuplexState(
+            sel(a.state.input_buffer, k.state.input_buffer),
+            sel(a.state.output_buffer, k.state.output_buffer),
+            sel(a.state.sponge_state, k.state.sponge_state),
+            sel(a.state.in_pos, k.state.in_pos),
+            sel(a.state.out_pos, k.state.out_pos),
+        ),
+    )
+
+
+def prove_jagged_pyramid(
+    layers: Sequence[JaggedGkrLayer],
+    carry: Carry,
+    transcript: Transcript,
+    *,
+    challenge_limbs: int = 1,
+) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
+    """Prove the jagged GKR pyramid as ONE `lax.scan` over the floor-outward
+    layer chain -- O(1) in the layer count, byte-identical to the unrolled
+    `ProveChain(JaggedGkrLayerRound(l) for l in layers)` (sp1-zorch#55).
+
+    `layers` are the proved layers floor-outward (the chain's `reversed(
+    layers[:-1])`); the pyramid halves each layer, so the per-layer planes ride
+    fixed-width buffers padded to the first (largest) layer's height with the
+    live prefix at the front (the `sumcheck.prove` / `zerocheck.jagged` pattern),
+    and the per-layer round count -- which grows by one each outward layer --
+    rides a fixed `max_rounds` loop whose tail rounds a shorter layer leaves
+    INACTIVE, selecting the unchanged transcript so it never over-advances
+    Fiat-Shamir. Returns the same `(carry, transcript, per-layer proofs)` triple
+    as the chain.
+    """
+    layers = list(layers)
+    if not layers:
+        raise ValueError("prove_jagged_pyramid needs at least one layer")
+    if not isinstance(transcript, DuplexTranscript):
+        raise TypeError("prove_jagged_pyramid threads a DuplexTranscript scan carry")
+
+    niv = layers[0].num_interaction_variables
+    num_eval0, _den0, eval_point0 = carry
+    dtype = num_eval0.dtype
+    # nrv grows by one each outward layer (the carry's eval_point gains the child
+    # selector), so the schedule's per-layer round count is host-known from the
+    # entry eval_point length; the planes' fixed width is the first (largest)
+    # layer's padded round-0 height.
+    init_nrv = int(eval_point0.shape[0]) - niv
+    nrvs = [init_nrv + j for j in range(len(layers))]
+    if any(layer.num_interaction_variables != niv for layer in layers):
+        raise ValueError("every layer must share the interaction-variable count")
+    real_rounds = [nrv + niv for nrv in nrvs]
+    max_rounds = max(real_rounds)
+    # The carry's eval_point grows by one per layer (the child selector), so the
+    # exit point of the last layer is the widest -- the fixed scan-carry width.
+    max_eval_len = max_rounds + 1
+
+    # Widen the fixed buffer to cover every layer's per-round prepad height (an
+    # odd segment padding up to even can exceed the layer's own height) plus the
+    # dense interaction width; halve once per round in a single pass per layer.
+    plane_width = 1 << niv
+    for layer, nrv in zip(layers, nrvs):
+        counts = layer.row_counts
+        for _ in range(nrv):
+            plane_width = max(plane_width, sum(rc + rc % 2 for rc in counts))
+            counts = tuple((rc + rc % 2) // 2 for rc in counts)
+
+    one = jnp.ones((), dtype)
+    naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
+    inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
+
+    # Stack the per-layer host schedule (gather / eq lookups / live-pair mask /
+    # phase flags) and the per-layer round-count metadata as scan xs, so every
+    # layer drives the same traced body.
+    keys = (
+        "gather",
+        "pair_lo",
+        "pair_hi",
+        "col",
+        "live_pairs",
+        "active",
+        "in_rows",
+        "last_row",
+    )
+    stacked: dict[str, list[np.ndarray]] = {key: [] for key in keys}
+    for layer, nrv in zip(layers, nrvs):
+        sched = _padded_round_schedule(
+            layer.row_counts, nrv, niv, max_rounds, plane_width
+        )
+        for key in keys:
+            stacked[key].append(sched[key])
+    xs_sched = {key: jnp.asarray(np.stack(stacked[key])) for key in keys}
+    # The bound point's live length per layer (the entry eval_point length), used
+    # to read each round's coordinate and to slice the new eval_point back.
+    xs_eval_len = jnp.asarray(np.asarray(real_rounds, dtype=np.int32))
+
+    # Pad each layer's interaction-major planes to the fixed width with the
+    # neutral fraction, stacked leading-axis for the scan.
+    def pad_planes(layer: JaggedGkrLayer) -> tuple[Array, Array, Array, Array]:
+        return (
+            _pad_to_width(layer.numerator_0.astype(dtype), plane_width, 0),
+            _pad_to_width(layer.numerator_1.astype(dtype), plane_width, 0),
+            _pad_to_width(layer.denominator_0.astype(dtype), plane_width, 1),
+            _pad_to_width(layer.denominator_1.astype(dtype), plane_width, 1),
+        )
+
+    planes = [pad_planes(layer) for layer in layers]
+    xs_planes = tuple(
+        jnp.stack([planes[j][i] for j in range(len(layers))]) for i in range(4)
+    )
+
+    perm, rate = transcript.permutation, transcript.rate
+
+    def step(
+        carry_scan: tuple[Carry, Transcript], xs: tuple
+    ) -> tuple[tuple[Carry, Transcript], tuple]:
+        (num_eval, den_eval, eval_point), t = carry_scan
+        (n0, n1, d0, d1), eval_len, sched = xs
+
+        # Per-layer carry reduction head: sample lam, batch the opening claim.
+        t, lam = sample_challenge(t, dtype, challenge_limbs)
+        claim = lam * num_eval + den_eval
+
+        # eq tables over the entry point: rows are the trailing `nrv` coords,
+        # interactions the leading `niv` -- nrv is host-known per layer, so the
+        # split index rides as a traced eval_len. Build at the fixed widths.
+        nrv_t = eval_len - niv
+        row_pt = lax.dynamic_slice_in_dim(eval_point, niv, max_rounds - niv, 0)
+        # eq_row spans 2^nrv live entries; expand over the fixed max width and let
+        # the schedule's pair lookups stay within the live region.
+        eq_row = _expand_eq_prefix(row_pt, nrv_t, 1 << (max_rounds - niv), one)
+        # eq_int stays its natural 2^niv width: it folds via `_bind_lsb` (needs an
+        # even length) and the schedule's lookups never index past 2^niv - 1.
+        eq_int = expand_eq_to_hypercube(eval_point[:niv], one)
+
+        # coords[rnd] = eval_point[eval_len - 1 - rnd]: the round consumes the
+        # point from the end, and the bound point is the challenges reversed.
+        idx = eval_len - 1 - jnp.arange(max_rounds)
+        coords = eval_point[jnp.clip(idx, 0, eval_point.shape[0] - 1)]
+
+        challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds_padded(
+            n0,
+            n1,
+            d0,
+            d1,
+            eq_row,
+            eq_int,
+            coords,
+            lam,
+            claim,
+            t,
+            sched,
+            naturals,
+            inv_vand,
+            niv,
+            max_rounds,
+            challenge_limbs,
+        )
+
+        t = t.observe(jnp.stack([fn0, fn1, fd0, fd1]))
+        t, r = sample_challenge(t, dtype, challenge_limbs)
+        num_eval = fn0 + (fn1 - fn0) * r
+        den_eval = fd0 + (fd1 - fd0) * r
+        # New eval_point = [bound point (the layer's real reversed challenges),
+        # child selector r]; the live length grows by one. `_run_jagged_rounds_
+        # padded` returns the full-width challenges reversed, so the real ones sit
+        # at the tail (the inactive rounds are zeros at the front); roll them to
+        # the front (a take by index, this jaxlib lacks `jnp.roll`), then append r
+        # as the low (last) bit.
+        roll = (jnp.arange(max_rounds) + (max_rounds - eval_len)) % max_rounds
+        bound = jnp.concatenate([challenges[roll], jnp.zeros((1,), dtype)])
+        new_point = lax.dynamic_update_index_in_dim(bound, r, eval_len, 0)
+
+        out = (lam, claim, polys, challenges, fn0, fn1, fd0, fd1)
+        return ((num_eval, den_eval, new_point), t), out
+
+    # eval_point rides a fixed max-width buffer with the live prefix at front.
+    eval_buf = jnp.concatenate(
+        [eval_point0, jnp.zeros((max_eval_len - eval_point0.shape[0],), dtype)]
+    )
+    init = ((num_eval0, carry[1], eval_buf), transcript)
+    xs = (xs_planes, xs_eval_len, xs_sched)
+    (final_carry, final_t), outs = lax.scan(step, init, xs)
+    lam_s, claim_s, polys_s, chal_s, fn0_s, fn1_s, fd0_s, fd1_s = outs
+
+    # Reconstruct the ragged per-layer proofs: slice each layer's padded polys /
+    # bound point to its real round count (the challenges land reversed, at the
+    # tail of the fixed buffer, so the live point is the last `rounds` entries).
+    proofs: list[JaggedLayerProof] = []
+    for j, rounds in enumerate(real_rounds):
+        polys_j = polys_s[j][:rounds]
+        point_j = chal_s[j][max_rounds - rounds :]
+        proofs.append(
+            JaggedLayerProof(
+                lam_s[j],
+                claim_s[j],
+                polys_j,
+                point_j,
+                fn0_s[j],
+                fn1_s[j],
+                fd0_s[j],
+                fd1_s[j],
+            )
+        )
+
+    (num_eval, den_eval, eval_buf) = final_carry
+    final_eval = eval_buf[: real_rounds[-1] + 1]
+    return (num_eval, den_eval, final_eval), final_t, proofs
+
+
+def _expand_eq_prefix(
+    point: Array, live_len: Array, width: int, scalar: Array
+) -> Array:
+    """`expand_eq_to_hypercube` over a traced-length prefix of `point`, into a
+    fixed `width` buffer (`2^max_row_vars`). The live `2^live_len` prefix carries
+    the eq weights; coordinates past `live_len` fold in as the identity (their
+    factor is 1), leaving the live values replicated -- harmless, the schedule's
+    pair lookups only ever read the live region. `width` must be the max so the
+    buffer is shape-invariant across layers."""
+    n = point.shape[0]
+    state = jnp.atleast_1d(scalar)
+    state = jnp.concatenate([state, jnp.zeros((width - 1,), state.dtype)])
+    live = 1
+    for j in range(n):
+        coord = jnp.where(j < live_len, point[j], jnp.zeros((), point.dtype))
+        # expand only the live prefix; build result[2i]/[2i+1] in place.
+        low = state * (jnp.ones((), point.dtype) - coord)
+        high = state * coord
+        inter = jnp.stack([low, high], axis=-1).reshape(-1)[:width]
+        do_expand = j < live_len
+        state = jnp.where(do_expand, inter, state)
+        live = jnp.where(do_expand, live * 2, live)
+    return state
 
 
 if TYPE_CHECKING:

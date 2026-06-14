@@ -26,11 +26,12 @@ fingerprinting likewise stays in the consumer -- zorch stays scheme-agnostic.
 from __future__ import annotations
 
 import itertools
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
-from jax import Array
+from jax import Array, lax
 
 from zorch.utils.bits import log2_strict_usize
 
@@ -265,6 +266,37 @@ def _pad_neutral(
     )
 
 
+def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
+    """Extend `arr` to `width` with the fold-neutral fraction tail -- 0 for a
+    numerator, 1 for a denominator -- keeping the live prefix at the front. The
+    fixed-width-buffer convention the rolled jagged scans carry so a chain of
+    differently-sized layers stays shape-invariant across the scan."""
+    pad = width - arr.shape[0]
+    if pad == 0:
+        return arr
+    tail = jnp.zeros((pad,), arr.dtype) if neutral == 0 else jnp.ones((pad,), arr.dtype)
+    return jnp.concatenate([arr, tail])
+
+
+def _fixed_width_gather(
+    src_counts: tuple[int, ...], dst_counts: tuple[int, ...], width: int
+) -> np.ndarray:
+    """`_segment_gather` laid into a fixed `width` buffer -- its companion for the
+    rolled scans, which carry every layer in one width. `_segment_gather`'s
+    intra-segment sentinel is `sum(src_counts)`: past the live rows in the
+    exactly-sized layout, but a live slot in the wider buffer, so remap it (and
+    any index past the live rows) to `width`, which `_gather_pad` resolves to the
+    neutral pad rather than a stale slot. `None` (layouts already agree) becomes
+    the identity over the live prefix."""
+    live = sum(src_counts)
+    seg = _segment_gather(src_counts, dst_counts)
+    base = np.arange(live, dtype=np.int32) if seg is None else np.asarray(seg, np.int32)
+    base = np.where(base >= live, width, base)
+    row = np.full(width, width, dtype=np.int32)
+    row[: base.shape[0]] = base
+    return row
+
+
 def jagged_layer_transition(
     layer: JaggedGkrLayer, out_row_counts: tuple[int, ...]
 ) -> JaggedGkrLayer:
@@ -330,3 +362,112 @@ def extract_jagged_outputs(layer: JaggedGkrLayer) -> LogUpGkrOutput:
         numerator=_interleave(layer.numerator_0, layer.numerator_1),
         denominator=_interleave(layer.denominator_0, layer.denominator_1),
     )
+
+
+def scan_build_jagged_pyramid(
+    first: JaggedGkrLayer, schedules: Sequence[tuple[int, ...]]
+) -> list[JaggedGkrLayer]:
+    """Build the jagged pyramid via one `lax.scan` over the transitions -- fused
+    (one traced region, O(1) in the pyramid depth), not the eager Python loop of
+    `jagged_layer_transition` dispatches that scales the runtime with the layer
+    count. `schedules[k]` is transition `k`'s `out_row_counts` (the consumer's
+    halving policy, the same argument the eager transition takes); the planes ride
+    a fixed-width buffer with the neutral fraction padding the dead tail so the
+    scan carry stays shape-invariant. Byte-identical to iterating
+    `jagged_layer_transition` down the chain; returns `[first, ..., floor]`
+    (sp1-zorch#55)."""
+    schedules = list(schedules)
+    # A chain that is already at the floor has no transition to fold; `lax.scan`
+    # with length 0 is illegal, so short-circuit before building any xs.
+    if not schedules:
+        return [first]
+
+    # Walk the chain host-side to recover every transition's static layout:
+    # the row counts entering transition k, the even prepad counts the fold
+    # needs, and the postpad target `schedules[k]`. The gathers are pure
+    # functions of these Python ints, so the whole xs stack is built at trace
+    # time.
+    src_counts: list[tuple[int, ...]] = [first.row_counts, *schedules]
+    prepad_counts = [tuple(rc + rc % 2 for rc in c) for c in src_counts[:-1]]
+    folded_counts = [tuple(pc // 2 for pc in counts) for counts in prepad_counts]
+
+    # The planes ride a fixed-width buffer (live prefix front, neutral tail) so
+    # the scan carry stays shape-invariant. The widest intermediate is a
+    # transition's prepad buffer, which can exceed `first.height` when an odd
+    # segment pads up; size the buffer to cover every layer height AND every
+    # prepad height along the chain.
+    plane_width = max(
+        max(sum(counts) for counts in src_counts),
+        max(sum(counts) for counts in prepad_counts),
+    )
+    # Per-transition prepad / postpad gathers, each `_segment_gather` laid into
+    # the fixed width and stacked as the scan xs.
+    prepad_gathers = jnp.asarray(
+        np.stack(
+            [
+                _fixed_width_gather(src_counts[k], prepad_counts[k], plane_width)
+                for k in range(len(schedules))
+            ]
+        )
+    )
+    postpad_gathers = jnp.asarray(
+        np.stack(
+            [
+                _fixed_width_gather(folded_counts[k], schedules[k], plane_width)
+                for k in range(len(schedules))
+            ]
+        )
+    )
+
+    init = (
+        _pad_to_width(first.numerator_0, plane_width, 0),
+        _pad_to_width(first.numerator_1, plane_width, 0),
+        _pad_to_width(first.denominator_0, plane_width, 1),
+        _pad_to_width(first.denominator_1, plane_width, 1),
+    )
+
+    def step(
+        carry: tuple[Array, Array, Array, Array],
+        gathers: tuple[Array, Array],
+    ) -> tuple[tuple[Array, Array, Array, Array], tuple[Array, Array, Array, Array]]:
+        n0, n1, d0, d1 = carry
+        prepad, postpad = gathers
+        # One eager transition inside the fixed width: prepad odd segments to
+        # even, fold stride-2 over the (now even) live prefix, then postpad the
+        # folded segments to the schedule. The dead tail is the neutral fraction
+        # throughout -- it folds to neutral and the postpad gather discards it --
+        # so the live region matches the eager exact-sized transition.
+        n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, prepad)
+        n0, n1, d0, d1 = _fold_pairs(n0, n1, d0, d1)
+        # The fold halves the buffer, so re-pad the four planes back up to the
+        # fixed width with the neutral tail before the postpad gather (indexed
+        # against the full width) and before the next carry.
+        n0, n1, d0, d1 = (
+            _pad_to_width(n0, plane_width, 0),
+            _pad_to_width(n1, plane_width, 0),
+            _pad_to_width(d0, plane_width, 1),
+            _pad_to_width(d1, plane_width, 1),
+        )
+        n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, postpad)
+        # A dead-fold + re-pad chain can alias into another scan iteration under
+        # XLA's scan-body value numbering; barrier the per-step carry so each
+        # transition's planes stay independent (the jagged_prover mitigation).
+        n0, n1, d0, d1 = lax.optimization_barrier((n0, n1, d0, d1))
+        out = (n0, n1, d0, d1)
+        return out, out
+
+    _, stacked = lax.scan(step, init, (prepad_gathers, postpad_gathers))
+
+    layers = [first]
+    for k, out_row_counts in enumerate(schedules):
+        height = sum(out_row_counts)
+        layers.append(
+            JaggedGkrLayer(
+                numerator_0=stacked[0][k][:height],
+                numerator_1=stacked[1][k][:height],
+                denominator_0=stacked[2][k][:height],
+                denominator_1=stacked[3][k][:height],
+                row_counts=out_row_counts,
+            )
+        )
+    return layers
