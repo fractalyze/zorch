@@ -17,7 +17,7 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array, lax
 
-from zorch.coding.foldable_code import FoldableCode
+from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.coding.linear_code import LinearCode
 from zorch.coding.reed_solomon import (
     BitReversedReedSolomon,
@@ -232,6 +232,172 @@ class ReedSolomonTest(absltest.TestCase):
         self.assertEqual(br_a, br_b)
         self.assertEqual(hash(br_a), hash(br_b))
         self.assertNotEqual(br_a, a)
+
+
+class ReedSolomonKaryTest(absltest.TestCase):
+    def test_implements_k_foldable_protocol(self) -> None:
+        rs = ReedSolomon(message_len=16, blowup=4, dtype=F, fold_factor=4)
+        self.assertIsInstance(rs, KFoldableCode)
+        self.assertEqual(rs.fold_factor, 4)
+
+    def test_fold_factor_must_be_power_of_two(self) -> None:
+        with self.assertRaises(ValueError):
+            ReedSolomon(message_len=16, blowup=4, dtype=F, fold_factor=3)
+
+    def test_fold_factor_breaks_value_equality(self) -> None:
+        # fold_factor changes the fold map, so it must be a config axis: same
+        # geometry but different factor must not compare/hash equal (#214).
+        a = ReedSolomon(8, 2, F, fold_factor=2)
+        b = ReedSolomon(8, 2, F, fold_factor=4)
+        self.assertNotEqual(a, b)
+        self.assertEqual(a, ReedSolomon(8, 2, F))  # default factor is 2
+        self.assertEqual(hash(b), hash(ReedSolomon(8, 2, F, fold_factor=4)))
+
+    def test_group_leaves_k2_equals_pair_leaves(self) -> None:
+        # At k=2 the k-group layout is the conjugate pair: row p = (cw[p], cw[p+n/2]).
+        rs = ReedSolomon(8, 2, F)  # default fold_factor 2
+        cw = rs.encode(rand_field(30, (8,), F))
+        self.assertTrue(bool(jnp.all(rs.group_leaves(cw) == rs.pair_leaves(cw))))
+
+    def test_group_indices_k2_equals_pair_indices(self) -> None:
+        rs = ReedSolomon(8, 2, F)
+        positions = jnp.array([0, 2, 5])
+        lo, hi = rs.pair_indices(positions, 0)
+        g0, g1 = rs.group_indices(positions, 0)
+        self.assertTrue(bool(jnp.all(g0 == lo)))
+        self.assertTrue(bool(jnp.all(g1 == hi)))
+
+    def test_group_leaves_groups_kth_root_coset(self) -> None:
+        # Row p holds the k entries a sub-layer apart {p, p+n/k, ..., p+(k-1)n/k}
+        # — the k-th-root coset that folds to position p.
+        k = 4
+        rs = ReedSolomon(16, 4, F, fold_factor=k)  # block_len 64
+        cw = rs.encode(rand_field(31, (16,), F))
+        leaves = rs.group_leaves(cw)
+        n = rs.block_len
+        sub = n // k
+        self.assertEqual(leaves.shape, (sub, k))
+        for p in (0, 1, sub - 1):
+            for m in range(k):
+                self.assertEqual(leaves[p, m], cw[p + m * sub])
+
+    def test_fold_group_k2_equals_binary_butterfly(self) -> None:
+        # F1: the k-ary Lagrange fold at k=2 is the same map as the conjugate
+        # butterfly (kept separate only for cost), so fold_group must match fold.
+        rs = ReedSolomon(8, 2, F)
+        cw = rs.encode(rand_field(32, (8,), F))
+        beta = rand_field(33, (), F)
+        self.assertTrue(bool(jnp.all(rs.fold_group(cw, beta) == rs.fold(cw, beta))))
+
+    def test_fold_group_rejects_short_layer(self) -> None:
+        # Fail loud at the seam boundary (like fri_fold's n<2 guard) instead of
+        # an opaque reshape error: a layer too short to form a full k-group is
+        # rejected.
+        rs = ReedSolomon(16, 4, F, fold_factor=4)  # block_len 64, k=4
+        with self.assertRaises(ValueError):
+            rs.fold_group(rand_field(70, (2,), F), rand_field(71, (), F))
+
+    def test_fold_group_encode_commute(self) -> None:
+        # Independent oracle: a k-ary fold by beta combines the k coefficient
+        # cosets as sum_m beta^m * p[m::k], on the x^k domain.
+        k = 4
+        L = 16
+        p = rand_field(34, (L,), F)
+        beta = rand_field(35, (), F)
+        cw = ReedSolomon(L, 1, F, fold_factor=k).encode(p)
+        folded = ReedSolomon(L, 1, F, fold_factor=k).fold_group(cw, beta)
+        p_fold = jnp.zeros((L // k,), F)
+        bp = jnp.ones((), F)
+        for m in range(k):
+            p_fold = p_fold + bp * p[m::k]
+            bp = bp * beta
+        expected = ReedSolomon(L // k, 1, F, fold_factor=k).encode(p_fold)
+        self.assertEqual(folded.shape, (L // k,))
+        self.assertTrue(bool(jnp.all(folded == expected)))
+
+    def test_fold_group_encode_commute_on_coset(self) -> None:
+        # Same commute on a coset h*H: the folded codeword lives on the (x^k)
+        # domain h^k*H^k, so the next layer's code carries shift h^k.
+        k = 4
+        L = 16
+        h = jnp.array(3, dtype=F)
+        p = rand_field(36, (L,), F)
+        beta = rand_field(37, (), F)
+        cw = ReedSolomon(L, 1, F, coset_shift=h, fold_factor=k).encode(p)
+        folded = ReedSolomon(L, 1, F, coset_shift=h, fold_factor=k).fold_group(cw, beta)
+        p_fold = jnp.zeros((L // k,), F)
+        bp = jnp.ones((), F)
+        for m in range(k):
+            p_fold = p_fold + bp * p[m::k]
+            bp = bp * beta
+        hk = h
+        for _ in range(k.bit_length() - 1):
+            hk = hk * hk  # h^k
+        expected = ReedSolomon(L // k, 1, F, coset_shift=hk, fold_factor=k).encode(
+            p_fold
+        )
+        self.assertTrue(bool(jnp.all(folded == expected)))
+
+    def test_fold_group_values_matches_whole_codeword_fold(self) -> None:
+        # The verifier invariant: folding an opened k-group at queried positions
+        # equals the whole-codeword fold at those positions.
+        k = 4
+        rs = ReedSolomon(16, 4, F, fold_factor=k)  # block_len 64
+        cw = rs.encode(rand_field(38, (16,), F))
+        beta = rand_field(39, (), F)
+        positions = jnp.array([0, 3, rs.block_len // k - 1])
+        idx = jnp.stack(rs.group_indices(positions, 0), axis=-1)
+        folded = rs.fold_group(cw, beta)
+        got = rs.fold_group_values(cw[idx], beta, positions, 0)
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_fold_group_values_matches_whole_codeword_fold_on_coset(self) -> None:
+        # Same invariant one level down on a coset: both sides must apply the
+        # level's shift h^(k^level), not the base shift.
+        k = 4
+        h = jnp.array(3, dtype=F)
+        rs = ReedSolomon(16, 4, F, coset_shift=h, fold_factor=k)  # block_len 64
+        layer1 = rs.fold_group(
+            rs.encode(rand_field(50, (16,), F)), rand_field(51, (), F)
+        )
+        beta = rand_field(52, (), F)
+        sub = layer1.shape[0] // k
+        positions = jnp.array([0, 1, sub - 1])
+        idx = jnp.stack(rs.group_indices(positions, 1), axis=-1)
+        folded = rs.fold_group(layer1, beta)
+        got = rs.fold_group_values(layer1[idx], beta, positions, 1)
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_fold_group_values_extension_field(self) -> None:
+        # k-ary fold of an EF-valued layer; the x-coordinates stay base-field.
+        k = 4
+        rs = ReedSolomon(16, 4, EF, fold_factor=k)
+        cw = rs.encode(rand_field(53, (16,), EF))
+        beta = rand_field(54, (), EF)
+        positions = jnp.array([0, 5, rs.block_len // k - 1])
+        idx = jnp.stack(rs.group_indices(positions, 0), axis=-1)
+        folded = rs.fold_group(cw, beta)
+        got = rs.fold_group_values(cw[idx], beta, positions, 0)
+        self.assertTrue(bool(jnp.all(got == folded[positions])))
+
+    def test_group_layer_positions_chain(self) -> None:
+        # k-ary query-index chain: a_i = q mod (n / k^{i+1}).
+        k = 4
+        rs = ReedSolomon(16, 4, F, fold_factor=k)  # block_len 64
+        q = jnp.array([37, 6])
+        a = rs.group_layer_positions(q, 3)
+        self.assertTrue(bool(jnp.all(a[0] == q % (rs.block_len // k))))
+        self.assertTrue(bool(jnp.all(a[1] == a[0] % (rs.block_len // k**2))))
+        self.assertTrue(bool(jnp.all(a[2] == a[1] % (rs.block_len // k**3))))
+
+    def test_group_layer_positions_k2_equals_binary(self) -> None:
+        rs = ReedSolomon(8, 2, F)
+        q = jnp.array([13, 6])
+        self.assertEqual(len(rs.group_layer_positions(q, 3)), 3)
+        for kary, binary in zip(
+            rs.group_layer_positions(q, 3), rs.layer_positions(q, 3)
+        ):
+            self.assertTrue(bool(jnp.all(kary == binary)))
 
 
 class BitReversedReedSolomonTest(absltest.TestCase):

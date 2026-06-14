@@ -26,3 +26,23 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "fold_test",
+    size = "small",
+    srcs = ["fold_test.py"],
+    # composite-vmap (Merkle commit marker); CI's published jaxlib can't run it.
+    # .bazelrc.ci excludes the local_only tag from CI; local bazel runs it.
+    tags = ["local_only"],
+    deps = [
+        "//zorch:prove",
+        "//zorch/coding:reed_solomon",
+        "//zorch/commit/testing:koalabear16",
+        "//zorch/pcs:fold",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
