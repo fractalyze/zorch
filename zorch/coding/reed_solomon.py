@@ -28,6 +28,7 @@ import numpy as np
 import zk_dtypes
 from jax import Array, lax
 
+from zorch.poly.univariate import compute_lagrange_basis
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 
 if TYPE_CHECKING:
@@ -317,6 +318,33 @@ def fri_fold_values(fx: Array, fnx: Array, beta: Array, x: Array) -> Array:
     one = jnp.ones((), fx.dtype)
     two = one + one
     return (fx + fnx) / two + beta * (fx - fnx) / (two * x)
+
+
+def fri_fold_k_values(group: Array, beta: Array, points: Array) -> Array:
+    """k-ary fold of one query group: the degree-`(k-1)` interpolant through the
+    `k` `points` carrying values `group` (both length-`k`, last axis), evaluated
+    at `beta`.
+
+    The arbitrary-fold-factor generalization of `fri_fold_values` (the `k=2`
+    conjugate-pair butterfly is the special case — for points `(x, −x)` this
+    returns exactly `fri_fold_values(group[0], group[1], beta, x)`). A folding
+    factor `> 2` has no closed-form butterfly, so it interpolates; the `k=2`
+    butterfly is kept separately because it is cheaper than its Lagrange form.
+
+    `points` are the group's evaluation coordinates — the caller supplies them
+    from its own domain order (native `eval_domain`, or another root entirely),
+    so this carries no single domain convention. Folds one group; `vmap` over the
+    query/group axis. `group`/`points` may be extension-field; the dtypes follow
+    `compute_lagrange_basis`."""
+    # Unroll the linear combination over the static factor k rather than
+    # `jnp.dot`: a reduction op is a kInput/gather fusion boundary on GPU, so
+    # the fold would not lower to one fused kernel (CLAUDE.md "Fusion by
+    # construction"). k is a small compile-time constant, so the unroll is cheap.
+    basis = compute_lagrange_basis(beta, points)
+    folded = group[..., 0] * basis[..., 0]
+    for i in range(1, group.shape[-1]):
+        folded = folded + group[..., i] * basis[..., i]
+    return folded
 
 
 def fri_fold(codeword: Array, beta: Array, *, shift: Array | None = None) -> Array:

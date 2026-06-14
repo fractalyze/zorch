@@ -9,6 +9,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch/poly",
         "//zorch/utils:bits",
         requirement("jax"),
         requirement("zk_dtypes"),
