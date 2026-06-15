@@ -1069,8 +1069,21 @@ def _prove_jagged_rounds_padded_marked(
     leaves = _state_leaves(duplex.state)
     sched_ops = [sched[k] for k in _SCHED_KEYS]
 
+    # The GPU emitter reads `z_cur = point[num_vars - 1 - rnd]` over the per-layer
+    # ACTUAL num_vars (from bound_meta), so operand-6 must be the MSB-first
+    # eval_point with the live coords at the FRONT ([0, num_vars)). This gather
+    # converts between round order and that eval_point order (an involution on the
+    # live prefix): a plain `[::-1]` reverses over the padded `max_rounds`, which
+    # only matches when num_vars == max_rounds (the largest / single layer) and
+    # otherwise strands a shorter pyramid layer's live coords at the padded tail,
+    # making the emitter read the neutral pad (sp1-zorch#55).
+    def _swap_point_order(arr: Array, num_vars: Array) -> Array:
+        return arr[jnp.clip(num_vars - 1 - jnp.arange(max_rounds), 0, max_rounds - 1)]
+
     def body(*operands: Array, **_attrs: object) -> tuple[Array, ...]:
-        bn0, bn1, bd0, bd1, beq_row, beq_int, bcoords, blam, bclaim = operands[:9]
+        bn0, bn1, bd0, bd1, beq_row, beq_int, bpoint, blam, bclaim = operands[:9]
+        # operands[-2] is bound_meta {num_vars, nrv, nseg, num_blocks}.
+        bcoords = _swap_point_order(bpoint, operands[-2][0])
         idx = 9
         lv = operands[idx : idx + len(leaves)]
         idx += len(leaves)
@@ -1102,6 +1115,8 @@ def _prove_jagged_rounds_padded_marked(
         leaves_out = _state_leaves(cast(DuplexTranscript, t).state)
         return (fn0, fn1, fd0, fd1, *leaves_out, polys, challenges)
 
+    eval_point_op = _swap_point_order(coords, bound_meta[0])
+
     out = fused_region(
         body,
         n0,
@@ -1110,7 +1125,7 @@ def _prove_jagged_rounds_padded_marked(
         d1,
         eq_row,
         eq_int,
-        coords,
+        eval_point_op,
         lam,
         claim,
         *leaves,
