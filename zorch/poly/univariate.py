@@ -82,12 +82,28 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
-    Powers built explicitly then contracted in one dot, so batched coefficient
-    rows evaluate in a single contraction. The power chain unrolls serially,
-    so the traced graph grows with the coefficient count — round-poly-sized
-    inputs, not whole codewords."""
-    n = coeffs.shape[-1]
-    powers = [jnp.ones((), point.dtype)]
-    for _ in range(n - 1):
-        powers.append(powers[-1] * point)
-    return jnp.dot(coeffs, jnp.stack(powers))
+    The power-sum is carried through a ``lax.scan`` over the coefficient axis
+    (degree moved to the leading axis): the carry threads
+    ``(accumulator, point**i)``, keeping the traced graph O(1) in the degree so
+    the fused kernel takes one array operand regardless of ``n``. A
+    coefficient-count-dependent graph (e.g. an explicit power chain) makes the
+    fused kernel's operand count scale with ``n``, which past a few thousand
+    coefficients exceeds the GPU's 32 KB kernel-parameter space and fails to
+    compile (``ptxas: too much parameter space``) — WHIR's out-of-domain eval
+    at large stacked sizes hits exactly this. Field arithmetic is exact, so the
+    scan is byte-identical to the direct power-sum."""
+    leading = jnp.moveaxis(coeffs, -1, 0)  # (n, *batch): degree on axis 0
+
+    # Forward power accumulation rather than a reverse-scan Horner (which would
+    # carry only the accumulator): ``lax.scan(reverse=True)`` is not honored on
+    # this jax fork — it runs forward and yields the wrong value.
+    def step(
+        carry: tuple[Array, Array], c_i: Array
+    ) -> tuple[tuple[Array, Array], None]:
+        acc, power = carry
+        return (acc + c_i * power, power * point), None
+
+    # acc seeds in the coeff×point promoted dtype/shape; power seeds at point**0.
+    init = (jnp.zeros_like(coeffs[..., 0] * point), jnp.ones_like(point))
+    (acc, _), _ = jax.lax.scan(step, init, leading)
+    return acc
