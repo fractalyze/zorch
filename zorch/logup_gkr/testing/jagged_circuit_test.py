@@ -1,6 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from dataclasses import fields
+
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
@@ -12,7 +14,9 @@ from zorch.logup_gkr.circuit import (
     extract_jagged_outputs,
     jagged_layer_transition,
     layer_transition,
+    scan_build_jagged_pyramid,
 )
+from zorch.logup_gkr.testing import build_jagged_pyramid
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
 
 KB = zk_dtypes.koalabear_mont
@@ -162,6 +166,36 @@ class JaggedEndToEndTest(absltest.TestCase):
             layer = jagged_layer_transition(layer, schedule)
         out = extract_jagged_outputs(layer)
         self.assertTrue(bool(total == jnp.sum(out.numerator / out.denominator)))
+
+
+class ScanBuildJaggedPyramidTest(absltest.TestCase):
+    """`scan_build_jagged_pyramid` fuses the eager `jagged_layer_transition`
+    chain into one `lax.scan`; every generated layer must be byte-identical to
+    the eager `build_jagged_pyramid` (sp1-zorch#55)."""
+
+    def _assert_matches_eager(self, row_counts: tuple[int, ...]) -> None:
+        first = _random_jagged_layer(7, row_counts)
+        eager = build_jagged_pyramid(first)
+        schedules = [layer.row_counts for layer in eager[1:]]
+        scanned = scan_build_jagged_pyramid(first, schedules)
+        self.assertEqual(len(scanned), len(eager))
+        for got, want in zip(scanned, eager, strict=True):
+            self.assertEqual(got.row_counts, want.row_counts)
+            for field in fields(JaggedGkrLayer):
+                if field.name == "row_counts":
+                    continue
+                self.assertTrue(
+                    bool(
+                        jnp.all(getattr(got, field.name) == getattr(want, field.name))
+                    ),
+                    f"{field.name} diverged for row_counts={want.row_counts}",
+                )
+
+    def test_matches_eager_small(self) -> None:
+        self._assert_matches_eager((3, 1, 5, 2))
+
+    def test_matches_eager_deeper(self) -> None:
+        self._assert_matches_eager((7, 3, 5, 2, 6, 1, 4, 8))
 
 
 if __name__ == "__main__":
