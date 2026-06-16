@@ -18,8 +18,10 @@ from zorch.logup_gkr.circuit import (
 )
 from zorch.logup_gkr.testing import build_jagged_pyramid
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
+from zorch.testkit.random_field import rand_field
 
 KB = zk_dtypes.koalabear_mont
+EF = zk_dtypes.koalabearx4_mont
 
 
 def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
@@ -133,6 +135,57 @@ class JaggedTransitionTest(absltest.TestCase):
         layer = _random_jagged_layer(50, (4, 4, 4, 4))
         with self.assertRaises(ValueError):
             jagged_layer_transition(layer, (1, 2, 2, 2))
+
+
+class MixedFieldFirstLayerTest(absltest.TestCase):
+    """A first layer may hold base-field numerators under extension-field
+    denominators; the transition's `n0*d1 + n1*d0` fold promotes to the common
+    field, byte-identically to folding an all-extension copy (zkx#681)."""
+
+    def _mixed_first_layer(
+        self, seed: int, row_counts: tuple[int, ...]
+    ) -> JaggedGkrLayer:
+        height = sum(row_counts)
+        return JaggedGkrLayer(
+            numerator_0=rand_field(seed, (height,), KB),
+            numerator_1=rand_field(seed + 1, (height,), KB),
+            denominator_0=rand_field(seed + 2, (height,), EF),
+            denominator_1=rand_field(seed + 3, (height,), EF),
+            row_counts=row_counts,
+        )
+
+    def test_type_accepts_base_numerator_ef_denominator(self) -> None:
+        # The shape-only `__post_init__` admits a layer whose numerator and
+        # denominator pairs live in different fields.
+        layer = self._mixed_first_layer(1, (3, 1, 2, 2))
+        self.assertEqual(layer.numerator_0.dtype, KB)
+        self.assertEqual(layer.denominator_0.dtype, EF)
+
+    def test_transition_promotes_and_matches_all_ef(self) -> None:
+        row_counts = (3, 1, 2, 2)
+        mixed = self._mixed_first_layer(5, row_counts)
+        all_ef = JaggedGkrLayer(
+            numerator_0=mixed.numerator_0.astype(EF),
+            numerator_1=mixed.numerator_1.astype(EF),
+            denominator_0=mixed.denominator_0,
+            denominator_1=mixed.denominator_1,
+            row_counts=row_counts,
+        )
+        schedule = (2, 1, 1, 1)
+        out = jagged_layer_transition(mixed, schedule)
+        want = jagged_layer_transition(all_ef, schedule)
+
+        # The fold lifts the base numerators into the extension field...
+        self.assertEqual(out.numerator_0.dtype, EF)
+        self.assertEqual(out.numerator_1.dtype, EF)
+        # ...and the folded layer is byte-identical to the all-extension fold,
+        # so a base-field first-layer numerator costs nothing past the first
+        # transition.
+        for name in ("numerator_0", "numerator_1", "denominator_0", "denominator_1"):
+            self.assertTrue(
+                bool(jnp.all(getattr(out, name) == getattr(want, name))),
+                f"{name} diverged",
+            )
 
 
 class ExtractJaggedOutputsTest(absltest.TestCase):
