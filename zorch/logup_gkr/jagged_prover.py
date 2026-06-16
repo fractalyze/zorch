@@ -756,7 +756,7 @@ def _padded_round_schedule_jax(
     """`_padded_round_schedule` reconstructed from a RUNTIME ``row_counts`` (jax
     ``s32[nseg]``) and runtime ``nrv`` -- no host-baked plane-width arrays, so the
     rolled scan computes its schedule from the compact row-count channel instead
-    of stacking a multi-GB constant (sp1-zorch#55 / #109). Byte-identical to the
+    of stacking a multi-GB constant. Byte-identical to the
     numpy ``_padded_round_schedule``.
 
     The row counts halve each round, and ``ceil(ceil(x/2)/2 ...)`` collapses to a
@@ -800,7 +800,7 @@ def _padded_round_schedule_jax(
             # single element: ceil(row_counts / 2^k) == 1 (row_counts >= 1).
             # Saturate directly -- `row_counts + (bk - 1)` overflows int32 once
             # `bk` nears 2^31, reachable when the marked split path widens
-            # max_rounds to the peel-chain envelope (sp1-zorch#55).
+            # max_rounds to the peel-chain envelope.
             counts_k = (row_counts > 0).astype(i32)
         else:
             counts_k = (row_counts + (bk - 1)) // bk
@@ -1084,7 +1084,7 @@ def _prove_jagged_rounds_padded_marked(
 
     The pyramid scan traces ONE body for every layer, so a single static
     `row_counts` attribute cannot carry the per-layer counts (the pyramid halves
-    each layer). Dual-channel instead (sp1-zorch#55): the static `row_counts` attr
+    each layer). Dual-channel instead: the static `row_counts` attr
     pins the scan-invariant fixed-width ENVELOPE (per-segment max across layers),
     `runtime_row_counts` flags the channel, and the per-layer actual counts ride as
     the trailing `bound_meta s32[4]={num_vars, nrv, nseg, num_blocks}` /
@@ -1107,14 +1107,12 @@ def _prove_jagged_rounds_padded_marked(
     # live prefix): a plain `[::-1]` reverses over the padded `max_rounds`, which
     # only matches when num_vars == max_rounds (the largest / single layer) and
     # otherwise strands a shorter pyramid layer's live coords at the padded tail,
-    # making the emitter read the neutral pad (sp1-zorch#55).
+    # making the emitter read the neutral pad.
     def _swap_point_order(arr: Array, num_vars: Array) -> Array:
         return arr[jnp.clip(num_vars - 1 - jnp.arange(max_rounds), 0, max_rounds - 1)]
 
     def body(*operands: Array, **_attrs: object) -> tuple[Array, ...]:
         bn0, bn1, bd0, bd1, beq_row, beq_int, bpoint, blam, bclaim = operands[:9]
-        # operands[-2] is bound_meta {num_vars, nrv, nseg, num_blocks}.
-        bcoords = _swap_point_order(bpoint, operands[-2][0])
         idx = 9
         lv = operands[idx : idx + len(leaves)]
         idx += len(leaves)
@@ -1122,7 +1120,12 @@ def _prove_jagged_rounds_padded_marked(
         idx += len(_SCHED_KEYS)
         bnaturals, binv_vand = operands[idx], operands[idx + 1]
         # operands[idx + 2 :] are (bound_meta, row_counts): the GPU recognizer's
-        # runtime row-count channel, dead on the CPU decomposition below.
+        # runtime row-count channel, dead on the CPU decomposition below. Index
+        # positively (not operands[-2]) -- a traced body may get auto-lifted
+        # constants appended to the operand tail. bound_meta = {num_vars, nrv,
+        # nseg, num_blocks}.
+        bbound_meta = operands[idx + 2]
+        bcoords = _swap_point_order(bpoint, bbound_meta[0])
         challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds_padded(
             bn0,
             bn1,
@@ -1189,7 +1192,7 @@ def prove_jagged_pyramid(
 ) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
     """Prove the jagged GKR pyramid as ONE `lax.scan` over the floor-outward
     layer chain -- O(1) in the layer count, byte-identical to the unrolled
-    `ProveChain(JaggedGkrLayerRound(l) for l in layers)` (sp1-zorch#55).
+    `ProveChain(JaggedGkrLayerRound(l) for l in layers)`.
 
     `layers` are the proved layers floor-outward (the chain's `reversed(
     layers[:-1])`); the pyramid halves each layer, so the per-layer planes ride
@@ -1230,7 +1233,7 @@ def prove_jagged_pyramid(
         for layer, nrv in zip(layers, nrvs)
     )
 
-    # Dual-channel row_counts for the marked path (sp1-zorch#55): nseg is constant
+    # Dual-channel row_counts for the marked path: nseg is constant
     # across the pyramid (a layer transition preserves the interaction count), so
     # the runtime `row_counts s32[nseg]` operand stays shape-invariant. The static
     # marker attribute pins the scan-invariant fixed-width envelope (per-segment
@@ -1247,7 +1250,7 @@ def prove_jagged_pyramid(
     # peel-chain envelope (k_max + tail_max), NOT the real round count, so the
     # vendor's runtime-masked split chain keeps a scan-invariant shape. The
     # surplus rounds run inactive (neutral), so each layer's proof, sliced to
-    # its real round count, stays byte-identical (sp1-zorch#55).
+    # its real round count, stays byte-identical.
     if mark:
         budget = _jagged_on_chip_budget(int(np.dtype(dtype).itemsize))
         if budget > 0 and sum(envelope) > budget:

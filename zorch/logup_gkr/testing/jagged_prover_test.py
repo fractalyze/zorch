@@ -65,6 +65,18 @@ from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 _HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
+# The pinned zkx CPU emitter recognizes the rolled `runtime_row_counts` marker but
+# routes it to the exact-fit emitter, which has no runtime-row-counts decompose
+# path and aborts (it requires factor length == sum(row_counts)). Until that CPU
+# decompose lands, tests that COMPILE the rolled marker run only where the emitter
+# supports it (GPU); the rolled path's CPU coverage is the unmarked byte-match in
+# RolledJaggedPyramidTest, and the marker contract is checked by the jaxpr-only
+# tests that never compile.
+_ON_CPU = jax.default_backend() == "cpu"
+_ROLLED_MARKER_CPU_SKIP = (
+    "pinned zkx CPU emitter has no runtime_row_counts decompose path; "
+    "the rolled marker compiles only where the emitter supports it (GPU)"
+)
 
 
 def _logup_combine(
@@ -539,7 +551,7 @@ class JaggedGkrLayerRoundJitTest(absltest.TestCase):
     change), so `jit(marked) == eager(marked)` follows from this test
     (`jit == eager` on the loop) composed with `ProveJaggedMarkedTest`
     (`marked == eager plain`); the full-scale jitted marked prove is validated
-    on GPU by the sp1-zorch bench's byte-match anchors."""
+    on GPU by the consumer prover's byte-match anchors."""
 
     # niv = 1 (two interactions), nrv = 2: an odd segment (3) and a saturated
     # one (1), both row and interaction rounds, in a few-element layer.
@@ -736,7 +748,7 @@ class PaddedJaggedRoundsTest(absltest.TestCase):
 class RolledJaggedPyramidTest(absltest.TestCase):
     """`prove_jagged_pyramid` rolls the floor-outward layer chain into one
     `lax.scan`; it must be byte-identical to the unrolled `ProveChain` over
-    `JaggedGkrLayerRound`s -- the sp1-zorch#55 gate. Same fixture as
+    `JaggedGkrLayerRound`s -- the rolled-pyramid gate. Same fixture as
     `ChainedJaggedProveTest` so the two share a reference stream."""
 
     ROW_COUNTS = (3, 1, 5, 2)
@@ -799,7 +811,7 @@ class RolledJaggedPyramidTest(absltest.TestCase):
 class PaddedRoundScheduleJaxTest(absltest.TestCase):
     """`_padded_round_schedule_jax` (runtime row_counts, no baked plane-width
     arrays) byte-matches the numpy `_padded_round_schedule` -- the #109 gate that
-    lets the rolled scan drop `xs_sched` (sp1-zorch#55)."""
+    lets the rolled scan drop `xs_sched`."""
 
     CASES = [
         ((3, 1), 2, 1),  # odd seg (3) + saturated (1)
@@ -845,8 +857,7 @@ class PaddedRoundScheduleJaxTest(absltest.TestCase):
         # The marked split path widens max_rounds to the peel-chain envelope
         # (32 at the EF budget); `bk = 1 << k` reaches 2^31 at k=31, where
         # `row_counts + (bk - 1)` would overflow int32. The saturate guard must
-        # still byte-match the numpy oracle across the surplus rounds
-        # (sp1-zorch#55).
+        # still byte-match the numpy oracle across the surplus rounds.
         for row_counts, nrv, niv in self.CASES:
             with self.subTest(row_counts=row_counts):
                 self._check(row_counts, nrv, niv, 32)
@@ -892,7 +903,7 @@ class _PaddedInputs(NamedTuple):
 class MarkedRolledJaggedPyramidTest(absltest.TestCase):
     """Over a dedicated-fusion transcript, `prove_jagged_pyramid` wraps the rolled
     `_run_jagged_rounds_padded` step in ONE `zorch.sumcheck` composite per scan
-    iteration (sp1-zorch#55). Because a scan body is traced once and the
+    iteration. Because a scan body is traced once and the
     pyramid halves each layer, the per-layer counts cannot ride the static
     `row_counts` attr -- so the marker sets `runtime_row_counts` with the static
     attr pinned to the fixed-width envelope, and carries the per-layer counts as
@@ -979,6 +990,7 @@ class MarkedRolledJaggedPyramidTest(absltest.TestCase):
             challenge_limbs=1,
         )
 
+    @absltest.skipIf(_ON_CPU, _ROLLED_MARKER_CPU_SKIP)
     def test_padded_marker_decomposes_to_plain_padded(self) -> None:
         # The marker is a no-op on CPU: over an identical transcript it must
         # reproduce the unmarked `_run_jagged_rounds_padded` byte-for-byte.
@@ -1006,7 +1018,10 @@ class MarkedRolledJaggedPyramidTest(absltest.TestCase):
         self.assertTrue(bool(jnp.all(m_polys == p_polys)))
         for got, want in zip(m_open, p_open, strict=True):
             self.assertTrue(bool(got == want))
-        assert isinstance(m_t, DuplexTranscript) and isinstance(p_t, DuplexTranscript)
+        if not (
+            isinstance(m_t, DuplexTranscript) and isinstance(p_t, DuplexTranscript)
+        ):
+            raise AssertionError("both paths thread the DuplexTranscript back")
         ms, ps = m_t.state, p_t.state
         self.assertTrue(bool(jnp.all(ms.sponge_state == ps.sponge_state)))
         self.assertEqual(int(ms.in_pos), int(ps.in_pos))
@@ -1047,6 +1062,7 @@ class MarkedRolledJaggedPyramidTest(absltest.TestCase):
         self.assertEqual((bm.dtype, bm.shape), (jnp.int32, (4,)))
         self.assertEqual((rc.dtype, rc.shape), (jnp.int32, (len(self.ROW_COUNTS),)))
 
+    @absltest.skipIf(_ON_CPU, _ROLLED_MARKER_CPU_SKIP)
     def test_pyramid_marks_dedicated_fusion_not_cheap(self) -> None:
         # Wiring + gate: prove_jagged_pyramid routes the step through the marker
         # for a dedicated-fusion transcript (one trace of the scan body = one
@@ -1068,6 +1084,7 @@ class MarkedRolledJaggedPyramidTest(absltest.TestCase):
                 prove_jagged_pyramid(proved, carry, t)
             self.assertEqual(spy.called, expect_marked)
 
+    @absltest.skipIf(_ON_CPU, _ROLLED_MARKER_CPU_SKIP)
     def test_marked_rolled_equals_unrolled_chain(self) -> None:
         layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
         proved = list(reversed(layers[:-1]))
