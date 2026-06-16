@@ -34,7 +34,9 @@ from zorch.logup_gkr.jagged_prover import (
     JaggedLayerProof,
     _expand_eq_prefix,
     _jagged_round_zone,
+    _layer_plane_width,
     _padded_round_schedule,
+    _padded_round_schedule_jax,
     _round_metadata,
     _run_jagged_rounds,
     _run_jagged_rounds_padded,
@@ -762,6 +764,98 @@ class RolledJaggedPyramidTest(absltest.TestCase):
         _, want_r = want_t.sample(1)
         _, got_r = got_t.sample(1)
         self.assertTrue(bool(got_r[0] == want_r[0]))
+
+    def test_no_baked_plane_width_schedule(self) -> None:
+        # #109: the rolled scan reconstructs its schedule from row_counts in-body,
+        # so tracing it bakes NO plane-width int32 schedule constant (the ~GB
+        # constant that blocked real-shard lowering). The planes are EF (not
+        # int32), so the only int32 const is the compact per-layer row-count
+        # channel -- a regression to the host-baked schedule would dwarf it.
+        import numpy as _np
+
+        layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
+        proved = list(reversed(layers[:-1]))
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        jaxpr = jax.make_jaxpr(lambda c, tr: prove_jagged_pyramid(proved, c, tr))(
+            carry, t
+        )
+        max_i32 = max(
+            (
+                _np.asarray(c).size
+                for c in jaxpr.consts
+                if _np.asarray(c).dtype == _np.int32
+            ),
+            default=0,
+        )
+        # row-count channel is len(proved) * nseg; the dropped schedule was
+        # len(proved) * max_rounds * plane_width -- orders of magnitude larger.
+        self.assertLess(max_i32, len(proved) * len(self.ROW_COUNTS) * 8)
+
+
+class PaddedRoundScheduleJaxTest(absltest.TestCase):
+    """`_padded_round_schedule_jax` (runtime row_counts, no baked plane-width
+    arrays) byte-matches the numpy `_padded_round_schedule` -- the #109 gate that
+    lets the rolled scan drop `xs_sched` (sp1-zorch#55)."""
+
+    CASES = [
+        ((3, 1), 2, 1),  # odd seg (3) + saturated (1)
+        ((3, 1, 5, 2), 3, 2),  # the multi-segment golden
+        ((7, 3, 11, 5), 4, 2),  # taller, two odd segs > 1
+        ((2, 1, 4, 1), 2, 1),  # odd segs all length 1
+        ((1, 7, 1, 9), 3, 2),  # saturated floors, tall odd segs
+        ((4, 2, 6, 3), 3, 2),
+    ]
+
+    def _check(
+        self, row_counts: tuple[int, ...], nrv: int, niv: int, max_rounds: int
+    ) -> None:
+        plane_width = _layer_plane_width(row_counts, nrv, niv)
+        want = _padded_round_schedule(row_counts, nrv, niv, max_rounds, plane_width)
+        got = _padded_round_schedule_jax(
+            jnp.asarray(row_counts, jnp.int32),
+            jnp.asarray(nrv, jnp.int32),
+            niv,
+            max_rounds,
+            plane_width,
+        )
+        for key in want:
+            self.assertTrue(
+                bool(jnp.all(jnp.asarray(got[key]) == jnp.asarray(want[key]))),
+                f"{key} diverged: row_counts={row_counts} nrv={nrv} niv={niv} "
+                f"max_rounds={max_rounds}",
+            )
+
+    def test_exact_rounds_match(self) -> None:
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, nrv + niv)
+
+    def test_with_inactive_rounds_match(self) -> None:
+        # max_rounds > nrv+niv (the envelope a shorter pyramid layer rides): the
+        # surplus rounds must reconstruct as numpy's identity gather / zeros / False.
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, nrv + niv + 3)
+
+    def test_under_jit_matches_eager(self) -> None:
+        # The reconstruction must lower (no baked plane-width constant) and match
+        # eager -- jitting it is the whole point.
+        row_counts, nrv, niv = (3, 1, 5, 2), 3, 2
+        max_rounds, plane_width = nrv + niv + 2, _layer_plane_width(
+            row_counts, nrv, niv
+        )
+        fn = jax.jit(
+            lambda rc, n: _padded_round_schedule_jax(
+                rc, n, niv, max_rounds, plane_width
+            )
+        )
+        got = fn(jnp.asarray(row_counts, jnp.int32), jnp.asarray(nrv, jnp.int32))
+        want = _padded_round_schedule(row_counts, nrv, niv, max_rounds, plane_width)
+        for key in want:
+            self.assertTrue(
+                bool(jnp.all(jnp.asarray(got[key]) == jnp.asarray(want[key]))), key
+            )
 
 
 if __name__ == "__main__":

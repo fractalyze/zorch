@@ -621,6 +621,19 @@ class JaggedGkrLayerRound(Round):
         return self._call(carry, transcript)
 
 
+def _layer_plane_width(row_counts: tuple[int, ...], nrv: int, niv: int) -> int:
+    """Fixed buffer width for one layer: the widest per-round prepad height (an
+    odd segment padding up to even can exceed the layer's own height) or the
+    dense interaction width, whichever is larger. The rolled pyramid pads every
+    layer to the max of this across the chain so the scan stays shape-invariant."""
+    width = 1 << niv
+    counts = row_counts
+    for _ in range(nrv):
+        width = max(width, sum(rc + rc % 2 for rc in counts))
+        counts = tuple((rc + rc % 2) // 2 for rc in counts)
+    return width
+
+
 def _padded_round_schedule(
     row_counts: tuple[int, ...],
     nrv: int,
@@ -700,6 +713,127 @@ def _padded_round_schedule(
         "active": active,
         "in_rows": in_rows,
         "last_row": last_row,
+    }
+
+
+def _excl_cumsum(x: Array) -> Array:
+    """Exclusive prefix sum ``out[i] = sum(x[:i])`` via a broadcast mask -- this
+    jax fork has no ``jnp.cumsum`` and ``nseg`` is tiny, so the n^2 cost is nil."""
+    idx = jnp.arange(x.shape[0])
+    return jnp.sum(jnp.where(idx[None, :] < idx[:, None], x[None, :], 0), axis=1)
+
+
+def _padded_round_schedule_jax(
+    row_counts: Array,
+    nrv: Array,
+    niv: int,
+    max_rounds: int,
+    plane_width: int,
+) -> dict[str, Array]:
+    """`_padded_round_schedule` reconstructed from a RUNTIME ``row_counts`` (jax
+    ``s32[nseg]``) and runtime ``nrv`` -- no host-baked plane-width arrays, so the
+    rolled scan computes its schedule from the compact row-count channel instead
+    of stacking a multi-GB constant (sp1-zorch#55 / #109). Byte-identical to the
+    numpy ``_padded_round_schedule``.
+
+    The row counts halve each round, and ``ceil(ceil(x/2)/2 ...)`` collapses to a
+    single ceil-divide, so ``counts_k = ceil(row_counts / 2^k)``. Every index
+    pattern is then ``iota`` + segment offsets (``searchsorted`` on the exclusive
+    cumsum); the only constants left are scalars (``iota`` lowers to an op, not a
+    `DenseElementsAttr`).
+    """
+    nseg = row_counts.shape[0]
+    half_width = plane_width // 2
+    sentinel = plane_width
+    i32 = jnp.int32
+    p = jnp.arange(plane_width, dtype=i32)
+    q = jnp.arange(half_width, dtype=i32)
+    # Dense interaction widths 2^(niv-m) for m in [0, niv] -- a static table
+    # indexed by the runtime m, dodging a runtime shift the fork may lack.
+    int_table = jnp.asarray([1 << (niv - mm) for mm in range(niv + 1)], i32)
+
+    def _segment_of(offsets: Array, pos: Array) -> Array:
+        # The segment each position falls in: count of offsets <= pos, minus 1
+        # (a broadcast `searchsorted(..., side="right") - 1` -- nseg is tiny, so
+        # the n*nseg compare is nil and it avoids jnp.searchsorted's method flag).
+        return jnp.clip(
+            jnp.sum((offsets[None, :] <= pos[:, None]).astype(i32), axis=1) - 1,
+            0,
+            nseg - 1,
+        )
+
+    gather_l, pair_lo_l, pair_hi_l, col_l = [], [], [], []
+    live_pairs_l, active_l, in_rows_l, last_row_l = [], [], [], []
+
+    for k in range(max_rounds):
+        in_rows_k = k < nrv
+        active_k = k < nrv + niv
+
+        # Row-round layout: counts_k = ceil(row_counts / 2^k); pad odd segs to
+        # even, then halve. Segment offsets are exclusive cumsums.
+        bk = 1 << k
+        counts_k = (row_counts + (bk - 1)) // bk
+        padded_k = counts_k + (counts_k % 2)
+        pairs_k = padded_k // 2
+        src_off = _excl_cumsum(counts_k)
+        dst_off = _excl_cumsum(padded_k)
+        pair_off = _excl_cumsum(pairs_k)
+        total_dst = jnp.sum(padded_k)
+        total_pairs = jnp.sum(pairs_k)
+
+        seg_p = _segment_of(dst_off, p)
+        within_p = p - dst_off[seg_p]
+        live_p = (within_p < counts_k[seg_p]) & (p < total_dst)
+        gather_row = jnp.where(live_p, src_off[seg_p] + within_p, sentinel).astype(i32)
+
+        seg_q = _segment_of(pair_off, q)
+        within_q = q - pair_off[seg_q]
+        live_q = q < total_pairs
+        col_row = jnp.where(live_q, seg_q, 0).astype(i32)
+        pair_lo_row = jnp.where(live_q, within_q * 2, 0).astype(i32)
+        pair_hi_row = jnp.where(live_q, within_q * 2 + 1, 0).astype(i32)
+
+        # Interaction-round layout (dense): int_width = 2^(niv - (k - nrv)).
+        m = jnp.clip(k - nrv, 0, niv)
+        int_width = int_table[m]
+        half = int_width // 2
+        gather_int = jnp.where(p < int_width, p, sentinel).astype(i32)
+        pair_lo_int = jnp.where(q < half, q * 2, 0).astype(i32)
+        pair_hi_int = jnp.where(q < half, q * 2 + 1, 0).astype(i32)
+
+        # Select row (in_rows) / interaction (active & ~in_rows) / inactive. An
+        # inactive round keeps the identity gather (numpy's `tile(arange)` init)
+        # and zeroed lookups; its `active` flag zeros the contribution anyway.
+        gather_l.append(
+            jnp.where(in_rows_k, gather_row, jnp.where(active_k, gather_int, p))
+        )
+        col_l.append(jnp.where(in_rows_k, col_row, 0).astype(i32))
+        pair_lo_l.append(
+            jnp.where(
+                in_rows_k, pair_lo_row, jnp.where(active_k, pair_lo_int, 0)
+            ).astype(i32)
+        )
+        pair_hi_l.append(
+            jnp.where(
+                in_rows_k, pair_hi_row, jnp.where(active_k, pair_hi_int, 0)
+            ).astype(i32)
+        )
+        live_pairs_l.append(
+            jnp.where(in_rows_k, total_pairs, jnp.where(active_k, half, 0)).astype(i32)
+        )
+        active_l.append(active_k)
+        in_rows_l.append(in_rows_k)
+        last_row_l.append(k == nrv - 1)
+
+    return {
+        "gather": jnp.stack(gather_l),
+        "pair_lo": jnp.stack(pair_lo_l),
+        "pair_hi": jnp.stack(pair_hi_l),
+        "col": jnp.stack(col_l),
+        "live_pairs": jnp.stack(live_pairs_l),
+        "active": jnp.stack(active_l),
+        "in_rows": jnp.stack(in_rows_l),
+        "last_row": jnp.stack(last_row_l),
     }
 
 
@@ -920,41 +1054,24 @@ def prove_jagged_pyramid(
     # exit point of the last layer is the widest -- the fixed scan-carry width.
     max_eval_len = max_rounds + 1
 
-    # Widen the fixed buffer to cover every layer's per-round prepad height (an
-    # odd segment padding up to even can exceed the layer's own height) plus the
-    # dense interaction width; halve once per round in a single pass per layer.
-    plane_width = 1 << niv
-    for layer, nrv in zip(layers, nrvs):
-        counts = layer.row_counts
-        for _ in range(nrv):
-            plane_width = max(plane_width, sum(rc + rc % 2 for rc in counts))
-            counts = tuple((rc + rc % 2) // 2 for rc in counts)
+    # The scan-invariant buffer width: the max per-layer width across the chain.
+    plane_width = max(
+        _layer_plane_width(layer.row_counts, nrv, niv)
+        for layer, nrv in zip(layers, nrvs)
+    )
 
     one = jnp.ones((), dtype)
     naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
     inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
 
-    # Stack the per-layer host schedule (gather / eq lookups / live-pair mask /
-    # phase flags) and the per-layer round-count metadata as scan xs, so every
-    # layer drives the same traced body.
-    keys = (
-        "gather",
-        "pair_lo",
-        "pair_hi",
-        "col",
-        "live_pairs",
-        "active",
-        "in_rows",
-        "last_row",
+    # Per-layer actual row counts (compact, nseg-wide) as scan xs: the step
+    # reconstructs each layer's full per-round schedule from these in-body via
+    # `_padded_round_schedule_jax`, so no host-baked plane-width schedule is
+    # stacked into the graph (sp1-zorch#55 / #109). nseg is invariant across the
+    # pyramid -- a layer transition preserves the interaction count.
+    xs_row_counts = jnp.asarray(
+        np.asarray([layer.row_counts for layer in layers], dtype=np.int32)
     )
-    stacked: dict[str, list[np.ndarray]] = {key: [] for key in keys}
-    for layer, nrv in zip(layers, nrvs):
-        sched = _padded_round_schedule(
-            layer.row_counts, nrv, niv, max_rounds, plane_width
-        )
-        for key in keys:
-            stacked[key].append(sched[key])
-    xs_sched = {key: jnp.asarray(np.stack(stacked[key])) for key in keys}
     # The bound point's live length per layer (the entry eval_point length), used
     # to read each round's coordinate and to slice the new eval_point back.
     xs_eval_len = jnp.asarray(np.asarray(real_rounds, dtype=np.int32))
@@ -980,7 +1097,7 @@ def prove_jagged_pyramid(
         carry_scan: tuple[Carry, Transcript], xs: tuple
     ) -> tuple[tuple[Carry, Transcript], tuple]:
         (num_eval, den_eval, eval_point), t = carry_scan
-        (n0, n1, d0, d1), eval_len, sched = xs
+        (n0, n1, d0, d1), eval_len, row_counts = xs
 
         # Per-layer carry reduction head: sample lam, batch the opening claim.
         t, lam = sample_challenge(t, dtype, challenge_limbs)
@@ -990,6 +1107,13 @@ def prove_jagged_pyramid(
         # interactions the leading `niv` -- nrv is host-known per layer, so the
         # split index rides as a traced eval_len. Build at the fixed widths.
         nrv_t = eval_len - niv
+
+        # Reconstruct this layer's per-round schedule from the compact row counts
+        # (no baked plane-width constant); byte-identical to the host-baked
+        # `_padded_round_schedule`.
+        sched = _padded_round_schedule_jax(
+            row_counts, nrv_t, niv, max_rounds, plane_width
+        )
         row_pt = lax.dynamic_slice_in_dim(eval_point, niv, max_rounds - niv, 0)
         # eq_row spans 2^nrv live entries; expand over the fixed max width and let
         # the schedule's pair lookups stay within the live region.
@@ -1044,7 +1168,7 @@ def prove_jagged_pyramid(
         [eval_point0, jnp.zeros((max_eval_len - eval_point0.shape[0],), dtype)]
     )
     init = ((num_eval0, carry[1], eval_buf), transcript)
-    xs = (xs_planes, xs_eval_len, xs_sched)
+    xs = (xs_planes, xs_eval_len, xs_row_counts)
     (final_carry, final_t), outs = lax.scan(step, init, xs)
     lam_s, claim_s, polys_s, chal_s, fn0_s, fn1_s, fd0_s, fd1_s = outs
 
