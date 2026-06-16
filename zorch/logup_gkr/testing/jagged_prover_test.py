@@ -628,7 +628,12 @@ class PaddedJaggedRoundsTest(absltest.TestCase):
     transcript-neutral inactive rounds -- from the outer scan."""
 
     def _assert_padded_equals_eager(
-        self, row_counts: tuple[int, ...], nrv: int, max_rounds: int, plane_width: int
+        self,
+        row_counts: tuple[int, ...],
+        nrv: int,
+        max_rounds: int,
+        plane_width: int,
+        eq_prefix_width: int | None = None,
     ) -> None:
         layer = random_jagged_layer(7, row_counts)
         niv = layer.num_interaction_variables
@@ -675,10 +680,13 @@ class PaddedJaggedRoundsTest(absltest.TestCase):
                 (layer.denominator_1, 1),
             )
         ]
+        eq_width = (
+            eq_prefix_width if eq_prefix_width is not None else 1 << (max_rounds - niv)
+        )
         eq_row_p = _expand_eq_prefix(
             jnp.concatenate([z[niv:], jnp.zeros((max_rounds - niv - nrv,), KB)]),
             jnp.asarray(nrv, jnp.int32),
-            1 << (max_rounds - niv),
+            eq_width,
             one,
         )
         sched = {
@@ -742,6 +750,25 @@ class PaddedJaggedRoundsTest(absltest.TestCase):
         )
         self._assert_padded_equals_eager(
             (2, 1, 4, 1), nrv=2, max_rounds=5, plane_width=14
+        )
+
+    def test_trimmed_eq_prefix_matches_eager(self) -> None:
+        # The producer trim (fractalyze/zorch#270): when a split layer bumps
+        # `max_rounds` to the peel-chain envelope, eq_row would otherwise be built
+        # over the full 2^(max_rounds - niv) envelope, but each layer only folds its
+        # natural `nrv` row rounds, so the consumed extent is just 2^nrv. Sizing the
+        # buffer to 2^nrv (the natural extent) instead of the over-padded envelope
+        # must stay byte-identical to the eager reference. The surplus inactive
+        # rounds never fold eq_row, so the trimmed tail is never read.
+        #
+        # nrv=3 in a max_rounds=8 envelope: build 2^3 = 8 instead of 2^(8-2) = 64.
+        self._assert_padded_equals_eager(
+            (3, 1, 5, 2), nrv=3, max_rounds=8, plane_width=14, eq_prefix_width=8
+        )
+        # nrv=4 in a max_rounds=10 envelope: build 2^4 = 16 instead of 2^(10-2) =
+        # 256 -- a 16x trim, two inactive tail rounds.
+        self._assert_padded_equals_eager(
+            (3, 1, 5, 2), nrv=4, max_rounds=10, plane_width=14, eq_prefix_width=16
         )
 
 
