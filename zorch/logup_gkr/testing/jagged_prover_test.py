@@ -212,6 +212,65 @@ class ProveJaggedLayerTest(absltest.TestCase):
             )
 
 
+class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
+    """The first GKR layer may carry base-field numerators under extension-field
+    denominators. `prove_jagged_layer`'s round 0 then reads the numerators in the
+    base field; the fold lifts them to the extension field from round 1, so the
+    whole sumcheck is byte-identical to proving an all-extension copy (zkx#681).
+    That round-0 base-field read is the first-layer-numerator bandwidth an
+    extension-everywhere layer leaves on the table."""
+
+    ROW_COUNTS = (3, 1, 5, 2)
+    NRV = 3
+
+    def _layers(self) -> tuple[JaggedGkrLayer, JaggedGkrLayer]:
+        # Same numbers, two encodings: base-field numerators vs the all-extension
+        # copy (the base elements embedded via astype).
+        height = sum(self.ROW_COUNTS)
+        n0 = rand_field(7, (height,), KB)
+        n1 = rand_field(8, (height,), KB)
+        d0 = rand_ext_field(9, (height,), KB, EF)
+        d1 = rand_ext_field(10, (height,), KB, EF)
+        mixed = JaggedGkrLayer(n0, n1, d0, d1, self.ROW_COUNTS)
+        all_ef = JaggedGkrLayer(n0.astype(EF), n1.astype(EF), d0, d1, self.ROW_COUNTS)
+        return mixed, all_ef
+
+    def test_layer_enters_with_base_field_numerators(self) -> None:
+        # The optimization's premise: numerators base, denominators already EF.
+        mixed, _ = self._layers()
+        self.assertEqual(mixed.numerator_0.dtype, KB)
+        self.assertEqual(mixed.numerator_1.dtype, KB)
+        self.assertEqual(mixed.denominator_0.dtype, EF)
+
+    def test_prove_matches_all_ef_byte_for_byte(self) -> None:
+        mixed, all_ef = self._layers()
+        lam = rand_ext_field(51, (), KB, EF)
+        z = rand_ext_field(52, (self.NRV + 2,), KB, EF)
+        claim = _virtual_claim(all_ef, self.NRV, lam, z)
+
+        gp, gt, gproof = prove_jagged_layer(
+            mixed, lam, claim, z, cheap_transcript(KB), challenge_limbs=4
+        )
+        wp, wt, wproof = prove_jagged_layer(
+            all_ef, lam, claim, z, cheap_transcript(KB), challenge_limbs=4
+        )
+
+        self.assertTrue(bool(jnp.all(gp == wp)))  # bound point
+        for f in fields(JaggedLayerProof):
+            self.assertTrue(
+                bool(jnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
+                f"proof.{f.name} diverged",
+            )
+        if not isinstance(gt, DuplexTranscript) or not isinstance(wt, DuplexTranscript):
+            raise AssertionError("both paths must thread the DuplexTranscript back")
+        gs, ws = gt.state, wt.state
+        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
+        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
+        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
+        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
+        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
+
+
 class JaggedGkrLayerRoundTest(absltest.TestCase):
     def test_carry_reduction_closes_the_gkr_relation(self) -> None:
         # claim = lam * N(z) + D(z) with N/D read off the *folded* layer's
