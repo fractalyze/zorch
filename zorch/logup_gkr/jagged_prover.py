@@ -658,15 +658,19 @@ def _padded_round_schedule(
     in_rows = np.zeros(max_rounds, dtype=bool)
     last_row = np.zeros(max_rounds, dtype=bool)
 
-    meta = _round_metadata(row_counts, nrv)
     counts = row_counts
     for k in range(nrv):
-        _, col_index, pair_index = meta[k]
         padded = tuple(rc + rc % 2 for rc in counts)
+        pairs = tuple(p // 2 for p in padded)
         live = sum(padded) // 2
         gather[k] = _fixed_width_gather(counts, padded, plane_width)
-        ci = np.asarray(col_index, dtype=np.int32)
-        pi = np.asarray(pair_index, dtype=np.int32)
+        # col_index / pair_index are static host-side schedule, derived from the
+        # Python-int row counts -- kept in numpy here so the schedule stacks
+        # under jit (the rolled scan body reads them off the static layout).
+        # _round_metadata wraps the same values in jnp for the unrolled jax
+        # round body; np.asarray on that jnp array is a tracer under jit.
+        ci = np.repeat(np.arange(len(pairs), dtype=np.int32), pairs)
+        pi = np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
         pair_lo[k, : pi.shape[0]] = pi * 2
         pair_hi[k, : pi.shape[0]] = pi * 2 + 1
         col[k, : ci.shape[0]] = ci
@@ -674,7 +678,7 @@ def _padded_round_schedule(
         active[k] = True
         in_rows[k] = True
         last_row[k] = k == nrv - 1
-        counts = tuple(p // 2 for p in padded)
+        counts = pairs
 
     for m in range(niv):
         k = nrv + m
