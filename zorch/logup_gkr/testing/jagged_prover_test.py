@@ -13,6 +13,8 @@ from __future__ import annotations
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
+from typing import NamedTuple
+from unittest import mock
 
 import jax
 import jax.numpy as jnp
@@ -22,6 +24,7 @@ from jax import Array
 from jaxlib.mlir.dialects import stablehlo
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.logup_gkr import jagged_prover
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _interleave,
@@ -62,6 +65,18 @@ from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 _HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
+# The pinned zkx CPU emitter recognizes the rolled `runtime_row_counts` marker but
+# routes it to the exact-fit emitter, which has no runtime-row-counts decompose
+# path and aborts (it requires factor length == sum(row_counts)). Until that CPU
+# decompose lands, tests that COMPILE the rolled marker run only where the emitter
+# supports it (GPU); the rolled path's CPU coverage is the unmarked byte-match in
+# RolledJaggedPyramidTest, and the marker contract is checked by the jaxpr-only
+# tests that never compile.
+_ON_CPU = jax.default_backend() == "cpu"
+_ROLLED_MARKER_CPU_SKIP = (
+    "pinned zkx CPU emitter has no runtime_row_counts decompose path; "
+    "the rolled marker compiles only where the emitter supports it (GPU)"
+)
 
 
 def _logup_combine(
@@ -536,7 +551,7 @@ class JaggedGkrLayerRoundJitTest(absltest.TestCase):
     change), so `jit(marked) == eager(marked)` follows from this test
     (`jit == eager` on the loop) composed with `ProveJaggedMarkedTest`
     (`marked == eager plain`); the full-scale jitted marked prove is validated
-    on GPU by the sp1-zorch bench's byte-match anchors."""
+    on GPU by the consumer prover's byte-match anchors."""
 
     # niv = 1 (two interactions), nrv = 2: an odd segment (3) and a saturated
     # one (1), both row and interaction rounds, in a few-element layer.
@@ -733,7 +748,7 @@ class PaddedJaggedRoundsTest(absltest.TestCase):
 class RolledJaggedPyramidTest(absltest.TestCase):
     """`prove_jagged_pyramid` rolls the floor-outward layer chain into one
     `lax.scan`; it must be byte-identical to the unrolled `ProveChain` over
-    `JaggedGkrLayerRound`s -- the sp1-zorch#55 gate. Same fixture as
+    `JaggedGkrLayerRound`s -- the rolled-pyramid gate. Same fixture as
     `ChainedJaggedProveTest` so the two share a reference stream."""
 
     ROW_COUNTS = (3, 1, 5, 2)
@@ -796,7 +811,7 @@ class RolledJaggedPyramidTest(absltest.TestCase):
 class PaddedRoundScheduleJaxTest(absltest.TestCase):
     """`_padded_round_schedule_jax` (runtime row_counts, no baked plane-width
     arrays) byte-matches the numpy `_padded_round_schedule` -- the #109 gate that
-    lets the rolled scan drop `xs_sched` (sp1-zorch#55)."""
+    lets the rolled scan drop `xs_sched`."""
 
     CASES = [
         ((3, 1), 2, 1),  # odd seg (3) + saturated (1)
@@ -838,6 +853,15 @@ class PaddedRoundScheduleJaxTest(absltest.TestCase):
             with self.subTest(row_counts=row_counts):
                 self._check(row_counts, nrv, niv, nrv + niv + 3)
 
+    def test_peel_chain_envelope_no_overflow(self) -> None:
+        # The marked split path widens max_rounds to the peel-chain envelope
+        # (32 at the EF budget); `bk = 1 << k` reaches 2^31 at k=31, where
+        # `row_counts + (bk - 1)` would overflow int32. The saturate guard must
+        # still byte-match the numpy oracle across the surplus rounds.
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, 32)
+
     def test_under_jit_matches_eager(self) -> None:
         # The reconstruction must lower (no baked plane-width constant) and match
         # eager -- jitting it is the whole point.
@@ -856,6 +880,237 @@ class PaddedRoundScheduleJaxTest(absltest.TestCase):
             self.assertTrue(
                 bool(jnp.all(jnp.asarray(got[key]) == jnp.asarray(want[key]))), key
             )
+
+
+class _PaddedInputs(NamedTuple):
+    """One layer's fixed-width padded operands plus the runtime row-count channel
+    -- the inputs the rolled scan step feeds the marker."""
+
+    layer: JaggedGkrLayer
+    niv: int
+    planes: tuple[Array, Array, Array, Array]
+    eq_row: Array
+    eq_int: Array
+    coords: Array
+    sched: dict[str, Array]
+    naturals: Array
+    inv_vand: Array
+    bound_meta: Array
+    row_counts: Array
+    envelope: tuple[int, ...]
+
+
+class MarkedRolledJaggedPyramidTest(absltest.TestCase):
+    """Over a dedicated-fusion transcript, `prove_jagged_pyramid` wraps the rolled
+    `_run_jagged_rounds_padded` step in ONE `zorch.sumcheck` composite per scan
+    iteration. Because a scan body is traced once and the
+    pyramid halves each layer, the per-layer counts cannot ride the static
+    `row_counts` attr -- so the marker sets `runtime_row_counts` with the static
+    attr pinned to the fixed-width envelope, and carries the per-layer counts as
+    the trailing `bound_meta s32[4]` / `row_counts s32[nseg]` runtime operands the
+    zkx rewriter threads (sumcheck_recognizer.cc dual-channel contract).
+    Unrecognized on CPU, the marker decomposes to the same loop, so the proof is
+    byte-identical to the unrolled chain."""
+
+    ROW_COUNTS = (3, 1, 5, 2)
+    NRV = 3
+
+    def _poseidon_transcript(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+    def _padded_layer_inputs(
+        self, row_counts: tuple[int, ...], nrv: int, max_rounds: int, plane_width: int
+    ) -> _PaddedInputs:
+        layer = random_jagged_layer(7, row_counts)
+        niv = layer.num_interaction_variables
+        z = rand_field(18, (nrv + niv,), KB)
+        one = jnp.ones((), KB)
+        pad = plane_width - layer.height
+
+        def pad_plane(arr: Array, neutral: int) -> Array:
+            fill = (jnp.zeros if neutral == 0 else jnp.ones)((pad,), KB)
+            return jnp.concatenate([arr, fill])
+
+        planes = (
+            pad_plane(layer.numerator_0, 0),
+            pad_plane(layer.numerator_1, 0),
+            pad_plane(layer.denominator_0, 1),
+            pad_plane(layer.denominator_1, 1),
+        )
+        eq_row = _expand_eq_prefix(
+            jnp.concatenate([z[niv:], jnp.zeros((max_rounds - niv - nrv,), KB)]),
+            jnp.asarray(nrv, jnp.int32),
+            1 << (max_rounds - niv),
+            one,
+        )
+        eq_int = expand_eq_to_hypercube(z[:niv], one)
+        sched = {
+            k: jnp.asarray(v)
+            for k, v in _padded_round_schedule(
+                layer.row_counts, nrv, niv, max_rounds, plane_width
+            ).items()
+        }
+        idx = (nrv + niv) - 1 - jnp.arange(max_rounds)
+        coords = z[jnp.clip(idx, 0, z.shape[0] - 1)]
+        nseg = len(layer.row_counts)
+        return _PaddedInputs(
+            layer=layer,
+            niv=niv,
+            planes=planes,
+            eq_row=eq_row,
+            eq_int=eq_int,
+            coords=coords,
+            sched=sched,
+            naturals=jnp.stack([jnp.array(j, KB) for j in range(_DEGREE + 1)]),
+            inv_vand=compute_inv_vandermonde(_DEGREE, KB),
+            bound_meta=jnp.asarray([nrv + niv, nrv, nseg, 1], jnp.int32),
+            row_counts=jnp.asarray(layer.row_counts, jnp.int32),
+            envelope=layer.row_counts,
+        )
+
+    def _call_marked(
+        self, inp: _PaddedInputs, lam: Array, claim: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
+        return jagged_prover._prove_jagged_rounds_padded_marked(
+            *inp.planes,
+            inp.eq_row,
+            inp.eq_int,
+            inp.coords,
+            lam,
+            claim,
+            transcript,
+            inp.sched,
+            inp.naturals,
+            inp.inv_vand,
+            inp.bound_meta,
+            inp.row_counts,
+            envelope=inp.envelope,
+            niv=inp.niv,
+            max_rounds=inp.coords.shape[0],
+            challenge_limbs=1,
+        )
+
+    @absltest.skipIf(_ON_CPU, _ROLLED_MARKER_CPU_SKIP)
+    def test_padded_marker_decomposes_to_plain_padded(self) -> None:
+        # The marker is a no-op on CPU: over an identical transcript it must
+        # reproduce the unmarked `_run_jagged_rounds_padded` byte-for-byte.
+        inp = self._padded_layer_inputs(self.ROW_COUNTS, self.NRV, 5, 14)
+        lam, claim = rand_field(17, (), KB), rand_field(19, (), KB)
+        m_ch, m_t, m_polys, *m_open = self._call_marked(
+            inp, lam, claim, self._poseidon_transcript()
+        )
+        p_ch, p_t, p_polys, *p_open = _run_jagged_rounds_padded(
+            *inp.planes,
+            inp.eq_row,
+            inp.eq_int,
+            inp.coords,
+            lam,
+            claim,
+            self._poseidon_transcript(),
+            inp.sched,
+            inp.naturals,
+            inp.inv_vand,
+            inp.niv,
+            inp.coords.shape[0],
+            1,
+        )
+        self.assertTrue(bool(jnp.all(m_ch == p_ch)))
+        self.assertTrue(bool(jnp.all(m_polys == p_polys)))
+        for got, want in zip(m_open, p_open, strict=True):
+            self.assertTrue(bool(got == want))
+        if not (
+            isinstance(m_t, DuplexTranscript) and isinstance(p_t, DuplexTranscript)
+        ):
+            raise AssertionError("both paths thread the DuplexTranscript back")
+        ms, ps = m_t.state, p_t.state
+        self.assertTrue(bool(jnp.all(ms.sponge_state == ps.sponge_state)))
+        self.assertEqual(int(ms.in_pos), int(ps.in_pos))
+        self.assertEqual(int(ms.out_pos), int(ps.out_pos))
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_padded_marker_carries_runtime_row_counts_contract(self) -> None:
+        # The dual-channel recognition contract (sumcheck_recognizer.cc): the
+        # bare marker, the static envelope `row_counts`, the `runtime_row_counts`
+        # flag, and the trailing `bound_meta s32[4]` / `row_counts s32[nseg]`
+        # runtime operands the rewriter reads positionally as the last two.
+        inp = self._padded_layer_inputs(self.ROW_COUNTS, self.NRV, 5, 14)
+        lam, claim = rand_field(17, (), KB), rand_field(19, (), KB)
+        # Build the transcript outside make_jaxpr -- the poseidon params do a
+        # numpy slice in __post_init__ that a trace context would tracer-poison.
+        t0 = self._poseidon_transcript()
+        jaxpr = jax.make_jaxpr(lambda l_, c_: self._call_marked(inp, l_, c_, t0)[0])(
+            lam, claim
+        ).jaxpr
+        eqn = next(
+            e
+            for e in jaxpr.eqns
+            if e.primitive.name == "composite"
+            and e.params.get("name") == SUMCHECK_MARKER
+        )
+        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
+        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(int(attrs["num_vars"]), self.NRV + 2)
+        self.assertTrue(bool(attrs["runtime_row_counts"]))
+        self.assertEqual(attrs["fold_order"], "lsb")
+        self.assertEqual(attrs["poly_form"], "coefficient")
+        envelope = attrs["row_counts"]
+        envelope = [int(c) for c in getattr(envelope, "val", envelope)]
+        self.assertEqual(envelope, list(self.ROW_COUNTS))
+        # bound_meta then row_counts are the final two operands (rank-1 s32, so
+        # the rewriter's duplex-leaf scan never mistakes them for a leaf block).
+        bm, rc = eqn.invars[-2].aval, eqn.invars[-1].aval
+        self.assertEqual((bm.dtype, bm.shape), (jnp.int32, (4,)))
+        self.assertEqual((rc.dtype, rc.shape), (jnp.int32, (len(self.ROW_COUNTS),)))
+
+    @absltest.skipIf(_ON_CPU, _ROLLED_MARKER_CPU_SKIP)
+    def test_pyramid_marks_dedicated_fusion_not_cheap(self) -> None:
+        # Wiring + gate: prove_jagged_pyramid routes the step through the marker
+        # for a dedicated-fusion transcript (one trace of the scan body = one
+        # marker call), and through the plain loop for a cheap one.
+        layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
+        proved = list(reversed(layers[:-1]))
+        output = extract_jagged_outputs(layers[-1])
+        original = jagged_prover._prove_jagged_rounds_padded_marked
+        for transcript_fn, expect_marked in (
+            (self._poseidon_transcript, True),
+            (lambda: cheap_transcript(KB), False),
+        ):
+            with mock.patch.object(
+                jagged_prover,
+                "_prove_jagged_rounds_padded_marked",
+                wraps=original,
+            ) as spy:
+                carry, t = bind_output(output, transcript_fn())
+                prove_jagged_pyramid(proved, carry, t)
+            self.assertEqual(spy.called, expect_marked)
+
+    @absltest.skipIf(_ON_CPU, _ROLLED_MARKER_CPU_SKIP)
+    def test_marked_rolled_equals_unrolled_chain(self) -> None:
+        layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
+        proved = list(reversed(layers[:-1]))
+        output = extract_jagged_outputs(layers[-1])
+
+        carry_u, t_u = bind_output(output, self._poseidon_transcript())
+        want_carry, want_t, want_proofs = ProveChain(
+            JaggedGkrLayerRound(layer) for layer in proved
+        )(carry_u, t_u)
+
+        carry_r, t_r = bind_output(output, self._poseidon_transcript())
+        got_carry, got_t, got_proofs = prove_jagged_pyramid(proved, carry_r, t_r)
+
+        for got, want in zip(got_proofs, want_proofs, strict=True):
+            for field in fields(JaggedLayerProof):
+                self.assertTrue(
+                    bool(
+                        jnp.all(getattr(got, field.name) == getattr(want, field.name))
+                    ),
+                    f"proof.{field.name} diverged",
+                )
+        for got, want in zip(got_carry, want_carry, strict=True):
+            self.assertTrue(bool(jnp.all(got == want)))
+        _, want_r = want_t.sample(1)
+        _, got_r = got_t.sample(1)
+        self.assertTrue(bool(got_r[0] == want_r[0]))
 
 
 if __name__ == "__main__":
