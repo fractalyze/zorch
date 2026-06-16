@@ -215,14 +215,14 @@ class JaggedGkrLayer:
         return (0, *itertools.accumulate(self.row_counts))
 
 
-def _segment_gather(
+def _segment_gather_np(
     src_counts: tuple[int, ...], dst_counts: tuple[int, ...]
-) -> Array | None:
-    """Gather indices remapping a jagged layout from src_counts to dst_counts.
+) -> np.ndarray | None:
+    """Numpy core of `_segment_gather` (see it for the gather semantics).
 
-    Positions past a segment's source rows get the sentinel `sum(src_counts)`,
-    which `_gather_pad` resolves to the padding value. None when the layouts
-    already agree (no gather needed).
+    Stays numpy so `_fixed_width_gather` can lay it into a fixed-width buffer
+    host-side: the rolled scans precompute their schedule inside the `jax.jit`
+    trace, where an `np.asarray` of a jnp value would trip on a tracer.
     """
     if src_counts == dst_counts:
         return None
@@ -236,7 +236,22 @@ def _segment_gather(
         gather[dst_pos : dst_pos + copy] = np.arange(src_pos, src_pos + copy)
         src_pos += src
         dst_pos += dst
-    return jnp.asarray(gather)
+    return gather
+
+
+def _segment_gather(
+    src_counts: tuple[int, ...], dst_counts: tuple[int, ...]
+) -> Array | None:
+    """Gather indices remapping a jagged layout from src_counts to dst_counts.
+
+    Positions past a segment's source rows get the sentinel `sum(src_counts)`,
+    which `_gather_pad` resolves to the padding value. None when the layouts
+    already agree (no gather needed). jnp so the unrolled `_round_metadata`
+    schedule rides the jax round body byte-for-byte (the rolled scans take the
+    numpy core directly via `_fixed_width_gather`).
+    """
+    seg = _segment_gather_np(src_counts, dst_counts)
+    return None if seg is None else jnp.asarray(seg)
 
 
 def _gather_pad(arr: Array, gather: Array, pad_val: int) -> Array:
@@ -289,8 +304,8 @@ def _fixed_width_gather(
     neutral pad rather than a stale slot. `None` (layouts already agree) becomes
     the identity over the live prefix."""
     live = sum(src_counts)
-    seg = _segment_gather(src_counts, dst_counts)
-    base = np.arange(live, dtype=np.int32) if seg is None else np.asarray(seg, np.int32)
+    seg = _segment_gather_np(src_counts, dst_counts)
+    base = np.arange(live, dtype=np.int32) if seg is None else seg
     base = np.where(base >= live, width, base)
     row = np.full(width, width, dtype=np.int32)
     row[: base.shape[0]] = base
