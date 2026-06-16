@@ -5,13 +5,16 @@ from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.poseidon2.linear import (
-    apply_external_standard,
+    apply_external_m4,
     apply_internal,
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import default_external_matrix
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
+
+# Plonky3's M4 = circ(2,3,1,1) — the base M4 `default_external_matrix` builds from.
+_STD_M4 = ((2, 3, 1, 1), (1, 2, 3, 1), (1, 1, 2, 3), (3, 1, 1, 2))
 
 
 class LinearLayerTest(absltest.TestCase):
@@ -28,23 +31,25 @@ class LinearLayerTest(absltest.TestCase):
         m_int = jnp.ones((w, w), dtype=F) + jnp.diag(d)
         self.assertTrue(bool(jnp.array_equal(apply_internal(d, s), m_int @ s)))
 
-    def test_apply_external_standard_equals_default_matrix(self) -> None:
+    def test_apply_external_m4_equals_default_matrix(self) -> None:
         # The literal-coefficient external layer must byte-match the array form
         # apply_matrix(default_external_matrix(w)) it stands in for.
         for w in (8, 16):
             m = default_external_matrix(w, F)
             s = rand_field(7, (w,), F)
             self.assertTrue(
-                bool(jnp.array_equal(apply_external_standard(s), apply_matrix(m, s))),
+                bool(
+                    jnp.array_equal(apply_external_m4(s, _STD_M4), apply_matrix(m, s))
+                ),
                 f"width {w}",
             )
 
-    def test_apply_external_standard_rejects_bad_width(self) -> None:
+    def test_apply_external_m4_rejects_bad_width(self) -> None:
         with self.assertRaises(ValueError):
-            apply_external_standard(rand_field(2, (6,), F))  # 6 % 4 != 0
+            apply_external_m4(rand_field(2, (6,), F), _STD_M4)  # 6 % 4 != 0
         with self.assertRaises(ValueError):
-            apply_external_standard(
-                rand_field(2, (16, 16), F)
+            apply_external_m4(
+                rand_field(2, (16, 16), F), _STD_M4
             )  # 2-D, not a lane vector
 
     def test_apply_matrix_rejects_mismatched_state(self) -> None:
@@ -69,7 +74,7 @@ class LinearLayerTest(absltest.TestCase):
         # Element-wise only — no reduce/dot/gather boundary (whitelist gate).
         assert_fusion_ready(lambda v: apply_matrix(m, v), s, reduces=0)
         assert_fusion_ready(lambda v: apply_internal(d, v), s, reduces=0)
-        assert_fusion_ready(apply_external_standard, s, reduces=0)
+        assert_fusion_ready(lambda v: apply_external_m4(v, _STD_M4), s, reduces=0)
         # The matrix form reduces, so the gate must bite — else the check is vacuous.
         with self.assertRaises(AssertionError):
             assert_fusion_ready(lambda v: m @ v, s, reduces=0)

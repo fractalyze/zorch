@@ -86,17 +86,45 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     @absltest.skipUnless(
         _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
     )
-    def test_custom_external_matrix_uses_generic_marker(self) -> None:
-        # The GPU Poseidon2Fusion emitter hardcodes the standard M4-circulant
-        # MDS, so a non-standard external matrix must NOT take the
-        # zorch.poseidon2 route — it falls back to the generic
-        # zorch.fused_region marker (LoopFusion lowers the real body) to stay
-        # correct.
+    def test_free_form_external_matrix_uses_generic_marker(self) -> None:
+        # The Poseidon2Fusion emitter assumes an (I + J_blocks) ⊗ M4 external
+        # layer (M4 rides as a marker attribute), so a free-form matrix that is
+        # NOT M4-block-structured must NOT take the zorch.poseidon2 route — it
+        # falls back to the generic zorch.fused_region marker (LoopFusion lowers
+        # the real body) to stay correct. (An M4-block-structured matrix — e.g.
+        # the HorizenLabs reference — does take the dedicated route.)
         custom = jnp.arange(16 * 16, dtype=F).reshape(16, 16)
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=custom))
         txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         self.assertNotIn(POSEIDON2_MARKER, txt)
         self.assertIn("zorch.fused_region", txt)
+
+    @absltest.skipUnless(
+        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
+    )
+    def test_non_plonky3_m4_takes_dedicated_route(self) -> None:
+        # A non-default but M4-block-structured matrix (here the HorizenLabs
+        # reference M4 that pil2/ZisK use) must take the dedicated zorch.poseidon2
+        # route, carrying its own M4 as the external_m4 attribute — not fall back
+        # to the generic marker. This is what makes the dedicated emitter usable
+        # by the HorizenLabs variant without a per-matrix special case.
+        hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
+        w = 16
+        mds = jnp.array(
+            [
+                [hl_m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(w)]
+                for i in range(w)
+            ],
+            dtype=F,
+        )
+        p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
+        txt = jax.jit(p.permute).lower(jnp.arange(w, dtype=F)).as_text()
+        self.assertIn(POSEIDON2_MARKER, txt)
+        self.assertIn(
+            "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"
+            " tensor<16xi64>",
+            txt,
+        )
 
 
 if __name__ == "__main__":

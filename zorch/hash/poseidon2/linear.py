@@ -15,13 +15,6 @@ import operator
 import jax.numpy as jnp
 from jax import Array
 
-# Standard Poseidon2 external M4 (mirrors params.default_external_matrix). Kept as
-# Python ints, not a field array: apply_external_standard scales lanes by these
-# literals so it closes over no matrix. A closed-over array inside a
-# jax.lax.composite is lifted to a leading operand, which would break a
-# name-routed emitter's fixed operand ABI.
-_M4 = ((2, 3, 1, 1), (1, 2, 3, 1), (1, 1, 2, 3), (3, 1, 1, 2))
-
 
 def _unrolled_sum(terms: list[Array]) -> Array:
     return functools.reduce(operator.add, terms)
@@ -38,24 +31,28 @@ def apply_matrix(matrix: Array, state: Array) -> Array:
     return _unrolled_sum([matrix[:, j] * state[j] for j in range(w)])
 
 
-def apply_external_standard(state: Array) -> Array:
-    """Standard M4-circulant external layer `M[i][j] = M4[i%4][j%4]*(2 if same
-    4-block)`, byte-equal to `apply_matrix(default_external_matrix(w, dtype),
-    state)` but scaling lanes by integer literals so no matrix array is captured
-    — required inside a name-routed `fused_region` (see `_M4`). `width` must be a
-    positive multiple of 4.
+def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
+    """External layer `(I + J_blocks) ⊗ M4`: per-4-block M4, plus M4-image column
+    sums across blocks — `M[i][j] = M4[i%4][j%4] * (2 if same 4-block)`.
+
+    `m4` is the 4×4 base matrix as canonical Python ints, so lanes scale by integer
+    literals and no field array is captured — required inside a name-routed
+    `fused_region` (a closed-over array lifts to a leading operand and breaks the
+    emitter ABI). The base M4 is not fixed: Plonky3's `circ(2,3,1,1)` and the
+    HorizenLabs reference matrix are two valid choices, the caller's to pick. The
+    2×-diagonal-block form matches references for width >= 8.
     """
     w = state.shape[0]
     if state.ndim != 1 or w == 0 or w % 4 != 0:
         raise ValueError(
-            f"standard external layer needs a 1-D state with width a positive "
-            f"multiple of 4, got {state.shape}"
+            f"external layer needs a 1-D state with width a positive multiple of "
+            f"4, got {state.shape}"
         )
     return jnp.stack(
         [
             _unrolled_sum(
                 [
-                    _M4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) * state[j]
+                    m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) * state[j]
                     for j in range(w)
                 ]
             )
