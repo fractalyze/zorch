@@ -68,12 +68,35 @@ from zorch.sumcheck.prover import (
     _state_leaves,
 )
 from zorch.transcript import DuplexState, DuplexTranscript, Transcript, sample_challenge
+from zorch.utils.bits import log2_ceil_usize
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
 
 # eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2), in coefficient form.
 _DEGREE = 3
+
+# Mirror of zkx's jagged on-chip budget / peel-chain envelope
+# (zkx/service/transforms/sumcheck_rewriter.cc: JaggedOnChipBudget,
+# JaggedFsReuseRounds, JaggedPeelChainNumVarsMax). When the static envelope
+# row-count sum exceeds the budget the vendor's masked capacity-split chain
+# fires, and it requires a runtime_row_counts marker's `num_vars` to be the
+# fixed envelope `k_max + tail_max` (a scan-invariant chain shape), NOT the
+# real round count. These constants are GPU-budget-derived but shard-invariant.
+_JAGGED_FS_SHARED_CAP_BYTES = 48 * 1024  # default static shared-memory cap
+_JAGGED_FS_SHARED_MULT = 12
+_JAGGED_PEEL_CHAIN_MAX_PEELS = 16
+
+
+def _jagged_on_chip_budget(factor_bytes: int) -> int:
+    return _JAGGED_FS_SHARED_CAP_BYTES // (_JAGGED_FS_SHARED_MULT * factor_bytes)
+
+
+def _jagged_peel_chain_num_vars_max(budget: int) -> int:
+    if budget <= 0:
+        return 0
+    # JaggedFsReuseRounds = 2 * ceil(log2(budget)).
+    return _JAGGED_PEEL_CHAIN_MAX_PEELS + 2 * log2_ceil_usize(budget)
 
 
 @partial(
@@ -772,7 +795,15 @@ def _padded_round_schedule_jax(
         # Row-round layout: counts_k = ceil(row_counts / 2^k); pad odd segs to
         # even, then halve. Segment offsets are exclusive cumsums.
         bk = 1 << k
-        counts_k = (row_counts + (bk - 1)) // bk
+        if bk > plane_width:
+            # 2^k exceeds the buffer width, so every segment has folded to a
+            # single element: ceil(row_counts / 2^k) == 1 (row_counts >= 1).
+            # Saturate directly -- `row_counts + (bk - 1)` overflows int32 once
+            # `bk` nears 2^31, reachable when the marked split path widens
+            # max_rounds to the peel-chain envelope (sp1-zorch#55).
+            counts_k = (row_counts > 0).astype(i32)
+        else:
+            counts_k = (row_counts + (bk - 1)) // bk
         padded_k = counts_k + (counts_k % 2)
         pairs_k = padded_k // 2
         src_off = _excl_cumsum(counts_k)
@@ -1211,6 +1242,17 @@ def prove_jagged_pyramid(
         raise ValueError("every layer must share the segment (interaction) count")
     envelope = tuple(max(layer.row_counts[s] for layer in layers) for s in range(nseg))
     mark = transcript.has_dedicated_fusion
+
+    # A split-needing marked composite must size num_vars to zkx's fixed
+    # peel-chain envelope (k_max + tail_max), NOT the real round count, so the
+    # vendor's runtime-masked split chain keeps a scan-invariant shape. The
+    # surplus rounds run inactive (neutral), so each layer's proof, sliced to
+    # its real round count, stays byte-identical (sp1-zorch#55).
+    if mark:
+        budget = _jagged_on_chip_budget(int(np.dtype(dtype).itemsize))
+        if budget > 0 and sum(envelope) > budget:
+            max_rounds = max(max_rounds, _jagged_peel_chain_num_vars_max(budget))
+            max_eval_len = max_rounds + 1
 
     one = jnp.ones((), dtype)
     naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])

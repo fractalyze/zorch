@@ -841,6 +841,16 @@ class PaddedRoundScheduleJaxTest(absltest.TestCase):
             with self.subTest(row_counts=row_counts):
                 self._check(row_counts, nrv, niv, nrv + niv + 3)
 
+    def test_peel_chain_envelope_no_overflow(self) -> None:
+        # The marked split path widens max_rounds to the peel-chain envelope
+        # (32 at the EF budget); `bk = 1 << k` reaches 2^31 at k=31, where
+        # `row_counts + (bk - 1)` would overflow int32. The saturate guard must
+        # still byte-match the numpy oracle across the surplus rounds
+        # (sp1-zorch#55).
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, 32)
+
     def test_under_jit_matches_eager(self) -> None:
         # The reconstruction must lower (no baked plane-width constant) and match
         # eager -- jitting it is the whole point.
