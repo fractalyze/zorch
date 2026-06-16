@@ -591,6 +591,50 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         row_counts = getattr(row_counts, "val", row_counts)
         self.assertEqual([int(c) for c in row_counts], list(self.ROW_COUNTS))
 
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_base_field_first_layer_marker_keeps_numerators_narrow(self) -> None:
+        # zkx#681 acceptance #1 at the producer/IR boundary: a first layer with
+        # base-field numerators under extension-field denominators emits a
+        # `zorch.sumcheck` marker whose two numerator plane operands stay
+        # base-field (4B) while the two denominator planes are EF (16B) -- the
+        # first-layer-numerator read an all-extension layer pays in full. The
+        # GPU emitter (zkx#681 PR2) codegens that narrow read; here we only pin
+        # that the producer hands it the narrow operands.
+        from collections import Counter
+
+        height = sum(self.ROW_COUNTS)
+        n0 = rand_field(7, (height,), KB)
+        n1 = rand_field(8, (height,), KB)
+        d0 = rand_ext_field(9, (height,), KB, EF)
+        d1 = rand_ext_field(10, (height,), KB, EF)
+        mixed = JaggedGkrLayer(n0, n1, d0, d1, self.ROW_COUNTS)
+        all_ef = JaggedGkrLayer(n0.astype(EF), n1.astype(EF), d0, d1, self.ROW_COUNTS)
+        lam = rand_ext_field(51, (), KB, EF)
+        z = rand_ext_field(52, (self.NRV + 2,), KB, EF)
+
+        def plane_dtypes(layer: JaggedGkrLayer) -> "Counter[str]":
+            # The four planes are the only marker operands shaped (height,); the
+            # eq tables / point / constants / sponge leaves carry other shapes,
+            # so this isolates the planes without relying on operand order.
+            t = self._poseidon_transcript()
+            jaxpr = jax.make_jaxpr(
+                lambda l_, c_, z_: prove_jagged_layer(
+                    layer, l_, c_, z_, t, challenge_limbs=4
+                )[0]
+            )(lam, jnp.zeros((), EF), z).jaxpr
+            eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+            return Counter(
+                str(iv.aval.dtype)
+                for iv in eqn.invars
+                if getattr(iv, "aval", None) is not None and iv.aval.shape == (height,)
+            )
+
+        self.assertEqual(
+            plane_dtypes(mixed),
+            Counter({"koalabear_mont": 2, "koalabearx4_mont": 2}),
+        )
+        self.assertEqual(plane_dtypes(all_ef), Counter({"koalabearx4_mont": 4}))
+
 
 class JaggedGkrLayerRoundJitTest(absltest.TestCase):
     """`JaggedGkrLayerRound(layer, jit=True)` compiles the per-layer prove once
