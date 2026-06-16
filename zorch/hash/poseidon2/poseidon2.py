@@ -22,12 +22,13 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import Array
 
 from zorch import _composite
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
-    apply_external_standard,
+    apply_external_m4,
     apply_internal,
     apply_matrix,
 )
@@ -54,10 +55,11 @@ class Poseidon2:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
-        # Decided once here (eager): the matrix compare would stage into the
-        # jaxpr if done inside the traced `permute` body. Gates both the marker
-        # name and the const-free external layer.
-        self._uses_standard_external = params.uses_standard_external_matrix
+        # Decided once here (eager): the structure check + M4 extraction would
+        # stage into the jaxpr if done inside the traced `permute` body. Gates both
+        # the marker name and the const-free (literal-M4) external layer.
+        self._is_m4_structured = params.is_m4_block_structured
+        self._external_m4 = params.external_m4 if self._is_m4_structured else None
         self._fused_region_name = self._select_fused_region_name()
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
@@ -76,12 +78,14 @@ class Poseidon2:
         return hash(self._p)
 
     def _select_fused_region_name(self) -> str:
-        """Route to the dedicated Poseidon2Fusion only with the standard external
-        matrix — its GPU emitter hardcodes the M4-circulant MDS, so a custom
-        matrix would be silently ignored there; otherwise keep the generic marker
-        (LoopFusion lowers the real body, staying correct).
+        """Route to the dedicated Poseidon2Fusion for any `(I + J_blocks) ⊗ M4`
+        external matrix — the emitter applies the M4 the marker carries as an
+        attribute, so Plonky3's `circ(2,3,1,1)` and the HorizenLabs matrix both
+        take the dedicated path. A free-form matrix is not M4-block-structured, so
+        it keeps the generic marker (LoopFusion lowers the real body, staying
+        correct, just slow to compile).
         """
-        if self._uses_standard_external:
+        if self._is_m4_structured:
             return POSEIDON2_MARKER
         return FUSED_REGION_MARKER
 
@@ -113,13 +117,16 @@ def _permute_body(perm: Poseidon2, state: Array, has_composite_op: bool) -> Arra
     # The external MDS must not be a closed-over array on the named-emitter
     # path: jax.lax.composite lifts closed-over consts to leading operands, so
     # the matrix would leak in as a 7th operand and break the Poseidon2Fusion
-    # 6-operand ABI. The standard matrix applies via integer literals (no
-    # capture); a custom matrix takes the generic LoopFusion fallback, which
-    # lowers the real body, so the closed array is harmless there.
-    if perm._uses_standard_external:
+    # 6-operand ABI. An M4-block-structured matrix applies via integer literals
+    # (the 4×4 M4, no array capture) and rides as a marker attribute; a free-form
+    # matrix takes the generic LoopFusion fallback, which lowers the real body, so
+    # the closed array is harmless there.
+    if perm._is_m4_structured:
+        m4 = perm._external_m4
+        assert m4 is not None  # _is_m4_structured ⇒ M4 was extracted
 
         def apply_external(s: Array) -> Array:
-            return apply_external_standard(s)
+            return apply_external_m4(s, m4)
 
     else:
         mds = p.external_matrix
@@ -177,22 +184,37 @@ def _permute_body(perm: Poseidon2, state: Array, has_composite_op: bool) -> Arra
     )
 
     # On the dedicated marker the permutation shape rides as
-    # `composite.attributes` — the zkx recognizer's contract: all four ints
-    # are required (it maps `alpha` to its s-box degree). The body ignores
-    # them (metadata only); the generic marker stays attrs-free.
-    marker_attrs: dict[str, int] = (
-        {
-            "version": POSEIDON2_MARKER_VERSION,
+    # `composite.attributes` — the zkx recognizer's contract: the four shape ints
+    # (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4 base M4
+    # flattened row-major, which the emitter applies per 4-block (so the external
+    # layer is no longer hardcoded). The body ignores them (metadata only); the
+    # generic marker stays attrs-free.
+    if perm.has_dedicated_fusion:
+        assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
+        marker_attrs: dict[str, object] = {
             "width": w,
             "external_rounds": e_rounds,
             "internal_rounds": i_rounds,
             "alpha": alpha,
+            # A numpy value (not a Python list) so it lowers to a
+            # `dense<[..]> : tensor<16xi64>` attribute the zkx recognizer parses
+            # with GetCompositeAttrIntArray (a plain list lowers to an unparsed
+            # ArrayAttr). Row-major 4×4.
+            "external_m4": np.array(
+                [perm._external_m4[r][c] for r in range(4) for c in range(4)],
+                dtype=np.int64,
+            ),
         }
-        if perm.has_dedicated_fusion
-        else {}
-    )
+        version = POSEIDON2_MARKER_VERSION
+    else:
+        marker_attrs = {}
+        version = 0
     return fused_region(
-        permutation, *operands, name=perm._fused_region_name, **marker_attrs
+        permutation,
+        *operands,
+        name=perm._fused_region_name,
+        version=version,
+        **marker_attrs,
     )
 
 

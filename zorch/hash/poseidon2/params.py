@@ -156,17 +156,37 @@ class Poseidon2Params:
         return h
 
     @property
-    def uses_standard_external_matrix(self) -> bool:
-        """Whether `external_matrix` is the standard M4-circulant default.
+    def external_m4(self) -> tuple[tuple[int, ...], ...]:
+        """The 4×4 base `M4` of an `(I + J_blocks) ⊗ M4` external matrix, as
+        canonical ints — the form the dedicated emitter carries as a marker
+        attribute and applies per 4-block. Read off the off-diagonal block (the
+        M4×1 image), so it is free of the 2× diagonal scaling. Meaningful only when
+        `is_m4_block_structured`. Canonical ints come from a numpy object cast,
+        which Montgomery-decodes without needing jax x64."""
+        canon = np.asarray(self.external_matrix).astype(object)
+        return tuple(tuple(int(canon[i, 4 + j]) for j in range(4)) for i in range(4))
 
-        zkx's params-driven Poseidon2Fusion GPU emitter hardcodes this matrix, so
-        it is the gate for taking that dedicated route over the generic fallback.
-        """
-        if self.width % 4 != 0:
+    @property
+    def is_m4_block_structured(self) -> bool:
+        """Whether `external_matrix == (I + J_blocks) ⊗ M4` for some 4×4 `M4` —
+        the shape the dedicated Poseidon2 emitter assumes (it applies M4 per
+        4-block plus cross-block column sums, with M4 riding as a marker
+        attribute). Plonky3's `circ(2,3,1,1)` default and the HorizenLabs reference
+        matrix both satisfy it; a free-form matrix does not and stays on the
+        generic fallback. Width 4 (plain M4, no 2× block) is excluded — the
+        emitter's 2×-diagonal form does not match it.
+
+        The reconstruction compares canonical products exactly. A matrix whose 2×
+        diagonal entry would wrap mod p (only a base M4 with an entry near p/2,
+        never a real MDS) reads as non-structured and falls to the generic path —
+        safe, just slower."""
+        if self.width < 8 or self.width % 4 != 0:
             return False
-        return bool(
-            jnp.array_equal(
-                self.external_matrix,
-                default_external_matrix(self.width, self.dtype),
-            )
-        )
+        m4 = self.external_m4
+        canon = np.asarray(self.external_matrix).astype(object)
+        for i in range(self.width):
+            for j in range(self.width):
+                want = m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1)
+                if int(canon[i, j]) != want:
+                    return False
+        return True
