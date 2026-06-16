@@ -13,6 +13,13 @@ leaves one fraction per interaction; `extract_outputs` interleaves the two
 children back into the output numerator/denominator MLEs over the interaction
 variables plus one.
 
+The four MLEs share a length, but the numerator pair and the denominator pair
+need not share a field: a base-field numerator under an extension-field
+denominator promotes to their common field at the fold (`n0*d1 + n1*d0`), so a
+consumer can keep a layer's numerator reads narrow until its first transition.
+zorch stays scheme-agnostic about why a consumer would; it only guarantees the
+promotion is byte-identical to folding an all-extension copy.
+
 Two layouts share that fold. Dense (`GkrLayer`): every interaction has one row
 count, so a layer is a flat power of two with no padding. Jagged
 (`JaggedGkrLayer`): the MLEs are stored interaction-major with per-interaction
