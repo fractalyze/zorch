@@ -1257,6 +1257,18 @@ def prove_jagged_pyramid(
             max_rounds = max(max_rounds, _jagged_peel_chain_num_vars_max(budget))
             max_eval_len = max_rounds + 1
 
+    # eq_row only needs the natural row hypercube. Each layer folds eq_row exactly
+    # its `nrv` (= eval_len - niv <= max(nrvs)) row rounds, and the LSB fold's
+    # one-past read `eq_row[1]` at the last row round reaches eq[2^(nrv-1):2^nrv],
+    # so the consumed extent is the full 2^(max row vars). When a split layer bumps
+    # `max_rounds` to the peel-chain envelope above, the surplus rounds run inactive
+    # and never fold eq_row, so sizing the build to the bumped `1 << (max_rounds -
+    # niv)` would materialize a table whose tail is identity-replicated and never
+    # read into the live region. Build only the natural extent (the trim is
+    # byte-exact: a smaller prefix of the same eq table, folded identically).
+    row_var_extent = max(nrvs)
+    eq_prefix_width = 1 << row_var_extent
+
     one = jnp.ones((), dtype)
     naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
     inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
@@ -1319,10 +1331,12 @@ def prove_jagged_pyramid(
         sched = _padded_round_schedule_jax(
             row_counts, nrv_t, niv, max_rounds, plane_width
         )
-        row_pt = lax.dynamic_slice_in_dim(eval_point, niv, max_rounds - niv, 0)
-        # eq_row spans 2^nrv live entries; expand over the fixed max width and let
-        # the schedule's pair lookups stay within the live region.
-        eq_row = _expand_eq_prefix(row_pt, nrv_t, 1 << (max_rounds - niv), one)
+        # eq_row spans 2^nrv live entries; expand over the natural-extent row coords
+        # into the trimmed buffer (see row_var_extent / eq_prefix_width above). Both
+        # are the pre-envelope-bump natural extent, so the surplus split rounds never
+        # enter the build and the schedule's pair lookups stay within the live region.
+        row_pt = lax.dynamic_slice_in_dim(eval_point, niv, row_var_extent, 0)
+        eq_row = _expand_eq_prefix(row_pt, nrv_t, eq_prefix_width, one)
         # eq_int stays its natural 2^niv width: it folds via `_bind_lsb` (needs an
         # even length) and the schedule's lookups never index past 2^niv - 1.
         eq_int = expand_eq_to_hypercube(eval_point[:niv], one)
@@ -1426,11 +1440,15 @@ def _expand_eq_prefix(
     point: Array, live_len: Array, width: int, scalar: Array
 ) -> Array:
     """`expand_eq_to_hypercube` over a traced-length prefix of `point`, into a
-    fixed `width` buffer (`2^max_row_vars`). The live `2^live_len` prefix carries
-    the eq weights; coordinates past `live_len` fold in as the identity (their
-    factor is 1), leaving the live values replicated -- harmless, the schedule's
-    pair lookups only ever read the live region. `width` must be the max so the
-    buffer is shape-invariant across layers."""
+    fixed `width` buffer. Each doubling step is truncated to `width`, so the result
+    is exactly the first `width` entries of the `2^live_len` eq table -- the prefix
+    is closed under the interleave (out[0:width] depends only on
+    prev[0:ceil(width/2)]). Coordinates past `live_len` fold in as the identity
+    (their factor is 1). When `width >= 2^live_len` the live values fill and the
+    surplus replicates harmlessly; when `width < 2^live_len` (the trimmed regime)
+    only the consumed prefix is built. Either way the schedule's pair lookups and
+    the LSB fold only ever touch this region. `width` is a single host-static value
+    (the max consumed extent across layers) so the buffer is shape-invariant."""
     n = point.shape[0]
     state = jnp.atleast_1d(scalar)
     state = jnp.concatenate([state, jnp.zeros((width - 1,), state.dtype)])
