@@ -1292,6 +1292,7 @@ def prove_jagged_pyramid(
     eq_prefix_width = 1 << row_var_extent
 
     one = jnp.ones((), dtype)
+    zero = jnp.zeros((), dtype)
     naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
     inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
 
@@ -1315,20 +1316,34 @@ def prove_jagged_pyramid(
         np.asarray([layer.row_counts for layer in layers], dtype=np.int32)
     )
 
-    # Pad each layer's interaction-major planes to the fixed width with the
-    # neutral fraction, stacked leading-axis for the scan.
-    def pad_planes(layer: JaggedGkrLayer) -> tuple[Array, Array, Array, Array]:
-        return (
-            _pad_to_width(layer.numerator_0.astype(dtype), plane_width, 0),
-            _pad_to_width(layer.numerator_1.astype(dtype), plane_width, 0),
-            _pad_to_width(layer.denominator_0.astype(dtype), plane_width, 1),
-            _pad_to_width(layer.denominator_1.astype(dtype), plane_width, 1),
-        )
+    # Each layer's interaction-major planes ride a flat per-channel buffer at
+    # their NATURAL width (concatenated): a halving pyramid's natural widths sum
+    # to ~2 · plane_width, so peak plane residency stays O(plane_width),
+    # independent of the layer count. `step` slices each layer's `plane_width`
+    # window out of the flat buffer and masks the tail past the live width back
+    # to the neutral fraction, so the round body sees the [live prefix | neutral
+    # tail] plane (byte-identical to `_pad_to_width`).
+    # Per-layer natural widths (`JaggedGkrLayer.__post_init__` guarantees all four
+    # channels are flat over `height`) and their exclusive-prefix offsets into the
+    # flat buffer.
+    plane_widths = [layer.height for layer in layers]
+    offsets = np.concatenate([[0], np.cumsum(plane_widths)[:-1]]).astype(np.int32)
+    # A `plane_width` window at the last (widest-offset) layer must stay in bounds
+    # -- `dynamic_slice` clamps a past-the-end start, which would read the wrong
+    # layer -- so size the buffer to the last window's end (>= the natural sum,
+    # since `plane_width` is the per-layer max width).
+    flat_len = int(offsets[-1]) + plane_width
 
-    planes = [pad_planes(layer) for layer in layers]
-    xs_planes = tuple(
-        jnp.stack([planes[j][i] for j in range(len(layers))]) for i in range(4)
-    )
+    def _flat_channel(attr: str, neutral: int) -> Array:
+        flat = jnp.concatenate([getattr(layer, attr).astype(dtype) for layer in layers])
+        return _pad_to_width(flat, flat_len, neutral)
+
+    flat_n0 = _flat_channel("numerator_0", 0)
+    flat_n1 = _flat_channel("numerator_1", 0)
+    flat_d0 = _flat_channel("denominator_0", 1)
+    flat_d1 = _flat_channel("denominator_1", 1)
+    xs_offsets = jnp.asarray(offsets)
+    xs_widths = jnp.asarray(np.asarray(plane_widths, dtype=np.int32))
 
     perm, rate = transcript.permutation, transcript.rate
 
@@ -1336,7 +1351,20 @@ def prove_jagged_pyramid(
         carry_scan: tuple[Carry, Transcript], xs: tuple
     ) -> tuple[tuple[Carry, Transcript], tuple]:
         (num_eval, den_eval, eval_point), t = carry_scan
-        (n0, n1, d0, d1), eval_len, row_counts, bound_meta = xs
+        offset, live_width, eval_len, row_counts, bound_meta = xs
+
+        # Reconstruct this layer's fixed-width planes from the flat per-channel
+        # buffers: a `plane_width` window at the layer's offset, with the tail
+        # past the live width masked to the neutral fraction (0 numerator, 1
+        # denominator) -- the [live prefix | neutral tail] the round body expects.
+        live = jnp.arange(plane_width) < live_width
+
+        def window(flat: Array, neutral: Array) -> Array:
+            win = lax.dynamic_slice_in_dim(flat, offset, plane_width, 0)
+            return jnp.where(live, win, neutral)
+
+        n0, n1 = window(flat_n0, zero), window(flat_n1, zero)
+        d0, d1 = window(flat_d0, one), window(flat_d1, one)
 
         # Per-layer carry reduction head: sample lam, batch the opening claim.
         t, lam = sample_challenge(t, dtype, challenge_limbs)
@@ -1429,7 +1457,7 @@ def prove_jagged_pyramid(
         [eval_point0, jnp.zeros((max_eval_len - eval_point0.shape[0],), dtype)]
     )
     init = ((num_eval0, carry[1], eval_buf), transcript)
-    xs = (xs_planes, xs_eval_len, xs_row_counts, xs_bound_meta)
+    xs = (xs_offsets, xs_widths, xs_eval_len, xs_row_counts, xs_bound_meta)
     (final_carry, final_t), outs = lax.scan(step, init, xs)
     lam_s, claim_s, polys_s, chal_s, fn0_s, fn1_s, fd0_s, fd1_s = outs
 
