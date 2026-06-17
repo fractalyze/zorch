@@ -27,7 +27,7 @@ from zorch.coding.reed_solomon import (
     fri_fold_k_values,
     fri_fold_values,
 )
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field, rand_field
 
 F = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
@@ -113,7 +113,7 @@ class ReedSolomonTest(absltest.TestCase):
         # A folding factor > 2 interpolates; check against an independent
         # product-form Lagrange evaluation (k=4, extension-field values).
         k = 4
-        group = rand_field(7, (k,), EF)
+        group = rand_ext_field(7, (k,), F, EF)
         points = rand_field(8, (k,), F)
         beta = rand_field(9, (), F)
 
@@ -178,7 +178,7 @@ class ReedSolomonTest(absltest.TestCase):
         shift = jnp.array(3, dtype=EF)
         for coset_shift in (None, shift):
             rs = ReedSolomon(k, blowup, EF, coset_shift=coset_shift)
-            msg = rand_field(25, (rows, k), EF)
+            msg = rand_ext_field(25, (rows, k), F, EF)
             cw = rs.encode(msg)
             self.assertEqual(cw.shape, (rows, k * blowup))
             for r in range(rows):
@@ -372,8 +372,8 @@ class ReedSolomonKaryTest(absltest.TestCase):
         # k-ary fold of an EF-valued layer; the x-coordinates stay base-field.
         k = 4
         rs = ReedSolomon(16, 4, EF, fold_factor=k)
-        cw = rs.encode(rand_field(53, (16,), EF))
-        beta = rand_field(54, (), EF)
+        cw = rs.encode(rand_ext_field(53, (16,), F, EF))
+        beta = rand_ext_field(54, (), F, EF)
         positions = jnp.array([0, 5, rs.block_len // k - 1])
         idx = jnp.stack(rs.group_indices(positions, 0), axis=-1)
         folded = rs.fold_group(cw, beta)
@@ -465,8 +465,8 @@ class BitReversedReedSolomonTest(absltest.TestCase):
         k, blowup = 8, 2
         nat = ReedSolomon(k, blowup, EF)
         br = BitReversedReedSolomon(k, blowup, EF)
-        cw = nat.encode(rand_field(17, (k,), EF))
-        beta = rand_field(18, (), EF)
+        cw = nat.encode(rand_ext_field(17, (k,), F, EF))
+        beta = rand_ext_field(18, (), F, EF)
         n = k * blowup
         got = br.fold(cw[_bit_reverse_perm(n)], beta)
         want = nat.fold(cw, beta)[_bit_reverse_perm(n // 2)]

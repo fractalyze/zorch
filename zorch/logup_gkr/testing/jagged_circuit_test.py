@@ -149,8 +149,8 @@ class MixedFieldFirstLayerTest(absltest.TestCase):
         return JaggedGkrLayer(
             numerator_0=rand_field(seed, (height,), KB),
             numerator_1=rand_field(seed + 1, (height,), KB),
-            denominator_0=rand_field(seed + 2, (height,), EF),
-            denominator_1=rand_field(seed + 3, (height,), EF),
+            denominator_0=rand_ext_field(seed + 2, (height,), KB, EF),
+            denominator_1=rand_ext_field(seed + 3, (height,), KB, EF),
             row_counts=row_counts,
         )
 
