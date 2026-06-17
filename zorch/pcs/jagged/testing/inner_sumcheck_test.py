@@ -14,9 +14,10 @@ from zorch.pcs.jagged.poly import (
 )
 from zorch.pcs.jagged.prover import prove_jagged_eval
 from zorch.pcs.jagged.verifier import verify_jagged_eval
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 
+KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 
 
@@ -37,9 +38,9 @@ def _layout() -> tuple[Array, JaggedStaticConfig]:
 class InnerSumcheckTest(absltest.TestCase):
     def test_inner_sumcheck_matches_eval_jagged_mle(self) -> None:
         cps, cfg = _layout()
-        z_row = rand_field(1, (cfg.n_r,), EF)
-        z_col = rand_field(2, (cfg.n_c,), EF)
-        z_final = rand_field(3, (cfg.n_d,), EF)
+        z_row = rand_ext_field(1, (cfg.n_r,), KB, EF)
+        z_col = rand_ext_field(2, (cfg.n_c,), KB, EF)
+        z_final = rand_ext_field(3, (cfg.n_d,), KB, EF)
 
         round_polys, claimed_sum, _ = prove_jagged_eval(
             cps, z_row, z_col, z_final, cfg=cfg, transcript=_t()
@@ -65,9 +66,9 @@ class InnerSumcheckTest(absltest.TestCase):
 
     def test_tampered_round_poly_rejects(self) -> None:
         cps, cfg = _layout()
-        z_row = rand_field(11, (cfg.n_r,), EF)
-        z_col = rand_field(12, (cfg.n_c,), EF)
-        z_final = rand_field(13, (cfg.n_d,), EF)
+        z_row = rand_ext_field(11, (cfg.n_r,), KB, EF)
+        z_col = rand_ext_field(12, (cfg.n_c,), KB, EF)
+        z_final = rand_ext_field(13, (cfg.n_d,), KB, EF)
 
         round_polys, claimed_sum, _ = prove_jagged_eval(
             cps, z_row, z_col, z_final, cfg=cfg, transcript=_t()
@@ -86,9 +87,9 @@ class InnerSumcheckTest(absltest.TestCase):
         # before the leaf check.  Rejection here ensures a bug in the final-round
         # folding (wrong claim delivered to the leaf check) would also be caught.
         cps, cfg = _layout()
-        z_row = rand_field(21, (cfg.n_r,), EF)
-        z_col = rand_field(22, (cfg.n_c,), EF)
-        z_final = rand_field(23, (cfg.n_d,), EF)
+        z_row = rand_ext_field(21, (cfg.n_r,), KB, EF)
+        z_col = rand_ext_field(22, (cfg.n_c,), KB, EF)
+        z_final = rand_ext_field(23, (cfg.n_d,), KB, EF)
 
         round_polys, claimed_sum, _ = prove_jagged_eval(
             cps, z_row, z_col, z_final, cfg=cfg, transcript=_t()

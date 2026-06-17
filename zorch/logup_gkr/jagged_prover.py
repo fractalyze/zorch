@@ -1210,6 +1210,28 @@ def prove_jagged_pyramid(
     if not isinstance(transcript, DuplexTranscript):
         raise TypeError("prove_jagged_pyramid threads a DuplexTranscript scan carry")
 
+    # The first layer's numerators are LogUp multiplicities -- naturally
+    # base-field -- so the largest layer (`layers[-1]`, the most row rounds) may
+    # carry base-field numerators under extension-field denominators. The rolled
+    # scan upcasts every plane to the EF carry dtype (`pad_planes`'
+    # `.astype`), erasing the base-field read. Carve that layer out: prove it
+    # through the base-field-capable per-layer prover (whose `zorch.sumcheck`
+    # marker keeps the numerator operands base-field), and scan the all-EF
+    # interior. The interior, all-EF after the first transition, re-enters this
+    # function on the unchanged scan path; the carved layer is exactly the chain's
+    # last round, so the result is byte-identical to the unrolled `ProveChain`.
+    if layers[-1].numerator_0.dtype != carry[0].dtype:
+        *interior, last = layers
+        interior_proofs: list[JaggedLayerProof] = []
+        if interior:
+            carry, transcript, interior_proofs = prove_jagged_pyramid(
+                interior, carry, transcript, challenge_limbs=challenge_limbs
+            )
+        carry, transcript, last_proof = _prove_jagged_layer_round(
+            last, challenge_limbs, carry, transcript
+        )
+        return carry, transcript, [*interior_proofs, last_proof]
+
     niv = layers[0].num_interaction_variables
     num_eval0, _den0, eval_point0 = carry
     dtype = num_eval0.dtype

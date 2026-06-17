@@ -13,6 +13,13 @@ leaves one fraction per interaction; `extract_outputs` interleaves the two
 children back into the output numerator/denominator MLEs over the interaction
 variables plus one.
 
+The four MLEs share a length, but the numerator pair and the denominator pair
+need not share a field: a base-field numerator under an extension-field
+denominator promotes to their common field at the fold (`n0*d1 + n1*d0`), so a
+consumer can keep a layer's numerator reads narrow until its first transition.
+zorch stays scheme-agnostic about why a consumer would; it only guarantees the
+promotion is byte-identical to folding an all-extension copy.
+
 Two layouts share that fold. Dense (`GkrLayer`): every interaction has one row
 count, so a layer is a flat power of two with no padding. Jagged
 (`JaggedGkrLayer`): the MLEs are stored interaction-major with per-interaction
@@ -396,6 +403,19 @@ def scan_build_jagged_pyramid(
     # with length 0 is illegal, so short-circuit before building any xs.
     if not schedules:
         return [first]
+
+    # The first layer's numerators are LogUp multiplicities -- naturally
+    # base-field -- so the first layer may enter with base-field numerators under
+    # an extension-field denominator. That layer cannot ride the scan:
+    # step 0's fold `n0*d1 + n1*d0` promotes the numerators base->EF, so the
+    # carry-out dtype differs from the (base) carry-in and `lax.scan` rejects it
+    # ("carry input and output must have equal types"). Carve the first transition
+    # out eagerly -- it does the base->EF promotion -- then scan the all-EF
+    # remainder; the promoted remainder re-enters this function on the unchanged
+    # all-EF path.
+    if first.numerator_0.dtype != first.denominator_0.dtype:
+        promoted = jagged_layer_transition(first, schedules[0])
+        return [first, *scan_build_jagged_pyramid(promoted, schedules[1:])]
 
     # Walk the chain host-side to recover every transition's static layout:
     # the row counts entering transition k, the even prepad counts the fold

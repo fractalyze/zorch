@@ -49,6 +49,7 @@ from zorch.logup_gkr.jagged_prover import (
 from zorch.logup_gkr.prover import Carry, bind_output
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
+    mixed_field_jagged_layer,
     random_jagged_layer,
     virtual_planes,
 )
@@ -225,6 +226,66 @@ class ProveJaggedLayerTest(absltest.TestCase):
                 rand_field(72, (3,), KB),  # nrv = 2 < log2(5)
                 cheap_transcript(KB),
             )
+
+
+class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
+    """The first GKR layer may carry base-field numerators under extension-field
+    denominators. `prove_jagged_layer`'s round 0 then reads the numerators in the
+    base field; the fold lifts them to the extension field from round 1, so the
+    whole sumcheck is byte-identical to proving an all-extension copy (zkx#681).
+    That round-0 base-field read is the first-layer-numerator bandwidth an
+    extension-everywhere layer leaves on the table."""
+
+    ROW_COUNTS = (3, 1, 5, 2)
+    NRV = 3
+
+    def _layers(self) -> tuple[JaggedGkrLayer, JaggedGkrLayer]:
+        # Same numbers, two encodings: base-field numerators vs the all-extension
+        # copy (the base elements embedded via astype).
+        mixed = mixed_field_jagged_layer(7, self.ROW_COUNTS)
+        all_ef = JaggedGkrLayer(
+            mixed.numerator_0.astype(EF),
+            mixed.numerator_1.astype(EF),
+            mixed.denominator_0,
+            mixed.denominator_1,
+            self.ROW_COUNTS,
+        )
+        return mixed, all_ef
+
+    def test_layer_enters_with_base_field_numerators(self) -> None:
+        # The optimization's premise: numerators base, denominators already EF.
+        mixed, _ = self._layers()
+        self.assertEqual(mixed.numerator_0.dtype, KB)
+        self.assertEqual(mixed.numerator_1.dtype, KB)
+        self.assertEqual(mixed.denominator_0.dtype, EF)
+
+    def test_prove_matches_all_ef_byte_for_byte(self) -> None:
+        mixed, all_ef = self._layers()
+        lam = rand_ext_field(51, (), KB, EF)
+        z = rand_ext_field(52, (self.NRV + 2,), KB, EF)
+        claim = _virtual_claim(all_ef, self.NRV, lam, z)
+
+        gp, gt, gproof = prove_jagged_layer(
+            mixed, lam, claim, z, cheap_transcript(KB), challenge_limbs=4
+        )
+        wp, wt, wproof = prove_jagged_layer(
+            all_ef, lam, claim, z, cheap_transcript(KB), challenge_limbs=4
+        )
+
+        self.assertTrue(bool(jnp.all(gp == wp)))  # bound point
+        for f in fields(JaggedLayerProof):
+            self.assertTrue(
+                bool(jnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
+                f"proof.{f.name} diverged",
+            )
+        if not isinstance(gt, DuplexTranscript) or not isinstance(wt, DuplexTranscript):
+            raise AssertionError("both paths must thread the DuplexTranscript back")
+        gs, ws = gt.state, wt.state
+        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
+        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
+        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
+        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
+        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
 
 
 class JaggedGkrLayerRoundTest(absltest.TestCase):
@@ -532,6 +593,50 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         row_counts = getattr(row_counts, "val", row_counts)
         self.assertEqual([int(c) for c in row_counts], list(self.ROW_COUNTS))
 
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_base_field_first_layer_marker_keeps_numerators_narrow(self) -> None:
+        # zkx#681 acceptance #1 at the producer/IR boundary: a first layer with
+        # base-field numerators under extension-field denominators emits a
+        # `zorch.sumcheck` marker whose two numerator plane operands stay
+        # base-field (4B) while the two denominator planes are EF (16B) -- the
+        # first-layer-numerator read an all-extension layer pays in full. The
+        # GPU emitter (zkx#681 PR2) codegens that narrow read; here we only pin
+        # that the producer hands it the narrow operands.
+        from collections import Counter
+
+        height = sum(self.ROW_COUNTS)
+        n0 = rand_field(7, (height,), KB)
+        n1 = rand_field(8, (height,), KB)
+        d0 = rand_ext_field(9, (height,), KB, EF)
+        d1 = rand_ext_field(10, (height,), KB, EF)
+        mixed = JaggedGkrLayer(n0, n1, d0, d1, self.ROW_COUNTS)
+        all_ef = JaggedGkrLayer(n0.astype(EF), n1.astype(EF), d0, d1, self.ROW_COUNTS)
+        lam = rand_ext_field(51, (), KB, EF)
+        z = rand_ext_field(52, (self.NRV + 2,), KB, EF)
+
+        def plane_dtypes(layer: JaggedGkrLayer) -> "Counter[str]":
+            # The four planes are the only marker operands shaped (height,); the
+            # eq tables / point / constants / sponge leaves carry other shapes,
+            # so this isolates the planes without relying on operand order.
+            t = self._poseidon_transcript()
+            jaxpr = jax.make_jaxpr(
+                lambda l_, c_, z_: prove_jagged_layer(
+                    layer, l_, c_, z_, t, challenge_limbs=4
+                )[0]
+            )(lam, jnp.zeros((), EF), z).jaxpr
+            eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+            return Counter(
+                str(iv.aval.dtype)
+                for iv in eqn.invars
+                if getattr(iv, "aval", None) is not None and iv.aval.shape == (height,)
+            )
+
+        self.assertEqual(
+            plane_dtypes(mixed),
+            Counter({"koalabear_mont": 2, "koalabearx4_mont": 2}),
+        )
+        self.assertEqual(plane_dtypes(all_ef), Counter({"koalabearx4_mont": 4}))
+
 
 class JaggedGkrLayerRoundJitTest(absltest.TestCase):
     """`JaggedGkrLayerRound(layer, jit=True)` compiles the per-layer prove once
@@ -833,6 +938,78 @@ class RolledJaggedPyramidTest(absltest.TestCase):
         # row-count channel is len(proved) * nseg; the dropped schedule was
         # len(proved) * max_rounds * plane_width -- orders of magnitude larger.
         self.assertLess(max_i32, len(proved) * len(self.ROW_COUNTS) * 8)
+
+    def test_base_field_first_layer_equals_unrolled_chain(self) -> None:
+        # zkx#681: the largest (first) layer carries base-field numerators under EF
+        # denominators. `prove_jagged_pyramid` carves it out to the per-layer prover
+        # (which reads the numerators base-field) and scans the all-EF interior; the
+        # result must stay byte-identical to the unrolled chain proving the same
+        # base-field layers -- the rolled gate, now with the base-field read.
+        first = mixed_field_jagged_layer(7, self.ROW_COUNTS)
+        layers = build_jagged_pyramid(first)
+        proved = list(reversed(layers[:-1]))
+        # The carved-out largest layer is the base-field one; the rest are EF.
+        self.assertEqual(proved[-1].numerator_0.dtype, KB)
+        self.assertEqual(proved[0].numerator_0.dtype, EF)
+        output = extract_jagged_outputs(layers[-1])
+
+        # EF denominators => EF claims/challenges, so the sponge squeezes four base
+        # limbs per challenge (koalabearx4); challenge_limbs=4 on both paths.
+        carry_u, t_u = bind_output(output, cheap_transcript(KB))
+        want_carry, want_t, want_proofs = ProveChain(
+            JaggedGkrLayerRound(layer, 4) for layer in proved
+        )(carry_u, t_u)
+
+        carry_r, t_r = bind_output(output, cheap_transcript(KB))
+        got_carry, got_t, got_proofs = prove_jagged_pyramid(
+            proved, carry_r, t_r, challenge_limbs=4
+        )
+
+        for got, want in zip(got_proofs, want_proofs, strict=True):
+            for field in fields(JaggedLayerProof):
+                self.assertTrue(
+                    bool(
+                        jnp.all(getattr(got, field.name) == getattr(want, field.name))
+                    ),
+                    f"proof.{field.name} diverged",
+                )
+        for got, want in zip(got_carry, want_carry, strict=True):
+            self.assertTrue(bool(jnp.all(got == want)))
+        _, want_r = want_t.sample(1)
+        _, got_r = got_t.sample(1)
+        self.assertTrue(bool(got_r[0] == want_r[0]))
+
+    def test_base_field_first_layer_marker_keeps_numerators_narrow(self) -> None:
+        # zkx#681 acceptance #3, at the producer/IR boundary: carving the
+        # base-field largest layer out to the per-layer prover keeps its
+        # `zorch.sumcheck` marker's two numerator plane operands base-field (4B)
+        # under EF denominators (16B) -- the first-layer read an all-extension
+        # rolled pyramid pays in full. jaxpr-only (never compiles), so CPU-safe.
+        from collections import Counter
+
+        first = mixed_field_jagged_layer(7, self.ROW_COUNTS)
+        layers = build_jagged_pyramid(first)
+        proved = list(reversed(layers[:-1]))
+        output = extract_jagged_outputs(layers[-1])
+        # Build the poseidon transcript outside make_jaxpr (its params do a numpy
+        # slice in __post_init__ a trace context would tracer-poison).
+        carry, t = bind_output(output, DuplexTranscript.new(koalabear16_perm(), rate=8))
+        jaxpr = jax.make_jaxpr(
+            lambda c: prove_jagged_pyramid(proved, c, t, challenge_limbs=4)
+        )(carry).jaxpr
+        # The carved layer is the only one proved at the full (largest) height; the
+        # all-EF interior rides the scan padded to a strictly smaller width. So the
+        # operands shaped (largest_height,) are exactly that layer's four planes --
+        # isolate them by shape without relying on operand order (per-layer test).
+        height = sum(proved[-1].row_counts)
+        planes = Counter(
+            str(iv.aval.dtype)
+            for e in jaxpr.eqns
+            if e.primitive.name == "composite"
+            for iv in e.invars
+            if getattr(iv, "aval", None) is not None and iv.aval.shape == (height,)
+        )
+        self.assertEqual(planes, Counter({"koalabear_mont": 2, "koalabearx4_mont": 2}))
 
 
 class PaddedRoundScheduleJaxTest(absltest.TestCase):
