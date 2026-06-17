@@ -18,7 +18,7 @@ from zorch.logup_gkr.circuit import (
 )
 from zorch.logup_gkr.testing import build_jagged_pyramid
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field, rand_field
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
@@ -226,29 +226,55 @@ class ScanBuildJaggedPyramidTest(absltest.TestCase):
     chain into one `lax.scan`; every generated layer must be byte-identical to
     the eager `build_jagged_pyramid` (sp1-zorch#55)."""
 
-    def _assert_matches_eager(self, row_counts: tuple[int, ...]) -> None:
-        first = _random_jagged_layer(7, row_counts)
-        eager = build_jagged_pyramid(first)
-        schedules = [layer.row_counts for layer in eager[1:]]
-        scanned = scan_build_jagged_pyramid(first, schedules)
-        self.assertEqual(len(scanned), len(eager))
-        for got, want in zip(scanned, eager, strict=True):
-            self.assertEqual(got.row_counts, want.row_counts)
+    def _assert_layers_equal(
+        self, got: list[JaggedGkrLayer], want: list[JaggedGkrLayer]
+    ) -> None:
+        self.assertEqual(len(got), len(want))
+        for g, w in zip(got, want, strict=True):
+            self.assertEqual(g.row_counts, w.row_counts)
             for field in fields(JaggedGkrLayer):
                 if field.name == "row_counts":
                     continue
                 self.assertTrue(
-                    bool(
-                        jnp.all(getattr(got, field.name) == getattr(want, field.name))
-                    ),
-                    f"{field.name} diverged for row_counts={want.row_counts}",
+                    bool(jnp.all(getattr(g, field.name) == getattr(w, field.name))),
+                    f"{field.name} diverged for row_counts={w.row_counts}",
                 )
+
+    def _assert_matches_eager(self, row_counts: tuple[int, ...]) -> None:
+        first = _random_jagged_layer(7, row_counts)
+        eager = build_jagged_pyramid(first)
+        schedules = [layer.row_counts for layer in eager[1:]]
+        self._assert_layers_equal(scan_build_jagged_pyramid(first, schedules), eager)
 
     def test_matches_eager_small(self) -> None:
         self._assert_matches_eager((3, 1, 5, 2))
 
     def test_matches_eager_deeper(self) -> None:
         self._assert_matches_eager((7, 3, 5, 2, 6, 1, 4, 8))
+
+    def test_matches_eager_base_field_first_layer(self) -> None:
+        # zkx#681: a base-field first-layer numerator under EF denominators. A
+        # base scan `init` can't ride `lax.scan` -- step 0's fold promotes it to
+        # EF, so carry-out dtype != carry-in. The rolled build must carve the
+        # first transition out and stay byte-identical to the eager build, whose
+        # first transition does the same base->EF promotion.
+        row_counts = (3, 1, 5, 2)
+        height = sum(row_counts)
+        first = JaggedGkrLayer(
+            numerator_0=rand_field(7, (height,), KB),
+            numerator_1=rand_field(8, (height,), KB),
+            denominator_0=rand_ext_field(9, (height,), KB, EF),
+            denominator_1=rand_ext_field(10, (height,), KB, EF),
+            row_counts=row_counts,
+        )
+        eager = build_jagged_pyramid(first)
+        scanned = scan_build_jagged_pyramid(
+            first, [layer.row_counts for layer in eager[1:]]
+        )
+        # The first layer keeps base-field numerators; the promoted remainder is EF.
+        self.assertEqual(scanned[0].numerator_0.dtype, KB)
+        self.assertEqual(scanned[1].numerator_0.dtype, EF)
+        self._assert_layers_equal(scanned, eager)
 
 
 if __name__ == "__main__":

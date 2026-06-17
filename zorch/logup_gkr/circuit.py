@@ -404,6 +404,19 @@ def scan_build_jagged_pyramid(
     if not schedules:
         return [first]
 
+    # The first layer's numerators are LogUp multiplicities -- naturally
+    # base-field -- so the first layer may enter with base-field numerators under
+    # an extension-field denominator. That layer cannot ride the scan:
+    # step 0's fold `n0*d1 + n1*d0` promotes the numerators base->EF, so the
+    # carry-out dtype differs from the (base) carry-in and `lax.scan` rejects it
+    # ("carry input and output must have equal types"). Carve the first transition
+    # out eagerly -- it does the base->EF promotion -- then scan the all-EF
+    # remainder; the promoted remainder re-enters this function on the unchanged
+    # all-EF path.
+    if first.numerator_0.dtype != first.denominator_0.dtype:
+        promoted = jagged_layer_transition(first, schedules[0])
+        return [first, *scan_build_jagged_pyramid(promoted, schedules[1:])]
+
     # Walk the chain host-side to recover every transition's static layout:
     # the row counts entering transition k, the even prepad counts the fold
     # needs, and the postpad target `schedules[k]`. The gathers are pure
