@@ -937,6 +937,91 @@ class RolledJaggedPyramidTest(absltest.TestCase):
         # len(proved) * max_rounds * plane_width -- orders of magnitude larger.
         self.assertLess(max_i32, len(proved) * len(self.ROW_COUNTS) * 8)
 
+    def _base_field_first_layer(
+        self, seed: int, row_counts: tuple[int, ...]
+    ) -> JaggedGkrLayer:
+        # Numerators base-field, denominators already EF -- the zkx#681 premise.
+        height = sum(row_counts)
+        return JaggedGkrLayer(
+            numerator_0=rand_field(seed, (height,), KB),
+            numerator_1=rand_field(seed + 1, (height,), KB),
+            denominator_0=rand_ext_field(seed + 2, (height,), KB, EF),
+            denominator_1=rand_ext_field(seed + 3, (height,), KB, EF),
+            row_counts=row_counts,
+        )
+
+    def test_base_field_first_layer_equals_unrolled_chain(self) -> None:
+        # zkx#681: the largest (first) layer carries base-field numerators under EF
+        # denominators. `prove_jagged_pyramid` carves it out to the per-layer prover
+        # (which reads the numerators base-field) and scans the all-EF interior; the
+        # result must stay byte-identical to the unrolled chain proving the same
+        # base-field layers -- the rolled gate, now with the base-field read.
+        first = self._base_field_first_layer(7, self.ROW_COUNTS)
+        layers = build_jagged_pyramid(first)
+        proved = list(reversed(layers[:-1]))
+        # The carved-out largest layer is the base-field one; the rest are EF.
+        self.assertEqual(proved[-1].numerator_0.dtype, KB)
+        self.assertEqual(proved[0].numerator_0.dtype, EF)
+        output = extract_jagged_outputs(layers[-1])
+
+        # EF denominators => EF claims/challenges, so the sponge squeezes four base
+        # limbs per challenge (koalabearx4); challenge_limbs=4 on both paths.
+        carry_u, t_u = bind_output(output, cheap_transcript(KB))
+        want_carry, want_t, want_proofs = ProveChain(
+            JaggedGkrLayerRound(layer, 4) for layer in proved
+        )(carry_u, t_u)
+
+        carry_r, t_r = bind_output(output, cheap_transcript(KB))
+        got_carry, got_t, got_proofs = prove_jagged_pyramid(
+            proved, carry_r, t_r, challenge_limbs=4
+        )
+
+        for got, want in zip(got_proofs, want_proofs, strict=True):
+            for field in fields(JaggedLayerProof):
+                self.assertTrue(
+                    bool(
+                        jnp.all(getattr(got, field.name) == getattr(want, field.name))
+                    ),
+                    f"proof.{field.name} diverged",
+                )
+        for got, want in zip(got_carry, want_carry, strict=True):
+            self.assertTrue(bool(jnp.all(got == want)))
+        _, want_r = want_t.sample(1)
+        _, got_r = got_t.sample(1)
+        self.assertTrue(bool(got_r[0] == want_r[0]))
+
+    def test_base_field_first_layer_marker_keeps_numerators_narrow(self) -> None:
+        # zkx#681 acceptance #3, at the producer/IR boundary: carving the
+        # base-field largest layer out to the per-layer prover keeps its
+        # `zorch.sumcheck` marker's two numerator plane operands base-field (4B)
+        # under EF denominators (16B) -- the first-layer read an all-extension
+        # rolled pyramid pays in full. jaxpr-only (never compiles), so CPU-safe.
+        from collections import Counter
+
+        first = self._base_field_first_layer(7, self.ROW_COUNTS)
+        layers = build_jagged_pyramid(first)
+        proved = list(reversed(layers[:-1]))
+        output = extract_jagged_outputs(layers[-1])
+        # Build the poseidon transcript outside make_jaxpr (its params do a numpy
+        # slice in __post_init__ a trace context would tracer-poison).
+        carry, t = bind_output(output, DuplexTranscript.new(koalabear16_perm(), rate=8))
+        jaxpr = jax.make_jaxpr(
+            lambda c: prove_jagged_pyramid(proved, c, t, challenge_limbs=4)
+        )(carry).jaxpr
+        # The carved layer is the only one proved at the full (largest) height; the
+        # all-EF interior rides the scan padded to a strictly smaller width. So the
+        # operands shaped (largest_height,) are exactly that layer's four planes --
+        # isolate them by shape without relying on operand order (per-layer test).
+        height = sum(proved[-1].row_counts)
+        planes = Counter(
+            str(iv.aval.dtype)
+            for e in jaxpr.eqns
+            if e.primitive.name == "composite"
+            for iv in e.invars
+            if getattr(iv, "aval", None) is not None and iv.aval.shape == (height,)
+        )
+        self.assertEqual(planes, Counter({"koalabear_mont": 2, "koalabearx4_mont": 2}))
+
 
 class PaddedRoundScheduleJaxTest(absltest.TestCase):
     """`_padded_round_schedule_jax` (runtime row_counts, no baked plane-width
