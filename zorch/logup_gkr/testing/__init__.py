@@ -23,11 +23,12 @@ from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
 from zorch.logup_gkr.verifier import GkrLayerRound as _VerifierLayer
 from zorch.round import ProveChain, VerifyChain
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
 _KB = zk_dtypes.koalabear_mont
+_EF = zk_dtypes.koalabearx4_mont
 
 
 def random_jagged_layer(
@@ -40,6 +41,22 @@ def random_jagged_layer(
         numerator_1=rand_field(seed + 1, (height,), dtype),
         denominator_0=rand_field(seed + 2, (height,), dtype),
         denominator_1=rand_field(seed + 3, (height,), dtype),
+        row_counts=row_counts,
+    )
+
+
+def mixed_field_jagged_layer(
+    seed: int, row_counts: tuple[int, ...], base: Any = _KB, ext: Any = _EF
+) -> JaggedGkrLayer:
+    """A jagged layer with base-field numerators under extension-field
+    denominators -- the first-layer shape when numerators are LogUp
+    multiplicities (naturally base-field). Denominators are generic extensions."""
+    height = sum(row_counts)
+    return JaggedGkrLayer(
+        numerator_0=rand_field(seed, (height,), base),
+        numerator_1=rand_field(seed + 1, (height,), base),
+        denominator_0=rand_ext_field(seed + 2, (height,), base, ext),
+        denominator_1=rand_ext_field(seed + 3, (height,), base, ext),
         row_counts=row_counts,
     )
 

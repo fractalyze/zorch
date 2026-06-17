@@ -49,6 +49,7 @@ from zorch.logup_gkr.jagged_prover import (
 from zorch.logup_gkr.prover import Carry, bind_output
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
+    mixed_field_jagged_layer,
     random_jagged_layer,
     virtual_planes,
 )
@@ -241,13 +242,14 @@ class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
     def _layers(self) -> tuple[JaggedGkrLayer, JaggedGkrLayer]:
         # Same numbers, two encodings: base-field numerators vs the all-extension
         # copy (the base elements embedded via astype).
-        height = sum(self.ROW_COUNTS)
-        n0 = rand_field(7, (height,), KB)
-        n1 = rand_field(8, (height,), KB)
-        d0 = rand_ext_field(9, (height,), KB, EF)
-        d1 = rand_ext_field(10, (height,), KB, EF)
-        mixed = JaggedGkrLayer(n0, n1, d0, d1, self.ROW_COUNTS)
-        all_ef = JaggedGkrLayer(n0.astype(EF), n1.astype(EF), d0, d1, self.ROW_COUNTS)
+        mixed = mixed_field_jagged_layer(7, self.ROW_COUNTS)
+        all_ef = JaggedGkrLayer(
+            mixed.numerator_0.astype(EF),
+            mixed.numerator_1.astype(EF),
+            mixed.denominator_0,
+            mixed.denominator_1,
+            self.ROW_COUNTS,
+        )
         return mixed, all_ef
 
     def test_layer_enters_with_base_field_numerators(self) -> None:
@@ -937,26 +939,13 @@ class RolledJaggedPyramidTest(absltest.TestCase):
         # len(proved) * max_rounds * plane_width -- orders of magnitude larger.
         self.assertLess(max_i32, len(proved) * len(self.ROW_COUNTS) * 8)
 
-    def _base_field_first_layer(
-        self, seed: int, row_counts: tuple[int, ...]
-    ) -> JaggedGkrLayer:
-        # Numerators base-field, denominators already EF -- the zkx#681 premise.
-        height = sum(row_counts)
-        return JaggedGkrLayer(
-            numerator_0=rand_field(seed, (height,), KB),
-            numerator_1=rand_field(seed + 1, (height,), KB),
-            denominator_0=rand_ext_field(seed + 2, (height,), KB, EF),
-            denominator_1=rand_ext_field(seed + 3, (height,), KB, EF),
-            row_counts=row_counts,
-        )
-
     def test_base_field_first_layer_equals_unrolled_chain(self) -> None:
         # zkx#681: the largest (first) layer carries base-field numerators under EF
         # denominators. `prove_jagged_pyramid` carves it out to the per-layer prover
         # (which reads the numerators base-field) and scans the all-EF interior; the
         # result must stay byte-identical to the unrolled chain proving the same
         # base-field layers -- the rolled gate, now with the base-field read.
-        first = self._base_field_first_layer(7, self.ROW_COUNTS)
+        first = mixed_field_jagged_layer(7, self.ROW_COUNTS)
         layers = build_jagged_pyramid(first)
         proved = list(reversed(layers[:-1]))
         # The carved-out largest layer is the base-field one; the rest are EF.
@@ -998,7 +987,7 @@ class RolledJaggedPyramidTest(absltest.TestCase):
         # rolled pyramid pays in full. jaxpr-only (never compiles), so CPU-safe.
         from collections import Counter
 
-        first = self._base_field_first_layer(7, self.ROW_COUNTS)
+        first = mixed_field_jagged_layer(7, self.ROW_COUNTS)
         layers = build_jagged_pyramid(first)
         proved = list(reversed(layers[:-1]))
         output = extract_jagged_outputs(layers[-1])

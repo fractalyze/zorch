@@ -16,7 +16,7 @@ from zorch.logup_gkr.circuit import (
     layer_transition,
     scan_build_jagged_pyramid,
 )
-from zorch.logup_gkr.testing import build_jagged_pyramid
+from zorch.logup_gkr.testing import build_jagged_pyramid, mixed_field_jagged_layer
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
 from zorch.testkit.random_field import rand_ext_field, rand_field
 
@@ -142,28 +142,16 @@ class MixedFieldFirstLayerTest(absltest.TestCase):
     denominators; the transition's `n0*d1 + n1*d0` fold promotes to the common
     field, byte-identically to folding an all-extension copy (zkx#681)."""
 
-    def _mixed_first_layer(
-        self, seed: int, row_counts: tuple[int, ...]
-    ) -> JaggedGkrLayer:
-        height = sum(row_counts)
-        return JaggedGkrLayer(
-            numerator_0=rand_field(seed, (height,), KB),
-            numerator_1=rand_field(seed + 1, (height,), KB),
-            denominator_0=rand_ext_field(seed + 2, (height,), KB, EF),
-            denominator_1=rand_ext_field(seed + 3, (height,), KB, EF),
-            row_counts=row_counts,
-        )
-
     def test_type_accepts_base_numerator_ef_denominator(self) -> None:
         # The shape-only `__post_init__` admits a layer whose numerator and
         # denominator pairs live in different fields.
-        layer = self._mixed_first_layer(1, (3, 1, 2, 2))
+        layer = mixed_field_jagged_layer(1, (3, 1, 2, 2))
         self.assertEqual(layer.numerator_0.dtype, KB)
         self.assertEqual(layer.denominator_0.dtype, EF)
 
     def test_transition_promotes_and_matches_all_ef(self) -> None:
         row_counts = (3, 1, 2, 2)
-        mixed = self._mixed_first_layer(5, row_counts)
+        mixed = mixed_field_jagged_layer(5, row_counts)
         all_ef = JaggedGkrLayer(
             numerator_0=mixed.numerator_0.astype(EF),
             numerator_1=mixed.numerator_1.astype(EF),
