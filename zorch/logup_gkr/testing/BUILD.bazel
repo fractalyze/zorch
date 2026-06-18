@@ -78,6 +78,7 @@ py_test(
     deps = [
         ":testing",
         "//zorch/logup_gkr",
+        "//zorch/testkit:jit_cache",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

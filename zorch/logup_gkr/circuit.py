@@ -35,7 +35,9 @@ from __future__ import annotations
 import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array, lax
@@ -319,6 +321,57 @@ def _fixed_width_gather(
     return row
 
 
+def _prepad_folded(
+    row_counts: tuple[int, ...],
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """One transition's even-prepad counts and the resulting folded counts.
+
+    Odd segments pad up to even so the stride-2 fold never pairs across an
+    interaction boundary; the fold then halves the padded count. One recurrence
+    so the wrapper's truncation guard validates exactly the schedule the core's
+    gathers fold to.
+    """
+    prepad = tuple(rc + rc % 2 for rc in row_counts)
+    folded = tuple(pc // 2 for pc in prepad)
+    return prepad, folded
+
+
+@partial(jax.jit, static_argnames=("row_counts", "out_row_counts"))
+def _jagged_transition_core(
+    numerator_0: Array,
+    numerator_1: Array,
+    denominator_0: Array,
+    denominator_1: Array,
+    *,
+    row_counts: tuple[int, ...],
+    out_row_counts: tuple[int, ...],
+) -> tuple[Array, Array, Array, Array]:
+    """The prepad/fold/postpad numeric core of `jagged_layer_transition`.
+
+    The transition's one `@jit` boundary: eager dispatch decomposes the
+    gather/pad/fold into op-by-op kernels, so the core needs exactly one
+    boundary around it (`docs/conventions.md` per-island), never zero. A
+    consumer that builds the pyramid by iterating the transition per layer --
+    rather than the rolled `scan_build_jagged_pyramid` -- then pays one fused
+    dispatch per transition instead of N eager ops. The schedule is pure static
+    ints, so both segment gathers bake into the graph as constants and the
+    static count tuples key a per-shape compile cache that distinct transition
+    shapes warm-reuse.
+    """
+    prepad_counts, folded_counts = _prepad_folded(row_counts)
+    n0, n1, d0, d1 = _pad_neutral(
+        numerator_0,
+        numerator_1,
+        denominator_0,
+        denominator_1,
+        _segment_gather(row_counts, prepad_counts),
+    )
+    rn0, rn1, rd0, rd1 = _fold_pairs(n0, n1, d0, d1)
+    return _pad_neutral(
+        rn0, rn1, rd0, rd1, _segment_gather(folded_counts, out_row_counts)
+    )
+
+
 def jagged_layer_transition(
     layer: JaggedGkrLayer, out_row_counts: tuple[int, ...]
 ) -> JaggedGkrLayer:
@@ -329,16 +382,16 @@ def jagged_layer_transition(
     folded segments are then padded out to `out_row_counts` with the same
     neutral rows. The schedule is the consumer's policy; this block only
     refuses to truncate, which would silently drop fractions from the sum.
+
+    Host-side validation stays out of the `@jit`; the numeric fold rides
+    `_jagged_transition_core`.
     """
     if len(out_row_counts) != layer.num_interactions:
         raise ValueError(
             f"schedule must cover all {layer.num_interactions} interactions, "
             f"got {len(out_row_counts)} entries"
         )
-    # Odd segments pad up to even so the stride-2 fold can't pair across an
-    # interaction boundary; the folded count is then half the padded one.
-    prepad_counts = tuple(rc + rc % 2 for rc in layer.row_counts)
-    folded_counts = tuple(pc // 2 for pc in prepad_counts)
+    _, folded_counts = _prepad_folded(layer.row_counts)
     for i, (folded, out) in enumerate(zip(folded_counts, out_row_counts)):
         if out < folded:
             raise ValueError(
@@ -346,18 +399,14 @@ def jagged_layer_transition(
                 f"{folded} > target {out}"
             )
 
-    n0, n1, d0, d1 = _pad_neutral(
+    rn0, rn1, rd0, rd1 = _jagged_transition_core(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
-        _segment_gather(layer.row_counts, prepad_counts),
+        row_counts=layer.row_counts,
+        out_row_counts=out_row_counts,
     )
-    rn0, rn1, rd0, rd1 = _fold_pairs(n0, n1, d0, d1)
-    rn0, rn1, rd0, rd1 = _pad_neutral(
-        rn0, rn1, rd0, rd1, _segment_gather(folded_counts, out_row_counts)
-    )
-
     return JaggedGkrLayer(
         numerator_0=rn0,
         numerator_1=rn1,
@@ -423,8 +472,12 @@ def scan_build_jagged_pyramid(
     # functions of these Python ints, so the whole xs stack is built at trace
     # time.
     src_counts: list[tuple[int, ...]] = [first.row_counts, *schedules]
-    prepad_counts = [tuple(rc + rc % 2 for rc in c) for c in src_counts[:-1]]
-    folded_counts = [tuple(pc // 2 for pc in counts) for counts in prepad_counts]
+    prepad_counts: list[tuple[int, ...]] = []
+    folded_counts: list[tuple[int, ...]] = []
+    for counts in src_counts[:-1]:
+        prepad, folded = _prepad_folded(counts)
+        prepad_counts.append(prepad)
+        folded_counts.append(folded)
 
     # The planes ride a fixed-width buffer (live prefix front, neutral tail) so
     # the scan carry stays shape-invariant. A transition's prepad buffer is the
