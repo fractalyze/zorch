@@ -972,7 +972,6 @@ def _run_jagged_rounds_padded(
         next_pad = pad_adj * (z_cur * r + (one - z_cur) * (one - r))
         fn0, fn1, fd0, fd1 = (_bind_lsb(a, r) for a in (pn0, pn1, pd0, pd1))
         feq_row = _bind_lsb(eq_row, r)
-        feq_int = _bind_lsb(eq_int, r)
 
         claim = jnp.where(active, next_claim, claim)
         # Row rounds accumulate the bound row-eq mass into pad_adj; at the last
@@ -987,7 +986,16 @@ def _run_jagged_rounds_padded(
         # eq_row folds on row rounds, eq_int on interaction rounds; the inactive
         # guard subsumes the wrong-phase one (a fold there is discarded).
         eq_row = _select_active(active & in_rows, feq_row, eq_row)
-        eq_int = _select_active(active & ~in_rows, feq_int, eq_int)
+        # With niv == 0 there are no interaction rounds, so eq_int stays its
+        # width-1 natural table (eq_int[0] = the empty-product eq factor), exactly
+        # as the unrolled `_run_jagged_rounds` leaves it (its eq_int fold lives
+        # inside the interaction-round branch). Folding the width-1 table here
+        # would yield a width-0 array that `_select_active` cannot re-pad to the
+        # odd kept width -- eq_int collapses to empty and next round's
+        # `eq_int[col]` gather slices a 0-length axis.
+        if niv:
+            feq_int = _bind_lsb(eq_int, r)
+            eq_int = _select_active(active & ~in_rows, feq_int, eq_int)
         # The inactive padding rounds (a shorter layer's tail) leave the carry
         # untouched via the selects above. Under `lax.scan` that dead-fold +
         # select chain can alias into a live earlier round and corrupt its poly

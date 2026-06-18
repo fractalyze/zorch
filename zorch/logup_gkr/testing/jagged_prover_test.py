@@ -876,6 +876,18 @@ class PaddedJaggedRoundsTest(absltest.TestCase):
             (3, 1, 5, 2), nrv=4, max_rounds=10, plane_width=14, eq_prefix_width=16
         )
 
+    def test_niv0_single_interaction_matches_eager(self) -> None:
+        # A single-interaction layer has niv == 0: no interaction rounds, so
+        # eq_int stays its width-1 table the whole layer. The padded loop must
+        # not fold it -- folding a width-1 table collapses it to width-0, which
+        # `_select_active` cannot re-pad to the odd kept width, so the next
+        # round's `eq_int[col]` gather slices a 0-length axis. This is the
+        # single-chip shard that crashed once `rolled` became the prove default.
+        self._assert_padded_equals_eager((4,), nrv=2, max_rounds=2, plane_width=4)
+        # Over-padded: the niv==0 floor layer riding a chain sized for a taller
+        # one (extra inactive rounds must stay neutral and byte-identical).
+        self._assert_padded_equals_eager((4,), nrv=2, max_rounds=5, plane_width=14)
+
 
 class RolledJaggedPyramidTest(absltest.TestCase):
     """`prove_jagged_pyramid` rolls the floor-outward layer chain into one
