@@ -67,7 +67,7 @@ class WhirParams:
         "ood_values",
         "folding_pow_witnesses",
         "query_pow_witnesses",
-        "initial_opening",
+        "initial_openings",
         "codeword_openings",
         "final_poly",
     ],
@@ -92,10 +92,11 @@ class WhirProof:
         (`num_rounds·k_whir`).
     query_pow_witnesses: grinding witness before each round's query phase
         (`num_rounds`).
-    initial_opening: round 0's strided opening of the initial committed codeword
-        matrix at the round's query cosets (`row` is `(Q, 2^k, num_polys)`; the
-        verifier μ-combines the columns); later rounds open the single re-encoded
-        codeword.
+    initial_openings: round 0's strided openings of the initial committed
+        codeword matrices at the round's query cosets — one `Opening` per
+        commitment (`row` is `(Q, 2^k, Wᵢ)`; the verifier μ-combines the columns
+        across all commitments). A single commitment is the length-1 case; later
+        rounds open the single re-encoded codeword.
     codeword_openings: round `r`'s strided opening of round `r−1`'s re-encoded
         codeword, for `r` in `1..num_rounds` (length `num_rounds − 1`).
     final_poly: the last round's folded MLE coefficients, sent in the clear; the
@@ -108,6 +109,6 @@ class WhirProof:
     ood_values: list[Array]
     folding_pow_witnesses: list[Array]
     query_pow_witnesses: list[Array]
-    initial_opening: Opening
+    initial_openings: list[Opening]
     codeword_openings: list[Opening]
     final_poly: Array

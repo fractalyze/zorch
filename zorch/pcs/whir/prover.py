@@ -102,9 +102,30 @@ class WhirProver:
         points: Sequence[Array],
         transcript: Transcript,
     ) -> tuple[Array, WhirProof, Transcript]:
-        """Open the committed batch at the single point `points[0]`, threading
-        Fiat-Shamir. Returns `(values, proof, transcript)` with `values` the
-        per-column evaluations `f̂ᵢ(z)` `(num_polys,)`."""
+        """Open a single committed matrix at `points[0]` — the degenerate
+        one-commitment μ-batch, the `PcsProver` seam shape. Returns
+        `(values, proof, transcript)` with `values` the matrix's per-column
+        evaluations `f̂ᵢ(z)` `(W,)`."""
+        return self.open_batch([prover_data], points, transcript)
+
+    def open_batch(
+        self,
+        prover_datas: Sequence[WhirProverData],
+        points: Sequence[Array],
+        transcript: Transcript,
+    ) -> tuple[Array, WhirProof, Transcript]:
+        """μ-batch-open the committed matrices at the shared point `points[0]`,
+        threading Fiat-Shamir.
+
+        The committed columns of every commitment join into one `(S, ΣWᵢ)`
+        message — first commitment's columns first — over which the scheme's
+        μ-power combine runs; each commitment keeps its own codeword tree and
+        round 0 opens them all. Returns `(values, proof, transcript)` with
+        `values` the per-column evaluations across all commitments `(ΣWᵢ,)`. A
+        single-element `prover_datas` is the degenerate (un-batched) open."""
+        datas = list(prover_datas)
+        if not datas:
+            raise ValueError("WHIR opens at least one commitment, got none")
         if len(points) != 1:
             raise ValueError(f"WHIR opens at one point, got {len(points)}")
         z = points[0]
@@ -116,7 +137,7 @@ class WhirProver:
                 f"num_rounds·k_whir ({num_rounds}·{k}) must fold between 1 and "
                 f"num_variables ({m}) inclusive"
             )
-        return _open_body(self, prover_data, z, transcript)
+        return _open_body(self, datas, z, transcript)
 
 
 # Jitted commit body, keyed on code + tree by value (#214): standalone, an eager
@@ -251,7 +272,7 @@ def _island_weight_update(
 
 def _open_body(
     prover: WhirProver,
-    prover_data: WhirProverData,
+    prover_datas: list[WhirProverData],
     z: Array,
     transcript: Transcript,
 ) -> tuple[Array, WhirProof, Transcript]:
@@ -261,17 +282,24 @@ def _open_body(
     ef = z.dtype
     limbs = efinfo(ef).degree
 
+    # Multi-commitment μ-batch: the committed columns of every commitment join
+    # into one `(S, ΣWᵢ)` message — first commitment's columns first — over which
+    # the scheme's μ-power combine runs (a single commitment is the length-1
+    # case, byte-identical). Each commitment keeps its own codeword tree; round 0
+    # opens them all (below).
+    mle = jnp.concatenate([pd.mle for pd in prover_datas], axis=1)
+
     # Bind the commitment + per-column evaluations; the scheme supplies the claimed
     # values, the μ-combined initial message, and the weight (plain MLE + eq by
     # default; prismalinear + möbius for SWIRL).
-    values = _island_initial(prover, prover_data.mle, z)  # (num_polys,)
+    values = _island_initial(prover, mle, z)  # (ΣWᵢ,)
     # Bind the commitment + claimed values (the scheme decides how — the default
     # absorbs both; a consumer whose outer protocol already bound the commitment
     # no-ops this to stay byte-exact).
-    t = prover.scheme.bind(transcript, prover_data.digest_layers[-1][0], values)
+    t = prover.scheme.bind(transcript, prover_datas[0].digest_layers[-1][0], values)
     t, mu_wit = cast(GrindingTranscript, t).grind(params.mu_pow_bits)
     t, mu = sample_challenge(t, ef, limbs)
-    f_evals, w_evals = _island_tables(prover, prover_data.mle, z, mu)
+    f_evals, w_evals = _island_tables(prover, mle, z, mu)
 
     sumcheck_polys: list[Array] = []
     folding_pow_witnesses: list[Array] = []
@@ -279,12 +307,14 @@ def _open_body(
     codeword_roots: list[Array] = []
     ood_values: list[Array] = []
     codeword_openings = []
-    initial_opening = None
+    initial_openings: list[Opening] = []
     final_poly = f_evals  # overwritten in the last round
 
-    # The codeword the current round opens: round 0 the initial commit, later
-    # rounds the previous round's re-encode.
-    cur_codeword, cur_layers = prover_data.codeword, prover_data.digest_layers
+    # The codeword later rounds (r ≥ 1) open: the previous round's single
+    # re-encode, set at the end of each round. Round 0 opens the committed
+    # codewords directly from `prover_datas` (below), so this initial value is
+    # just a placeholder until the first re-encode.
+    cur_codeword, cur_layers = prover_datas[0].codeword, prover_datas[0].digest_layers
 
     for r in range(num_rounds):
         is_last = r == num_rounds - 1
@@ -320,18 +350,23 @@ def _open_body(
         t, positions = sample_query_positions(
             t, stride, params.num_queries[r], code.dtype
         )
-        opening = _island_query_open(prover, cur_codeword, cur_layers, positions)
         if r == 0:
-            initial_opening = opening
+            # Open every commitment's codeword at the shared query cosets.
+            initial_openings = [
+                _island_query_open(prover, pd.codeword, pd.digest_layers, positions)
+                for pd in prover_datas
+            ]
         else:
-            codeword_openings.append(opening)
+            codeword_openings.append(
+                _island_query_open(prover, cur_codeword, cur_layers, positions)
+            )
 
         t, gamma = sample_challenge(t, ef, limbs)
         if not is_last:
             w_evals = _island_weight_update(prover, w_evals, gamma, z0, positions, r)
             cur_codeword, cur_layers = next_codeword, next_layers
 
-    assert initial_opening is not None
+    assert initial_openings
     proof = WhirProof(
         mu_pow_witness=mu_wit,
         sumcheck_polys=sumcheck_polys,
@@ -339,7 +374,7 @@ def _open_body(
         ood_values=ood_values,
         folding_pow_witnesses=folding_pow_witnesses,
         query_pow_witnesses=query_pow_witnesses,
-        initial_opening=initial_opening,
+        initial_openings=initial_openings,
         codeword_openings=codeword_openings,
         final_poly=final_poly,
     )

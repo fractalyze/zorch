@@ -223,6 +223,21 @@ class WhirTest(parameterized.TestCase):
         ok, _ = verifier.verify(root, [z], bad, proof, _transcript())
         self.assertFalse(bool(ok))
 
+    def test_verify_rejects_non_single_initial_openings(self) -> None:
+        """This verifier checks one commitment; a proof with zero or multiple
+        initial openings is a loud reject, not an IndexError or a silent
+        under-verify of openings 1..n."""
+        prover, verifier = _whir(num_vars=4, k_whir=2)
+        polys = [rand_field(i, (16,), F) for i in range(3)]
+        z = rand_ext_field(3, (4,), F, EF)
+        root, prover_data = prover.commit(polys)
+        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        (one,) = proof.initial_openings
+        for openings in ([], [one, one]):
+            malformed = dataclasses.replace(proof, initial_openings=openings)
+            with self.assertRaises(ValueError):
+                verifier.verify(root, [z], values, malformed, _transcript())
+
 
 if __name__ == "__main__":
     absltest.main()
