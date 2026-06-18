@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import fields
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
@@ -11,6 +12,7 @@ from jax import Array
 from zorch.logup_gkr.circuit import (
     GkrLayer,
     JaggedGkrLayer,
+    _jagged_transition_core,
     extract_jagged_outputs,
     jagged_layer_transition,
     layer_transition,
@@ -18,6 +20,7 @@ from zorch.logup_gkr.circuit import (
 )
 from zorch.logup_gkr.testing import build_jagged_pyramid, mixed_field_jagged_layer
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
+from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
 
 KB = zk_dtypes.koalabear_mont
@@ -135,6 +138,74 @@ class JaggedTransitionTest(absltest.TestCase):
         layer = _random_jagged_layer(50, (4, 4, 4, 4))
         with self.assertRaises(ValueError):
             jagged_layer_transition(layer, (1, 2, 2, 2))
+
+
+class JaggedTransitionJitTest(absltest.TestCase):
+    """The transition's array core rides a `@jit` island so each pyramid layer
+    is one fused dispatch; the fused output must byte-match the eager
+    (`jax.disable_jit`) one across the schedule shapes a build hits."""
+
+    def _assert_eager_matches_jit(
+        self, layer: JaggedGkrLayer, schedule: tuple[int, ...]
+    ) -> None:
+        with jax.disable_jit():
+            eager = jagged_layer_transition(layer, schedule)
+        fused = jagged_layer_transition(layer, schedule)
+        self.assertEqual(fused.row_counts, eager.row_counts)
+        for name in ("numerator_0", "numerator_1", "denominator_0", "denominator_1"):
+            self.assertTrue(
+                bool(jnp.all(getattr(fused, name) == getattr(eager, name))),
+                f"{name} diverged",
+            )
+
+    def test_uniform_even_no_gather(self) -> None:
+        # prepad == row_counts and folded == schedule, so both gathers are the
+        # no-op None branch and the island is just the fold.
+        self._assert_eager_matches_jit(
+            _random_jagged_layer(11, (4, 4, 4, 4)), (2, 2, 2, 2)
+        )
+
+    def test_odd_segment_prepad(self) -> None:
+        self._assert_eager_matches_jit(
+            _random_jagged_layer(12, (3, 1, 2, 1)), (2, 1, 1, 1)
+        )
+
+    def test_post_padding(self) -> None:
+        self._assert_eager_matches_jit(
+            _random_jagged_layer(13, (3, 1, 2, 1)), (4, 2, 2, 2)
+        )
+
+    def test_mixed_base_field_numerator_promotes(self) -> None:
+        # The base->EF promotion happens inside the island (numerator and
+        # denominator avals differ), the path the first build transition takes.
+        self._assert_eager_matches_jit(
+            mixed_field_jagged_layer(14, (3, 1, 2, 2)), (2, 1, 1, 1)
+        )
+
+    def test_saturated_floor(self) -> None:
+        # The saturated-floor transition a consumer folds before extracting
+        # outputs: every segment at two slots down to one, both gathers no-op.
+        self._assert_eager_matches_jit(
+            _random_jagged_layer(15, (2, 2, 2, 2)), (1, 1, 1, 1)
+        )
+
+    def test_static_counts_warm_reuse_one_trace(self) -> None:
+        # The island's load-bearing property: the static count tuples key the
+        # compile cache by value, so two independently built layers of one
+        # shape warm-reuse a single trace instead of re-tracing per call.
+        schedule = (4, 2, 1, 1)
+        assert_single_trace(
+            self,
+            _jagged_transition_core,
+            [
+                lambda: jagged_layer_transition(
+                    _random_jagged_layer(16, (5, 3, 1, 1)), schedule
+                ),
+                lambda: jagged_layer_transition(
+                    _random_jagged_layer(17, (5, 3, 1, 1)), schedule
+                ),
+            ],
+        )
 
 
 class MixedFieldFirstLayerTest(absltest.TestCase):
