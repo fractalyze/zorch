@@ -90,7 +90,16 @@ class WhirVerifier:
         }
         if bad:
             raise ValueError(f"malformed WHIR proof: {bad} (got, expected)")
-        num_polys = proof.initial_opening.row.shape[-1]
+        # This verifier checks a single commitment (one tree); a multi-commitment
+        # proof is a prover-side capability its consumer byte-matches without
+        # round-tripping here, so reject it loudly rather than silently
+        # under-verifying openings 1..n.
+        if len(proof.initial_openings) != 1:
+            raise ValueError(
+                "this verifier checks a single commitment, got "
+                f"{len(proof.initial_openings)} initial openings"
+            )
+        num_polys = proof.initial_openings[0].row.shape[-1]
         if values.ndim != 1 or values.shape[0] != num_polys:
             raise ValueError(
                 f"values must be 1-D of length num_polys ({num_polys}), got shape "
@@ -177,7 +186,9 @@ def _verify_body(
             t, stride, params.num_queries[r], code.dtype
         )
 
-        opening = proof.initial_opening if r == 0 else proof.codeword_openings[r - 1]
+        opening = (
+            proof.initial_openings[0] if r == 0 else proof.codeword_openings[r - 1]
+        )
         rebuilt = jax.vmap(tree.reconstruct_root)(positions, opening)
         ok = ok & jnp.all(rebuilt == cur_root)
 
