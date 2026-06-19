@@ -212,10 +212,10 @@ scipy==1.17.1 \
     # via
     #   jax
     #   jaxlib
-zk-dtypes==0.0.6 \
-    --hash=sha256:65325d2f5436a6d981c0daf733afe9b2b6c3b09c40238050bc11ea7ef9deddf0 \
-    --hash=sha256:66d8a7fbba8bfc962f825f6e682ae224b95a5ea87ede18650adb1a2bf356b76f \
-    --hash=sha256:82d37aafb7173c9cf00ba3465352d6249deb8c064f12804e8b79fec56cc90d64
+zk-dtypes==0.0.7 \
+    --hash=sha256:0ab346cbee3a634b7e9fe990fefe7a69ddbae2748e9eac0d76743630db9328ee \
+    --hash=sha256:1f48e53fd80fd68f50e1806fcad44e59aa74baa783bf7dcf2c74e88a51ba2620 \
+    --hash=sha256:879637a7dbb4914ba19ded1ef5c8ccfe83245800a7becefca809aeac8e4b8b5c
     # via
     #   -r requirements.in
     #   jax
