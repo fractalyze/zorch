@@ -56,7 +56,12 @@ from jax import Array, lax
 
 from zorch.fusion import fused_region
 from zorch.round import Round
-from zorch.transcript import DuplexState, DuplexTranscript, Transcript
+from zorch.transcript import (
+    DuplexState,
+    DuplexTranscript,
+    Transcript,
+    reinterpret_challenge,
+)
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
@@ -90,15 +95,18 @@ def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
     return p0 + r * (p1 - p0)
 
 
-def lift_to_domain(p0: Array, p1: Array, degree: int) -> Array:
-    """Lift one split pair to the evaluation domain [0..degree]:
-    f[u] = P0 + u*(P1 - P0), shape (degree+1, *P0.shape).
+def lift_to_domain(p0: Array, p1: Array, degree: int, start: int = 0) -> Array:
+    """Lift one split pair to the evaluation domain [start..degree]:
+    f[u] = P0 + u*(P1 - P0), shape (degree+1-start, *P0.shape).
 
-    The whole u-domain is built at once so the round poly stays one batched
-    reduction (not degree+1 separate ones). `us` uses jnp.stack (not jnp.arange,
-    whose iota is unsupported for extension dtypes) and is reshaped to broadcast
-    over any leading batch dims of the factor."""
-    us = jnp.stack([jnp.array(u, p0.dtype) for u in range(degree + 1)])
+    `start` defaults to 0 (the natural domain [0..degree]); set it to 1 to omit
+    the f[0] = P0 point, the compressed round-poly wire form a verifier
+    reconstructs from the running claim (s(0) = claim - s(1)). The whole u-domain
+    is built at once so the round poly stays one batched reduction (not
+    degree+1 separate ones). `us` uses jnp.stack (not jnp.arange, whose iota is
+    unsupported for extension dtypes) and is reshaped to broadcast over any
+    leading batch dims of the factor."""
+    us = jnp.stack([jnp.array(u, p0.dtype) for u in range(start, degree + 1)])
     return p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0)
 
 
@@ -228,6 +236,9 @@ def prove(
     transcript: Transcript,
     *,
     num_real: int | None = None,
+    eval_start: int = 0,
+    challenge_dtype: object | None = None,
+    challenge_limbs: int = 1,
 ) -> tuple[list[Array], Transcript, RoundMsg]:
     """Scan a sumcheck round once per variable; return the folded state, the
     advanced transcript, and the stacked per-round `RoundMsg` (`.round_poly` is the
@@ -249,6 +260,18 @@ def prove(
     first round's reduction to the real prefix; the computation is unchanged —
     skipping the tail is sound only because a padded summand sums to zero there,
     which is the caller's contract.
+
+    `eval_start` controls the round-poly evaluation domain `[eval_start..degree]`:
+    the default 0 sends `degree+1` values; 1 omits `s(0)` and sends `degree`, the
+    compressed wire form a verifier reconstructs as `s(0) = claim − s(1)`.
+    `challenge_dtype` / `challenge_limbs` pick the per-round fold challenge's
+    field: the default (None / 1) folds with one transcript-field squeeze; a
+    challenge in an extension reinterprets `challenge_limbs` consecutive squeezes
+    as one `challenge_dtype` element (the `sample_challenge` packing, applied
+    inside the scan), as the SWIRL stacking / zerocheck sumchecks need. A
+    non-default `eval_start` or challenge field bypasses the dedicated-fusion
+    marker — it codegens only the default round shape, so those decompose to the
+    plain scan (byte-identical); a marker for them is a follow-up.
     """
     state = list(state)
     if not state:
@@ -265,13 +288,42 @@ def prove(
         raise ValueError(
             f"num_real must be within [1, table width {width}], got {num_real}"
         )
-    # Mark only a DuplexTranscript with a dedicated-fusion permutation: the marker
-    # threads the sponge's five-leaf state as operands, so it needs that concrete
-    # layout. The isinstance narrows the type for `_prove_marked` (the merkle.py
-    # `has_dedicated_fusion` gate pattern, here over the transcript's permutation).
-    if isinstance(transcript, DuplexTranscript) and transcript.has_dedicated_fusion:
+    if not 0 <= eval_start <= round.degree:
+        raise ValueError(
+            f"eval_start must be within [0, degree {round.degree}], got {eval_start}"
+        )
+    if challenge_limbs < 1:
+        raise ValueError(f"challenge_limbs must be >= 1, got {challenge_limbs}")
+    if challenge_dtype is None and challenge_limbs != 1:
+        # The default squeeze is the identity reinterpret (one transcript-field
+        # element). >1 limbs with no dtype to pack them into would advance the
+        # transcript past squeezes the fold never consumes — a silent verifier
+        # desync; reject it. (The dtype != None case is guarded at the squeeze.)
+        raise ValueError(
+            "challenge_limbs must be 1 when challenge_dtype is None, got "
+            f"{challenge_limbs}"
+        )
+    # Mark only a DuplexTranscript with a dedicated-fusion permutation, AND only
+    # the default round shape — the marker threads the sponge's five-leaf state as
+    # operands (so it needs that concrete layout) and codegens a full-domain,
+    # single-transcript-field-challenge round, so a truncated domain or an
+    # extension challenge falls through to the plain scan. The isinstance narrows
+    # the type for `_prove_marked` (the merkle.py `has_dedicated_fusion` gate).
+    default_round = eval_start == 0 and challenge_dtype is None and challenge_limbs == 1
+    if (
+        default_round
+        and isinstance(transcript, DuplexTranscript)
+        and transcript.has_dedicated_fusion
+    ):
         return _prove_marked(round, state, transcript, num_real=num_real)
-    return _prove_scan(round, state, transcript)
+    return _prove_scan(
+        round,
+        state,
+        transcript,
+        eval_start=eval_start,
+        challenge_dtype=challenge_dtype,
+        challenge_limbs=challenge_limbs,
+    )
 
 
 def _prove_scan(
@@ -281,12 +333,19 @@ def _prove_scan(
     *,
     mark_combine: bool = False,
     scalars: Sequence[Array] | None = None,
+    eval_start: int = 0,
+    challenge_dtype: object | None = None,
+    challenge_limbs: int = 1,
 ) -> tuple[list[Array], Transcript, RoundMsg]:
     """The per-variable sumcheck scan: split / lift / round-poly / Fiat-Shamir /
     fold, one `lax.scan` step per variable. This is both the plain prover body and
     the decomposition `prove`'s `zorch.sumcheck` marker wraps, so the marked and
     unmarked paths are byte-identical by construction. Assumes a validated,
     non-empty `state` (`prove` guards the empty / zero-round cases).
+
+    `eval_start` / `challenge_dtype` / `challenge_limbs` are the round-poly domain
+    and fold-challenge-field controls `prove` documents; the marked path leaves
+    them at their defaults (full domain, single transcript-field challenge).
 
     `mark_combine` wraps each round's combine in a nested `zorch.sumcheck.combine`
     region (#113) — set only on the marked path, where `_prove_marked`
@@ -310,7 +369,7 @@ def _prove_scan(
             (buf[..., :half_max], lax.dynamic_slice_in_dim(buf, half, half_max, -1))
             for buf in state
         ]
-        lifted = [lift_to_domain(p0, p1, degree) for p0, p1 in pairs]
+        lifted = [lift_to_domain(p0, p1, degree, eval_start) for p0, p1 in pairs]
         if mark_combine:
             # operands [lifted factors][scalars]; body reads passed scalars, so the
             # round (and its λ) is not captured — λ rides as an explicit operand.
@@ -326,12 +385,20 @@ def _prove_scan(
         msg = jnp.sum(
             jnp.where(live, integrand, jnp.zeros((), integrand.dtype)), axis=-1
         )
-        transcript, r = transcript.observe_and_sample(msg, 1)
+        # One round challenge: `challenge_limbs` squeezes reinterpreted as a single
+        # `challenge_dtype` element (the `sample_challenge` packing) — the identity
+        # squeeze at the defaults, an extension-field challenge otherwise.
+        transcript, raw = transcript.observe_and_sample(msg, challenge_limbs)
+        r = (
+            raw[0]
+            if challenge_dtype is None
+            else reinterpret_challenge(raw, challenge_dtype)
+        )
         state = [
-            jnp.concatenate([fold_pair(p0, p1, r[0]), jnp.zeros_like(p0)], axis=-1)
+            jnp.concatenate([fold_pair(p0, p1, r), jnp.zeros_like(p0)], axis=-1)
             for p0, p1 in pairs
         ]
-        return (state, transcript, half // 2), RoundMsg(msg, r[0])
+        return (state, transcript, half // 2), RoundMsg(msg, r)
 
     init = (state, transcript, jnp.int32(half_max))
     (state, transcript, _), msgs = lax.scan(step, init, xs=None, length=rounds)
