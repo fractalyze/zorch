@@ -19,7 +19,9 @@ py_library(
 
 py_test(
     name = "merkle_test",
-    size = "small",
+    # medium: the per-test fixed cost (jit trace + XLA compile of the fused
+    # merkle region) sums past the small 60s budget on a loaded CPU.
+    size = "medium",
     srcs = ["merkle_test.py"],
     # composite-vmap; CI's published jaxlib can't run it. .bazelrc.ci excludes the
     # local_only tag from CI (full rationale there); local bazel runs it.

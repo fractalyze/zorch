@@ -483,5 +483,59 @@ class KaryMerkleTreeTest(absltest.TestCase):
             )
 
 
+class ColumnMajorMerkleTreeTest(absltest.TestCase):
+    """`column_major=True` coverage: the commit equals a leaf-major commit of the
+    transpose, the opening side stays leaf-major, and the flag joins the value
+    identity. The layout contract itself lives in `MerkleTree`'s docs."""
+
+    def _trees(self) -> tuple[MerkleTree, MerkleTree]:
+        """A row-major and a column-major tree over the same blocks."""
+        sponge, comp, row_tree = koalabear16_merkle()
+        return row_tree, MerkleTree(sponge, comp, column_major=True)
+
+    def test_commit_matches_leaf_major_transpose(self) -> None:
+        # The core contract: hashing the columns of `[leaf_width, num_leaves]`
+        # gives the same root + layers as the leaf-major commit of its transpose
+        # (column r of the input == row r of the transpose == the same leaf).
+        row_tree, col_tree = self._trees()
+        leaf_major = jnp.arange(32, dtype=F).reshape(4, 8)  # 4 leaves x width 8
+        row_root, row_layers = row_tree.commit(leaf_major)
+        col_root, col_layers = col_tree.commit(leaf_major.T)  # [8, 4]
+        self.assertTrue(bool(jnp.array_equal(col_root, row_root)))
+        self.assertEqual([l.shape for l in col_layers], [l.shape for l in row_layers])
+        for cl, rl in zip(col_layers, row_layers):
+            self.assertTrue(bool(jnp.array_equal(cl, rl)))
+
+    def test_open_verify_roundtrip_on_leaf_major(self) -> None:
+        # open/verify are leaf-major regardless of the flag: the consumer commits
+        # column-major but opens the leaf-major transpose, and the openings still
+        # reconstruct the column-major root.
+        _, col_tree = self._trees()
+        leaf_major = jnp.arange(32, dtype=F).reshape(4, 8)
+        col_root, col_layers = col_tree.commit(leaf_major.T)
+        for i in range(4):
+            op = col_tree.open(leaf_major, col_layers, i)
+            self.assertTrue(bool(jnp.array_equal(op.row, leaf_major[i])))
+            self.assertTrue(bool(col_tree.verify(col_root, i, op)))
+
+    def test_non_power_of_two_num_leaves_raises(self) -> None:
+        # The power-of-two guard counts leaves on axis 1 when column-major: a
+        # `[leaf_width=8, num_leaves=3]` matrix has 3 leaves and must reject.
+        _, col_tree = self._trees()
+        with self.assertRaises(ValueError):
+            col_tree.commit(jnp.arange(24, dtype=F).reshape(8, 3))
+
+    def test_layout_is_part_of_value_identity(self) -> None:
+        # The leaf layout is part of the jit-zone key (#214): a column-major tree
+        # traces a different body, so it must not compare equal to the row-major
+        # one, while two column-major builds stay equal.
+        sponge, comp, row_tree = koalabear16_merkle()
+        col_tree = MerkleTree(sponge, comp, column_major=True)
+        col_tree2 = MerkleTree(sponge, comp, column_major=True)
+        self.assertNotEqual(row_tree, col_tree)
+        self.assertEqual(col_tree, col_tree2)
+        self.assertEqual(hash(col_tree), hash(col_tree2))
+
+
 if __name__ == "__main__":
     absltest.main()
