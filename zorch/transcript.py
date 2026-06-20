@@ -6,6 +6,7 @@ implementation.
 scalars) — a JAX pytree whose state threads functionally under `@jit`, with no
 host callback or zkVM FFI.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -14,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import jax.numpy as jnp
 from jax import Array, jit, lax, vmap
-from jax.tree_util import register_dataclass
+from jax.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
 
 from zorch.hash.permutation import Permutation
@@ -208,7 +209,19 @@ class DuplexTranscript:
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
         # Permute when input is pending or the output buffer is drained.
         need_perm = (self.state.in_pos > 0) | (self.state.out_pos == 0)
-        t = lax.cond(need_perm, lambda c: c._duplexing(), lambda c: c, self)
+        # `select`, not `lax.cond`: a traced-predicate `cond` reads `need_perm`
+        # back to the host to choose a branch -- one device->host sync per
+        # sample, the out-of-marker Fiat-Shamir syncs sp1-zorch#143 targets. The
+        # two branches are shape-equal, so selecting the unconditionally-computed
+        # `_duplexing()` is byte-identical to the cond; the only cost is running
+        # the permute on the no-perm path too (a net win only because it removes
+        # the host round-trip -- measured, not assumed: sp1-zorch#143).
+        permuted = self._duplexing()
+        t = self._with_state(
+            tree_map(
+                lambda p, c: jnp.where(need_perm, p, c), permuted.state, self.state
+            )
+        )
         out_pos = t.state.out_pos - 1
         item = t.state.output_buffer[out_pos]
         return t._with_state(replace(t.state, out_pos=out_pos)), item
@@ -338,11 +351,11 @@ class DuplexTranscript:
 
 
 # Module-level cached zones behind DuplexTranscript's public ops. Outside jit,
-# the Python-loop `sample` re-traces its `lax.cond` branches — the full
-# permutation graph included — on EVERY call, and `observe`'s eager `lax.scan`
-# pays the same. Routing through module-level jit makes every eager call site
-# hit one process-wide cache: `permutation`/`rate` are static meta_fields with
-# value-equality keys (#214), so fresh same-config transcripts reuse the trace.
+# the Python-loop `sample` re-traces its permutation graph on EVERY call, and
+# `observe`'s eager `lax.scan` pays the same. Routing through module-level jit
+# makes every eager call site hit one process-wide cache: `permutation`/`rate`
+# are static meta_fields with value-equality keys (#214), so fresh same-config
+# transcripts reuse the trace.
 # `inline=True` keeps call sites already inside a jit zone byte-identical:
 # without it the zone stays a nested pjit call in the outer jaxpr, which stops
 # the permutation's round constants from auto-lifting into the
@@ -376,13 +389,14 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
         new_in_pos = in_pos + 1
         full = new_in_pos == rate
 
-        def perm(args: tuple[Array, Array]) -> tuple[Array, Array]:
-            sp, ib = args
-            # Full block: new_in_pos == rate, so the whole rate lane is `ib`.
-            new_sponge = _absorb_permute(permutation, sp, ib, new_in_pos, rate)
-            return new_sponge, jnp.zeros_like(ib)
-
-        sponge, in_buf = lax.cond(full, perm, lambda a: a, (sponge, in_buf))
+        # `select`, not `lax.cond` -- see `_sample_one`. The traced-predicate
+        # cond syncs `full` to the host on every scan step; selecting the
+        # unconditionally-absorbed block drops that sync byte-identically: when
+        # `full`, new_in_pos == rate so the whole rate lane is `in_buf` and this
+        # is exactly the absorb the cond ran (sp1-zorch#143).
+        permuted_sponge = _absorb_permute(permutation, sponge, in_buf, new_in_pos, rate)
+        sponge = jnp.where(full, permuted_sponge, sponge)
+        in_buf = jnp.where(full, jnp.zeros_like(in_buf), in_buf)
         in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
         return (in_buf, in_pos_out, sponge), None
 

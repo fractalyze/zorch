@@ -2,21 +2,24 @@
 from __future__ import annotations
 
 import functools
+from dataclasses import replace
 from unittest import mock
 
 import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import tree_util
+from jax import lax, tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import (
+    DuplexState,
     DuplexTranscript,
     GrindError,
+    _absorb_permute,
     _check_witness_body,
     _observe_and_sample_body,
     _observe_body,
@@ -294,6 +297,100 @@ class GrindTest(absltest.TestCase):
             if not bool(ok):
                 return jnp.array(cand, F)
         raise AssertionError("expected a failing witness within range")
+
+
+def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]:
+    """The pre-Lever-B `_sample_one`: a traced-predicate `lax.cond` over
+    `_duplexing`. Kept here as the byte-identity reference the production
+    `select` rewrite (sp1-zorch#143) must reproduce exactly."""
+    need_perm = (t.state.in_pos > 0) | (t.state.out_pos == 0)
+    t2 = lax.cond(need_perm, lambda c: c._duplexing(), lambda c: c, t)
+    out_pos = t2.state.out_pos - 1
+    item = t2.state.output_buffer[out_pos]
+    return t2._with_state(replace(t2.state, out_pos=out_pos)), item
+
+
+def _cond_observe_body(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
+    """The pre-Lever-B `_observe_body` scan step: a traced-predicate `lax.cond`
+    on the full-block flush. The byte-identity reference for the production
+    `select` rewrite (sp1-zorch#143)."""
+    base_dtype = t.state.sponge_state.dtype
+    flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
+    if flat.shape[0] == 0:
+        return t
+    rate = t.rate
+    permutation = t.permutation
+
+    def step(carry, x):
+        in_buf, in_pos, sponge = carry
+        in_buf = in_buf.at[in_pos].set(x)
+        new_in_pos = in_pos + 1
+        full = new_in_pos == rate
+
+        def perm(args):
+            sp, ib = args
+            new_sponge = _absorb_permute(permutation, sp, ib, new_in_pos, rate)
+            return new_sponge, jnp.zeros_like(ib)
+
+        sponge, in_buf = lax.cond(full, perm, lambda a: a, (sponge, in_buf))
+        in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
+        return (in_buf, in_pos_out, sponge), None
+
+    init = (t.state.input_buffer, t.state.in_pos, t.state.sponge_state)
+    (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
+    last_was_perm = in_pos == 0
+    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
+    output_buffer = jnp.where(
+        last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
+    )
+    return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
+
+
+class CondToSelectByteIdentityTest(absltest.TestCase):
+    """Lever B (sp1-zorch#143): `_sample_one` replaced its traced-predicate
+    `lax.cond` over `_duplexing` with a `select` of the unconditionally-permuted
+    state, to drop the per-sample device->host Fiat-Shamir sync. The select must
+    return the exact value the cond did -- it picks the same branch and field ops
+    are exact. `sample` has no `lax.scan`, so this runs on CPU (unlike the
+    observe path); `_observe_body`'s twin rewrite is pinned on GPU below."""
+
+    def test_select_sample_matches_cond_reference(self) -> None:
+        # A fresh sponge has out_pos == 0 (need_perm True -> permute); the next
+        # squeeze reads the primed output buffer (need_perm False). Draining the
+        # buffer over several samples cycles back to a permute, so the run covers
+        # both predicate values of the out_pos == 0 disjunct.
+        t_sel = cheap_transcript(F)
+        t_ref = cheap_transcript(F)
+        for i in range(12):
+            t_sel, x_sel = t_sel._sample_one()
+            t_ref, x_ref = _cond_sample_one(t_ref)
+            self.assertTrue(bool(x_sel == x_ref), f"sample {i} value diverged")
+            for a, b in zip(
+                tree_util.tree_leaves(t_sel),
+                tree_util.tree_leaves(t_ref),
+                strict=True,
+            ):
+                self.assertTrue(bool(jnp.all(a == b)), f"sample {i} state diverged")
+
+    @_skip_on_cpu_scan_bug
+    def test_select_observe_matches_cond_reference(self) -> None:
+        # 19 elements over rate 8: two full-block flushes (`full` True) plus a
+        # 3-element tail (`full` False), so the run covers both branches of the
+        # scan-step select. Resulting state AND a follow-on sample must match the
+        # cond reference byte-for-byte.
+        v = rand_field(13, (19,), F)
+        new = functools.partial(DuplexTranscript.new, koalabear16_perm(), rate=8)
+        t_sel = _observe_body(new(), v)
+        t_ref = _cond_observe_body(new(), v)
+        for a, b in zip(
+            tree_util.tree_leaves(t_sel),
+            tree_util.tree_leaves(t_ref),
+            strict=True,
+        ):
+            self.assertTrue(bool(jnp.all(a == b)), "observe state diverged")
+        _, x_sel = t_sel.sample(4)
+        _, x_ref = t_ref.sample(4)
+        self.assertTrue(bool(jnp.all(x_sel == x_ref)), "post-observe sample diverged")
 
 
 if __name__ == "__main__":
