@@ -10,14 +10,14 @@ absl-py==2.4.0 \
     --hash=sha256:88476fd881ca8aab94ffa78b7b6c632a782ab3ba1cd19c9bd423abc4fb4cd28d \
     --hash=sha256:8c6af82722b35cf71e0f4d1d47dcaebfff286e27110a99fc359349b247dfb5d4
     # via -r requirements.in
-jax==0.0.5.dev20260619205416 \
-    --hash=sha256:8a89f8e3a92ccca2b0595620e622ff60000eb8d116d0537ed8dc92f35429219c
+jax==0.0.5.dev20260620064324 \
+    --hash=sha256:9819ccda96f0b90f5543f04f8ecaed42b989eca3180c681e62143569399dfb62
     # via -r requirements.in
 jax-cuda12-plugin==0.0.5.dev20260524000415 \
     --hash=sha256:00d8bfb5d178ba514486c463e544ced648f2943b5bd632d38e28dfa62da12cda
     # via -r requirements.in
-jaxlib==0.0.5.dev20260619205416 \
-    --hash=sha256:961a45d66b50ba9439e3814134a3cdacff1cbcea57ca02c2cb02cb215888e00c
+jaxlib==0.0.5.dev20260620064324 \
+    --hash=sha256:99fa026da56e814bfd8305dc6de08f30fab9f3fd10e3846fb1591804072d0d6f
     # via
     #   -r requirements.in
     #   jax
@@ -222,8 +222,8 @@ zk-dtypes==0.0.7 \
 zkbench==0.4.0 \
     --hash=sha256:60d6d265fbe87dc8c0fd18e16af01d6f1484ba08c4a5c5c1082fd0ac02acb5d3
     # via -r requirements.in
-zkx-cuda-pjrt==0.0.5.dev20260619205416 \
-    --hash=sha256:cb02ed376c40b67ae650b3929d75855b921014fe090979de688c6139344f39e6
+zkx-cuda-pjrt==0.0.5.dev20260620064324 \
+    --hash=sha256:0fe86c3bc459f2ec6fd53f860776f5d41aea33bdd16bea2e520c7f8f4d9421fb
     # via
     #   -r requirements.in
     #   jax-cuda12-plugin
