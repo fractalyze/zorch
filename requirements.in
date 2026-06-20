@@ -11,10 +11,10 @@
 # only exists from zk_dtypes 0.0.6, so the two must move together.
 absl-py
 numpy
-jax==0.0.5.dev20260620064324
-jaxlib==0.0.5.dev20260620064324
+jax==0.0.5.dev20260620104906
+jaxlib==0.0.5.dev20260620104906
 jax-cuda12-plugin==0.0.5.dev20260524000415
-zkx-cuda-pjrt==0.0.5.dev20260620064324
+zkx-cuda-pjrt==0.0.5.dev20260620104906
 zk-dtypes==0.0.7
 
 # Benchmark harness (shared across fractalyze repos); used only by the
