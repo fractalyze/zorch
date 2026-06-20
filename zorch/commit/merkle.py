@@ -89,9 +89,24 @@ class MerkleTree:
     level, shape `(arity-1, digest_elems)`. The batched `reconstruct_roots`
     fast path stays binary-only — its sole consumer is the binary fold-PCS
     query machinery.
+
+    `column_major` (keyword-only, default False) selects the COMMIT-side leaf
+    layout: False reads a leaf as a matrix row (`commit` takes
+    `[num_leaves, leaf_width]`), True as a matrix column (`[leaf_width,
+    num_leaves]`), so a producer whose data is already column-per-leaf commits
+    it without transposing to leaf-major. It changes only the commit leaf
+    gather — `open`/`verify`/`reconstruct` are always leaf-major (one leaf per
+    row), so a column-major consumer hands those the leaf-major matrix (the
+    `commit` input's transpose).
     """
 
-    def __init__(self, leaf_hasher: Sponge, compressor: Compression) -> None:
+    def __init__(
+        self,
+        leaf_hasher: Sponge,
+        compressor: Compression,
+        *,
+        column_major: bool = False,
+    ) -> None:
         if leaf_hasher.out != compressor.chunk:
             raise ValueError(
                 f"leaf digest size ({leaf_hasher.out}) must equal compressor "
@@ -101,6 +116,10 @@ class MerkleTree:
         self._compressor = compressor
         self.arity = compressor.arity
         self.digest_elems = compressor.chunk
+        # Commit-side leaf layout (contract in the class docstring): when True
+        # the leaf hash vmaps over axis 1 and the `merkle_commit` marker carries
+        # `column_major` so the expander gathers columns. Touches commit only.
+        self._column_major = column_major
         # Wrap the whole commit in the agnostic composite only when both blocks
         # lower to a hash-dedicated marker the vendor can expand; otherwise the
         # marker would be unexpandable, so fall back to the plain vmap path.
@@ -109,20 +128,24 @@ class MerkleTree:
         )
 
     # Value equality/hash for static jit-zone keys (#214) — identity equality
-    # re-traces per instance. Both blocks compare by value themselves.
+    # re-traces per instance. Both blocks compare by value themselves; the leaf
+    # layout is part of the identity (a column-major tree traces a different
+    # body), so it joins the key.
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MerkleTree):
             return NotImplemented
-        return (self._leaf_hasher, self._compressor) == (
+        return (self._leaf_hasher, self._compressor, self._column_major) == (
             other._leaf_hasher,
             other._compressor,
+            other._column_major,
         )
 
     def __hash__(self) -> int:
-        return hash((self._leaf_hasher, self._compressor))
+        return hash((self._leaf_hasher, self._compressor, self._column_major))
 
     def commit(self, matrix: Array) -> tuple[Array, list[Array]]:
-        """Commit a (height, width) matrix.
+        """Commit a matrix: leaf-major `(num_leaves, leaf_width)`, or
+        `(leaf_width, num_leaves)` when `column_major` (a leaf is a column).
 
         Returns `(raw_root (digest_elems,), digest_layers)`, where digest_layers
         runs leaf digests -> ... -> root, each (nodes_at_level, digest_elems)
@@ -134,20 +157,25 @@ class MerkleTree:
         """
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2-D, got ndim={matrix.ndim}")
-        if self.arity == 2 and not is_power_of_two(matrix.shape[0]):
-            raise ValueError(
-                f"matrix height ({matrix.shape[0]}) must be a power of two"
-            )
+        # Leaves are columns when column-major, else rows.
+        num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
+        if self.arity == 2 and not is_power_of_two(num_leaves):
+            raise ValueError(f"leaf count ({num_leaves}) must be a power of two")
         # The validation above guards eagerly, so it stays outside the marked
         # region; only `matrix` is an explicit operand (constants auto-lift).
         if self._fused:
-            return fused_region(self._build, matrix, name=MERKLE_COMMIT_MARKER)
+            attrs = {"column_major": 1} if self._column_major else {}
+            return fused_region(self._build, matrix, name=MERKLE_COMMIT_MARKER, **attrs)
         return self._build(matrix)
 
-    def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
+    def _build(self, matrix: Array, **_attrs: object) -> tuple[Array, list[Array]]:
         """The traced commit body: vmap the leaf hash, fold arity-sized groups
         per layer down to the root. Wrapped by `commit` as one
         `zorch.merkle_commit` region.
+
+        `**_attrs` absorbs the marker's `composite.attributes` (threaded back by
+        `lax.composite` on both the composite and inline paths); the body ignores
+        them — `self._column_major` already fixes the layout.
 
         A binary tree (always power-of-two, so no level ever pads) folds with one
         `lax.scan`, tracing the per-layer compress once: the commit body is then
@@ -157,7 +185,9 @@ class MerkleTree:
         because per-level padding a fixed-shape scan can't express, and partly
         because the k-ary compress inside a loop crashes the CPU emitter
         (zkx#606); binary is the common, padding-free case."""
-        layer = jax.vmap(self._leaf_hasher.hash)(matrix)
+        layer = jax.vmap(
+            self._leaf_hasher.hash, in_axes=1 if self._column_major else 0
+        )(matrix)
         # Scan only the binary path; the height (always regular for a power-of-
         # two binary tree) is computed only there, never for the unrolled fold.
         if (
@@ -211,6 +241,10 @@ class MerkleTree:
         self, matrix: Array, digest_layers: list[Array], index: int | Array
     ) -> Opening:
         """Authentication path for leaf `index`: its row plus each level's sibling.
+
+        `matrix` is always leaf-major (`[num_leaves, leaf_width]`, one leaf per
+        row), even when `column_major` (a commit-side-only flag): a column-major
+        consumer passes the leaf-major transpose of its commit input here.
 
         Single-index by construction; batch by `jax.vmap`-ing over `index` (the
         sibling gather is orchestration outside the fused permute, like `commit`).
