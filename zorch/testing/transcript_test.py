@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import lax, tree_util
+from jax import Array, lax, tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.jit_cache import assert_single_trace
@@ -321,13 +321,15 @@ def _cond_observe_body(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTransc
     rate = t.rate
     permutation = t.permutation
 
-    def step(carry, x):
+    def step(
+        carry: tuple[Array, Array, Array], x: Array
+    ) -> tuple[tuple[Array, Array, Array], None]:
         in_buf, in_pos, sponge = carry
         in_buf = in_buf.at[in_pos].set(x)
         new_in_pos = in_pos + 1
         full = new_in_pos == rate
 
-        def perm(args):
+        def perm(args: tuple[Array, Array]) -> tuple[Array, Array]:
             sp, ib = args
             new_sponge = _absorb_permute(permutation, sp, ib, new_in_pos, rate)
             return new_sponge, jnp.zeros_like(ib)
@@ -405,7 +407,9 @@ def _ref_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
     rate = t.rate
     permutation = t.permutation
 
-    def step(carry, x):
+    def step(
+        carry: tuple[Array, Array, Array], x: Array
+    ) -> tuple[tuple[Array, Array, Array], None]:
         in_buf, in_pos, sponge = carry
         in_buf = in_buf.at[in_pos].set(x)
         new_in_pos = in_pos + 1
