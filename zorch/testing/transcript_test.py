@@ -393,5 +393,199 @@ class CondToSelectByteIdentityTest(absltest.TestCase):
         self.assertTrue(bool(jnp.all(x_sel == x_ref)), "post-observe sample diverged")
 
 
+def _ref_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
+    """Verbatim copy of the pre-rate-block `_observe_body`: a `lax.scan` that
+    absorbs ONE base element per step and runs a full `_absorb_permute` on every
+    element, keeping the rate-boundary one via `jnp.where`. The byte-identity
+    reference the rate-block rewrite (sp1-zorch#119) must reproduce exactly."""
+    base_dtype = t.state.sponge_state.dtype
+    flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
+    if flat.shape[0] == 0:
+        return t
+    rate = t.rate
+    permutation = t.permutation
+
+    def step(carry, x):
+        in_buf, in_pos, sponge = carry
+        in_buf = in_buf.at[in_pos].set(x)
+        new_in_pos = in_pos + 1
+        full = new_in_pos == rate
+        permuted_sponge = _absorb_permute(permutation, sponge, in_buf, new_in_pos, rate)
+        sponge = jnp.where(full, permuted_sponge, sponge)
+        in_buf = jnp.where(full, jnp.zeros_like(in_buf), in_buf)
+        in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
+        return (in_buf, in_pos_out, sponge), None
+
+    init = (t.state.input_buffer, t.state.in_pos, t.state.sponge_state)
+    (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
+    last_was_perm = in_pos == 0
+    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
+    output_buffer = jnp.where(
+        last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
+    )
+    return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
+
+
+def _ref_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]:
+    """Verbatim copy of the pre-rate-block `_sample_one`: an unconditional
+    `_duplexing` (one permute) selected away when not needed."""
+    need_perm = (t.state.in_pos > 0) | (t.state.out_pos == 0)
+    permuted = t._duplexing()
+    t = t._with_state(
+        tree_util.tree_map(
+            lambda p, c: jnp.where(need_perm, p, c), permuted.state, t.state
+        )
+    )
+    out_pos = t.state.out_pos - 1
+    item = t.state.output_buffer[out_pos]
+    return t._with_state(replace(t.state, out_pos=out_pos)), item
+
+
+def _ref_sample(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, jnp.ndarray]:
+    """Verbatim copy of the pre-rate-block `_sample_body`: `n` per-limb
+    `_sample_one` calls, each running a permute unconditionally."""
+    outs = []
+    for _ in range(n):
+        t, x = _ref_sample_one(t)
+        outs.append(x.reshape(()))
+    return t, jnp.stack(outs)
+
+
+@_skip_on_cpu_scan_bug
+class RateBlockByteIdentityTest(absltest.TestCase):
+    """Rate-block batching (sp1-zorch#119): `_observe_body` now permutes once per
+    rate-block (not once per element) and `_sample_body` once per drained
+    output-block (not once per limb). Both must be byte-for-byte identical to the
+    captured pre-change references -- the transcript drives the prover's
+    Fiat-Shamir, so any drift breaks every proof. Pinned on GPU (the duplex
+    `lax.scan` hits the zkx#500 CPU bug)."""
+
+    def _new(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+    def _seeded(self, seed: int, observes: tuple, samples: tuple) -> DuplexTranscript:
+        # Build a non-trivial starting state (non-zero in_pos/out_pos) by replaying
+        # prior observes/samples through the PRODUCTION ops -- already proven equal
+        # to the reference, so a divergence here is a fresh-state divergence.
+        t = self._new()
+        for i, (mlen, n) in enumerate(zip(observes, samples, strict=True)):
+            if mlen:
+                t = t.observe(rand_field(seed * 100 + i, (mlen,), F))
+            if n:
+                t, _ = t.sample(n)
+        return t
+
+    def _assert_state_eq(
+        self, a: DuplexTranscript, b: DuplexTranscript, msg: str
+    ) -> None:
+        for x, y in zip(
+            tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
+        ):
+            self.assertTrue(bool(jnp.all(x == y)), msg)
+
+    def test_observe_matches_reference_over_many_lengths(self) -> None:
+        # Rate-boundary edges explicit: 7 (under), 8 (exact one block), 9 (one
+        # block + tail), 16/17 (two blocks +/- tail), plus 0/1/40.
+        for mlen in (0, 1, 7, 8, 9, 16, 17, 40):
+            v = rand_field(mlen + 1, (mlen,), F)
+            new = _observe_body(self._new(), v)
+            ref = _ref_observe(self._new(), v)
+            self._assert_state_eq(new, ref, f"observe(len={mlen}) state diverged")
+
+    def test_observe_from_nonzero_in_pos(self) -> None:
+        # Start with a partial input buffer (in_pos != 0) so the combined-stream
+        # gap-removal and runtime block offset are exercised, across edge lengths.
+        for in_pos in (1, 3, 7):
+            base_new = _observe_body(self._new(), rand_field(in_pos, (in_pos,), F))
+            base_ref = _ref_observe(self._new(), rand_field(in_pos, (in_pos,), F))
+            self._assert_state_eq(base_new, base_ref, f"seed in_pos={in_pos} diverged")
+            self.assertEqual(int(base_new.state.in_pos), in_pos)
+            for mlen in (0, 1, 7, 8, 9, 16, 17):
+                v = rand_field(in_pos * 10 + mlen + 1, (mlen,), F)
+                new = _observe_body(base_new, v)
+                ref = _ref_observe(base_ref, v)
+                self._assert_state_eq(
+                    new, ref, f"observe(in_pos={in_pos}, len={mlen}) diverged"
+                )
+
+    def test_sample_matches_reference_over_many_counts(self) -> None:
+        # From a fresh sponge (in_pos 0, out_pos 0 -> first sample permutes).
+        for n in (1, 2, 4, 7, 8, 9, 16, 17):
+            t_new, x_new = _sample_body(self._new(), n)
+            t_ref, x_ref = _ref_sample(self._new(), n)
+            self.assertTrue(
+                bool(jnp.all(x_new == x_ref)), f"sample({n}) value diverged"
+            )
+            self._assert_state_eq(t_new, t_ref, f"sample({n}) state diverged")
+
+    def test_sample_from_partial_output_buffer(self) -> None:
+        # Drain some limbs first so the next sample starts mid-buffer (out_pos in
+        # (0, rate)), then sample across the rate boundary.
+        for drained in (1, 3, 7):
+            base = self._seeded(drained, (5,), (drained,))
+            for n in (1, 2, 4, 8, 9, 16):
+                t_new, x_new = _sample_body(base, n)
+                t_ref, x_ref = _ref_sample(base, n)
+                self.assertTrue(
+                    bool(jnp.all(x_new == x_ref)),
+                    f"sample(drained={drained}, n={n}) value diverged",
+                )
+                self._assert_state_eq(
+                    t_new, t_ref, f"sample(drained={drained}, n={n}) state diverged"
+                )
+
+    def test_sample_from_pending_input(self) -> None:
+        # in_pos > 0 AND out_pos > 0: the first sample must flush (permute) even
+        # though outputs are available -- the forced-flush first permute. This
+        # state is not reachable through the public API (observe zeroes out_pos
+        # when it leaves a tail), so build it directly to pin the `_duplexing`
+        # flush path both implementations share.
+        primed, _ = self._new().sample(2)  # out_pos in (0, rate), input buffer empty
+        for in_pos in (1, 3, 7):
+            pend = rand_field(in_pos, (8,), F)
+            # Only [0:in_pos] is valid in overwrite mode; zero the rest.
+            buf = jnp.where(jnp.arange(8) < in_pos, pend, jnp.zeros(8, F))
+            state = replace(primed.state, input_buffer=buf, in_pos=jnp.int32(in_pos))
+            base = primed._with_state(state)
+            self.assertEqual(int(base.state.in_pos), in_pos)
+            self.assertGreater(int(base.state.out_pos), 0)
+            for n in (1, 2, 4, 9):
+                t_new, x_new = _sample_body(base, n)
+                t_ref, x_ref = _ref_sample(base, n)
+                self.assertTrue(
+                    bool(jnp.all(x_new == x_ref)),
+                    f"pending-input sample(in_pos={in_pos}, n={n}) diverged",
+                )
+                self._assert_state_eq(
+                    t_new, t_ref, f"pending-input sample(in_pos={in_pos}, n={n}) state"
+                )
+
+    def test_interleaved_observe_sample_sequences(self) -> None:
+        # Long interleaved scripts exercise carried in_pos/out_pos across both ops.
+        scripts = (
+            ((1, 0), (0, 2), (7, 0), (0, 3), (8, 0), (0, 5), (17, 0), (0, 9)),
+            ((9, 0), (0, 4), (3, 0), (0, 1), (16, 0), (0, 8), (0, 8), (1, 0)),
+            ((40, 0), (0, 16), (0, 1), (7, 0), (0, 7), (5, 0), (0, 9)),
+        )
+        for si, script in enumerate(scripts):
+            t_new = self._new()
+            t_ref = self._new()
+            for step_i, (mlen, n) in enumerate(script):
+                if mlen:
+                    v = rand_field(si * 1000 + step_i, (mlen,), F)
+                    t_new = _observe_body(t_new, v)
+                    t_ref = _ref_observe(t_ref, v)
+                if n:
+                    t_new, x_new = _sample_body(t_new, n)
+                    t_ref, x_ref = _ref_sample(t_ref, n)
+                    self.assertTrue(
+                        bool(jnp.all(x_new == x_ref)),
+                        f"script {si} step {step_i} value diverged",
+                    )
+                self._assert_state_eq(
+                    t_new, t_ref, f"script {si} step {step_i} state diverged"
+                )
+
+
 if __name__ == "__main__":
     absltest.main()

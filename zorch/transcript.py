@@ -364,53 +364,137 @@ class DuplexTranscript:
 
 @partial(jit, static_argnames=("n",), inline=True)
 def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+    if n == 1:
+        # One squeeze runs at most one permute already; the unrolled loop would
+        # build a chain of one, so route straight through `_sample_one` (also the
+        # exact path `_grind_search` and `check_witness` replay).
+        t, x = t._sample_one()
+        return t, jnp.stack([x.reshape(())])
+
+    rate = t.rate
+    st = t.state
+
+    # Squeeze a rate-block of outputs per permutation, not one permutation per
+    # squeezed limb: the old loop called `_sample_one` -> `_duplexing` (a
+    # permutation) unconditionally on every limb and selected it away when the
+    # output buffer still had limbs, doing ~n permutes when ~ceil(n/rate) suffice
+    # (sp1-zorch#119). Build the chain of permuted states ONCE -- `chain[0]` is
+    # the entry state, `chain[1]` flushes pending input, `chain[i+1]` is a plain
+    # permute -- then read the n limbs out of the right chain entry. Byte-identical
+    # to the per-limb loop: the per-limb `need_perm` selects exactly the same
+    # `_duplexing` result, so reading from the chosen chain entry is the value the
+    # old select returned.
+    #
+    # `chain[1]._duplexing()` is a plain permute (its input buffer is zeroed and
+    # `in_pos == 0`), so one `_duplexing` per chain link reproduces both the
+    # pending-input flush (link 1) and the drained-buffer refills (links >= 2).
+    # Static chain depth: with `rate >= 1`, after the first limb `in_pos == 0`, so
+    # at most `1 + ceil(n / rate)` permutes ever fire.
+    depth = 1 + (n + rate - 1) // rate
+    chain = [t]
+    for _ in range(depth):
+        chain.append(chain[-1]._duplexing())
+    # Stack the candidate output buffers and state leaves so a traced index picks
+    # the live chain entry without a host-visible branch.
+    output_buffers = jnp.stack(
+        [c.state.output_buffer for c in chain]
+    )  # (depth+1, rate)
+    chain_states = tree_map(lambda *xs: jnp.stack(xs), *[c.state for c in chain])
+
+    # Replay the per-limb schedule with traced scalars only (no field ops): track
+    # how many permutes have fired (`perm_count`, the chain index) and the running
+    # `out_pos`; a permute fires iff input is pending or the buffer is drained --
+    # the same `need_perm` the per-limb loop tested.
+    perm_count = jnp.int32(0)
+    in_pos = st.in_pos
+    out_pos = st.out_pos
     outs = []
     for _ in range(n):
-        t, x = t._sample_one()
-        outs.append(x.reshape(()))
-    return t, jnp.stack(outs)
+        need_perm = (in_pos > 0) | (out_pos == 0)
+        perm_count = jnp.where(need_perm, perm_count + 1, perm_count)
+        in_pos = jnp.where(need_perm, jnp.int32(0), in_pos)
+        out_pos = jnp.where(need_perm, jnp.int32(rate), out_pos)
+        out_pos = out_pos - 1
+        outs.append(output_buffers[perm_count, out_pos].reshape(()))
+
+    final_state = tree_map(lambda leaves: leaves[perm_count], chain_states)
+    final_state = replace(final_state, out_pos=out_pos)
+    return t._with_state(final_state), jnp.stack(outs)
 
 
 @partial(jit, inline=True)
 def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     base_dtype = t.state.sponge_state.dtype
     flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
-    if flat.shape[0] == 0:
+    m = flat.shape[0]
+    if m == 0:
         return t
 
     rate = t.rate
     permutation = t.permutation
+    st = t.state
 
-    def step(
-        carry: tuple[Array, Array, Array], x: Array
-    ) -> tuple[tuple[Array, Array, Array], None]:
-        in_buf, in_pos, sponge = carry
-        in_buf = in_buf.at[in_pos].set(x)
-        new_in_pos = in_pos + 1
-        full = new_in_pos == rate
+    # Absorb a rate-block per permutation, not a base element per permutation:
+    # the old per-element scan ran a full `_absorb_permute` on every input and
+    # kept only the rate-boundary one (`jnp.where(full, ...)`), doing ~M permutes
+    # to absorb M elements when ~ceil(M/rate) suffice. sp1-zorch#119 (the
+    # FS-permute-batching lever) scans over the rate-sized BLOCKS of the combined
+    # stream instead, permuting once per block. Byte-identical to the per-element
+    # form: a full block in the old scan overwrites the whole rate lane with those
+    # `rate` consecutive stream elements (`new_in_pos == rate`), which is exactly
+    # `permutation.permute(sponge.at[:rate].set(block))`.
+    #
+    # The combined stream is `input_buffer[0:in_pos] ++ flat`, runtime length
+    # `length = in_pos + M`. `in_pos < rate` is static-bounded, so at most
+    # `num_blocks = (rate - 1 + M) // rate` full blocks can ever form; the live
+    # count `length // rate` is masked against that static bound. The trailing
+    # `length % rate` elements go back into `input_buffer` for the next absorb.
+    in_pos = st.in_pos
+    length = in_pos + jnp.int32(m)
+    active_blocks = length // rate  # runtime count of full rate-blocks
+    num_blocks = (rate - 1 + m) // rate  # static upper bound on full blocks
 
-        # `select`, not `lax.cond` -- see `_sample_one`. The traced-predicate
-        # cond syncs `full` to the host on every scan step; selecting the
-        # unconditionally-absorbed block drops that sync byte-identically: when
-        # `full`, new_in_pos == rate so the whole rate lane is `in_buf` and this
-        # is exactly the absorb the cond ran (sp1-zorch#143).
-        permuted_sponge = _absorb_permute(permutation, sponge, in_buf, new_in_pos, rate)
-        sponge = jnp.where(full, permuted_sponge, sponge)
-        in_buf = jnp.where(full, jnp.zeros_like(in_buf), in_buf)
-        in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
-        return (in_buf, in_pos_out, sponge), None
+    # Drop the unused gap `input_buffer[in_pos:rate]` from the stream: for stream
+    # position `j`, the source index is `j` while `j < in_pos`, else shifted by
+    # `rate - in_pos` to skip past the buffer's invalid suffix.
+    combined_src = jnp.concatenate([st.input_buffer, flat])  # (rate + M,)
+    total = (num_blocks + 1) * rate  # >= length, with a rate-block of tail slack
+    pos = jnp.arange(total, dtype=jnp.int32)
+    src_idx = pos + jnp.where(pos < in_pos, jnp.int32(0), rate - in_pos)
+    src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+    combined = combined_src[src_idx]  # (total,) — valid prefix is [0:length]
 
-    init = (t.state.input_buffer, t.state.in_pos, t.state.sponge_state)
-    (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
+    def block_step(sponge: Array, k: Array) -> tuple[Array, None]:
+        block = lax.dynamic_slice_in_dim(combined, k * rate, rate)
+        permuted = permutation.permute(sponge.at[:rate].set(block))
+        # Blocks past the live count are padding-only: leave the sponge untouched.
+        return jnp.where(k < active_blocks, permuted, sponge), None
 
-    # If the final scan step permuted (in_pos == 0 at exit), the post-permute
-    # sponge prefix is the fresh output; otherwise the next sample permutes.
-    last_was_perm = in_pos == 0
+    sponge, _ = lax.scan(
+        block_step, st.sponge_state, jnp.arange(num_blocks, dtype=jnp.int32)
+    )
+
+    # The `length % rate` tail of the combined stream stays pending in the input
+    # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode
+    # reads only [0:in_pos]). `tail_start` is the live tail's stream offset.
+    tail_len = length - active_blocks * rate
+    tail_start = active_blocks * rate
+    tail = lax.dynamic_slice_in_dim(combined, tail_start, rate)
+    slot = jnp.arange(rate, dtype=jnp.int32)
+    in_buf = jnp.where(slot < tail_len, tail, jnp.zeros(rate, dtype=base_dtype))
+    in_pos_out = tail_len
+
+    # If the last full block permuted and no tail remains (in_pos_out == 0), the
+    # post-permute sponge prefix is the fresh output; otherwise the next sample
+    # permutes. Matches the per-element form's `last_was_perm` exactly.
+    last_was_perm = in_pos_out == 0
     out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
     output_buffer = jnp.where(
         last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
     )
-    return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
+    return t._with_state(
+        DuplexState(in_buf, output_buffer, sponge, in_pos_out, out_pos)
+    )
 
 
 @partial(jit, static_argnames=("n",), inline=True)
