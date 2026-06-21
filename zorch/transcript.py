@@ -211,11 +211,10 @@ class DuplexTranscript:
         need_perm = (self.state.in_pos > 0) | (self.state.out_pos == 0)
         # `select`, not `lax.cond`: a traced-predicate `cond` reads `need_perm`
         # back to the host to choose a branch -- one device->host sync per
-        # sample, the out-of-marker Fiat-Shamir syncs sp1-zorch#143 targets. The
-        # two branches are shape-equal, so selecting the unconditionally-computed
-        # `_duplexing()` is byte-identical to the cond; the only cost is running
-        # the permute on the no-perm path too (a net win only because it removes
-        # the host round-trip -- measured, not assumed: sp1-zorch#143).
+        # sample. The two branches are shape-equal, so selecting the
+        # unconditionally-computed `_duplexing()` is byte-identical to the cond;
+        # the only cost is running the permute on the no-perm path too, a net win
+        # because it removes the host round-trip.
         permuted = self._duplexing()
         t = self._with_state(
             tree_map(
@@ -374,16 +373,15 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     rate = t.rate
     st = t.state
 
-    # Squeeze a rate-block of outputs per permutation, not one permutation per
-    # squeezed limb: the old loop called `_sample_one` -> `_duplexing` (a
-    # permutation) unconditionally on every limb and selected it away when the
-    # output buffer still had limbs, doing ~n permutes when ~ceil(n/rate) suffice
-    # (sp1-zorch#119). Build the chain of permuted states ONCE -- `chain[0]` is
-    # the entry state, `chain[1]` flushes pending input, `chain[i+1]` is a plain
-    # permute -- then read the n limbs out of the right chain entry. Byte-identical
-    # to the per-limb loop: the per-limb `need_perm` selects exactly the same
-    # `_duplexing` result, so reading from the chosen chain entry is the value the
-    # old select returned.
+    # Squeeze a rate-block of outputs per permutation rather than one permutation
+    # per limb: the obvious per-limb form runs a `_duplexing` (permutation) on
+    # every limb and selects it away while the output buffer still has limbs,
+    # doing ~n permutes when ~ceil(n/rate) suffice. Build the chain of permuted
+    # states ONCE -- `chain[0]` is the entry state, `chain[1]` flushes pending
+    # input, `chain[i+1]` is a plain permute -- then read the n limbs out of the
+    # right chain entry. Byte-identical to the per-limb form: the per-limb
+    # `need_perm` selects exactly the same `_duplexing` result, so reading from
+    # the chosen chain entry returns that value.
     #
     # `chain[1]._duplexing()` is a plain permute (its input buffer is zeroed and
     # `in_pos == 0`), so one `_duplexing` per chain link reproduces both the
@@ -434,14 +432,14 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     permutation = t.permutation
     st = t.state
 
-    # Absorb a rate-block per permutation, not a base element per permutation:
-    # the old per-element scan ran a full `_absorb_permute` on every input and
-    # kept only the rate-boundary one (`jnp.where(full, ...)`), doing ~M permutes
-    # to absorb M elements when ~ceil(M/rate) suffice. sp1-zorch#119 (the
-    # FS-permute-batching lever) scans over the rate-sized BLOCKS of the combined
-    # stream instead, permuting once per block. Byte-identical to the per-element
-    # form: a full block in the old scan overwrites the whole rate lane with those
-    # `rate` consecutive stream elements (`new_in_pos == rate`), which is exactly
+    # Absorb a rate-block per permutation rather than a base element per
+    # permutation: the obvious per-element form runs a full `_absorb_permute` on
+    # every input and keeps only the rate-boundary one (`jnp.where(full, ...)`),
+    # doing ~M permutes to absorb M elements when ~ceil(M/rate) suffice. This
+    # scans over the rate-sized BLOCKS of the combined stream instead, permuting
+    # once per block. Byte-identical to the per-element form: a full block in that
+    # form overwrites the whole rate lane with those `rate` consecutive stream
+    # elements (`new_in_pos == rate`), which is exactly
     # `permutation.permute(sponge.at[:rate].set(block))`.
     #
     # The combined stream is `input_buffer[0:in_pos] ++ flat`, runtime length

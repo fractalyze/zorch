@@ -300,9 +300,9 @@ class GrindTest(absltest.TestCase):
 
 
 def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]:
-    """The pre-Lever-B `_sample_one`: a traced-predicate `lax.cond` over
+    """The cond-based `_sample_one`: a traced-predicate `lax.cond` over
     `_duplexing`. Kept here as the byte-identity reference the production
-    `select` rewrite (sp1-zorch#143) must reproduce exactly."""
+    `select` rewrite must reproduce exactly."""
     need_perm = (t.state.in_pos > 0) | (t.state.out_pos == 0)
     t2 = lax.cond(need_perm, lambda c: c._duplexing(), lambda c: c, t)
     out_pos = t2.state.out_pos - 1
@@ -311,9 +311,9 @@ def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray
 
 
 def _cond_observe_body(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
-    """The pre-Lever-B `_observe_body` scan step: a traced-predicate `lax.cond`
+    """The cond-based `_observe_body` scan step: a traced-predicate `lax.cond`
     on the full-block flush. The byte-identity reference for the production
-    `select` rewrite (sp1-zorch#143)."""
+    `select` rewrite."""
     base_dtype = t.state.sponge_state.dtype
     flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
     if flat.shape[0] == 0:
@@ -349,7 +349,7 @@ def _cond_observe_body(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTransc
 
 
 class CondToSelectByteIdentityTest(absltest.TestCase):
-    """Lever B (sp1-zorch#143): `_sample_one` replaced its traced-predicate
+    """`_sample_one` replaced its traced-predicate
     `lax.cond` over `_duplexing` with a `select` of the unconditionally-permuted
     state, to drop the per-sample device->host Fiat-Shamir sync. The select must
     return the exact value the cond did -- it picks the same branch and field ops
@@ -399,7 +399,7 @@ def _ref_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
     """Verbatim copy of the pre-rate-block `_observe_body`: a `lax.scan` that
     absorbs ONE base element per step and runs a full `_absorb_permute` on every
     element, keeping the rate-boundary one via `jnp.where`. The byte-identity
-    reference the rate-block rewrite (sp1-zorch#119) must reproduce exactly."""
+    reference the rate-block rewrite must reproduce exactly."""
     base_dtype = t.state.sponge_state.dtype
     flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
     if flat.shape[0] == 0:
@@ -457,7 +457,7 @@ def _ref_sample(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, jnp.ndar
 
 @_skip_on_cpu_scan_bug
 class RateBlockByteIdentityTest(absltest.TestCase):
-    """Rate-block batching (sp1-zorch#119): `_observe_body` now permutes once per
+    """Rate-block batching: `_observe_body` now permutes once per
     rate-block (not once per element) and `_sample_body` once per drained
     output-block (not once per limb). Both must be byte-for-byte identical to the
     captured pre-change references -- the transcript drives the prover's
