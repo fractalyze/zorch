@@ -17,6 +17,7 @@ from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER_VERSION,
     Poseidon2,
     _permute_body,
+    _permute_body_batched,
 )
 from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
@@ -77,6 +78,32 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         funcs = re.findall(r"func\.func.*?@[\w.$]+\([^)]*\)(.*?)\n  \}", txt, re.S)
         big = [body for body in funcs if body.count("stablehlo.multiply") > 50]
         self.assertLen(big, 1)
+
+    def test_permute_batched_inline_fallback_matches(self) -> None:
+        # Published-wheel path (no CompositeOp): the batched decomposition runs
+        # inline as lax.map(_single_permute) over the batch. Must equal the
+        # composite/vmap result — the shared body computes the real permutation.
+        p = koalabear16_perm()
+        states = jnp.arange(3 * 16, dtype=F).reshape(3, 16)
+        ref = jax.vmap(p.permute)(states)
+        orig = _composite._HAS_COMPOSITE_OP
+        try:
+            _composite._HAS_COMPOSITE_OP = False
+            out = p.permute_batched(states)
+        finally:
+            _composite._HAS_COMPOSITE_OP = orig
+        self.assertTrue(bool(jnp.array_equal(out, ref)))
+
+    def test_permute_batched_reuses_one_trace_across_instances(self) -> None:
+        # The batched jit zone must also share one trace across freshly built
+        # same-params permutations (#214/#216) — the dedup is pointless if the
+        # batched body re-traces per instance.
+        states = jnp.arange(4 * 16, dtype=F).reshape(4, 16)
+        calls = [
+            functools.partial(koalabear16_perm().permute_batched, states)
+            for _ in (0, 1)
+        ]
+        assert_single_trace(self, _permute_body_batched, calls)
 
     def test_permute_reuses_one_trace_across_instances(self) -> None:
         # Freshly built same-params permutations must share one module-level
