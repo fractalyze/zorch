@@ -129,3 +129,47 @@ class Sponge:
             state = state.at[:tail].set(input[full * self.rate :])
             state = self._permutation.permute(state)
         return state[: self.out]
+
+    def hash_batched(self, inputs: Array) -> Array:
+        """Batch of `hash`: (b, n) -> (b, out), numerically a `vmap(hash)`.
+
+        Absorbs the whole Merkle leaf level at once on `(b, width)` states,
+        routing every permute through `permute_batched`. With a dedicated-fusion
+        permutation that makes the ragged Merkle layers share one lowered permute
+        body instead of re-emitting it per layer. All `b` leaves
+        share the input length `n`, so the block structure is static, exactly as in
+        `hash` — including absorbing block 0 outside the scan so the top-level
+        permute marker stays discoverable to a `merkle_commit` consumer."""
+        if inputs.ndim != 2:
+            raise ValueError(f"inputs must be 2-D, got ndim={inputs.ndim}")
+        b, n = inputs.shape
+        state = jnp.zeros((b, self._permutation.width), dtype=inputs.dtype)
+        if n == 0:
+            return state[:, : self.out]
+        if n <= self.rate:  # single (possibly partial) block
+            state = state.at[:, :n].set(inputs)
+            return self._permutation.permute_batched(state)[:, : self.out]
+        # Block 0 outside the scan (see `hash`): a merkle_commit consumer reads
+        # the hash identity from a top-level permute marker, not inside the loop.
+        state = state.at[:, : self.rate].set(inputs[:, : self.rate])
+        state = self._permutation.permute_batched(state)
+        full = n // self.rate
+        if full > 1:
+            blocks = inputs[:, self.rate : full * self.rate].reshape(
+                b, full - 1, self.rate
+            )
+            # Scan over the block axis (one permute body for all blocks, #135);
+            # move it leading so each step carries a `(b, rate)` block.
+            blocks = jnp.swapaxes(blocks, 0, 1)
+
+            def absorb(s: Array, block: Array) -> tuple[Array, None]:
+                s = s.at[:, : self.rate].set(block)
+                return self._permutation.permute_batched(s), None
+
+            state, _ = lax.scan(absorb, state, blocks)
+        # A partial last block overwrites only its own lanes (padding-free).
+        tail = n - full * self.rate
+        if tail:
+            state = state.at[:, :tail].set(inputs[:, full * self.rate :])
+            state = self._permutation.permute_batched(state)
+        return state[:, : self.out]

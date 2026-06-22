@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import re
 
 import jax
 import jax.numpy as jnp
@@ -16,6 +17,7 @@ from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER_VERSION,
     Poseidon2,
     _permute_body,
+    _permute_body_batched,
 )
 from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_EXPECTED,
@@ -38,6 +40,70 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         batch = jax.vmap(p.permute)(jnp.stack([x, x]))
         self.assertTrue(bool(jnp.array_equal(batch[0], KOALABEAR16_EXPECTED)))
         self.assertTrue(bool(jnp.array_equal(batch[1], KOALABEAR16_EXPECTED)))
+
+    def test_permute_batched_matches_vmap(self) -> None:
+        # permute_batched is numerically a vmap(permute) over the leading axis; it
+        # differs only in how the region lowers (one shared body, not one per
+        # batch shape — see test_permute_batched_shares_one_lowered_body).
+        p = koalabear16_perm()
+        states = jnp.arange(5 * 16, dtype=F).reshape(5, 16)
+        self.assertTrue(
+            bool(
+                jnp.array_equal(p.permute_batched(states), jax.vmap(p.permute)(states))
+            )
+        )
+
+    @absltest.skipUnless(
+        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
+    )
+    def test_permute_batched_shares_one_lowered_body(self) -> None:
+        # Dedup invariant: ragged Merkle-fold rounds must reference ONE shared
+        # permute body, not re-emit the ~width-sized s-box/MDS body per batch
+        # shape. Lower two ragged batches in one module: there are two
+        # zorch.poseidon2 ops (one per shape), but exactly one decomposition func
+        # carries the real body (the rest are thin lax.map wrappers over the
+        # shared _single_permute). A revert to vmap(permute) re-bakes the batch
+        # into a fresh per-shape body and fails this.
+        p = koalabear16_perm()
+        a = jnp.arange(8 * 16, dtype=F).reshape(8, 16)
+        b = jnp.arange(4 * 16, dtype=F).reshape(4, 16)
+        txt = (
+            jax.jit(
+                lambda x, y: p.permute_batched(x).sum() + p.permute_batched(y).sum()
+            )
+            .lower(a, b)
+            .as_text()
+        )
+        self.assertEqual(txt.count('stablehlo.composite "zorch.poseidon2"'), 2, txt)
+        funcs = re.findall(r"func\.func.*?@[\w.$]+\([^)]*\)(.*?)\n  \}", txt, re.S)
+        big = [body for body in funcs if body.count("stablehlo.multiply") > 50]
+        self.assertLen(big, 1)
+
+    def test_permute_batched_inline_fallback_matches(self) -> None:
+        # Published-wheel path (no CompositeOp): the batched decomposition runs
+        # inline as lax.map(_single_permute) over the batch. Must equal the
+        # composite/vmap result — the shared body computes the real permutation.
+        p = koalabear16_perm()
+        states = jnp.arange(3 * 16, dtype=F).reshape(3, 16)
+        ref = jax.vmap(p.permute)(states)
+        orig = _composite._HAS_COMPOSITE_OP
+        try:
+            _composite._HAS_COMPOSITE_OP = False
+            out = p.permute_batched(states)
+        finally:
+            _composite._HAS_COMPOSITE_OP = orig
+        self.assertTrue(bool(jnp.array_equal(out, ref)))
+
+    def test_permute_batched_reuses_one_trace_across_instances(self) -> None:
+        # The batched jit zone must also share one trace across freshly built
+        # same-params permutations (#214/#216) — the dedup is pointless if the
+        # batched body re-traces per instance.
+        states = jnp.arange(4 * 16, dtype=F).reshape(4, 16)
+        calls = [
+            functools.partial(koalabear16_perm().permute_batched, states)
+            for _ in (0, 1)
+        ]
+        assert_single_trace(self, _permute_body_batched, calls)
 
     def test_permute_reuses_one_trace_across_instances(self) -> None:
         # Freshly built same-params permutations must share one module-level

@@ -17,6 +17,9 @@ class _Id:
     def permute(self, state: Array) -> Array:
         return state
 
+    def permute_batched(self, states: Array) -> Array:
+        return states  # identity, so vmap(permute) over the batch is identity
+
 
 class PermutationProtocolTest(absltest.TestCase):
     def test_duck_typed_impl_satisfies_protocol(self) -> None:

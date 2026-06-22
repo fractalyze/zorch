@@ -190,9 +190,12 @@ class MerkleTree:
         because per-level padding a fixed-shape scan can't express, and partly
         because the k-ary compress inside a loop crashes the CPU emitter
         (zkx#606); binary is the common, padding-free case."""
-        layer = jax.vmap(
-            self._leaf_hasher.hash, in_axes=1 if self._column_major else 0
-        )(matrix)
+        # One batched leaf hash over the whole level (not a per-leaf vmap): a
+        # dedicated-fusion permutation then shares one lowered permute body across
+        # the ragged fold layers. Column-major hands the
+        # leaf-major transpose (a leaf is a column), matching the old in_axes=1.
+        leaves = matrix.T if self._column_major else matrix
+        layer = self._leaf_hasher.hash_batched(leaves)
         # Scan only the binary path; the height (always regular for a power-of-
         # two binary tree) is computed only there, never for the unrolled fold.
         if (
@@ -215,7 +218,7 @@ class MerkleTree:
                 layer = jnp.concatenate([layer, pad])
                 digest_layers[-1] = layer
             groups = layer.reshape(-1, self.arity, self.digest_elems)
-            layer = jax.vmap(self._compressor.compress)(groups)
+            layer = self._compressor.compress_batched(groups)
             digest_layers.append(layer)
         return digest_layers[-1][0], digest_layers
 
@@ -233,7 +236,7 @@ class MerkleTree:
         n, a, d = leaf_layer.shape[0], self.arity, self.digest_elems
 
         def fold_level(buf: Array, _: None) -> tuple[Array, Array]:
-            compressed = jax.vmap(self._compressor.compress)(buf.reshape(n // a, a, d))
+            compressed = self._compressor.compress_batched(buf.reshape(n // a, a, d))
             return jnp.zeros_like(buf).at[: n // a].set(compressed), compressed
 
         _, stacked = jax.lax.scan(fold_level, leaf_layer, xs=None, length=height)
