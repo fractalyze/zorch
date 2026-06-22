@@ -46,7 +46,7 @@ class CompressionTest(absltest.TestCase):
     def test_compress_batched_matches_vmap(self) -> None:
         # compress_batched folds a whole sibling level at once; numerically a
         # vmap(compress) (it routes through permute_batched for the shared-body
-        # lowering, zisk-zorch#36).
+        # lowering).
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
         groups = jnp.arange(7 * 2 * 8, dtype=F).reshape(7, 2, 8)
         self.assertTrue(

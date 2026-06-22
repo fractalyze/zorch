@@ -187,7 +187,7 @@ class MerkleTree:
         (zkx#606); binary is the common, padding-free case."""
         # One batched leaf hash over the whole level (not a per-leaf vmap): a
         # dedicated-fusion permutation then shares one lowered permute body across
-        # the ragged fold layers (zisk-zorch#36). Column-major hands the
+        # the ragged fold layers. Column-major hands the
         # leaf-major transpose (a leaf is a column), matching the old in_axes=1.
         leaves = matrix.T if self._column_major else matrix
         layer = self._leaf_hasher.hash_batched(leaves)

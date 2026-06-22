@@ -96,7 +96,7 @@ class Compression:
         """Batch of `compress`: (n, arity, chunk) -> (n, chunk), numerically a
         `vmap(compress)`. Routes the whole level through `permute_batched`, so a
         dedicated-fusion permutation lowers one shared permute body across the
-        ragged Merkle levels instead of one per level (zisk-zorch#36)."""
+        ragged Merkle levels instead of one per level."""
         if inputs.ndim != 3 or inputs.shape[1:] != (self.arity, self.chunk):
             raise ValueError(
                 f"inputs shape must be (n, {self.arity}, {self.chunk}), "

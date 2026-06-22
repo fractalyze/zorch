@@ -129,8 +129,8 @@ class Sponge:
 
         Absorbs the whole Merkle leaf level at once on `(b, width)` states,
         routing every permute through `permute_batched`. With a dedicated-fusion
-        permutation that makes the ragged FRI fold layers share one lowered permute
-        body instead of re-emitting it per layer (zisk-zorch#36). All `b` leaves
+        permutation that makes the ragged Merkle layers share one lowered permute
+        body instead of re-emitting it per layer. All `b` leaves
         share the input length `n`, so the block structure is static, exactly as in
         `hash` — including absorbing block 0 outside the scan so the top-level
         permute marker stays discoverable to a `merkle_commit` consumer."""

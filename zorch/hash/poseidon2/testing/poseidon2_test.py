@@ -57,7 +57,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
     )
     def test_permute_batched_shares_one_lowered_body(self) -> None:
-        # zisk-zorch#36: ragged Merkle-fold rounds must reference ONE shared
+        # Dedup invariant: ragged Merkle-fold rounds must reference ONE shared
         # permute body, not re-emit the ~width-sized s-box/MDS body per batch
         # shape. Lower two ragged batches in one module: there are two
         # zorch.poseidon2 ops (one per shape), but exactly one decomposition func

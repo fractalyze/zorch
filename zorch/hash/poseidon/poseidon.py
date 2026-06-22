@@ -84,9 +84,8 @@ class Poseidon:
 
     def permute_batched(self, states: Array) -> Array:
         # Classic Poseidon keeps the plain vmap batch path; the shared-body
-        # batched marker (zisk-zorch#36) is implemented for Poseidon2, the FRI
-        # leaf/compress permutation. A merkle layer over classic Poseidon batches
-        # exactly as before.
+        # batched marker is implemented for Poseidon2. A merkle layer over classic
+        # Poseidon batches exactly as before.
         return jax.vmap(self.permute)(states)
 
 

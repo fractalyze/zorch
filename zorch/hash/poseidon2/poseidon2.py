@@ -107,7 +107,7 @@ class Poseidon2:
         scalar/vector round constants) are byte-for-byte what `vmap(permute)`
         emits, so a marker-routed vendor emits the same batched kernel — the only
         change is that the ragged Merkle-fold rounds share one lowered permute
-        body rather than re-emitting it per round (zisk-zorch#36). A free-form
+        body rather than re-emitting it per round. A free-form
         (non-M4) matrix keeps the generic `vmap` path: its body must stay
         inline-straight-line for the single-kernel fallback, which a `lax.map`
         call would break."""

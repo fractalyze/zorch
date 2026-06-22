@@ -74,7 +74,7 @@ class SpongeTest(absltest.TestCase):
     def test_hash_batched_matches_vmap(self) -> None:
         # hash_batched absorbs a whole leaf level on (b, width) states; numerically
         # a vmap(hash) (it routes through permute_batched for the shared-body
-        # lowering, zisk-zorch#36). Cover single-block, full-block, and
+        # lowering). Cover single-block, full-block, and
         # partial-tail input widths (rate=8).
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         for n in (2, 8, 19):
