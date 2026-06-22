@@ -125,6 +125,72 @@ class ConstraintEvalTest(absltest.TestCase):
         # hard-errors unless that operand is a scalar s32.
         self.assertIn("live_width_operand_idx = 2", txt)
 
+    def test_column_weights_adds_the_weighted_column_sum(self) -> None:
+        # column_weights folds `sum_c trace[:, c] * w[c]` into each row's value,
+        # added AFTER the live mask (unmasked). The inlined decomposition must
+        # equal `masked_fold + trace @ w` exactly (field add is associative, so
+        # the contraction order is irrelevant). Random rows (dead rows are NOT
+        # zero here) pin that the column term is added unmasked.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        weights = rand_field(5, (3,), F)  # one weight per trace column
+        fold = _eval_fn(rows) @ alpha
+        masked = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
+        golden = masked + rows @ weights
+        got = constraint_eval(
+            _eval_fn, rows, alpha, live_width=5, column_weights=weights
+        )
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+
+    def test_column_weights_under_jit_matches_eager(self) -> None:
+        # The column term is a dot inside the marked body; confirm the jitted /
+        # lowered path equals the eager golden (the emitter folds the dot, the
+        # inlined path runs it directly — neither may diverge).
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        weights = rand_field(5, (3,), F)
+        golden = constraint_eval(
+            _eval_fn, rows, alpha, live_width=5, column_weights=weights
+        )
+        got = jax.jit(
+            lambda t, a, w: constraint_eval(
+                _eval_fn, t, a, live_width=5, column_weights=w
+            )
+        )(rows, alpha, weights)
+        self.assertTrue(bool(jnp.array_equal(got, golden)))
+
+    def test_column_weights_requires_live_width(self) -> None:
+        # column_weights rides as the trailing operand after live_width, so the
+        # bounded path is mandatory (keeps the operand order fixed).
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(
+                _eval_fn, rows, alpha, column_weights=rand_field(5, (3,), F)
+            )
+
+    def test_column_weights_rejects_wrong_shape(self) -> None:
+        # One weight per trace column (rank-1, len == trace.shape[-1]); a mismatch
+        # must fail loud at the entry point, not as a cryptic matmul trace error.
+        rows = rand_field(1, (8, 3), F)  # 3 columns
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):  # wrong length (2 != 3)
+            constraint_eval(
+                _eval_fn,
+                rows,
+                alpha,
+                live_width=5,
+                column_weights=rand_field(5, (2,), F),
+            )
+        with self.assertRaises(ValueError):  # wrong rank (2D, not 1D)
+            constraint_eval(
+                _eval_fn,
+                rows,
+                alpha,
+                live_width=5,
+                column_weights=rand_field(6, (3, 1), F),
+            )
+
 
 if __name__ == "__main__":
     absltest.main()

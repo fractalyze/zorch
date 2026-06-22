@@ -53,6 +53,7 @@ def constraint_eval(
     alpha: Array,
     *,
     live_width: Array | int | None = None,
+    column_weights: Array | None = None,
     name: str = CONSTRAINT_EVAL_MARKER,
 ) -> Array:
     """Mark `sum_k alpha_k * eval_fn(trace)_k` as one `zorch.constraint_eval`.
@@ -72,28 +73,67 @@ def constraint_eval(
     marked and inlined paths. It rides as operand 2 with its index declared in
     `live_width_operand_idx`; zkx hard-errors on a malformed declaration rather
     than silently falling back to the unbounded path.
+
+    `column_weights`, when given, adds a per-row weighted column sum
+    `sum_c trace[row, c] * column_weights[c]` to each row's accumulated value —
+    a rank-1 vector with one weight per trace column. It rides as the trailing
+    operand; the recognizing emitter folds the `trace @ column_weights` dot into
+    the per-row accumulator (computed thread-locally while the row is already
+    loaded), so no separate matmul kernel is launched. The marker keeps the dot
+    in its body so the inlined / monolithic paths stay byte-identical. It
+    requires `live_width` (the bounded path the emitter folds into) and is added
+    AFTER the live mask: dead rows are zero, so a zero row's column term
+    vanishes and the masked and unmasked forms agree. The term carries no
+    proving-scheme meaning here (a consumer may use it for a column opening
+    batch) — `zorch` stays scheme-agnostic.
     """
     num_constraints = alpha.shape[-1]
     if num_constraints < 1:
         raise ValueError(
             f"alpha must carry at least one coefficient, got {num_constraints}"
         )
+    if column_weights is not None:
+        # Rides as the trailing operand AFTER live_width — so it requires one,
+        # keeping the operand order fixed (trace, alpha, live, weights) for the
+        # decomposition's positional binding — and carries one weight per trace
+        # column. Validate at the entry point so a mismatch fails loud here
+        # rather than as a cryptic matmul trace error.
+        if live_width is None:
+            raise ValueError("column_weights requires live_width")
+        num_cols = trace.shape[-1]
+        if column_weights.ndim != 1 or column_weights.shape[0] != num_cols:
+            raise ValueError(
+                "column_weights must be rank-1 with one weight per trace column "
+                f"({num_cols}), got shape {column_weights.shape}"
+            )
 
     def decomposition(
-        trace: Array, alpha: Array, live_width: Array | None = None, **_attrs: object
+        trace: Array,
+        alpha: Array,
+        live_width: Array | None = None,
+        column_weights: Array | None = None,
+        **_attrs: object,
     ) -> Array:
         constraints = eval_fn(trace)
         acc = constraints[..., 0] * alpha[..., 0]
         for k in range(1, num_constraints):
             acc = acc + constraints[..., k] * alpha[..., k]
-        if live_width is None:
-            return acc
-        if acc.ndim == 0:
-            raise ValueError("live_width needs a result with a leading row axis")
-        # lax.select, not jnp.where — the single-kernel body rule; see
-        # zorch/fusion.py's module docstring.
-        rows = lax.broadcasted_iota(jnp.int32, acc.shape, 0)
-        return lax.select(rows < live_width, acc, jnp.zeros_like(acc))
+        if live_width is not None:
+            if acc.ndim == 0:
+                raise ValueError("live_width needs a result with a leading row axis")
+            # lax.select, not jnp.where — the single-kernel body rule; see
+            # zorch/fusion.py's module docstring.
+            rows = lax.broadcasted_iota(jnp.int32, acc.shape, 0)
+            acc = lax.select(rows < live_width, acc, jnp.zeros_like(acc))
+        if column_weights is not None:
+            # Added AFTER the live mask, so the body root is
+            # add(masked_fold, dot(trace, column_weights)) — the shape a
+            # recognizing emitter folds into the per-row accumulator (hand-emitted
+            # in-kernel; the inlined path runs the dot directly). A dot is allowed
+            # in the bounded body, and dead rows are zero so the column term is
+            # byte-neutral under the live mask.
+            acc = acc + trace @ column_weights
+        return acc
 
     operands: tuple[Array, ...] = (trace, alpha)
     attrs: dict[str, int] = {
@@ -116,4 +156,8 @@ def constraint_eval(
                 )
         operands += (live,)
         attrs["live_width_operand_idx"] = 2
+    if column_weights is not None:
+        # Trailing operand; the emitter recognizes it structurally (the rank-1
+        # operand of the body-root dot), so no operand-index attribute is needed.
+        operands += (column_weights,)
     return composite_or_inline(decomposition, *operands, name=name, **attrs)
