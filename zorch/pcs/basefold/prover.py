@@ -37,6 +37,7 @@ from zorch.pcs.fold import (
     PreFoldPairCommitRound,
     open_rows,
     sample_positions,
+    to_base_field,
 )
 from zorch.poly.multilinear import eval_mle, mle_fold
 from zorch.prove import fold_rounds
@@ -50,19 +51,22 @@ if TYPE_CHECKING:
 
 @partial(
     jax.tree_util.register_dataclass,
-    data_fields=["digest_layers", "mle", "codeword"],
+    data_fields=["digest_layers", "mle", "codeword", "leaves"],
     meta_fields=["widths"],
 )
 @dataclass(frozen=True)
 class BasefoldProverData:
-    """Retained witness from `BasefoldProver.commit`: the Merkle digest layers
-    over the codeword, the message-domain MLE `[S, K]` (the sumcheck folds it),
-    the codeword `[block_len, K]` (the fold halves it and Merkle opens it), plus
-    per-column widths. A pytree so `commit`/`open` ride a `@jit` zone."""
+    """Retained witness from `BasefoldProver.commit`: the Merkle digest layers,
+    the message-domain MLE `[S, K]` (the sumcheck folds it), the codeword
+    `[block_len, K]` (the fold halves it), the committed base-field leaves (what
+    the Merkle commit/open hashes — the codeword's rows reinterpreted as
+    base-field limbs, identity for a base-field code), plus per-column widths. A
+    pytree so `commit`/`open` ride a `@jit` zone."""
 
     digest_layers: list[Array]
     mle: Array  # [S, K] message-domain columns
-    codeword: Array  # [block_len, K] codeword (Merkle leaves = its rows)
+    codeword: Array  # [block_len, K] codeword (the fold halves it)
+    leaves: Array  # [block_len, K*limbs] base-field Merkle leaves
     widths: tuple[int, ...]
 
 
@@ -181,9 +185,14 @@ def _commit_body(
     # commit expects.
     mle = jnp.stack(polys, axis=1)
     codeword = code.encode(mle.T).T
-    root, layers = tree.commit(codeword)
+    leaves = to_base_field(codeword)
+    root, layers = tree.commit(leaves)
     return root, BasefoldProverData(
-        digest_layers=layers, mle=mle, codeword=codeword, widths=(len(polys),)
+        digest_layers=layers,
+        mle=mle,
+        codeword=codeword,
+        leaves=leaves,
+        widths=(len(polys),),
     )
 
 
@@ -246,8 +255,7 @@ def _open_batch_body(
     t, positions = sample_positions(t, n, prover.num_queries)
     a = prover.code.layer_positions(positions, num_vars)
     component_openings = [
-        open_rows(prover.tree, pd.codeword, pd.digest_layers, positions)
-        for pd in rounds
+        open_rows(prover.tree, pd.leaves, pd.digest_layers, positions) for pd in rounds
     ]
     query_openings = [
         open_rows(prover.tree, layer.leaves, layer.digest_layers, a[i])

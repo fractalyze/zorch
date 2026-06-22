@@ -200,7 +200,7 @@ class BasefoldOpenTest(absltest.TestCase):
         z = _rand_ef(8, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
         comp = proof.component_openings[0]
-        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, EF))
+        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
@@ -230,7 +230,7 @@ class BasefoldOpenTest(absltest.TestCase):
         z = _rand_ef(15, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
         comp = proof.component_openings[0]
-        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, EF))
+        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
@@ -338,7 +338,7 @@ class BasefoldOpenTest(absltest.TestCase):
         z = _rand_ef(33, (log_s,))
         values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
         co = proof.component_openings[1]
-        bad_co = dataclasses.replace(co, row=co.row + jnp.array(1, EF))
+        bad_co = dataclasses.replace(co, row=co.row + jnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[proof.component_openings[0], bad_co]
         )

@@ -157,6 +157,11 @@ class MerkleTree:
         """
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2-D, got ndim={matrix.ndim}")
+        if matrix.dtype != self._leaf_hasher.dtype:
+            raise TypeError(
+                f"leaf dtype {matrix.dtype} must match the hasher field "
+                f"{self._leaf_hasher.dtype}"
+            )
         # Leaves are columns when column-major, else rows.
         num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
         if self.arity == 2 and not is_power_of_two(num_leaves):

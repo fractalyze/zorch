@@ -94,6 +94,11 @@ class Poseidon2:
             raise ValueError(
                 f"state must be a 1-D array of shape ({self.width},), got {state.shape}"
             )
+        if state.dtype != self.dtype:
+            raise TypeError(
+                f"state dtype {state.dtype} must match the permutation field "
+                f"{self.dtype}"
+            )
         return _permute_body(self, state, _composite.has_composite_op())
 
 

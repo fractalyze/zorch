@@ -24,7 +24,12 @@ from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
 from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldProof
-from zorch.pcs.fold import sample_positions, verify_fold_chain, verify_openings
+from zorch.pcs.fold import (
+    from_base_field,
+    sample_positions,
+    verify_fold_chain,
+    verify_openings,
+)
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -184,11 +189,15 @@ def _verify_batch_body(
     # batched codeword at `positions`; it must be the right leg of fold layer
     # 0's opened pair. Then each layer's pair folds to the next layer's
     # opened value, down to the final poly.
-    comp_val = batch_staggered(
-        [co.row for co in proof.component_openings], coeffs
-    )  # (Q,) batched value at `positions`
+    # The committed leaves store base-field limbs; reinterpret each opened row
+    # back to the code's value dtype before the EF RLC / fold comparison.
+    comp_rows = [
+        from_base_field(co.row, dtype, int(v.shape[0]))
+        for co, v in zip(proof.component_openings, values, strict=True)
+    ]
+    comp_val = batch_staggered(comp_rows, coeffs)  # (Q,) batched value at `positions`
     lo0, _ = verifier.code.pair_indices(a[0], 0)
-    leaf0 = proof.query_openings[0].row  # (Q, 2)
+    leaf0 = from_base_field(proof.query_openings[0].row, dtype, 2)  # (Q, 2)
     in_leaf0 = jnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1])
     ok = ok & jnp.all(comp_val == in_leaf0)
 
