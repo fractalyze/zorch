@@ -30,3 +30,13 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "duplex_sponge",
+    srcs = ["duplex_sponge.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":permutation",
+        requirement("jax"),
+    ],
+)

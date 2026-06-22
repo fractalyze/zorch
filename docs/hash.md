@@ -32,6 +32,13 @@ lanes into the width, permutes, and truncates to `chunk` (collision-resistant in
 the hash-tree setting). Neither adds a domain separator: that is scheme-specific
 and belongs to the consumer.
 
+**Add-absorb duplex sponge.** `DuplexSponge` is the sibling for interleaved
+absorb/squeeze (Fiat-Shamir): absorb *adds* into the rate lanes (`+=`, not
+overwrite), permuting on a full rate block or a duplex direction switch; squeeze
+reads the rate, permuting when it drains. It is the agnostic primitive a classic
+sponge prover drives — the scheme-specific challenge packing, domain separation,
+and field conversions live in the consumer, not here.
+
 ## Fusion by construction
 
 The **permutation is the fusion unit.** `Poseidon2.permute` wraps all rounds in
