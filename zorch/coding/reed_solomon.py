@@ -143,7 +143,7 @@ class ReedSolomon:
     def __hash__(self) -> int:
         return hash(self._value_key())
 
-    def encode(self, message: Array) -> Array:
+    def encode(self, message: Array, *, bit_reverse_output: bool = False) -> Array:
         if message.shape[-1] != self.message_len:
             raise ValueError(
                 f"message last axis must be {self.message_len}, "
@@ -154,7 +154,10 @@ class ReedSolomon:
         coeffs = jnp.concatenate([message, jnp.zeros(tail, self.dtype)], axis=-1)
         if self._coset_powers is not None:
             coeffs = coeffs * self._coset_powers
-        return lax.fft(coeffs, "FFT", n)
+        # bit_reverse_output folds the codeword's bit-reversal into the NTT
+        # (the consumer asks for bit-reversed evaluation order), so it lowers to
+        # one fused kernel with no standalone bit-reverse pass.
+        return lax.fft(coeffs, "FFT", n, bit_reverse_output=bit_reverse_output)
 
     def domain(self) -> Array:
         """The points `encode` evaluates on, coset shift included."""
@@ -348,8 +351,10 @@ class BitReversedReedSolomon:
         return hash((BitReversedReedSolomon, self._natural))
 
     def encode(self, message: Array) -> Array:
-        cw = self._natural.encode(message)
-        return lax.bit_reverse(cw, dimensions=(cw.ndim - 1,))
+        # The NTT emits the codeword directly in bit-reversed evaluation order
+        # (the bit-reversal is folded into the transform), so no standalone
+        # lax.bit_reverse pass — one fused kernel by construction.
+        return self._natural.encode(message, bit_reverse_output=True)
 
     def domain(self) -> Array:
         """The points `encode` evaluates on, in codeword (bit-reversed) order."""
