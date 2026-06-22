@@ -20,10 +20,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
+import zk_dtypes
 from jax import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
@@ -33,6 +34,32 @@ from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
+
+
+def to_base_field(leaves: Array) -> Array:
+    """A leaf's storage dtype (what the base-field hashers commit) is split from
+    its value dtype (what the fold math reads). Reinterpret extension-field
+    leaves as base-field limbs, folding the new trailing axis into the leaf
+    width. Identity for a base-field code (passes through unchanged)."""
+    try:
+        bf = zk_dtypes.efinfo(leaves.dtype).base_field_dtype
+    except ValueError:
+        return leaves
+    limbs = lax.bitcast_convert_type(leaves, bf)
+    return limbs.reshape(*leaves.shape[:-1], -1)
+
+
+def from_base_field(rows: Array, dtype: Any, group: int) -> Array:
+    """Inverse of `to_base_field` for a `(Q, group * limbs)` opened leaf: split
+    the limb axis back out and reinterpret to the code's value dtype, yielding
+    `(Q, group)`. Identity for a base-field code (dtype carries no limbs).
+    `dtype` can't be inferred — base-field rows have lost which extension field
+    they encode — so the caller passes the code's field."""
+    try:
+        limbs = zk_dtypes.efinfo(dtype).degree
+    except ValueError:
+        return rows
+    return lax.bitcast_convert_type(rows.reshape(rows.shape[0], group, limbs), dtype)
 
 
 @dataclass(frozen=True)
@@ -65,7 +92,7 @@ class PreFoldPairCommitRound(Round):
     def __call__(
         self, cw: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, PairCommittedLayer]:
-        leaves = self.code.pair_leaves(cw)
+        leaves = to_base_field(self.code.pair_leaves(cw))
         root, digest_layers = self.tree.commit(leaves)
         t = transcript.observe(root)
         t, beta = t.sample()
@@ -103,7 +130,7 @@ class PreFoldKGroupCommitRound(Round):
     def __call__(
         self, cw: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, KGroupCommittedLayer]:
-        leaves = self.code.group_leaves(cw)
+        leaves = to_base_field(self.code.group_leaves(cw))
         root, digest_layers = self.tree.commit(leaves)
         t = transcript.observe(root)
         t, beta = t.sample()
@@ -197,13 +224,13 @@ def verify_fold_chain(
     num_rounds = len(query_openings)
     ok = jnp.bool_(True)
     for i in range(num_rounds):
-        leaf = query_openings[i].row  # (Q, 2)
+        leaf = from_base_field(query_openings[i].row, code.dtype, 2)  # (Q, 2)
         folded = code.fold_values(leaf[:, 0], leaf[:, 1], betas[i], leaf_indices[i], i)
         if i < num_rounds - 1:
             # The fold lands at leaf_indices[i] in layer i+1 — the lo or hi leg of
             # that layer's opened pair, decided by the code's layout.
             next_lo, _ = code.pair_indices(leaf_indices[i + 1], i + 1)
-            nxt = query_openings[i + 1].row
+            nxt = from_base_field(query_openings[i + 1].row, code.dtype, 2)
             expected = jnp.where(leaf_indices[i] == next_lo, nxt[:, 0], nxt[:, 1])
         else:
             expected = final_poly[leaf_indices[i]]

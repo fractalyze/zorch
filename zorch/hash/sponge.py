@@ -17,6 +17,7 @@ instead of paying one permute trace per block (#135).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import jax.numpy as jnp
 from jax import Array, lax
@@ -88,6 +89,11 @@ class Sponge:
         consumer can wrap a whole region using this hash (e.g. a Merkle commit) in
         an expandable composite. Delegates to the permutation; names no hash."""
         return self._permutation.has_dedicated_fusion
+
+    @property
+    def dtype(self) -> Any:
+        """The base field the sponge absorbs and squeezes (the permutation's)."""
+        return self._permutation.dtype
 
     def hash(self, input: Array) -> Array:
         """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,)."""
