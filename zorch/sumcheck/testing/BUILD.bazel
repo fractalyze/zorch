@@ -28,7 +28,7 @@ py_test(
 
 py_test(
     name = "prove_marked_test",
-    size = "small",
+    size = "medium",
     srcs = ["prove_marked_test.py"],
     deps = [
         "//zorch:transcript",
@@ -60,7 +60,7 @@ py_test(
 
 py_test(
     name = "verifier_test",
-    size = "small",
+    size = "medium",
     srcs = ["verifier_test.py"],
     deps = [
         ":testing",

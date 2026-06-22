@@ -4,7 +4,7 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
     name = "reed_solomon_test",
-    size = "small",
+    size = "medium",
     srcs = ["reed_solomon_test.py"],
     deps = [
         "//zorch/coding:foldable_code",

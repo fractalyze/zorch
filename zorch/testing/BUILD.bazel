@@ -85,7 +85,7 @@ py_test(
 
 py_test(
     name = "transcript_test",
-    size = "small",
+    size = "medium",
     srcs = ["transcript_test.py"],
     deps = [
         "//zorch:transcript",

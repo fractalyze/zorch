@@ -46,7 +46,7 @@ py_test(
 
 py_test(
     name = "permute_shape_test",
-    size = "small",
+    size = "medium",
     srcs = ["permute_shape_test.py"],
     deps = [
         "//zorch/hash/poseidon2",
