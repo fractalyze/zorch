@@ -36,3 +36,16 @@ class Permutation(Protocol):
         One call is one function — the unit that lowers to one fused kernel.
         """
         ...
+
+    def permute_batched(self, states: Array) -> Array:
+        """Apply the permutation to a batch: (n, width) -> (n, width), numerically
+        a `vmap(permute)` over the leading axis.
+
+        The seam a batched consumer (a Merkle layer hashing/compressing a whole
+        level at once) calls so one region spans the batch. An implementation with
+        a dedicated fusion marker may emit a single batched marker over one SHARED
+        single-state body, so ragged batches (the FRI fold layers) share one
+        lowered permute body instead of re-emitting it per shape; a plain
+        implementation may just `vmap(permute)`.
+        """
+        ...

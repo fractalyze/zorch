@@ -43,6 +43,20 @@ class CompressionTest(absltest.TestCase):
         self.assertEqual(out.shape, (8,))
         self.assertEqual(out.dtype, F)
 
+    def test_compress_batched_matches_vmap(self) -> None:
+        # compress_batched folds a whole sibling level at once; numerically a
+        # vmap(compress) (it routes through permute_batched for the shared-body
+        # lowering, zisk-zorch#36).
+        c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
+        groups = jnp.arange(7 * 2 * 8, dtype=F).reshape(7, 2, 8)
+        self.assertTrue(
+            bool(
+                jnp.array_equal(
+                    c.compress_batched(groups), jax.vmap(c.compress)(groups)
+                )
+            )
+        )
+
     def test_compress_2to1_is_full_width_permute_truncated(self) -> None:
         # arity*chunk == width: no padding; compress == permute(flatten)[:chunk].
         perm = koalabear16_perm()

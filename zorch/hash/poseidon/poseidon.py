@@ -82,6 +82,13 @@ class Poseidon:
             )
         return _permute_body(self, state, _composite.has_composite_op())
 
+    def permute_batched(self, states: Array) -> Array:
+        # Classic Poseidon keeps the plain vmap batch path; the shared-body
+        # batched marker (zisk-zorch#36) is implemented for Poseidon2, the FRI
+        # leaf/compress permutation. A merkle layer over classic Poseidon batches
+        # exactly as before.
+        return jax.vmap(self.permute)(states)
+
 
 # Module-level jit zone so the permutation body traces once per (params, state
 # aval) process-wide: `lax.composite` re-traces its decomposition on every
