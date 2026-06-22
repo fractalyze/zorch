@@ -10,10 +10,11 @@ issue [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 fixed-width permutation over a single field dtype — `width`, `dtype`, `permute`.
 The Sponge (leaf hasher), the Compression (Merkle fold), and the duplex
 Fiat-Shamir transcript all read `width`/`dtype` to size and allocate state, then
-call `permute`; none names a concrete hash. `Poseidon2` is one implementation,
-and any other fixed-width permutation drops into the same seam unchanged. This is
-how the symmetric layer stays proving-scheme- and zkVM-agnostic — the
-non-negotiable.
+call `permute`; none names a concrete hash. `Poseidon2` is one implementation
+and classic `Poseidon` (`zorch/hash/poseidon`, the `zorch.poseidon` marker — a
+full dense MDS every round, full/partial round split) is a second; any other
+fixed-width permutation drops into the same seam unchanged. This is how the
+symmetric layer stays proving-scheme- and zkVM-agnostic — the non-negotiable.
 
 **Width from the permutation; the rest are free params on a frozen object.**
 `rate`/`out` (`SpongeParams`) and `arity`/`chunk` (`CompressionParams`) are the
