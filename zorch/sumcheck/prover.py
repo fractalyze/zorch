@@ -42,6 +42,7 @@ the same scan, byte-identical and sound. A test `CheapPermutation`
 (`has_dedicated_fusion=False`) keeps the plain scan, so unit tests never need the
 marker. This is the register-resident lever reached transparently from `prove`.
 """
+
 from __future__ import annotations
 
 import operator
@@ -219,6 +220,12 @@ class SumcheckSummand(Protocol):
 # hash and carries no pre-sampled challenges.
 SUMCHECK_MARKER = "zorch.sumcheck"
 # Marker revision the zkx `SumcheckRecognizer` gates on (`composite.version`).
+# All rounds ride revision 1; the round shape (a truncated `eval_start` domain,
+# an extension-field fold challenge) is carried in attributes / operand dtypes a
+# recognizer reads, not in the version. The version is reserved for a future
+# cross-release ABI break — there are no released marker consumers to gate yet,
+# and producer and recognizer move together behind one pin, so a shape the
+# recognizer cannot codegen fails loud at compile rather than silently.
 SUMCHECK_MARKER_VERSION = 1
 
 # Nested region delineating the per-round combine (the summand over the lifted
@@ -268,10 +275,11 @@ def prove(
     field: the default (None / 1) folds with one transcript-field squeeze; a
     challenge in an extension reinterprets `challenge_limbs` consecutive squeezes
     as one `challenge_dtype` element (the `sample_challenge` packing, applied
-    inside the scan), as the SWIRL stacking / zerocheck sumchecks need. A
-    non-default `eval_start` or challenge field bypasses the dedicated-fusion
-    marker — it codegens only the default round shape, so those decompose to the
-    plain scan (byte-identical); a marker for them is a follow-up.
+    inside the scan), as a downstream scheme's extension-field sumchecks need. A
+    non-default `eval_start` rides the dedicated-fusion marker as a composite
+    attribute (the truncated domain a recognizer reads); the extension-field fold
+    challenge rides no attr — a vendor infers it from the challenge result dtype.
+    Both keep the marker byte-identical to the plain scan when unrecognized.
     """
     state = list(state)
     if not state:
@@ -279,8 +287,7 @@ def prove(
     width = state[0].shape[-1]
     if log2_strict_usize(width) == 0:
         raise ValueError(
-            "prove requires a state width >= 2 (at least one round), got "
-            f"width {width}"
+            f"prove requires a state width >= 2 (at least one round), got width {width}"
         )
     # Mirror the zkx recognizer's bound so a bad value fails at emission, and on
     # the unmarked path too — the two paths must reject identically.
@@ -303,19 +310,22 @@ def prove(
             "challenge_limbs must be 1 when challenge_dtype is None, got "
             f"{challenge_limbs}"
         )
-    # Mark only a DuplexTranscript with a dedicated-fusion permutation, AND only
-    # the default round shape — the marker threads the sponge's five-leaf state as
-    # operands (so it needs that concrete layout) and codegens a full-domain,
-    # single-transcript-field-challenge round, so a truncated domain or an
-    # extension challenge falls through to the plain scan. The isinstance narrows
-    # the type for `_prove_marked` (the merkle.py `has_dedicated_fusion` gate).
-    default_round = eval_start == 0 and challenge_dtype is None and challenge_limbs == 1
-    if (
-        default_round
-        and isinstance(transcript, DuplexTranscript)
-        and transcript.has_dedicated_fusion
-    ):
-        return _prove_marked(round, state, transcript, num_real=num_real)
+    # Mark any DuplexTranscript with a dedicated-fusion permutation — the marker
+    # threads the sponge's five-leaf state as operands, and `_prove_marked` carries
+    # the truncated-domain `eval_start` as a composite attribute (an extension
+    # challenge needs none — a vendor reads it off the challenge dtype). The
+    # isinstance narrows the type for `_prove_marked` (the merkle.py
+    # `has_dedicated_fusion` gate).
+    if isinstance(transcript, DuplexTranscript) and transcript.has_dedicated_fusion:
+        return _prove_marked(
+            round,
+            state,
+            transcript,
+            num_real=num_real,
+            eval_start=eval_start,
+            challenge_dtype=challenge_dtype,
+            challenge_limbs=challenge_limbs,
+        )
     return _prove_scan(
         round,
         state,
@@ -344,8 +354,9 @@ def _prove_scan(
     non-empty `state` (`prove` guards the empty / zero-round cases).
 
     `eval_start` / `challenge_dtype` / `challenge_limbs` are the round-poly domain
-    and fold-challenge-field controls `prove` documents; the marked path leaves
-    them at their defaults (full domain, single transcript-field challenge).
+    and fold-challenge-field controls `prove` documents; the marked path forwards
+    them unchanged (and mirrors them onto the marker as composite attributes), so
+    the decomposition stays byte-identical whatever the round shape.
 
     `mark_combine` wraps each round's combine in a nested `zorch.sumcheck.combine`
     region (#113) — set only on the marked path, where `_prove_marked`
@@ -417,14 +428,22 @@ def _prove_marked(
     state: list[Array],
     transcript: DuplexTranscript,
     num_real: int | None = None,
+    *,
+    eval_start: int = 0,
+    challenge_dtype: object | None = None,
+    challenge_limbs: int = 1,
 ) -> tuple[list[Array], DuplexTranscript, RoundMsg]:
     """Wrap `_prove_scan` in the hash-agnostic `zorch.sumcheck` composite —
     Fiat-Shamir INSIDE, so the body is the *same* scan and the folded state,
     advanced transcript, and proof are bit-identical to the plain path.
 
     The shape (`degree`, `num_vars`, `num_factors`, plus `num_real` when given)
-    rides as `composite.attributes` under `version` 1 — the recognizer's
-    contract; the body ignores them (metadata only). The duplex sponge threads
+    rides as `composite.attributes` — the recognizer's contract; the body ignores
+    them (metadata only). A non-default `eval_start` (the truncated domain) rides
+    as a further attribute under the same `version` 1 — the recognizer keys off
+    the attribute, not the version. (An extension-field fold challenge rides no
+    attr — a vendor infers it from the challenge result dtype.) The duplex sponge
+    threads
     through as the five `DuplexState` leaves (the
     mutable carry); the FS permutation rides as the nested `zorch.poseidon2` marker
     inside `observe_and_sample`, whose round constants auto-lift into this
@@ -460,12 +479,20 @@ def _prove_marked(
             DuplexTranscript(perm, rate, DuplexState(*lv)),
             mark_combine=True,
             scalars=sca,
+            eval_start=eval_start,
+            challenge_dtype=challenge_dtype,
+            challenge_limbs=challenge_limbs,
         )
         return folded, _state_leaves(cast(DuplexTranscript, t).state), msgs
 
-    # Optional attr: emitted only when declared, so a dense prove's envelope is
-    # unchanged for a recognizer that predates `num_real`.
+    # Optional attrs: emitted only when non-default, so a default prove's envelope
+    # is unchanged for a recognizer that predates them. `num_real` bounds a zero
+    # tail; `eval_start` declares the truncated round-poly domain. Both are read
+    # off the attribute. The extension fold challenge rides no attr — a vendor
+    # infers it from the challenge dtype.
     opt_attrs = {} if num_real is None else {"num_real": num_real}
+    if eval_start != 0:
+        opt_attrs["eval_start"] = eval_start
     folded, out_leaves, msgs = fused_region(
         body,
         *state,

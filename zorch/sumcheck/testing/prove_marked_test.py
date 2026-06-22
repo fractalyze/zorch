@@ -23,7 +23,9 @@ from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
+EF = zk_dtypes.koalabearx4_mont
 _HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
+_GPU_BACKEND = jax.default_backend() == "gpu"
 
 
 class ProveTest(absltest.TestCase):
@@ -58,16 +60,22 @@ class ProveMarkedTest(absltest.TestCase):
         return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
     def _assert_marked_equals_scan(
-        self, round: prover.SumcheckSummand, factors: list[Any]
+        self,
+        round: prover.SumcheckSummand,
+        factors: list[Any],
+        **prove_kwargs: Any,
     ) -> None:
         # Fiat-Shamir is sampled inside the marker from the threaded sponge, so the
         # marked path must match the plain scan on the folded state, the advanced
         # transcript, AND the proof — all driven from an identical fresh transcript.
+        # `prove_kwargs` forward the round-shape controls (`eval_start`,
+        # `challenge_dtype`, `challenge_limbs`) to both paths so the non-default
+        # marker is checked against the same-shaped scan.
         got_state, got_t, got_msgs = prove(
-            round, list(factors), self._poseidon_transcript()
+            round, list(factors), self._poseidon_transcript(), **prove_kwargs
         )
         want_state, want_t, want_msgs = _prove_scan(
-            round, list(factors), self._poseidon_transcript()
+            round, list(factors), self._poseidon_transcript(), **prove_kwargs
         )
         self.assertTrue(bool(jnp.all(got_msgs.round_poly == want_msgs.round_poly)))
         self.assertTrue(bool(jnp.all(got_msgs.challenge == want_msgs.challenge)))
@@ -103,6 +111,36 @@ class ProveMarkedTest(absltest.TestCase):
         # num_factors, unlike product.
         factors = [rand_field(50 + i, (1 << 4,), KB) for i in range(5)]
         self._assert_marked_equals_scan(LogupSumcheckRound(jnp.array(7, KB)), factors)
+
+    def test_marked_equals_scan_truncated_base(self) -> None:
+        # `eval_start=1` (the SWIRL `{s(1)..}` wire form) rides the marker too: its
+        # decomposition is the identical truncated scan. Base field, so it executes
+        # on every backend.
+        a = rand_field(44, (1 << 4,), KB)
+        b = rand_field(45, (1 << 4,), KB)
+        self._assert_marked_equals_scan(
+            prover.SumcheckRound(degree=2), [a, b], eval_start=1
+        )
+
+    @absltest.skipIf(
+        _GPU_BACKEND,
+        "cuda-pjrt aborts compiling koalabearx4 EF reductions; "
+        "remove when fractalyze/prime-ir#332 lands",
+    )
+    def test_marked_equals_scan_truncated_extension(self) -> None:
+        # The full openvm SWIRL shape — `{s(1), s(2)}` round polys folded by EF
+        # challenges drawn from a base sponge — through the marker, byte-identical
+        # to the plain scan. The marker threads operands dtype-blind, so this is the
+        # extension-field decomposition gate (CPU; the recognized GPU path is zkx).
+        a = rand_field(46, (1 << 4,), KB).astype(EF)
+        b = rand_field(47, (1 << 4,), KB).astype(EF)
+        self._assert_marked_equals_scan(
+            prover.SumcheckRound(degree=2),
+            [a, b],
+            eval_start=1,
+            challenge_dtype=EF,
+            challenge_limbs=4,
+        )
 
     def test_cheap_transcript_stays_unmarked(self) -> None:
         # has_dedicated_fusion=False keeps the gate shut: no composite, plain scan.
@@ -155,6 +193,65 @@ class ProveMarkedTest(absltest.TestCase):
         eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
         attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(int(attrs["num_real"]), 10)
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_truncated_round_carries_eval_start_attr(self) -> None:
+        # `eval_start=1` must still ride the `zorch.sumcheck` marker (not fall to the
+        # plain scan), so a vendor codegens the truncated round register-resident.
+        # The domain rides as an `eval_start` attr the recognizer keys off; the
+        # marker stays revision 1 (the recognizer reads the attr, not the version).
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()
+        jaxpr = jax.make_jaxpr(lambda x, y: prove(rnd, [x, y], t0, eval_start=1))(
+            a, b
+        ).jaxpr
+        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+        self.assertEqual(eqn.params["name"], SUMCHECK_MARKER)
+        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
+        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual(int(attrs["eval_start"]), 1)
+        # `eval_start` is the only non-default axis carried as an attr; the marker
+        # never emits a `challenge_limbs` attr (the extension fold is inferred from
+        # the challenge dtype downstream).
+        self.assertEqual(int(attrs["degree"]), 2)
+        self.assertNotIn("challenge_limbs", attrs)
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_extension_challenge_round_carries_no_attr(self) -> None:
+        # An EF fold challenge (eval_start=0, full domain) adds no marker attr: a
+        # vendor infers the extension fold from the EF-typed challenge result. The
+        # envelope is the bare degree/num_vars/num_factors with no eval_start /
+        # challenge_limbs — the EF rides in the operand / result dtypes.
+        a = rand_field(40, (1 << 4,), KB).astype(EF)
+        b = rand_field(41, (1 << 4,), KB).astype(EF)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()
+        jaxpr = jax.make_jaxpr(
+            lambda x, y: prove(rnd, [x, y], t0, challenge_dtype=EF, challenge_limbs=4)
+        )(a, b).jaxpr
+        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
+        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
+        self.assertNotIn("eval_start", attrs)
+        self.assertNotIn("challenge_limbs", attrs)
+
+    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
+    def test_default_round_carries_no_eval_start(self) -> None:
+        # The default round's envelope is unchanged — version 1 with no `eval_start`
+        # / `challenge_limbs` attrs — so a recognizer that predates `eval_start`
+        # keeps codegen'ing it exactly as before.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        rnd = prover.SumcheckRound(degree=2)
+        t0 = self._poseidon_transcript()
+        jaxpr = jax.make_jaxpr(lambda x, y: prove(rnd, [x, y], t0))(a, b).jaxpr
+        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
+        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
+        self.assertNotIn("eval_start", attrs)
+        self.assertNotIn("challenge_limbs", attrs)
 
     @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_num_real_is_metadata_only(self) -> None:
