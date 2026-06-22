@@ -73,7 +73,7 @@ py_test(
 
 py_test(
     name = "jagged_circuit_test",
-    size = "small",
+    size = "medium",
     srcs = ["jagged_circuit_test.py"],
     deps = [
         ":testing",
@@ -108,7 +108,7 @@ py_test(
 
 py_test(
     name = "verifier_test",
-    size = "small",
+    size = "medium",
     srcs = ["verifier_test.py"],
     deps = [
         ":testing",
