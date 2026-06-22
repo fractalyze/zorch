@@ -591,5 +591,110 @@ class RateBlockByteIdentityTest(absltest.TestCase):
                 )
 
 
+def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
+    """Scan-free, CPU-safe per-element observe reference — the byte-identity spec.
+
+    A Python loop with NO `lax.scan` and NO traced-index scatter: `in_buf[in_pos]`
+    is set with a `jnp.where` select, and `_absorb_permute`'s `sponge.at[:rate]`
+    write is a static-range scatter the sample path already uses CPU-safely. So
+    this is correct on the ZKX CPU backend, unlike the scan-based `_ref_observe`,
+    and can byte-check the production rate-block observe ON CPU."""
+    base = t.state.sponge_state.dtype
+    flat = lax.bitcast_convert_type(values, base).reshape(-1)
+    if flat.shape[0] == 0:
+        return t
+    rate = t.rate
+    sponge, in_buf, in_pos = (
+        t.state.sponge_state,
+        t.state.input_buffer,
+        t.state.in_pos,
+    )
+    slot = jnp.arange(rate, dtype=jnp.int32)
+    for i in range(int(flat.shape[0])):
+        in_buf = jnp.where(slot == in_pos, flat[i], in_buf)  # set [in_pos], no scatter
+        new_in_pos = in_pos + 1
+        full = new_in_pos == rate
+        permuted = _absorb_permute(t.permutation, sponge, in_buf, new_in_pos, rate)
+        sponge = jnp.where(full, permuted, sponge)
+        in_buf = jnp.where(full, jnp.zeros_like(in_buf), in_buf)
+        in_pos = jnp.where(full, jnp.int32(0), new_in_pos)
+    last_was_perm = in_pos == 0
+    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
+    output_buffer = jnp.where(last_was_perm, sponge[:rate], jnp.zeros(rate, base))
+    return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
+
+
+class CpuByteIdentityTest(absltest.TestCase):
+    """Rate-block byte-identity on CPU (NOT `@_skip_on_cpu_scan_bug`).
+
+    The byte-identity suite above is GPU-pinned (its `lax.scan`/`lax.cond`
+    references hit the ZKX CPU scan bug, fractalyze/zkx#500), so the rate-block
+    ops were never byte-checked on the CPU backend the prover runs on. These
+    compare production `observe`/`sample` against scan-free, CPU-safe references
+    (`_pure_observe`, the per-limb `_sample_one` loop) so a future rate-block
+    LOGIC change is byte-checked on CPU as well as GPU.
+
+    SCOPE — do NOT over-trust these. They compile `observe`/`sample` in ISOLATION,
+    where the ops are correct even on the build that broke #292: zkx#500 is a
+    CONTEXT-DEPENDENT CPU codegen miscompile that only fires inside the full
+    prove's compilation. An isolated op — and even a transcript threaded through a
+    bare `lax.scan` — compiles correctly on CPU; the divergence appears only in
+    the rolled prove. So these guard rate-block LOGIC; the zkx#500 codegen
+    miscompile is gated ONLY by the consumer's full CPU prove (sp1-zorch
+    `logup_gkr:{prover,verifier}_test`, `shard_prover:verify_shard_test`), which
+    is where it surfaced. A zorch Fiat-Shamir change must be validated there.
+    """
+
+    def _new(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8)
+
+    def _seeded(self, seed: int, observes: tuple, samples: tuple) -> DuplexTranscript:
+        # Non-trivial start state via the CPU-safe references only, so the seed
+        # itself can never be the divergence under test.
+        t = self._new()
+        for i, (mlen, n) in enumerate(zip(observes, samples, strict=True)):
+            if mlen:
+                t = _pure_observe(t, rand_field(seed * 100 + i, (mlen,), F))
+            for _ in range(n):
+                t, _ = t._sample_one()
+        return t
+
+    def _assert_state_eq(
+        self, a: DuplexTranscript, b: DuplexTranscript, msg: str
+    ) -> None:
+        for x, y in zip(
+            tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
+        ):
+            self.assertTrue(bool(jnp.all(x == y)), msg)
+
+    def test_observe_matches_pure_reference(self) -> None:
+        for mlen in (1, 7, 8, 9, 16, 17, 37, 40):
+            for seed, obs, smp in ((0, (), ()), (3, (5, 9), (2, 1))):
+                t = self._seeded(seed, obs, smp)
+                v = rand_field(seed * 1000 + mlen, (mlen,), F)
+                self._assert_state_eq(
+                    t.observe(v),
+                    _pure_observe(t, v),
+                    f"observe(len={mlen}, seed={seed}) diverged from per-element ref",
+                )
+
+    def test_sample_matches_per_limb_reference(self) -> None:
+        for n in (1, 2, 7, 8, 9, 16, 21):  # spans the rate-8 block boundary
+            for seed, obs, smp in ((0, (), ()), (5, (9,), (3,))):
+                t = self._seeded(seed, obs, smp)
+                got_t, got = t.sample(n)
+                ref_t, outs = t, []
+                for _ in range(n):
+                    ref_t, x = ref_t._sample_one()
+                    outs.append(x.reshape(()))
+                self.assertTrue(
+                    bool(jnp.all(got == jnp.stack(outs))),
+                    f"sample(n={n}, seed={seed}) value diverged from per-limb ref",
+                )
+                self._assert_state_eq(
+                    got_t, ref_t, f"sample(n={n}, seed={seed}) state diverged"
+                )
+
+
 if __name__ == "__main__":
     absltest.main()

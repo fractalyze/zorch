@@ -382,22 +382,24 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     # right chain entry. Byte-identical to the per-limb form: the per-limb
     # `need_perm` selects exactly the same `_duplexing` result, so reading from
     # the chosen chain entry returns that value.
-    #
-    # `chain[1]._duplexing()` is a plain permute (its input buffer is zeroed and
-    # `in_pos == 0`), so one `_duplexing` per chain link reproduces both the
-    # pending-input flush (link 1) and the drained-buffer refills (links >= 2).
-    # Static chain depth: with `rate >= 1`, after the first limb `in_pos == 0`, so
-    # at most `1 + ceil(n / rate)` permutes ever fire.
     depth = 1 + (n + rate - 1) // rate
     chain = [t]
     for _ in range(depth):
         chain.append(chain[-1]._duplexing())
-    # Stack the candidate output buffers and state leaves so a traced index picks
-    # the live chain entry without a host-visible branch.
-    output_buffers = jnp.stack(
-        [c.state.output_buffer for c in chain]
-    )  # (depth+1, rate)
-    chain_states = tree_map(lambda *xs: jnp.stack(xs), *[c.state for c in chain])
+    output_buffers = [c.state.output_buffer for c in chain]  # depth+1 x (rate,)
+
+    # Select the chain entry for `perm_count` with a one-hot select over the
+    # STATIC chain, NOT a traced-index gather into a stacked array
+    # (`output_buffers[perm_count, ...]` / `leaves[perm_count]`): that gather
+    # miscompiles on the ZKX CPU backend (fractalyze/zkx#500 class), the same
+    # reason `_observe_body` unrolls its block loop. `depth` is static, so the
+    # one-hot is a fixed chain of selects; `out_pos` stays a 1-D buffer gather,
+    # which `_sample_one` already uses CPU-safely.
+    def _pick(stacked: list, idx: Array) -> Array:
+        acc = stacked[0]
+        for i in range(1, len(stacked)):
+            acc = jnp.where(idx == i, stacked[i], acc)
+        return acc
 
     # Replay the per-limb schedule with traced scalars only (no field ops): track
     # how many permutes have fired (`perm_count`, the chain index) and the running
@@ -413,9 +415,12 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
         in_pos = jnp.where(need_perm, jnp.int32(0), in_pos)
         out_pos = jnp.where(need_perm, jnp.int32(rate), out_pos)
         out_pos = out_pos - 1
-        outs.append(output_buffers[perm_count, out_pos].reshape(()))
+        outs.append(_pick(output_buffers, perm_count)[out_pos].reshape(()))
 
-    final_state = tree_map(lambda leaves: leaves[perm_count], chain_states)
+    chain_state_leaves = [c.state for c in chain]
+    final_state = tree_map(
+        lambda *leaves: _pick(list(leaves), perm_count), *chain_state_leaves
+    )
     final_state = replace(final_state, out_pos=out_pos)
     return t._with_state(final_state), jnp.stack(outs)
 
@@ -462,15 +467,23 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
     combined = combined_src[src_idx]  # (total,) — valid prefix is [0:length]
 
-    def block_step(sponge: Array, k: Array) -> tuple[Array, None]:
-        block = lax.dynamic_slice_in_dim(combined, k * rate, rate)
-        permuted = permutation.permute(sponge.at[:rate].set(block))
+    # Unroll the rate-block absorb in Python (num_blocks is STATIC) rather than
+    # `lax.scan`: a scan whose array carry evolves under a per-step scatter
+    # (`sponge.at[:rate].set`) and a `dynamic_slice` of the closed-over `combined`
+    # is the fractalyze/zkx#500 CPU-backend miscompile, which silently corrupts
+    # the CPU Fiat-Shamir transcript (the byte-identity tests are GPU-pinned, so
+    # it slipped through). num_blocks = ceil((rate-1+M)/rate) is small and
+    # CONSTANT for the fixed-size messages the rolled prove observes per round, so
+    # the per-call graph stays O(1) across rounds; a one-time large observe pays a
+    # small static unroll. `concatenate` (not `sponge.at[:rate].set`) overwrites
+    # the rate lanes, byte-identical to the per-element absorb, and the static
+    # `combined[k*rate:(k+1)*rate]` avoids the traced-index dynamic_slice.
+    sponge = st.sponge_state
+    for k in range(num_blocks):
+        block = combined[k * rate : (k + 1) * rate]  # static slice
+        permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
         # Blocks past the live count are padding-only: leave the sponge untouched.
-        return jnp.where(k < active_blocks, permuted, sponge), None
-
-    sponge, _ = lax.scan(
-        block_step, st.sponge_state, jnp.arange(num_blocks, dtype=jnp.int32)
-    )
+        sponge = jnp.where(jnp.int32(k) < active_blocks, permuted, sponge)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode
