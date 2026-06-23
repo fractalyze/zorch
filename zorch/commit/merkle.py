@@ -157,10 +157,14 @@ class MerkleTree:
         """
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2-D, got ndim={matrix.ndim}")
-        if matrix.dtype != self._leaf_hasher.dtype:
+        # Field guard, but only when the leaf hasher names its field: `Sponge`
+        # exposes `dtype`, while a consumer's custom leaf hash (the duck-typed
+        # seam this commit's fallback serves) need not — so gate on its presence
+        # rather than requiring it.
+        leaf_dtype = getattr(self._leaf_hasher, "dtype", None)
+        if leaf_dtype is not None and matrix.dtype != leaf_dtype:
             raise TypeError(
-                f"leaf dtype {matrix.dtype} must match the hasher field "
-                f"{self._leaf_hasher.dtype}"
+                f"leaf dtype {matrix.dtype} must match the hasher field {leaf_dtype}"
             )
         # Leaves are columns when column-major, else rows.
         num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
@@ -172,6 +176,27 @@ class MerkleTree:
             attrs = {"column_major": 1} if self._column_major else {}
             return fused_region(self._build, matrix, name=MERKLE_COMMIT_MARKER, **attrs)
         return self._build(matrix)
+
+    # The #36 batched-permute dedup is opt-in: a leaf hasher / compressor that
+    # provides the batched twin (zorch's Sponge / Compression) shares one lowered
+    # permute body across the ragged fold layers; a block that only implements the
+    # single-element `hash` / `compress` (e.g. a consumer's custom leaf hash like a
+    # linear hash) keeps the plain vmap path — correct, just without the dedup.
+    # Falling back here rather than requiring the twin keeps the leaf-hasher /
+    # compressor seam duck-typed, so adding the dedup never breaks a consumer block.
+    def _hash_leaves(self, matrix: Array) -> Array:
+        hash_batched = getattr(self._leaf_hasher, "hash_batched", None)
+        if hash_batched is not None:
+            return hash_batched(matrix.T if self._column_major else matrix)
+        return jax.vmap(self._leaf_hasher.hash, in_axes=1 if self._column_major else 0)(
+            matrix
+        )
+
+    def _compress_groups(self, groups: Array) -> Array:
+        compress_batched = getattr(self._compressor, "compress_batched", None)
+        if compress_batched is not None:
+            return compress_batched(groups)
+        return jax.vmap(self._compressor.compress)(groups)
 
     def _build(self, matrix: Array, **_attrs: object) -> tuple[Array, list[Array]]:
         """The traced commit body: vmap the leaf hash, fold arity-sized groups
@@ -192,10 +217,8 @@ class MerkleTree:
         (zkx#606); binary is the common, padding-free case."""
         # One batched leaf hash over the whole level (not a per-leaf vmap): a
         # dedicated-fusion permutation then shares one lowered permute body across
-        # the ragged fold layers. Column-major hands the
-        # leaf-major transpose (a leaf is a column), matching the old in_axes=1.
-        leaves = matrix.T if self._column_major else matrix
-        layer = self._leaf_hasher.hash_batched(leaves)
+        # the ragged fold layers (see `_hash_leaves` for the vmap fallback).
+        layer = self._hash_leaves(matrix)
         # Scan only the binary path; the height (always regular for a power-of-
         # two binary tree) is computed only there, never for the unrolled fold.
         if (
@@ -218,7 +241,7 @@ class MerkleTree:
                 layer = jnp.concatenate([layer, pad])
                 digest_layers[-1] = layer
             groups = layer.reshape(-1, self.arity, self.digest_elems)
-            layer = self._compressor.compress_batched(groups)
+            layer = self._compress_groups(groups)
             digest_layers.append(layer)
         return digest_layers[-1][0], digest_layers
 
@@ -236,7 +259,7 @@ class MerkleTree:
         n, a, d = leaf_layer.shape[0], self.arity, self.digest_elems
 
         def fold_level(buf: Array, _: None) -> tuple[Array, Array]:
-            compressed = self._compressor.compress_batched(buf.reshape(n // a, a, d))
+            compressed = self._compress_groups(buf.reshape(n // a, a, d))
             return jnp.zeros_like(buf).at[: n // a].set(compressed), compressed
 
         _, stacked = jax.lax.scan(fold_level, leaf_layer, xs=None, length=height)
