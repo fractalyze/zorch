@@ -44,20 +44,25 @@ def _base_dtype(dtype: Any) -> Any:
         return dtype
 
 
-def eval_domain(dtype: Any, n: int, *, shift: Array | None = None) -> Array:
+def eval_domain(
+    dtype: Any, n: int, *, shift: Array | None = None, generator: int | None = None
+) -> Array:
     """The order-`n` two-adic subgroup points [d₀..d_{n-1}] in `lax.fft` order,
     or the coset points [shift·d₀..shift·d_{n-1}] when `shift` is given.
 
     `lax.fft` of the coefficient vector of p(X)=X (i.e. e₁) returns
     [p(d₀)..p(d_{n-1})] = [d₀..d_{n-1}], so the domain is read off the same NTT
-    the encoder uses. `n` must be a power of two; the order-1 subgroup is {1}."""
+    the encoder uses. `generator` selects the subgroup generator the NTT root is
+    `gen^((p-1)/n)` of; None uses the dtype's canonical root. It must match the
+    `generator` the codeword was encoded with — the domain order is the root's.
+    `n` must be a power of two; the order-1 subgroup is {1}."""
     if not is_power_of_two(n):
         raise ValueError(f"eval_domain size must be a power of two, got {n}")
     if n == 1:
         domain = jnp.ones((1,), dtype)
     else:
         e1 = jnp.zeros(n, dtype).at[1].set(jnp.ones((), dtype))
-        domain = lax.fft(e1, "FFT", n)
+        domain = lax.fft(e1, "FFT", n, generator=generator)
     return domain if shift is None else shift * domain
 
 
@@ -80,6 +85,7 @@ class ReedSolomon:
         *,
         coset_shift: Array | None = None,
         fold_factor: int = 2,
+        generator: int | None = None,
     ) -> None:
         if not is_power_of_two(message_len):
             raise ValueError(f"message_len must be a power of two, got {message_len}")
@@ -93,6 +99,13 @@ class ReedSolomon:
         self.block_len = message_len * blowup
         self.dtype = dtype
         self.coset_shift = coset_shift
+        # Subgroup generator selecting the NTT root (`gen^((p-1)/n)`); None uses
+        # the dtype's canonical root. Lets a consumer match an external prover's
+        # domain order without re-permuting the codeword. Honoured on the
+        # encode/LDE surface (`encode`, `domain`); the FRI fold path
+        # (`fold`/`fold_values`) is canonical-order only — generator there is a
+        # follow-up.
+        self.generator = generator
         # The k-ary fold's static factor (KFoldableCode). The binary pair seam
         # ignores it; default 2 keeps the binary path's jit-zone key unchanged.
         self.fold_factor = fold_factor
@@ -130,6 +143,7 @@ class ReedSolomon:
                 self.dtype,
                 shift,
                 self.fold_factor,
+                self.generator,
             )
         return self._key
 
@@ -154,11 +168,16 @@ class ReedSolomon:
         coeffs = jnp.concatenate([message, jnp.zeros(tail, self.dtype)], axis=-1)
         if self._coset_powers is not None:
             coeffs = coeffs * self._coset_powers
-        return lax.fft(coeffs, "FFT", n)
+        return lax.fft(coeffs, "FFT", n, generator=self.generator)
 
     def domain(self) -> Array:
         """The points `encode` evaluates on, coset shift included."""
-        return eval_domain(self.dtype, self.block_len, shift=self.coset_shift)
+        return eval_domain(
+            self.dtype,
+            self.block_len,
+            shift=self.coset_shift,
+            generator=self.generator,
+        )
 
     def fold(self, codeword: Array, beta: Array) -> Array:
         """FoldableCode fold: natural-order `(x, -x)` conjugate pairs. The layer
