@@ -139,11 +139,10 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
     return rand_ext_field(seed, shape, F, EF)
 
 
-# TODO(zorch#202): BasefoldOpenTest hits a NON-DETERMINISTIC SIGSEGV in the
-# backend compile of open_batch on the jax_fork nightly — each method passes in
-# isolation, but the full-file run crashes at a varying test (state/memory
-# across many EF compiles in one process). Re-enable when zorch#202 lands.
-@unittest.skip("flaky open_batch compile segfault (non-deterministic); see zorch#202")
+# TODO(zorch#202): basefold open emits a multi-batch NTT the published nightly's
+# rewriter rejects (`Unsupported opcode: ntt`); the fix is on the parametric
+# xla_fork branch, not the wheel.
+@unittest.skip("basefold open hits an unsupported multi-batch NTT; see zorch#202")
 class BasefoldOpenTest(absltest.TestCase):
     def _commit(
         self,

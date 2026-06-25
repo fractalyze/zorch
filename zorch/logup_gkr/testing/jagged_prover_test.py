@@ -21,7 +21,6 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 from jax import Array
-from jaxlib.mlir.dialects import stablehlo
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr import jagged_prover
@@ -65,7 +64,6 @@ from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
-_HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 # The pinned zkx CPU emitter recognizes the rolled `runtime_row_counts` marker but
 # routes it to the exact-fit emitter, which has no runtime-row-counts decompose
 # path and aborts (it requires factor length == sum(row_counts)). Until that CPU
@@ -567,7 +565,6 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         )(lam, claim, z).jaxpr
         self.assertFalse(any(e.primitive.name == "composite" for e in jaxpr.eqns))
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_marker_envelope_carries_jagged_attributes(self) -> None:
         # The recognition contract off the jaxpr: bare name + version, the shape in
         # composite.attributes, and the jagged row_counts vector / fold-order /
@@ -593,7 +590,6 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         row_counts = getattr(row_counts, "val", row_counts)
         self.assertEqual([int(c) for c in row_counts], list(self.ROW_COUNTS))
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_base_field_first_layer_marker_keeps_numerators_narrow(self) -> None:
         # zkx#681 acceptance #1 at the producer/IR boundary: a first layer with
         # base-field numerators under extension-field denominators emits a
@@ -1243,7 +1239,6 @@ class MarkedRolledJaggedPyramidTest(absltest.TestCase):
         self.assertEqual(int(ms.in_pos), int(ps.in_pos))
         self.assertEqual(int(ms.out_pos), int(ps.out_pos))
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_padded_marker_carries_runtime_row_counts_contract(self) -> None:
         # The dual-channel recognition contract (sumcheck_recognizer.cc): the
         # bare marker, the static envelope `row_counts`, the `runtime_row_counts`

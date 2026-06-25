@@ -18,11 +18,9 @@ root; the strided levels below are not stored — a verifier recomputes them by
 re-hashing the opened rows. ``rows_per_query = 1`` adds no strided level and is
 exactly the plain binary tree (`zorch.commit.merkle.MerkleTree`, arity 2).
 
-Like `MerkleTree`, the whole tree is wrapped in one `zorch.merkle_commit`
-composite when both hash blocks lower to a dedicated fusion marker — but here the
-marker also carries ``rows_per_query`` as a composite attribute, so a vendor's
-expander knows the stride of the bottom levels. The wrapping passes only
-``matrix`` (the round constants auto-lift), so this stays scheme-agnostic.
+Like `MerkleTree`, this emits no whole-tree marker: the nested permutes carry
+their own dedicated `zorch.poseidon2` markers (a dedicated merkle-chain fusion
+benchmarked slower than the per-permute kernels).
 
 This carries the prover-side commitment and opening accessors plus the
 verifier-side `open` / `reconstruct_root` (device-indexed, `vmap`-able), the
@@ -36,8 +34,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
-from zorch.fusion import fused_region
+from zorch.commit.merkle import MerkleTree, Opening
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
@@ -57,8 +54,6 @@ class StridedMerkleTree:
         leaf_hasher: Sponge,
         compressor: Compression,
         rows_per_query: int,
-        *,
-        fuse: bool = True,
     ) -> None:
         if leaf_hasher.out != compressor.chunk:
             raise ValueError(
@@ -80,15 +75,6 @@ class StridedMerkleTree:
         # The query layer up is a plain binary tree; reuse MerkleTree's scanned
         # regular fold rather than re-implement it.
         self._top = MerkleTree(leaf_hasher, compressor)
-        # Wrap only when both blocks lower to a hash-dedicated marker the vendor
-        # can expand (cf. MerkleTree). `fuse=False` forces the byte-identical
-        # inline path for a consumer whose vendor cannot expand a strided
-        # merkle_commit.
-        self._fused = (
-            fuse
-            and leaf_hasher.has_dedicated_fusion
-            and compressor.has_dedicated_fusion
-        )
 
     # Value equality/hash for static jit-zone keys (#214) — identity equality
     # re-traces per instance. Both blocks compare by value themselves.
@@ -125,26 +111,13 @@ class StridedMerkleTree:
             raise ValueError(
                 f"rows_per_query ({self._rows_per_query}) > leaves ({height})"
             )
-        # The validation guards eagerly, so it stays outside the marked region;
-        # only `matrix` is an explicit operand. `rows_per_query` rides as a
-        # composite attribute (and is passed to `_build` as a keyword, so the
-        # inline and marked paths are identical).
-        if self._fused:
-            return fused_region(
-                self._build,
-                matrix,
-                name=MERKLE_COMMIT_MARKER,
-                rows_per_query=self._rows_per_query,
-            )
         return self._build(matrix, rows_per_query=self._rows_per_query)
 
     def _build(
         self, matrix: Array, *, rows_per_query: int
     ) -> tuple[Array, list[Array]]:
-        """The traced commit body: vmap the leaf hash, fold ``log2(rows_per_query)``
-        query-strided levels, then plain adjacent pairs to the root. Wrapped by
-        ``commit`` as one ``zorch.merkle_commit`` region carrying
-        ``rows_per_query``."""
+        """The commit body: vmap the leaf hash, fold ``log2(rows_per_query)``
+        query-strided levels, then plain adjacent pairs to the root."""
         d = self.digest_elems
         layer = jax.vmap(self._leaf_hasher.hash)(matrix)
         query_stride = layer.shape[0] // rows_per_query

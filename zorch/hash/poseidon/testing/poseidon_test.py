@@ -15,7 +15,6 @@ from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
 from zk_dtypes import pfinfo
 
-import zorch._composite as _composite
 from zorch.hash.permutation import Permutation
 from zorch.hash.poseidon.params import PoseidonParams
 from zorch.hash.poseidon.poseidon import (
@@ -154,25 +153,8 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             p.permute(jnp.zeros((2, _WIDTH), dtype=F))  # batched, not a 1-D state
 
-    def test_inline_fallback_byte_matches(self) -> None:
-        # The published-wheel path (no CompositeOp): fused_region runs the
-        # 2-operand decomposition inline. Must still match the marker path.
-        p = Poseidon(_poseidon_params())
-        x = jnp.arange(_WIDTH, dtype=F)
-        marker_out = p.permute(x)
-        orig = _composite._HAS_COMPOSITE_OP
-        try:
-            _composite._HAS_COMPOSITE_OP = False
-            inline_out = Poseidon(_poseidon_params()).permute(x)
-            self.assertTrue(bool(jnp.array_equal(inline_out, marker_out)))
-        finally:
-            _composite._HAS_COMPOSITE_OP = orig
-
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
-    @absltest.skipUnless(
-        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
-    )
     def test_permute_emits_poseidon_named_composite(self) -> None:
         # The permute marks its region "zorch.poseidon" so zkx routes it to the
         # dedicated Poseidon emitter; the permutation shape rides as
@@ -193,9 +175,6 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         operands = composite_line.split(f'"{POSEIDON_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 2, composite_line)
 
-    @absltest.skipUnless(
-        _composite._HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp"
-    )
     def test_mds_serializes_as_dense_i64_tensor(self) -> None:
         # The mds attribute must lower to a DenseElementsAttr
         # (`dense<[..]> : tensor<Nxi64>`), the form the zkx recognizer reads via

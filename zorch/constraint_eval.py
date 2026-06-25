@@ -11,10 +11,8 @@ result.
 
 Agnostic: `eval_fn` is opaque — its body belongs to the caller — and the marker
 and fold carry no proving-scheme or zkVM knowledge. Sibling of
-`zorch.fusion::fused_region`, and shares the `stablehlo.CompositeOp` fallback in
-`zorch._composite.composite_or_inline`: absent the composite backport, the
-decomposition runs inline instead — numerically identical, only the marker is
-dropped.
+`zorch.fusion::fused_region`, and shares the `lax.composite` emission in
+`zorch._composite.composite`.
 
 The RLC is emitted as an unrolled fold (`acc += alpha_k * C_k`), not `jnp.dot`
 / `@`: a reduction in the marked body would split the region under the
@@ -42,7 +40,7 @@ from collections.abc import Callable
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch._composite import composite_or_inline
+from zorch._composite import composite
 
 CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
@@ -62,9 +60,8 @@ def constraint_eval(
     matching `alpha`'s trailing length `K`; the result drops that axis. The K
     count and the alpha operand index ride along as composite attributes for the
     recognizing emitter; they are metadata, so the decomposition ignores them (it
-    reads K from `alpha`'s static shape). On a jaxlib without
-    `stablehlo.CompositeOp` the marker is dropped and the decomposition runs
-    inline (see the module docstring).
+    reads K from `alpha`'s static shape). An unrecognizing compiler inlines the
+    decomposition to the identical result (see the module docstring).
 
     `live_width`, when given, bounds the result's leading axis at runtime: rows
     at index >= the bound are the field's zero. It must be a scalar `int32`
@@ -160,4 +157,4 @@ def constraint_eval(
         # Trailing operand; the emitter recognizes it structurally (the rank-1
         # operand of the body-root dot), so no operand-index attribute is needed.
         operands += (column_weights,)
-    return composite_or_inline(decomposition, *operands, name=name, **attrs)
+    return composite(decomposition, *operands, name=name, **attrs)

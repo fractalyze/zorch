@@ -25,7 +25,6 @@ import jax.numpy as jnp
 import numpy as np
 from jax import Array
 
-from zorch import _composite
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
     apply_external_m4,
@@ -99,30 +98,7 @@ class Poseidon2:
                 f"state dtype {state.dtype} must match the permutation field "
                 f"{self.dtype}"
             )
-        return _permute_body(self, state, _composite.has_composite_op())
-
-    def permute_batched(self, states: Array) -> Array:
-        """Permute a batch of states `(n, width) -> (n, width)`, numerically a
-        `vmap(permute)` over the leading axis.
-
-        On the dedicated marker this emits ONE `zorch.poseidon2` region over the
-        whole `(n, width)` batch whose decomposition is `lax.map` over a single
-        SHARED `(width,)` permute body, instead of `vmap` baking the batch into a
-        fresh per-`n` decomposition. The region's operands (batched state plus the
-        scalar/vector round constants) are byte-for-byte what `vmap(permute)`
-        emits, so a marker-routed vendor emits the same batched kernel — the only
-        change is that the ragged Merkle-fold rounds share one lowered permute
-        body rather than re-emitting it per round. A free-form
-        (non-M4) matrix keeps the generic `vmap` path: its body must stay
-        inline-straight-line for the single-kernel fallback, which a `lax.map`
-        call would break."""
-        if states.ndim != 2 or states.shape[1] != self.width:
-            raise ValueError(
-                f"states must be 2-D of shape (n, {self.width}), got {states.shape}"
-            )
-        if not self.has_dedicated_fusion:
-            return jax.vmap(self.permute)(states)
-        return _permute_body_batched(self, states, _composite.has_composite_op())
+        return _permute_body(self, state)
 
 
 def _permutation_body(
@@ -138,9 +114,9 @@ def _permutation_body(
     Poseidon2Fusion ABI operands explicitly: round constants flattened row-major,
     int_rc the lane-0 column, off_diag scaling the internal J term.
 
-    The decomposition every `zorch.poseidon2` region runs — spliced inline on the
-    single-state path, or referenced as a shared callable (`_single_permute`) by
-    the batched path so the ragged Merkle-fold rounds share one lowered copy."""
+    The decomposition every `zorch.poseidon2` region runs, spliced inline (the
+    generic marker's single-kernel requirement allows no call). A batch is
+    `vmap(permute)`, which lowers to the same marker over a batched operand."""
     p = perm._p
     alpha = p.alpha
     w, e_rounds, i_rounds = perm.width, p.external_rounds, p.internal_rounds
@@ -187,24 +163,6 @@ def _permutation_body(
     for i in range(e_rounds):
         s = external_round(s, ext_term[i])
     return s
-
-
-# Shared, NON-inlined single-state permute: the batched decomposition `lax.map`s
-# this one callable, and JAX lowers an identical-aval subfunction to ONE
-# `func.func` (referenced by every batched composite) rather than re-emitting the
-# ~width-sized body per ragged fold round. `inline=True` would splice it back into
-# each `lax.map` body and defeat the sharing. `perm` is the static value key (#214).
-@partial(jax.jit, static_argnames=("perm",), inline=False)
-def _single_permute(
-    perm: Poseidon2,
-    s: Array,
-    ext_init_rc: Array,
-    int_rc: Array,
-    ext_term_rc: Array,
-    diag: Array,
-    off_diag: Array,
-) -> Array:
-    return _permutation_body(perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag)
 
 
 def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
@@ -258,12 +216,9 @@ def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
 # re-trace of this body dominated the first-trace-per-config floor (#216).
 # The permutation is the static key, compared by value (#214); `inline=True`
 # splices the cached jaxpr into the enclosing trace, so the emitted module
-# (one composite marker per permute) is unchanged. `has_composite_op` is a
-# pure cache key: `composite_or_inline` reads the flag itself at trace time,
-# but the traced body differs across its values (marker vs inlined fallback),
-# so a flip must not replay a stale entry.
-@partial(jax.jit, static_argnames=("perm", "has_composite_op"), inline=True)
-def _permute_body(perm: Poseidon2, state: Array, has_composite_op: bool) -> Array:
+# (one composite marker per permute) is unchanged.
+@partial(jax.jit, static_argnames=("perm",), inline=True)
+def _permute_body(perm: Poseidon2, state: Array) -> Array:
     def decomposition(
         s: Array,
         ext_init_rc: Array,
@@ -273,10 +228,10 @@ def _permute_body(perm: Poseidon2, state: Array, has_composite_op: bool) -> Arra
         off_diag: Array,
         **_attrs: object,
     ) -> Array:
-        # `_attrs` is marker metadata passed through on both the composite and
-        # inline paths — the decomposition itself does not read it. Inlined here
-        # so the single-state region stays one straight-line body (the generic
-        # marker's single-kernel requirement allows no call).
+        # `_attrs` is marker metadata passed through — the decomposition itself
+        # does not read it. Inlined here so the single-state region stays one
+        # straight-line body (the generic marker's single-kernel requirement
+        # allows no call).
         return _permutation_body(
             perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
         )
@@ -285,42 +240,6 @@ def _permute_body(perm: Poseidon2, state: Array, has_composite_op: bool) -> Arra
     return fused_region(
         decomposition,
         *_abi_operands(perm, state),
-        name=perm._fused_region_name,
-        version=version,
-        **attrs,
-    )
-
-
-# Batched twin of `_permute_body`: one region over the whole `(n, width)` batch
-# whose decomposition `lax.map`s the SHARED `_single_permute`. The region's
-# operands match `vmap(permute)` byte-for-byte (batched state + the same
-# unbatched constants), so a marker-routed vendor emits the same batched kernel;
-# the win is purely that every ragged fold round references one lowered body.
-# Dedicated marker only (see `permute_batched` for why the generic path vmaps).
-@partial(jax.jit, static_argnames=("perm", "has_composite_op"), inline=True)
-def _permute_body_batched(
-    perm: Poseidon2, states: Array, has_composite_op: bool
-) -> Array:
-    def decomposition(
-        batched: Array,
-        ext_init_rc: Array,
-        int_rc: Array,
-        ext_term_rc: Array,
-        diag: Array,
-        off_diag: Array,
-        **_attrs: object,
-    ) -> Array:
-        return jax.lax.map(
-            lambda s: _single_permute(
-                perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
-            ),
-            batched,
-        )
-
-    attrs, version = _marker_attrs(perm)
-    return fused_region(
-        decomposition,
-        *_abi_operands(perm, states),
         name=perm._fused_region_name,
         version=version,
         **attrs,

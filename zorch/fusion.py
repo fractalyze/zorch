@@ -16,9 +16,8 @@ markers with a dedicated emitter (`zorch.sumcheck`, `zorch.poseidon2`) are exemp
 their emitters tolerate reductions and calls. Loop-carrying large-N rounds
 await the in-kernel-loop emitter; see fractalyze/zorch#25.
 
-On a jaxlib without `stablehlo.CompositeOp` the marker is dropped and the
-decomposition runs inline — see `zorch._composite.composite_or_inline`, the
-shared fallback every zorch composite marker routes through.
+The `lax.composite` marker is emitted via `zorch._composite.composite`, the one
+place every zorch composite marker routes through.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ from collections.abc import Callable
 
 from jax import Array
 
-from zorch._composite import _Region, composite_or_inline
+from zorch._composite import _Region, composite
 
 FUSED_REGION_MARKER = "zorch.fused_region"
 
@@ -44,9 +43,7 @@ def fused_region(
 
     Under the default marker the region must be straight-line element-wise — no
     loops, reductions, or gathers — so it lowers to a single kernel. It is called
-    with `operands`, which become the composite's operands in order. On a jaxlib
-    without `stablehlo.CompositeOp` the marker is dropped and `decomposition` runs
-    inline (see the module docstring).
+    with `operands`, which become the composite's operands in order.
 
     A non-default `name` routes the region to a dedicated zkx emitter instead of
     the generic one — e.g. a `zorch.poseidon2` region goes to `Poseidon2Fusion`
@@ -61,6 +58,4 @@ def fused_region(
     sumcheck marker's `degree` / `num_vars`. Both default to absent (`version=0`,
     no attrs), so a plain straight-line region is unchanged.
     """
-    return composite_or_inline(
-        decomposition, *operands, name=name, version=version, **attrs
-    )
+    return composite(decomposition, *operands, name=name, version=version, **attrs)
