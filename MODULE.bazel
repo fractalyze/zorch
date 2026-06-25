@@ -9,6 +9,7 @@ module(
     version = "0.0.0",
 )
 
+bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_python", version = "1.5.1")
 
 python = use_extension("@rules_python//python/extensions:python.bzl", "python")
@@ -19,7 +20,8 @@ python.toolchain(
 
 pip = use_extension("@rules_python//python/extensions:pip.bzl", "pip")
 pip.parse(
-    # jax / jaxlib / zkx-cuda-pjrt are published on the Fractalyze index.
+    # jax / jaxlib / jax-cuda12-pjrt / jax-cuda12-plugin are published on the
+    # Fractalyze index.
     extra_pip_args = ["--extra-index-url=https://fractalyze.github.io/pypi/simple/"],
     hub_name = "zorch_pip",
     python_version = "3.11",
