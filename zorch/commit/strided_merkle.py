@@ -111,9 +111,6 @@ class StridedMerkleTree:
             raise ValueError(
                 f"rows_per_query ({self._rows_per_query}) > leaves ({height})"
             )
-        # No whole-tree marker (cf. MerkleTree: the dedicated merkle-chain fusion
-        # is slower than per-permute poseidon2 kernels). The nested permutes carry
-        # their own dedicated markers.
         return self._build(matrix, rows_per_query=self._rows_per_query)
 
     def _build(

@@ -362,6 +362,7 @@ class MerkleTreeTest(absltest.TestCase):
         _, _, tree = koalabear16_merkle()
         matrix = jnp.arange(32, dtype=F).reshape(4, 8)
         text = jax.jit(tree.commit).lower(matrix).as_text()
+        self.assertNotIn('"zorch.merkle_commit"', text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, text)
 
@@ -506,14 +507,11 @@ class ColumnMajorMerkleTreeTest(absltest.TestCase):
         self.assertEqual(hash(col_tree), hash(col_tree2))
 
 
-class CommitDtypeGuardTest(absltest.TestCase):
-    """`MerkleTree.commit` rejects a matrix whose field mismatches the leaf
-    hasher, gated on the hasher exposing `dtype` (a Sponge does)."""
+class CommitDtypeRejectionTest(absltest.TestCase):
+    """Committing a matrix whose field mismatches the leaf hasher is rejected —
+    the permutation's dtype check fires during the leaf hash."""
 
-    def test_commit_rejects_wrong_dtype_when_hasher_names_its_field(self) -> None:
-        # A Sponge names its field via `dtype`, so committing a goldilocks matrix
-        # through a koalabear hasher is rejected; a hasher that names no field is
-        # not blocked by the guard.
+    def test_commit_rejects_wrong_field_matrix(self) -> None:
         sponge, comp, _ = koalabear16_merkle()
         wrong_field = jnp.arange(8 * 8, dtype=goldilocks_mont).reshape(8, 8)
         with self.assertRaises(TypeError):

@@ -78,6 +78,14 @@ class StridedMerkleTest(absltest.TestCase):
         self.assertEqual(root.shape, (8,))
         self.assertEqual(strided.query_stride(16), 4)
 
+    def test_commit_lowers_to_nested_poseidon2_markers(self) -> None:
+        # The query-strided `_build` path is separate from MerkleTree's, so cover
+        # it too: no whole-tree marker, just the per-permute zorch.poseidon2 ones.
+        _, _, strided = _stack(rows_per_query=4)
+        text = jax.jit(strided.commit).lower(_matrix(16)).as_text()
+        self.assertNotIn('"zorch.merkle_commit"', text)
+        self.assertIn('"zorch.poseidon2"', text)
+
     def test_opened_rows_are_the_strided_coset(self) -> None:
         _, _, strided = _stack(rows_per_query=4)
         matrix = _matrix(16)

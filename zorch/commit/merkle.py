@@ -142,15 +142,6 @@ class MerkleTree:
         """
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2-D, got ndim={matrix.ndim}")
-        # Field guard, but only when the leaf hasher names its field: `Sponge`
-        # exposes `dtype`, while a consumer's custom leaf hash (the duck-typed
-        # seam this commit's fallback serves) need not — so gate on its presence
-        # rather than requiring it.
-        leaf_dtype = getattr(self._leaf_hasher, "dtype", None)
-        if leaf_dtype is not None and matrix.dtype != leaf_dtype:
-            raise TypeError(
-                f"leaf dtype {matrix.dtype} must match the hasher field {leaf_dtype}"
-            )
         # Leaves are columns when column-major, else rows.
         num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
         if self.arity == 2 and not is_power_of_two(num_leaves):
