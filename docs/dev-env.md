@@ -36,7 +36,7 @@ remains the single source of truth for "all tests pass"
 ## Developing against a local ZKX checkout
 
 Plugin resolution order is `ZKX_GPU_PLUGIN_PATH` > the wheel's bundled `.so` >
-`$ZKX_REPO_ROOT/bazel-bin` — so when the venv has `zkx-cuda-pjrt` installed
+`$ZKX_REPO_ROOT/bazel-bin` — so when the venv has `jax-cuda12-plugin` installed
 (every pinned venv does), `ZKX_REPO_ROOT` is silently ignored and only
 `ZKX_GPU_PLUGIN_PATH` reaches a local zkx build:
 

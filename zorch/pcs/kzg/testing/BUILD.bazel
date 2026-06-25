@@ -16,10 +16,16 @@ py_library(
     ],
 )
 
+# `needs_cpu_backend`: the round-trip tests verify via lax.pairing_check, which
+# legalizes CPU-only on this stack, while lax.msm is GPU-only — so the verifier
+# splits work across both devices and the test needs a CPU backend alongside
+# cuda. The GPU CI leg runs strict `cuda` everywhere else; this tag routes such
+# host-split tests to a `cuda,cpu` sub-leg (see .github/workflows/ci.yml).
 py_test(
     name = "kzg_test",
     size = "small",
     srcs = ["kzg_test.py"],
+    tags = ["needs_cpu_backend"],
     deps = [
         ":srs",
         "//zorch:transcript",

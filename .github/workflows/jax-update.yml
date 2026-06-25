@@ -22,11 +22,11 @@ jobs:
         with:
           token: ${{ secrets.BUMPER_GH_PAT }}
 
-      - name: Bump jax/jaxlib/zkx-cuda-pjrt
+      - name: Bump jax/jaxlib/jax-cuda12 plugins
         uses: fractalyze/github-actions/pip-bump@main
         with:
           upstream_repo: jax
           version: ${{ github.event.client_payload.jax_version }}
           upstream_commit: ${{ github.event.client_payload.commit }}
-          packages: jax jaxlib zkx-cuda-pjrt
+          packages: jax jaxlib jax-cuda12-pjrt jax-cuda12-plugin
           github_token: ${{ secrets.BUMPER_GH_PAT }}

@@ -62,7 +62,7 @@ def eval_domain(
         domain = jnp.ones((1,), dtype)
     else:
         e1 = jnp.zeros(n, dtype).at[1].set(jnp.ones((), dtype))
-        domain = lax.fft(e1, "FFT", n, generator=generator)
+        domain = lax.ntt(e1, ntt_type="NTT", ntt_length=n, generator=generator)
     return domain if shift is None else shift * domain
 
 
@@ -168,7 +168,7 @@ class ReedSolomon:
         coeffs = jnp.concatenate([message, jnp.zeros(tail, self.dtype)], axis=-1)
         if self._coset_powers is not None:
             coeffs = coeffs * self._coset_powers
-        return lax.fft(coeffs, "FFT", n, generator=self.generator)
+        return lax.ntt(coeffs, ntt_type="NTT", ntt_length=n, generator=self.generator)
 
     def domain(self) -> Array:
         """The points `encode` evaluates on, coset shift included."""
