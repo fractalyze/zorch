@@ -5,7 +5,6 @@ import jax.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
-from zorch._composite import _HAS_COMPOSITE_OP
 from zorch.constraint_eval import CONSTRAINT_EVAL_MARKER, constraint_eval
 from zorch.testkit.random_field import rand_field
 
@@ -36,7 +35,6 @@ class ConstraintEvalTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             constraint_eval(_eval_fn, rows, rand_field(2, (0,), F))
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_emits_one_zorch_constraint_eval_composite(self) -> None:
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
@@ -111,7 +109,6 @@ class ConstraintEvalTest(absltest.TestCase):
                 live_width=1,
             )
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_live_width_attr_rides_the_composite(self) -> None:
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)

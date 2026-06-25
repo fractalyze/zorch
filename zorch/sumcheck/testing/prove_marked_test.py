@@ -5,7 +5,6 @@ import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jaxlib.mlir.dialects import stablehlo
 
 from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -24,7 +23,6 @@ from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
-_HAS_COMPOSITE_OP = hasattr(stablehlo, "CompositeOp")
 _GPU_BACKEND = jax.default_backend() == "gpu"
 
 
@@ -152,7 +150,6 @@ class ProveMarkedTest(absltest.TestCase):
         )(a, b).jaxpr
         self.assertFalse(any(e.primitive.name == "composite" for e in jaxpr.eqns))
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_marker_envelope_carries_shape_attributes(self) -> None:
         # Recognition contract asserted off the jaxpr (no lowering): name is the
         # bare routing key, version gates the revision, and degree/num_vars/
@@ -178,7 +175,6 @@ class ProveMarkedTest(absltest.TestCase):
         self.assertEqual(len(eqn.outvars), 2 + 5 + 2)  # folded, leaves, polys, chal
         self.assertGreater(len(eqn.invars), 2 + 5)  # RC auto-lifted past explicit
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_marker_carries_num_real_attribute(self) -> None:
         # A jagged factor table zero-pads to the next power of two; `num_real`
         # declares the real prefix length so a vendor bounds the first round's
@@ -194,7 +190,6 @@ class ProveMarkedTest(absltest.TestCase):
         attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
         self.assertEqual(int(attrs["num_real"]), 10)
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_truncated_round_carries_eval_start_attr(self) -> None:
         # `eval_start=1` must still ride the `zorch.sumcheck` marker (not fall to the
         # plain scan), so a vendor codegens the truncated round register-resident.
@@ -218,7 +213,6 @@ class ProveMarkedTest(absltest.TestCase):
         self.assertEqual(int(attrs["degree"]), 2)
         self.assertNotIn("challenge_limbs", attrs)
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_extension_challenge_round_carries_no_attr(self) -> None:
         # An EF fold challenge (eval_start=0, full domain) adds no marker attr: a
         # vendor infers the extension fold from the EF-typed challenge result. The
@@ -237,7 +231,6 @@ class ProveMarkedTest(absltest.TestCase):
         self.assertNotIn("eval_start", attrs)
         self.assertNotIn("challenge_limbs", attrs)
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_default_round_carries_no_eval_start(self) -> None:
         # The default round's envelope is unchanged — version 1 with no `eval_start`
         # / `challenge_limbs` attrs — so a recognizer that predates `eval_start`
@@ -253,7 +246,6 @@ class ProveMarkedTest(absltest.TestCase):
         self.assertNotIn("eval_start", attrs)
         self.assertNotIn("challenge_limbs", attrs)
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_num_real_is_metadata_only(self) -> None:
         # The attr never reaches the computation: the marked call's
         # decomposition jaxpr is identical with and without it, so the bounded
@@ -289,7 +281,6 @@ class ProveMarkedTest(absltest.TestCase):
                 with self.assertRaisesRegex(ValueError, "num_real"):
                     prove(rnd, [f], transcript, num_real=bad)
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_marker_and_nested_permute_survive_lowering(self) -> None:
         # The whole sumcheck lowers under the hash-agnostic zorch.sumcheck marker;
         # the FS permute survives as a nested zorch.poseidon2 marker the vendor

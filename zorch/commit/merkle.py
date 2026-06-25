@@ -22,13 +22,12 @@ binary tree folds the layers with one `lax.scan` so the traced body is O(1) in
 tree height — the unrolled fold dominated the trace-commit compile; a k-ary
 tree keeps the unrolled fold (see `_build` for why).
 
-When both blocks lower to a hash-dedicated fusion marker (`has_dedicated_fusion`),
-`commit` wraps the whole tree in one `zorch.merkle_commit` composite — a
-hash-agnostic, whole-tree boundary a vendor expands into the per-layer hash
-kernels (the nested permute markers carry the hash identity). The wrapping passes
-only `matrix`; the round constants ride in as auto-lifted composite operands, so
-this stays scheme-agnostic (no permutation/hash is named here). Otherwise (or on a
-jaxlib without `stablehlo.CompositeOp`) the plain vmap path runs unchanged.
+`commit` emits no whole-tree marker: each `permute` inside the leaf hash and the
+fold carries its own dedicated `zorch.poseidon2` marker, which the vendor lowers
+to a kernel directly. A dedicated whole-tree `zorch.merkle_commit` chain fusion
+was benchmarked SLOWER than these per-permute kernels (1.05-1.19x at 2^16..2^20),
+and the markerless body is what lowers under symbolic dims for recompile-free
+export — so the tree is committed by its plain `lax.scan` / vmap body.
 """
 
 from __future__ import annotations
@@ -40,16 +39,9 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.fusion import fused_region
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
-
-# Hash-agnostic whole-tree boundary: `commit` wraps the entire tree in one
-# composite under this name (never a per-hash name). A vendor expander reads the
-# hash identity from the nested `permute` marker, so adding a hash never touches
-# this marker or MerkleTree — see the module docstring.
-MERKLE_COMMIT_MARKER = "zorch.merkle_commit"
 
 
 def _regular_fold_height(leaf_count: int, arity: int) -> int | None:
@@ -117,15 +109,8 @@ class MerkleTree:
         self.arity = compressor.arity
         self.digest_elems = compressor.chunk
         # Commit-side leaf layout (contract in the class docstring): when True
-        # the leaf hash vmaps over axis 1 and the `merkle_commit` marker carries
-        # `column_major` so the expander gathers columns. Touches commit only.
+        # the leaf hash vmaps over axis 1 (a leaf is a column). Touches commit only.
         self._column_major = column_major
-        # Wrap the whole commit in the agnostic composite only when both blocks
-        # lower to a hash-dedicated marker the vendor can expand; otherwise the
-        # marker would be unexpandable, so fall back to the plain vmap path.
-        self._fused = (
-            leaf_hasher.has_dedicated_fusion and compressor.has_dedicated_fusion
-        )
 
     # Value equality/hash for static jit-zone keys (#214) — identity equality
     # re-traces per instance. Both blocks compare by value themselves; the leaf
@@ -170,42 +155,27 @@ class MerkleTree:
         num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
         if self.arity == 2 and not is_power_of_two(num_leaves):
             raise ValueError(f"leaf count ({num_leaves}) must be a power of two")
-        # The validation above guards eagerly, so it stays outside the marked
-        # region; only `matrix` is an explicit operand (constants auto-lift).
-        if self._fused:
-            attrs = {"column_major": 1} if self._column_major else {}
-            return fused_region(self._build, matrix, name=MERKLE_COMMIT_MARKER, **attrs)
+        # No `zorch.merkle_commit` wrap: the dedicated GPU merkle-chain fusion is
+        # slower than letting each nested poseidon2 marker become its own kernel
+        # (benchmarked 1.05-1.19x at 2^16..2^20), and markerless lowers under
+        # symbolic dims for recompile-free export.
         return self._build(matrix)
 
-    # The #36 batched-permute dedup is opt-in: a leaf hasher / compressor that
-    # provides the batched twin (zorch's Sponge / Compression) shares one lowered
-    # permute body across the ragged fold layers; a block that only implements the
-    # single-element `hash` / `compress` (e.g. a consumer's custom leaf hash like a
-    # linear hash) keeps the plain vmap path — correct, just without the dedup.
-    # Falling back here rather than requiring the twin keeps the leaf-hasher /
-    # compressor seam duck-typed, so adding the dedup never breaks a consumer block.
+    # Batch the single-element leaf hash / compress with `vmap`: the dedicated
+    # `zorch.poseidon2` marker lowers identically batched (one shared
+    # `@zorch.poseidon2` decomposition), so `vmap(single)` IS the batched kernel —
+    # a hand-written batched twin would buy nothing.
     def _hash_leaves(self, matrix: Array) -> Array:
-        hash_batched = getattr(self._leaf_hasher, "hash_batched", None)
-        if hash_batched is not None:
-            return hash_batched(matrix.T if self._column_major else matrix)
         return jax.vmap(self._leaf_hasher.hash, in_axes=1 if self._column_major else 0)(
             matrix
         )
 
     def _compress_groups(self, groups: Array) -> Array:
-        compress_batched = getattr(self._compressor, "compress_batched", None)
-        if compress_batched is not None:
-            return compress_batched(groups)
         return jax.vmap(self._compressor.compress)(groups)
 
-    def _build(self, matrix: Array, **_attrs: object) -> tuple[Array, list[Array]]:
-        """The traced commit body: vmap the leaf hash, fold arity-sized groups
-        per layer down to the root. Wrapped by `commit` as one
-        `zorch.merkle_commit` region.
-
-        `**_attrs` absorbs the marker's `composite.attributes` (threaded back by
-        `lax.composite` on both the composite and inline paths); the body ignores
-        them — `self._column_major` already fixes the layout.
+    def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
+        """The commit body: vmap the leaf hash, fold arity-sized groups per layer
+        down to the root. `self._column_major` fixes the leaf layout.
 
         A binary tree (always power-of-two, so no level ever pads) folds with one
         `lax.scan`, tracing the per-layer compress once: the commit body is then
@@ -215,9 +185,7 @@ class MerkleTree:
         because per-level padding a fixed-shape scan can't express, and partly
         because the k-ary compress inside a loop crashes the CPU emitter
         (zkx#606); binary is the common, padding-free case."""
-        # One batched leaf hash over the whole level (not a per-leaf vmap): a
-        # dedicated-fusion permutation then shares one lowered permute body across
-        # the ragged fold layers (see `_hash_leaves` for the vmap fallback).
+        # vmap the leaf hash over the whole level (see `_hash_leaves`).
         layer = self._hash_leaves(matrix)
         # Scan only the binary path; the height (always regular for a power-of-
         # two binary tree) is computed only there, never for the unrolled fold.
@@ -253,9 +221,8 @@ class MerkleTree:
         levels. Each level's live prefix is the next `digest_layers` entry, so
         the per-level outputs are sliced back to the exact ragged shapes the
         unrolled fold produced — byte-identical, but O(1) in height. The buffer
-        compresses its padding too; that waste only runs on a backend without the
-        merkle-commit emitter (the GPU vendor replaces the whole region), and the
-        sliced-off tail never reaches a digest layer."""
+        compresses its padding too, but the sliced-off tail never reaches a digest
+        layer."""
         n, a, d = leaf_layer.shape[0], self.arity, self.digest_elems
 
         def fold_level(buf: Array, _: None) -> tuple[Array, Array]:

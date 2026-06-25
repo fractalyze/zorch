@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -54,10 +53,6 @@ class CheapPermutation:
         # challenges; not a secure or even bijective permutation — tests only.
         mixed = state * state * state
         return mixed + jnp.sum(mixed)
-
-    def permute_batched(self, states: Array) -> Array:
-        # No dedicated fusion, so the plain vmap path (no shared-body marker).
-        return jax.vmap(self.permute)(states)
 
 
 def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTranscript:

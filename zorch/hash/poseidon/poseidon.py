@@ -27,7 +27,6 @@ import jax.numpy as jnp
 import numpy as np
 from jax import Array
 
-from zorch import _composite
 from zorch.fusion import fused_region
 from zorch.hash.poseidon.linear import apply_dense_mds
 from zorch.hash.poseidon.params import PoseidonParams
@@ -80,13 +79,7 @@ class Poseidon:
             raise ValueError(
                 f"state must be a 1-D array of shape ({self.width},), got {state.shape}"
             )
-        return _permute_body(self, state, _composite.has_composite_op())
-
-    def permute_batched(self, states: Array) -> Array:
-        # Classic Poseidon keeps the plain vmap batch path; the shared-body
-        # batched marker is implemented for Poseidon2. A merkle layer over classic
-        # Poseidon batches exactly as before.
-        return jax.vmap(self.permute)(states)
+        return _permute_body(self, state)
 
 
 # Module-level jit zone so the permutation body traces once per (params, state
@@ -96,12 +89,9 @@ class Poseidon:
 # re-trace of this body dominated the first-trace-per-config floor (#216).
 # The permutation is the static key, compared by value (#214); `inline=True`
 # splices the cached jaxpr into the enclosing trace, so the emitted module
-# (one composite marker per permute) is unchanged. `has_composite_op` is a
-# pure cache key: `composite_or_inline` reads the flag itself at trace time,
-# but the traced body differs across its values (marker vs inlined fallback),
-# so a flip must not replay a stale entry.
-@partial(jax.jit, static_argnames=("perm", "has_composite_op"), inline=True)
-def _permute_body(perm: Poseidon, state: Array, has_composite_op: bool) -> Array:
+# (one composite marker per permute) is unchanged.
+@partial(jax.jit, static_argnames=("perm",), inline=True)
+def _permute_body(perm: Poseidon, state: Array) -> Array:
     p = perm._p
     alpha = p.alpha
     w = perm.width

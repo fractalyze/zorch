@@ -29,16 +29,16 @@ scheme-agnostic round loop (any `Round`, any message shape) is
 `zorch.prove.fold_rounds`. A univariate / FFT prover would be its own driver.
 
 When the transcript's Fiat-Shamir permutation lowers to a dedicated fusion marker
-(`transcript.has_dedicated_fusion`, the `zorch.merkle_commit` gate), `prove` wraps
-that whole scan in one hash-agnostic `zorch.sumcheck` composite a vendor codegens
-as a single register-resident kernel — reduce → Fiat-Shamir → fold looped on-chip,
-the MLE state and the sponge never round-tripping HBM between rounds. The marker
-is transparent (callers still just call `prove`) and carries computation, not
+(`transcript.has_dedicated_fusion`), `prove` wraps that whole scan in one
+hash-agnostic `zorch.sumcheck` composite a vendor codegens as a single
+register-resident kernel — reduce → Fiat-Shamir → fold looped on-chip, the MLE
+state and the sponge never round-tripping HBM between rounds. The marker is
+transparent (callers still just call `prove`) and carries computation, not
 parameters: no pre-sampled challenges (FS stays inside the body scan), no hash
-identity (it rides as a nested `zorch.poseidon2` marker whose round constants auto-lift,
-exactly as `merkle_commit` keeps the hash off its marker). Unrecognized — a vendor
-without the emitter, or a jaxlib without `stablehlo.CompositeOp` — it decomposes to
-the same scan, byte-identical and sound. A test `CheapPermutation`
+identity (it rides as a nested `zorch.poseidon2` marker whose round constants
+auto-lift, keeping the hash off the wrapper's marker). Unrecognized — a vendor
+without the emitter — it decomposes to the same scan, byte-identical and sound. A
+test `CheapPermutation`
 (`has_dedicated_fusion=False`) keeps the plain scan, so unit tests never need the
 marker. This is the register-resident lever reached transparently from `prove`.
 """
@@ -471,8 +471,8 @@ def _prove_marked(
         # Rebuild the transcript from its leaves so the body closes over no sponge
         # state; `_prove_scan` runs the per-round FS, keeping this the one prover.
         # Forward the combine scalars so the nested combine region reads them as
-        # operands. `_attrs` is marker metadata the inline fallback passes through
-        # — the decomposition itself does not read it.
+        # operands. `_attrs` is marker metadata passed through — the decomposition
+        # itself does not read it.
         folded, t, msgs = _prove_scan(
             round,
             tables,

@@ -17,9 +17,7 @@ from jax import Array
 from zk_dtypes import goldilocks_mont
 from zk_dtypes import koalabear_mont as F
 
-import zorch._composite as _composite
-from zorch._composite import _HAS_COMPOSITE_OP
-from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
+from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix
@@ -34,8 +32,8 @@ from zorch.hash.sponge import Sponge, SpongeParams
 
 def _non_standard_perm() -> Poseidon2:
     """A Poseidon2 whose external matrix is NOT the standard M4-circulant, so its
-    permute carries only the generic fusion marker — hence `commit` cannot wrap
-    in `zorch.merkle_commit` (the expander couldn't identify the hash)."""
+    permute carries only the generic fusion marker (`has_dedicated_fusion` False)
+    rather than the dedicated `zorch.poseidon2` one."""
     params = koalabear16_params()
     perturbed = default_external_matrix(16, F).at[0, 0].add(jnp.ones((), F))
     return Poseidon2(dataclasses.replace(params, external_matrix=perturbed))
@@ -65,47 +63,6 @@ def _committed_4x8() -> tuple[MerkleTree, Array, Array, list[Array]]:
     matrix = jnp.arange(32, dtype=F).reshape(4, 8)
     root, layers = tree.commit(matrix)
     return tree, matrix, root, layers
-
-
-class _LeafOnly:
-    """A leaf hasher exposing only the single-element `hash` seam — no
-    `hash_batched`. Stands in for a consumer's custom leaf hash that is not a
-    zorch `Sponge` (e.g. a linear hash), so `MerkleTree` must fall back to a
-    per-row vmap rather than the batched twin."""
-
-    def __init__(self, inner: Sponge) -> None:
-        self._inner = inner
-        self.out = inner.out
-        self.has_dedicated_fusion = inner.has_dedicated_fusion
-
-    def hash(self, input: Array) -> Array:
-        return self._inner.hash(input)
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, _LeafOnly) and self._inner == other._inner
-
-    def __hash__(self) -> int:
-        return hash(("_LeafOnly", self._inner))
-
-
-class _CompressOnly:
-    """A compressor exposing only the single-group `compress` seam — no
-    `compress_batched`; forces `MerkleTree`'s vmap fallback for the fold."""
-
-    def __init__(self, inner: Compression) -> None:
-        self._inner = inner
-        self.arity = inner.arity
-        self.chunk = inner.chunk
-        self.has_dedicated_fusion = inner.has_dedicated_fusion
-
-    def compress(self, inputs: Array) -> Array:
-        return self._inner.compress(inputs)
-
-    def __eq__(self, other: object) -> bool:
-        return isinstance(other, _CompressOnly) and self._inner == other._inner
-
-    def __hash__(self) -> int:
-        return hash(("_CompressOnly", self._inner))
 
 
 class MerkleTreeTest(absltest.TestCase):
@@ -175,7 +132,6 @@ class MerkleTreeTest(absltest.TestCase):
             bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
     def test_jit_batched_open_reconstruct_roundtrip(self) -> None:
         # The whole batched open->reconstruct path traces under one jit (static
         # unroll, single region) — the property the fusion contract relies on.
@@ -398,46 +354,16 @@ class MerkleTreeTest(absltest.TestCase):
             Compression(perm, CompressionParams(arity=2, chunk=8)).has_dedicated_fusion
         )
 
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
-    def test_commit_lowers_to_merkle_commit_composite(self) -> None:
-        # commit wraps the whole tree in one hash-agnostic zorch.merkle_commit
-        # composite; the leaf/fold permutes survive as nested zorch.poseidon2
-        # markers the vendor expander reads to pick the per-block emitters. The
-        # permutes are vmap'd and their round constants auto-lift, so this also
-        # guards that composite.attributes survive both transformations.
+    def test_commit_lowers_to_nested_poseidon2_markers(self) -> None:
+        # commit emits no whole-tree marker; the leaf/fold permutes survive as
+        # dedicated zorch.poseidon2 markers (with their attributes) the vendor
+        # lowers to per-permute kernels. The permutes are vmap'd and their round
+        # constants auto-lift, so this also guards composite.attributes survive.
         _, _, tree = koalabear16_merkle()
         matrix = jnp.arange(32, dtype=F).reshape(4, 8)
         text = jax.jit(tree.commit).lower(matrix).as_text()
-        self.assertIn(MERKLE_COMMIT_MARKER, text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, text)
-
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
-    def test_commit_skips_composite_when_not_dedicated(self) -> None:
-        # A non-standard external matrix => generic permute marker => no
-        # zorch.merkle_commit (an unexpandable marker); commit takes the vmap path.
-        perm = _non_standard_perm()
-        tree = MerkleTree(
-            Sponge(perm, SpongeParams(rate=8, out=8)),
-            Compression(perm, CompressionParams(arity=2, chunk=8)),
-        )
-        matrix = jnp.arange(32, dtype=F).reshape(4, 8)
-        text = jax.jit(tree.commit).lower(matrix).as_text()
-        self.assertNotIn(MERKLE_COMMIT_MARKER, text)
-
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
-    def test_commit_skips_composite_when_only_one_block_dedicated(self) -> None:
-        # The gate is AND, not OR: a mixed tree (one block dedicated, one not) is
-        # unexpandable, so commit must take the vmap path. true/true + false/false
-        # alone would still pass under an and->or regression; this asymmetric case
-        # catches it.
-        tree = MerkleTree(
-            Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8)),
-            Compression(_non_standard_perm(), CompressionParams(arity=2, chunk=8)),
-        )
-        matrix = jnp.arange(32, dtype=F).reshape(4, 8)
-        text = jax.jit(tree.commit).lower(matrix).as_text()
-        self.assertNotIn(MERKLE_COMMIT_MARKER, text)
 
     def test_value_equality_across_fresh_instances(self) -> None:
         # A tree seats in static jit-zone keys (#214): same-config builds must
@@ -580,64 +506,14 @@ class ColumnMajorMerkleTreeTest(absltest.TestCase):
         self.assertEqual(hash(col_tree), hash(col_tree2))
 
 
-class BatchedHasherFallbackTest(absltest.TestCase):
-    """The #36 batched-permute dedup is opt-in: a leaf hasher / compressor that
-    implements only the single-element seam (no `hash_batched` / `compress_batched`)
-    must still commit — via a per-row/-group vmap fallback — byte-identically to the
-    batched twin. Guards the regression where `_build` hard-required the twin and
-    crashed any consumer's custom block (a leaf linear hash, say). The marker
-    expander is disabled so the fallback in `_build` is actually exercised, not
-    replaced by the vendor's whole-region synthesis."""
-
-    def _matrix(self) -> Array:
-        return jnp.arange(8 * 8, dtype=F).reshape(8, 8)
-
-    def _assert_commit_equal(
-        self, got: tuple[Array, list[Array]], ref: tuple[Array, list[Array]]
-    ) -> None:
-        """Compare the FULL commit output — root and every digest layer. `open`
-        reads the layers, so a fallback regression in layer shape/padding/storage
-        could escape a root-only check."""
-        got_root, got_layers = got
-        ref_root, ref_layers = ref
-        self.assertTrue(bool(jnp.array_equal(got_root, ref_root)))
-        self.assertEqual(len(got_layers), len(ref_layers))
-        for got_layer, ref_layer in zip(got_layers, ref_layers):
-            self.assertEqual(got_layer.shape, ref_layer.shape)
-            self.assertTrue(bool(jnp.array_equal(got_layer, ref_layer)))
-
-    def test_leaf_hasher_without_hash_batched_matches_batched(self) -> None:
-        sponge, comp, _ = koalabear16_merkle()
-        m = self._matrix()
-        orig = _composite._HAS_COMPOSITE_OP
-        try:
-            _composite._HAS_COMPOSITE_OP = False
-            ref = MerkleTree(sponge, comp).commit(m)
-            # Duck-typed stand-in: the leaf-hasher seam is structural (MerkleTree
-            # only needs `hash`/`out`/`has_dedicated_fusion`), wider than the
-            # `Sponge` annotation — which is the gap this test guards.
-            got = MerkleTree(_LeafOnly(sponge), comp).commit(m)  # type: ignore[arg-type]
-        finally:
-            _composite._HAS_COMPOSITE_OP = orig
-        self._assert_commit_equal(got, ref)
-
-    def test_compressor_without_compress_batched_matches_batched(self) -> None:
-        sponge, comp, _ = koalabear16_merkle()
-        m = self._matrix()
-        orig = _composite._HAS_COMPOSITE_OP
-        try:
-            _composite._HAS_COMPOSITE_OP = False
-            ref = MerkleTree(sponge, comp).commit(m)
-            got = MerkleTree(sponge, _CompressOnly(comp)).commit(m)  # type: ignore[arg-type]
-        finally:
-            _composite._HAS_COMPOSITE_OP = orig
-        self._assert_commit_equal(got, ref)
+class CommitDtypeGuardTest(absltest.TestCase):
+    """`MerkleTree.commit` rejects a matrix whose field mismatches the leaf
+    hasher, gated on the hasher exposing `dtype` (a Sponge does)."""
 
     def test_commit_rejects_wrong_dtype_when_hasher_names_its_field(self) -> None:
-        # The field guard is restored but gated on the hasher exposing `dtype`: a
-        # Sponge (which does) still rejects a wrong-field matrix. `_LeafOnly`,
-        # which names no field, is not blocked by the guard — covered above by
-        # committing a koalabear matrix through it without raising.
+        # A Sponge names its field via `dtype`, so committing a goldilocks matrix
+        # through a koalabear hasher is rejected; a hasher that names no field is
+        # not blocked by the guard.
         sponge, comp, _ = koalabear16_merkle()
         wrong_field = jnp.arange(8 * 8, dtype=goldilocks_mont).reshape(8, 8)
         with self.assertRaises(TypeError):

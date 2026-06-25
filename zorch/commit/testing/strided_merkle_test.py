@@ -15,8 +15,7 @@ from absl.testing import absltest
 from jax import Array
 from zk_dtypes import koalabear_mont as F
 
-from zorch._composite import _HAS_COMPOSITE_OP
-from zorch.commit.merkle import MERKLE_COMMIT_MARKER, MerkleTree, Opening
+from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
@@ -186,13 +185,6 @@ class StridedMerkleTest(absltest.TestCase):
         self.assertEqual(opening.path, [])
         rebuilt = strided.reconstruct_root(0, opening)
         self.assertTrue(bool(jnp.array_equal(rebuilt, root)))
-
-    @absltest.skipUnless(_HAS_COMPOSITE_OP, "jaxlib lacks stablehlo.CompositeOp")
-    def test_commit_wraps_in_merkle_commit_marker(self) -> None:
-        _, _, strided = _stack(rows_per_query=4)
-        lowered = jax.jit(strided.commit).lower(_matrix(16)).as_text()
-        self.assertIn("stablehlo.composite", lowered)
-        self.assertIn(MERKLE_COMMIT_MARKER, lowered)
 
 
 if __name__ == "__main__":

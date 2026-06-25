@@ -71,18 +71,6 @@ class SpongeTest(absltest.TestCase):
         self.assertEqual(out.shape, (8,))
         self.assertEqual(out.dtype, F)
 
-    def test_hash_batched_matches_vmap(self) -> None:
-        # hash_batched absorbs a whole leaf level on (b, width) states; numerically
-        # a vmap(hash) (it routes through permute_batched for the shared-body
-        # lowering). Cover single-block, full-block, and
-        # partial-tail input widths (rate=8).
-        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-        for n in (2, 8, 19):
-            inp = jnp.arange(6 * n, dtype=F).reshape(6, n)
-            self.assertTrue(
-                bool(jnp.array_equal(s.hash_batched(inp), jax.vmap(s.hash)(inp))), n
-            )
-
     def test_hash_single_block_is_permute_truncated(self) -> None:
         perm = koalabear16_perm()
         s = Sponge(perm, SpongeParams(rate=8, out=8))
