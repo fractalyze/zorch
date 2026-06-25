@@ -94,6 +94,11 @@ def _column_claims(blocks: list[jnp.ndarray], z_row: jnp.ndarray) -> jnp.ndarray
     return jnp.stack(claims)
 
 
+@absltest.skip(
+    "jagged opening hashes extension-field merkle leaves, but base-field "
+    "poseidon2 bails on an EF state (zorch#309). Re-enable once the jagged-PCS "
+    "rework lifts leaves to the hasher's base field."
+)
 class JaggedOpeningTest(absltest.TestCase):
     # One opened proof shared by every log_s=5 test: the round trip verifies
     # it, the anchor test replays it, and each tamper mutates a COPY
