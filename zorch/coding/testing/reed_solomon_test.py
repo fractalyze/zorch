@@ -48,7 +48,7 @@ def _domain(n: int, dtype: Any) -> Array:
     """The order-n NTT evaluation domain [w^0, ..., w^{n-1}] for the canonical
     root, recovered independently of the encoder: NTT(e_1)_j = w^j."""
     e1 = jnp.zeros((n,), dtype).at[1].set(jnp.ones((), dtype))
-    return lax.fft(e1, "FFT", n)
+    return lax.ntt(e1, ntt_type="NTT", ntt_length=n)
 
 
 def _horner(coeffs: Array, points: Array) -> Array:
@@ -152,7 +152,7 @@ class ReedSolomonTest(absltest.TestCase):
         k, blowup = 8, 2
         rs = ReedSolomon(k, blowup, F)
         coeffs = rand_field(2, (k,), F)
-        rec = lax.fft(rs.encode(coeffs), "IFFT", k * blowup)
+        rec = lax.ntt(rs.encode(coeffs), ntt_type="INTT", ntt_length=k * blowup)
         self.assertTrue(bool(jnp.all(rec[:k] == coeffs)))
         self.assertTrue(bool(jnp.all(rec[k:] == jnp.zeros(k * blowup - k, F))))
 
