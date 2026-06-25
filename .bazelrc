@@ -8,5 +8,20 @@ test --test_output=errors
 # per-target in each py_test's env, which made the backend unselectable from CI.
 test --test_env=JAX_PLATFORMS=cpu
 
+# Buildbarn remote execution (--config=remote). The frontend endpoint is the
+# proto RBE node; the mTLS client material is machine-local and passed
+# per-invocation (CI supplies the --tls_* flags pointing at /etc/rbe-certs on the
+# self-hosted runners — see .github/workflows/ci.yml). Workers are CPU-only
+# (//rbe:linux_remote), so the spawn_strategy fallback runs GPU and other
+# no-remote-exec actions locally. Mirrors fractalyze/jax_fork's :remote.
+build:remote --remote_executor=grpcs://43.201.213.94:8980
+build:remote --remote_cache=grpcs://43.201.213.94:8980
+build:remote --remote_instance_name=
+build:remote --remote_download_minimal
+build:remote --jobs=256
+build:remote --extra_execution_platforms=//rbe:linux_remote
+build:remote --remote_timeout=3600
+build:remote --spawn_strategy=remote,worker,standalone,local
+
 # Local, machine-specific overrides (gitignored).
 try-import %workspace%/.bazelrc.user

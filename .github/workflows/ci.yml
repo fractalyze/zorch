@@ -28,12 +28,15 @@ jobs:
       matrix: ${{ steps.set.outputs.matrix }}
     steps:
       - id: set
-        # Strict `cuda` (no cpu fallback) on the GPU leg so a green run means it
-        # really ran on GPU; a GPU init failure fails loudly instead of silently
-        # passing on CPU.
+        # Strict `cuda` on the GPU leg (no cpu fallback) so a green run really
+        # ran on GPU. `needs_cpu_backend` tests get a separate `cuda,cpu` pass.
         run: |
-          cpu='{"backend":"cpu","runs_on":["self-hosted","cpu"],"jax_platforms":"cpu"}'
-          gpu='{"backend":"gpu","runs_on":["self-hosted","gpu"],"jax_platforms":"cuda"}'
+          # Per-leg bazel flags: CPU leg runs on the Buildbarn pool
+          # (`--config=remote` + machine-local mTLS certs); the GPU leg runs
+          # local (pool is CPU-only), so its `rbe` is empty.
+          rbe_cpu='--config=remote --tls_certificate=/etc/rbe-certs/ca.pem --tls_client_certificate=/etc/rbe-certs/client.pem --tls_client_key=/etc/rbe-certs/client.key'
+          cpu='{"backend":"cpu","runs_on":["self-hosted","cpu"],"jax_platforms":"cpu","rbe":"'"${rbe_cpu}"'"}'
+          gpu='{"backend":"gpu","runs_on":["self-hosted","gpu"],"jax_platforms":"cuda","rbe":""}'
           include="${cpu}"
           if [ "${{ vars.HAS_GPU_RUNNER }}" = "true" ]; then
             include="${cpu},${gpu}"
@@ -41,6 +44,9 @@ jobs:
           echo "matrix={\"include\":[${include}]}" >> "$GITHUB_OUTPUT"
 
   build-and-test:
+    # Explicit name; else GitHub appends every matrix value (incl. the long
+    # --config=remote + cert-path rbe flags) to the auto-generated job name.
+    name: build-and-test (${{ matrix.backend }})
     needs: setup
     strategy:
       fail-fast: false
@@ -48,13 +54,30 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - uses: actions/checkout@v4
-      # No setup-bazel: it's for ephemeral runners and clobbers the box's
-      # ~/.bazelrc; on self-hosted runners bazel/caches already persist.
-      # `.bazelrc.ci` filters the `local_only` (composite-vmap) tests out of CI —
-      # they need a jaxlib CI's published wheel isn't; see .bazelrc.ci. They run
-      # under a local `bazel test //...`.
+      # No setup-bazel: it clobbers the box's ~/.bazelrc (self-hosted runners
+      # already persist bazel + caches). `.bazelrc.ci` drops the `local_only`
+      # tests CI's wheel can't run.
+      #
+      # GPU leg = two passes: strict `cuda` for the bulk, then `cuda,cpu` for
+      # `needs_cpu_backend` (lax.pairing_check legalizes CPU-only beside the
+      # GPU-only lax.msm). Prealloc-off avoids a spurious OOM once the CPU
+      # backend also inits. CLI `--test_tag_filters` *replaces* .bazelrc.ci's,
+      # so restate `-local_only`.
       - name: Run bazel test
-        run: bazel --bazelrc=.bazelrc.ci test --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.backend }}" = "gpu" ]; then
+            prealloc='--test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false'
+            bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} "$prealloc" \
+              --test_tag_filters=-local_only,-needs_cpu_backend \
+              --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
+            bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} "$prealloc" \
+              --test_tag_filters=-local_only,needs_cpu_backend \
+              --test_env=JAX_PLATFORMS=cuda,cpu -- //...
+          else
+            bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} \
+              --test_env=JAX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
+          fi
 
       # Capture the runner-local test.log a failed test leaves behind — the CI
       # stream only carries the FAIL summary, not the gtest output.
