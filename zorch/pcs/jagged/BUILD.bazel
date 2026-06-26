@@ -28,6 +28,27 @@ py_library(
 )
 
 py_library(
+    name = "region",
+    srcs = ["region.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("jax"),
+    ],
+)
+
+py_library(
+    name = "commit",
+    srcs = ["commit.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":region",
+        "//zorch/coding:reed_solomon",
+        "//zorch/commit:smcs",
+        requirement("jax"),
+    ],
+)
+
+py_library(
     name = "stacked",
     srcs = ["stacked.py"],
     visibility = ["//visibility:public"],

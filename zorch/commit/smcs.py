@@ -65,13 +65,31 @@ class SingleMatrixCommitmentScheme:
     def __init__(self, sponge: Sponge, compressor: Compression):
         # Keep sponge + compressor too: the domain separator calls them directly
         # and zorch's MerkleTree does not expose its internals.
+        #
+        # column-major is a per-``commit`` choice, NOT a scheme property: the same
+        # SMCS commits the trace codeword column-major (a leaf is a column,
+        # skipping the encode transpose) AND the FRI fold's conjugate-pair leaves
+        # row-major. Hold both layout trees over the one block pair and pick per
+        # call; open/verify re-hash individually-extracted leaf rows (the same K
+        # values either way), so they always use the row-major tree.
         self._tree = MerkleTree(sponge, compressor)
+        self._tree_column_major = MerkleTree(sponge, compressor, column_major=True)
         self._sponge = sponge
         self._compressor = compressor
         self.digest_elems = compressor.chunk
 
-    def commit(self, matrix: Array) -> tuple[Array, list[Array]]:
+    def commit(
+        self, matrix: Array, *, column_major: bool = False
+    ) -> tuple[Array, list[Array]]:
         """Commit a base-field ``(height, width)`` matrix (power-of-two height).
+
+        ``column_major`` commits the transpose ``(width, height)`` by hashing its
+        columns (a leaf is a column), so the producer can hand a codeword in its
+        native encode layout without a transpose; the root is identical to a
+        row-major commit of the transpose. It is a per-call choice — the same
+        scheme also commits row-major leaves (the FRI fold) — so it is not a
+        constructor property; ``open``/``verify`` re-hash individually-extracted
+        leaf rows and are layout-independent.
 
         Returns ``(commitment, digest_layers)``: the ``(digest_elems,)``
         commitment with SP1's domain separator applied, plus zorch's layered
@@ -91,8 +109,10 @@ class SingleMatrixCommitmentScheme:
                 "extension-field matrices are not yet supported; pass a base-field "
                 "matrix (EF commit is the FFI byte-match slice, fractalyze/zorch#37)"
             )
-        raw_root, digest_layers = self._tree.commit(matrix)
-        height, width = matrix.shape
+        tree = self._tree_column_major if column_major else self._tree
+        raw_root, digest_layers = tree.commit(matrix)
+        # Column-major commit takes [width, height]; row-major takes [height, width].
+        height, width = matrix.shape[::-1] if column_major else matrix.shape
         log_height = log2_strict_usize(height)  # power-of-two enforced by commit
         return self.bind_root(raw_root, log_height, width, matrix.dtype), digest_layers
 
