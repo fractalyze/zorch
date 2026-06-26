@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax import Array, jit, lax, vmap
 from jax.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
@@ -158,10 +157,10 @@ class DuplexTranscript:
     the whole transcript threads through `@jit` (and, later, a `lax.scan` carry).
     Every step is a device op — no host callback, no zkVM FFI.
 
-    `fs_on_host` opts the absorb/squeeze into `zorch.host_fs`: the transcript stays
-    device-resident, but the serial Poseidon chain runs on the host CPU via
-    `jax.pure_callback` (a latency-bound hash chain idles accelerator cores, so a
-    host-driven, per-round-kernel consumer offloads it). Off by default, so the
+    `fs_on_host` runs the serial Poseidon chain on the host CPU (a latency-bound
+    hash chain idles accelerator cores, so a host-driven, per-round-kernel consumer
+    offloads it), with the sponge state kept CPU-resident across the stream -- an
+    eager primitive (see the host-FS backend section below). Off by default, so the
     device path and its compiled graph are untouched unless a caller opts in."""
 
     permutation: Permutation
@@ -545,19 +544,26 @@ def _check_witness_body(
 
 
 # ============================================================================
-# Host-FS backend — the duplex sponge run on the host CPU via `jax.pure_callback`,
-# the transcript staying device-resident. `DuplexTranscript.fs_on_host` routes
-# observe/sample/observe_and_sample here. A serial hash chain idles accelerator
-# cores, so a host-driven, per-round-kernel consumer offloads it; the device path
-# above is untouched.
+# Host-FS backend — the duplex sponge run on the host CPU. A serial hash chain
+# idles accelerator cores, so a host-driven, per-round-kernel consumer offloads it;
+# `DuplexTranscript.fs_on_host` routes observe/sample/observe_and_sample here and
+# the device path above is untouched.
 #
-# Byte-identical to the device sponge: the callback reconstructs a
-# `DuplexTranscript` (fs_on_host defaults False -> no recursion) and runs the SAME
-# `_observe_body`/`_sample_body` on the CPU. The `permutation` must lower its
-# `permute` to the host (a raw permute, not one pinning an inner accelerator jit).
+# The sponge state lives on the CPU for the whole Fiat-Shamir stream: the host op
+# calls the CPU sponge jit DIRECTLY on host-resident leaves and moves only `values`
+# in / the squeezed challenge back to the compute device. Crossing the host
+# boundary costs per array-leaf (a `jax.pure_callback` round-trip of the 5 state
+# leaves every hop was ~6x that and dominated a warm prove once the sponge math got
+# fast); keeping the state resident drops each hop to one `values` in + one
+# challenge out. This is an eager primitive -- it is the production jit=False
+# relaunch's per-round FS, not a graph op.
 #
-# State leaves cross the callback as their own field dtype -- jax_fork#45 (FFI ABI
-# carries ZK field types) retired the uint32 bitcast workaround for the #44 abort.
+# Byte-identical to the device sponge: the jit reconstructs a `DuplexTranscript`
+# (fs_on_host defaults False -> no recursion) and runs the SAME `_observe_body`/
+# `_sample_body`. The `permutation` must lower its `permute` to the host (a raw
+# permute, not one pinning an inner accelerator jit). State leaves cross as their
+# own field dtype -- jax_fork#45 (FFI ABI carries ZK field types) retired the
+# uint32 bitcast workaround for the #44 abort.
 # ============================================================================
 
 
@@ -568,7 +574,7 @@ def _host_cpu():
     return jax.devices("cpu")[0]
 
 
-def _host_state_leaves(state: DuplexState):
+def _host_state_leaves(state: DuplexState) -> tuple[Array, ...]:
     return (state.input_buffer, state.output_buffer, state.sponge_state,
             state.in_pos, state.out_pos)
 
@@ -580,91 +586,96 @@ def _host_raw(permutation: Permutation) -> Permutation:
     return getattr(permutation, "_inner", permutation)
 
 
-def _host_state_shapes(state: DuplexState):
-    base = state.sponge_state.dtype
-    return base, (
-        jax.ShapeDtypeStruct(state.input_buffer.shape, state.input_buffer.dtype),
-        jax.ShapeDtypeStruct(state.output_buffer.shape, state.output_buffer.dtype),
-        jax.ShapeDtypeStruct(state.sponge_state.shape, state.sponge_state.dtype),
-        jax.ShapeDtypeStruct(state.in_pos.shape, state.in_pos.dtype),
-        jax.ShapeDtypeStruct(state.out_pos.shape, state.out_pos.dtype),
-    )
-
-
-# Memoize per config: pure_callback keys its wrapper on the callback IDENTITY, so a
-# fresh closure per call would recompile every hop. device_put commits inputs to CPU.
-def _host_cb(f, c):
-    return lambda *a: tuple(np.asarray(o) for o in f(*jax.device_put(a, c)))
-
-
+# The CPU sponge jit per config -- the host sponge math, memoized so a fixed
+# closure compiles once. Runs on the CPU because the caller feeds it a host-
+# resident state (`_state_on_host`) and CPU-committed `values`.
 @cache
-def _host_observe_caller(perm, rate):
+def _host_observe_jit(perm, rate):
     @jit
     def f(ib, ob, sp, ip, op, x):
         s = DuplexState(ib, ob, sp, ip, op)
         return _host_state_leaves(DuplexTranscript(perm, rate, s).observe(x).state)
-    return _host_cb(f, _host_cpu())
+    return f
 
 
 @cache
-def _host_sample_caller(perm, rate, n):
+def _host_sample_jit(perm, rate, n):
     @jit
     def f(ib, ob, sp, ip, op):
         t, out = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).sample(n)
-        nb, no, ns, ni, no2 = _host_state_leaves(t.state)
-        return nb, no, ns, ni, no2, out
-    return _host_cb(f, _host_cpu())
+        return (*_host_state_leaves(t.state), out)
+    return f
 
 
 @cache
-def _host_obs_sample_caller(perm, rate, n):
+def _host_obs_sample_jit(perm, rate, n):
     @jit
     def f(ib, ob, sp, ip, op, x):
         t = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).observe(x)
         t, out = t.sample(n)
-        nb, no, ns, ni, no2 = _host_state_leaves(t.state)
-        return nb, no, ns, ni, no2, out
-    return _host_cb(f, _host_cpu())
+        return (*_host_state_leaves(t.state), out)
+    return f
+
+
+@cache
+def _host_compute_device():
+    """Where a squeezed challenge returns to -- the device the surrounding eager
+    prove computes on (its kernels consume the challenge)."""
+    return jax.devices()[0]
+
+
+def _on_host(x: Array) -> bool:
+    return next(iter(x.devices())).platform == "cpu"
+
+
+def _state_on_host(state: DuplexState) -> DuplexState:
+    """Commit the sponge state to the CPU. The first hop pays it once; the host
+    sponge returns host leaves, so later hops find it already resident and the
+    per-hop device<->host round-trip of the 5 state leaves disappears."""
+    if _on_host(state.sponge_state):
+        return state
+    c = _host_cpu()
+    return DuplexState(*(jax.device_put(leaf, c) for leaf in _host_state_leaves(state)))
 
 
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
-    """`observe` on the host sponge; the transcript stays on its device."""
-    s = transcript.state
-    _, shapes = _host_state_shapes(s)
-    fn = _host_observe_caller(_host_raw(transcript.permutation), transcript.rate)
-    nb, no, ns, ni, no2 = jax.pure_callback(
-        fn, shapes,
-        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos, values,
+    """`observe` on the host sponge; the state stays host-resident."""
+    s = _state_on_host(transcript.state)
+    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
+    leaves = f(
+        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos,
+        jax.device_put(values, _host_cpu()),
     )
-    return transcript._with_state(DuplexState(nb, no, ns, ni, no2))
+    return transcript._with_state(DuplexState(*leaves))
 
 
 def _sample_host(transcript: DuplexTranscript, n: int = 1) -> tuple[DuplexTranscript, Array]:
-    """`sample` n raw squeezes on the host sponge; they return on the transcript's
-    device."""
-    s = transcript.state
-    base, shapes = _host_state_shapes(s)
-    fn = _host_sample_caller(_host_raw(transcript.permutation), transcript.rate, n)
-    nb, no, ns, ni, no2, out = jax.pure_callback(
-        fn, (*shapes, jax.ShapeDtypeStruct((n,), base)),
-        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos,
+    """`sample` n raw squeezes on the host sponge; the state stays host-resident,
+    the challenge returns to the compute device."""
+    s = _state_on_host(transcript.state)
+    f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
+    *leaves, out = f(s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos)
+    return (
+        transcript._with_state(DuplexState(*leaves)),
+        jax.device_put(out, _host_compute_device()),
     )
-    return transcript._with_state(DuplexState(nb, no, ns, ni, no2)), out
 
 
 def _observe_and_sample_host(
     transcript: DuplexTranscript, values: Array, n: int = 1
 ) -> tuple[DuplexTranscript, Array]:
-    """`observe_and_sample`: absorb then squeeze n raw in ONE host callback -- the
-    per-round Fiat-Shamir primitive. The challenge reinterpret stays on the device."""
-    s = transcript.state
-    base, shapes = _host_state_shapes(s)
-    fn = _host_obs_sample_caller(_host_raw(transcript.permutation), transcript.rate, n)
-    nb, no, ns, ni, no2, out = jax.pure_callback(
-        fn, (*shapes, jax.ShapeDtypeStruct((n,), base)),
-        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos, values,
+    """`observe_and_sample`: absorb then squeeze n raw in one host hop -- the
+    per-round Fiat-Shamir primitive. The challenge returns to the compute device."""
+    s = _state_on_host(transcript.state)
+    f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
+    *leaves, out = f(
+        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos,
+        jax.device_put(values, _host_cpu()),
     )
-    return transcript._with_state(DuplexState(nb, no, ns, ni, no2)), out
+    return (
+        transcript._with_state(DuplexState(*leaves)),
+        jax.device_put(out, _host_compute_device()),
+    )
 
 
 if TYPE_CHECKING:

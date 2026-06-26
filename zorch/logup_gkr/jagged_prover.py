@@ -35,6 +35,7 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, partial
@@ -50,7 +51,7 @@ from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _pad_neutral,
     _pad_to_width,
-    _segment_gather,
+    _segment_gather_np,
 )
 from zorch.logup_gkr.prover import Carry, logup_combine
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -132,18 +133,20 @@ def _round_metadata(
     factor is indexed per segment while `eq_int[col_index]` carries the
     interaction weight. All static, derived from the Python-int row counts.
     """
-    meta = []
+    # Build the whole schedule on the host, then commit it in ONE batched
+    # device_put: every index array is tiny and static, so a per-round transfer
+    # is pure dispatch overhead (~3 per round x every layer). The None gathers
+    # (no re-pad) ride through device_put as empty pytree nodes.
+    host_meta: list[tuple[np.ndarray | None, np.ndarray, np.ndarray]] = []
     counts = row_counts
     for _ in range(num_row_vars):
         padded = tuple(rc + rc % 2 for rc in counts)
         pairs = tuple(p // 2 for p in padded)
-        col_index = jnp.asarray(np.repeat(np.arange(len(pairs), dtype=np.int32), pairs))
-        pair_index = jnp.asarray(
-            np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
-        )
-        meta.append((_segment_gather(counts, padded), col_index, pair_index))
+        col_index = np.repeat(np.arange(len(pairs), dtype=np.int32), pairs)
+        pair_index = np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
+        host_meta.append((_segment_gather_np(counts, padded), col_index, pair_index))
         counts = pairs
-    return meta
+    return jax.device_put(host_meta)
 
 
 def _flatten_meta(
@@ -257,6 +260,13 @@ def _paired_sums(
     return eval_zero, eval_half, jnp.sum(eq_h)
 
 
+# Jit the eq-table build: its eager log-depth doubling dispatches ~2*nrv ops a
+# layer -- the relaunch's biggest non-kernel eager site. One pjit instead.
+# Recompile-free here: the point length is nrv/niv, bounded by the row/segment
+# variable count (a fixed bracket across shards, unlike the data-sized planes).
+_jit_expand_eq = jax.jit(expand_eq_to_hypercube)
+
+
 def prove_jagged_layer(
     layer: JaggedGkrLayer,
     lam: Array,
@@ -289,8 +299,8 @@ def prove_jagged_layer(
         )
 
     one = jnp.ones((), eval_point.dtype)
-    eq_row = expand_eq_to_hypercube(eval_point[niv:], one)
-    eq_int = expand_eq_to_hypercube(eval_point[:niv], one)
+    eq_row = _jit_expand_eq(eval_point[niv:], one)
+    eq_int = _jit_expand_eq(eval_point[:niv], one)
     n0, n1 = layer.numerator_0, layer.numerator_1
     d0, d1 = layer.denominator_0, layer.denominator_1
     meta = _round_metadata(layer.row_counts, nrv)
@@ -591,7 +601,9 @@ def _fix_and_sum_boundary(
 
 def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array]:
     """The `fix_last` step: bind the final challenge and read off the four pair
-    openings (the fully-folded length-1 state's single element)."""
+    openings (the fully-folded length-1 state's single element). The relaunch tail
+    fuses this into one kernel via `_jit_finalize` -- a fold step lowering to one
+    kernel is the fusion-by-construction rule, not just a speedup."""
     p = _bind_planes(planes, alpha)
     return p.n0[0], p.n1[0], p.d0[0], p.d1[0]
 
@@ -604,8 +616,13 @@ def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
     `prove_jagged_layer` is pure redundant host work -- `compute_inv_vandermonde`
     is an O(DEGREE^2) numpy coefficient build, and the per-GKR-layer recompute
     dominated the eager host glue around the relaunch loop."""
-    naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
-    return naturals, compute_inv_vandermonde(_DEGREE, dtype)
+    # Force concrete eval: `@cache` memoizes the result, so building it inside a
+    # jit trace (the jit=True round zone) would cache a tracer that then escapes the
+    # trace (UnexpectedTracerError). The constants are trace-independent anyway.
+    with jax.ensure_compile_time_eval():
+        naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
+        inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
+    return naturals, inv_vand
 
 
 
@@ -623,6 +640,62 @@ def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
 # wall-clock NEUTRAL on the real prove -- the round dispatch overlaps async GPU/FS
 # work, so the saved host time is off the critical path. Not worth the extra layer.
 _ROUND_KERNEL_CACHE: dict[tuple, export.Exported] = {}
+
+# Opt-in on-disk cache for the exported round binaries (set ZORCH_EXPORT_CACHE_DIR):
+# their jax.export BUILD (symbolic StableHLO generation) re-runs every process and
+# dominates the cold start, which the XLA persistent compile cache does NOT cover.
+# Namespaced by jax version + a hash of the kernel sources (this module + circuit +
+# eq), so any kernel edit invalidates it. Unset -> unchanged in-memory behaviour.
+_EXPORT_CACHE_DIR = os.environ.get("ZORCH_EXPORT_CACHE_DIR")
+
+
+@cache
+def _export_cache_dir():
+    import hashlib
+    from pathlib import Path
+
+    import zorch.logup_gkr.circuit as _circuit
+    import zorch.poly.eq as _eq
+
+    src = b"".join(open(f, "rb").read() for f in (__file__, _circuit.__file__, _eq.__file__))
+    d = Path(_EXPORT_CACHE_DIR) / f"{jax.__version__}-{hashlib.sha256(src).hexdigest()[:12]}"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _export_path(key: tuple):
+    import hashlib
+
+    return _export_cache_dir() / f"{hashlib.sha256(repr(key).encode()).hexdigest()[:20]}.bin"
+
+
+def _round_get(key: tuple):
+    exp = _ROUND_KERNEL_CACHE.get(key)
+    if exp is None and _EXPORT_CACHE_DIR is not None:
+        path = _export_path(key)
+        if path.exists():
+            exp = export.deserialize(bytearray(path.read_bytes()))
+            _ROUND_KERNEL_CACHE[key] = exp
+    return exp
+
+
+def _round_put(key: tuple, exp: export.Exported) -> None:
+    _ROUND_KERNEL_CACHE[key] = exp
+    if _EXPORT_CACHE_DIR is not None:
+        _export_path(key).write_bytes(bytes(exp.serialize()))
+
+
+# `_Planes` / `_RoundScalars` cross the jax.export boundary as pytree operands;
+# register their (empty -- no meta_fields) aux so `Exported.serialize()` can
+# round-trip them for the on-disk cache above.
+if _EXPORT_CACHE_DIR is not None:
+    for _t in (_Planes, _RoundScalars):
+        export.register_pytree_node_serialization(
+            _t,
+            serialized_name=f"zorch.logup_gkr.jagged_prover.{_t.__name__}",
+            serialize_auxdata=lambda _a: b"",
+            deserialize_auxdata=lambda _b: (),
+        )
 
 # The symbolic bound only needs to *contain* every round size (`exported.call`
 # re-specializes XLA codegen per concrete size regardless), but it MUST exceed the
@@ -658,7 +731,7 @@ def _dispatch_fix_and_sum_int(
     # each (round-shape, dtype-mix) gets its own binary; `consts` is baked in.
     key = ("int", tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
            consts.naturals.shape[0], consts.naturals.dtype)
-    exported = _ROUND_KERNEL_CACHE.get(key)
+    exported = _round_get(key)
     if exported is None:
         (g,) = export.symbolic_shape("g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"])
         abst = (
@@ -669,7 +742,85 @@ def _dispatch_fix_and_sum_int(
         )
         fn = lambda p, e, al, sc: _fix_and_sum_int(p, e, al, sc, consts)  # noqa: E731
         exported = export.export(jax.jit(fn))(*abst)
-        _ROUND_KERNEL_CACHE[key] = exported
+        _round_put(key, exported)
+    return exported.call(*operands)
+
+
+def _dispatch_fix_and_sum_boundary(
+    planes: _Planes, eq_int: Array, alpha: Array, scalars: _RoundScalars, consts: _InterpConsts
+) -> tuple[Array, _Planes, Array]:
+    """Dispatch the row->interaction handoff (bind the last row challenge `alpha`,
+    then sum the first interaction round over the still-unfolded `eq_int`) through
+    one cached binary. Mirrors `_dispatch_fix_and_sum_int` without the `eq_int`
+    bind: the bind halves the state (`4*g -> 2*g`) and `eq_int` rides unfolded at
+    `2*g` (= the post-bind state), so a single relaunch replaces the eager kernel."""
+    if isinstance(planes.n0, jax.core.Tracer):
+        return _fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
+    operands = (planes, eq_int, alpha, scalars)
+    key = ("boundary", tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
+           consts.naturals.shape[0], consts.naturals.dtype)
+    exported = _round_get(key)
+    if exported is None:
+        (g,) = export.symbolic_shape("g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"])
+        abst = (
+            _Planes(*(jax.ShapeDtypeStruct((4 * g,), getattr(planes, f).dtype) for f in ("n0", "n1", "d0", "d1"))),
+            jax.ShapeDtypeStruct((2 * g,), eq_int.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            _abst_scalars(scalars),
+        )
+        fn = lambda p, e, al, sc: _fix_and_sum_boundary(p, e, al, sc, consts)  # noqa: E731
+        exported = export.export(jax.jit(fn))(*abst)
+        _round_put(key, exported)
+    return exported.call(*operands)
+
+
+def _dispatch_sum_as_poly_row(
+    planes: _Planes,
+    gather: Array | None,
+    col_index: Array,
+    pair_index: Array,
+    eq_row: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes]:
+    """Dispatch the round-0 sum (no fold, no challenge) through one cached binary
+    symbolic over the RAW layer height (`h`), the re-pad layout (`2*p` gather / `p`
+    schedule), and `eq_row` (`2*rr`); `eq_int` rides fixed. Mirrors
+    `_dispatch_fix_and_sum_row` without the bind -- a single relaunch replaces the
+    eager entry kernel. A round needing no re-pad (`gather` None) gets an identity
+    gather over the full height (no `//2` fold) so it hits the same binary."""
+    if isinstance(planes.n0, jax.core.Tracer):
+        return _sum_as_poly_row(planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts)
+    if gather is None:
+        gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
+    operands = (planes, gather, col_index, pair_index, eq_row, eq_int, scalars)
+    key = ("sum0", tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
+           eq_int.shape, consts.naturals.shape[0])
+    exported = _round_get(key)
+    if exported is None:
+        h, p, rr = export.symbolic_shape(
+            "h, p, rr",
+            constraints=[
+                "h >= 1", f"h <= {_ROUND_SYM_MAX}",
+                "p >= 1", f"p <= {_ROUND_SYM_MAX}",
+                "rr >= 1", f"rr <= {_ROUND_SYM_MAX}",
+            ],
+        )
+        abst = (
+            _Planes(*(jax.ShapeDtypeStruct((h,), getattr(planes, f).dtype) for f in ("n0", "n1", "d0", "d1"))),
+            jax.ShapeDtypeStruct((2 * p,), gather.dtype),
+            jax.ShapeDtypeStruct((p,), col_index.dtype),
+            jax.ShapeDtypeStruct((p,), pair_index.dtype),
+            jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
+            jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
+            _abst_scalars(scalars),
+        )
+        fn = lambda pl, ga, ci, pi, er, ei, sc: _sum_as_poly_row(  # noqa: E731
+            pl, ga, ci, pi, er, ei, sc, consts
+        )
+        exported = export.export(jax.jit(fn))(*abst)
+        _round_put(key, exported)
     return exported.call(*operands)
 
 
@@ -696,7 +847,7 @@ def _dispatch_fix_and_sum_row(
     operands = (planes, eq_row, alpha, gather, col_index, pair_index, eq_int, scalars)
     key = ("row", tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
            eq_int.shape, consts.naturals.shape[0])
-    exported = _ROUND_KERNEL_CACHE.get(key)
+    exported = _round_get(key)
     if exported is None:
         pp, p, rr = export.symbolic_shape(
             "pp, p, rr",
@@ -720,7 +871,7 @@ def _dispatch_fix_and_sum_row(
             pl, er, al, ga, ci, pi, ei, sc, consts
         )
         exported = export.export(jax.jit(fn))(*abst)
-        _ROUND_KERNEL_CACHE[key] = exported
+        _round_put(key, exported)
     return exported.call(*operands)
 
 
@@ -732,6 +883,23 @@ def _scalar_reduce(poly, r, pad_adj, z_cur, one):
     themselves are async-cheap). Byte-identical."""
     return eval_coeffs(poly, r), pad_adj * (z_cur * r + (one - z_cur) * (one - r))
 
+
+# One squeezed challenge's reshape/bitcast (`raw.view`) jitted -- shape-stable per
+# (limbs, dtype), so the ~2 eager ops per FS hop collapse to one dispatch.
+_jit_reinterpret = jax.jit(reinterpret_challenge, static_argnums=(1,))
+
+# The layer tail in one jitted dispatch: the final fold (`_fix_last`) plus stacking
+# the per-round challenge/poly lists. Folding `_fix_last` in here keeps the final
+# fold one kernel without decorating the bare helper, and the always-length-2 fold
+# adds no shape -- recompile-free (one trace per challenge dtype / per round count,
+# bounded by nrv); the ~2*(nrv+niv) element broadcasts + four fold slices collapse
+# to one dispatch.
+def _finalize_layer(planes, alpha, chal, poly):
+    fn0, fn1, fd0, fd1 = _fix_last(planes, alpha)
+    return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
+
+
+_jit_finalize = jax.jit(_finalize_layer)
 
 
 def _run_jagged_rounds_relaunch(
@@ -771,21 +939,25 @@ def _run_jagged_rounds_relaunch(
     one = jnp.ones((), eval_point.dtype)
     eq_adj = one
     pad_adj = one
-    point = eval_point
     planes = _Planes(n0, n1, d0, d1)
     consts = _InterpConsts(naturals, inv_vand)
     # The dispatch and eager kernels share signatures, so select one per round.
     fix_row = _dispatch_fix_and_sum_row if export_dispatch else _fix_and_sum_row
     fix_int = _dispatch_fix_and_sum_int if export_dispatch else _fix_and_sum_int
+    fix_boundary = _dispatch_fix_and_sum_boundary if export_dispatch else _fix_and_sum_boundary
+    sum0 = _dispatch_sum_as_poly_row if export_dispatch else _sum_as_poly_row
     polys: list[Array] = []
     challenges: list[Array] = []
     prev_r = one  # unused until the first fold (round 1)
     for rnd in range(nrv + niv):
-        z_cur = point[-1]
+        # z_cur is eval_point's coordinate for this round (round k binds -(k+1)).
+        # `jnp.take` with a static index lowers a single-element gather to a buffer
+        # view -- zero dispatch -- where `eval_point[-(rnd+1)]` costs a slice+squeeze.
+        z_cur = jnp.take(eval_point, -(rnd + 1))
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         if rnd == 0:
             gather, col_index, pair_index = meta[0]
-            poly, planes = _sum_as_poly_row(
+            poly, planes = sum0(
                 planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
             )
         elif rnd < nrv:
@@ -794,25 +966,26 @@ def _run_jagged_rounds_relaunch(
                 planes, eq_row, prev_r, gather, col_index, pair_index, eq_int, scalars, consts
             )
         elif rnd == nrv:
-            poly, planes, eq_int = _fix_and_sum_boundary(planes, eq_int, prev_r, scalars, consts)
+            poly, planes, eq_int = fix_boundary(planes, eq_int, prev_r, scalars, consts)
         else:
             poly, planes, eq_int = fix_int(planes, eq_int, prev_r, scalars, consts)
         transcript, raw = transcript.observe_and_sample(poly, challenge_limbs)
-        r = reinterpret_challenge(raw, claim.dtype)
+        r = _jit_reinterpret(raw, claim.dtype)
         polys.append(poly)
         challenges.append(r)
         claim, pad_adj = _scalar_reduce(poly, r, pad_adj, z_cur, one)
         if rnd == nrv - 1:
             eq_adj = pad_adj
             pad_adj = one
-        point = point[:-1]
         prev_r = r
 
-    fn0, fn1, fd0, fd1 = _fix_last(planes, prev_r)
+    fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _jit_finalize(
+        planes, prev_r, challenges, polys
+    )
     return (
-        jnp.stack(challenges[::-1]),
+        stacked_challenges,
         transcript,
-        jnp.stack(polys),
+        stacked_polys,
         fn0,
         fn1,
         fd0,

@@ -156,9 +156,17 @@ class RelaunchHostFsEqualsDeviceTest(parameterized.TestCase):
         for a, b in zip(jax.tree_util.tree_leaves(prd),
                         jax.tree_util.tree_leaves(prh)):
             self.assertTrue(bool(jnp.all(a == b)), "proof diverged")
+        # host-FS keeps its state on the CPU, the device path on the accelerator,
+        # so compare the values device-agnostically (a direct cross-device `==`
+        # raises) -- byte-identity of the state is the point.
         for f in ("input_buffer", "output_buffer", "sponge_state"):
             self.assertTrue(
-                bool(jnp.all(getattr(td.state, f) == getattr(th.state, f))),
+                bool(
+                    jnp.all(
+                        jax.device_get(getattr(td.state, f))
+                        == jax.device_get(getattr(th.state, f))
+                    )
+                ),
                 f"transcript {f} diverged",
             )
 

@@ -2,6 +2,10 @@
 
 > Code, symbols, and file paths are English.
 
+New to JAX? Read [`jax.md`](jax.md) first — the mental models these rules follow
+from, plus the canonical external references. This page is the rules; that one is
+the why.
+
 ## `@jit`
 
 `@jit` the leaf numeric kernels; compose them in plain Python.

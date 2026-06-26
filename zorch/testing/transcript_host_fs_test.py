@@ -1,8 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""`DuplexTranscript.fs_on_host` routes the duplex sponge to the host CPU via
-`jax.pure_callback` (the transcript stays device-resident) -- byte-identical to the
-on-device sponge. Every test compares `fs_on_host=True` against the default device
-path on the same inputs."""
+"""`DuplexTranscript.fs_on_host` routes the duplex sponge to the host CPU, keeping
+the sponge state host-resident across the stream -- byte-identical to the on-device
+sponge. Every test compares `fs_on_host=True` against the default device path on the
+same inputs."""
 from __future__ import annotations
 
 import jax
@@ -76,11 +76,13 @@ class TranscriptHostFsTest(parameterized.TestCase):
         self.assertTrue(t.sample(1)[0].fs_on_host)
         self.assertTrue(t.observe_and_sample(rand_field(5, (3,), F), 2)[0].fs_on_host)
 
-    def test_transcript_stays_on_device(self) -> None:
-        # The point of host-FS: the transcript never leaves the compute device.
+    def test_state_goes_host_resident(self) -> None:
+        # The optimization: the host-FS sponge state lives on the CPU across the
+        # whole stream, so each hop crosses only `values` in and the challenge out,
+        # not the 5 state leaves both ways.
         t = self._new(True).observe(rand_field(7, (4,), F))
         leaf = tree_util.tree_leaves(t)[0]
-        self.assertEqual(next(iter(leaf.devices())), jax.devices()[0])
+        self.assertEqual(next(iter(leaf.devices())).platform, "cpu")
 
 
 if __name__ == "__main__":
