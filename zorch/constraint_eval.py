@@ -27,10 +27,10 @@ shapes reuses one compiled kernel across rounds while paying constraint-circuit
 work for live rows only — the recognizing emitter computes
 `out[x] = x < live ? body(x) : 0` and the decomposition mirrors that masked
 form exactly, keeping marked and inlined paths byte-identical lane for lane.
-The sumcheck marker's `num_real` expresses the same leading-row liveness as a
-static composite ATTRIBUTE; here the bound is an OPERAND because it must vary
-per round without changing the marker's fingerprint — static-vs-runtime is the
-axis that picks the wire shape.
+The jagged sumcheck marker's `row_counts` attribute expresses the same
+leading-row liveness as a static composite ATTRIBUTE; here the bound is an OPERAND
+because it must vary per round without changing the marker's fingerprint —
+static-vs-runtime is the axis that picks the wire shape.
 """
 
 from __future__ import annotations
