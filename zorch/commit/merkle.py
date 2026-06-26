@@ -294,22 +294,19 @@ class MerkleTree:
         `verify`'s plain equality can't express. Single-index; batch by
         `jax.vmap`-ing over `(index, opening)`."""
         node = self._leaf_hasher.hash(opening.row)
-        if not opening.path:
-            return node
-
-        # Roll the leaf->root fold into one `scan`: the body (one compress) is
-        # traced once, so a depth-h path lowers to a single compress region
-        # rather than h unrolled copies. The unrolled fold dominated the
-        # verifier's trace+lower across its per-layer reconstruct chains (#163).
-        def fold(
-            carry: tuple[Array, Array], siblings: Array
-        ) -> tuple[tuple[Array, Array], None]:
-            node, idx = carry
+        # Unroll the leaf->root fold over the static-depth path instead of a
+        # `scan`: a scan lowers to a `while` whose custom poseidon2 fusion body
+        # miscompiles the s32 index carry under @jit on the sponge plugin (wrong
+        # parity -> wrong pair order -> wrong root; eager is correct), while each
+        # level's compress still shares one cubin via the reuse_key so the trace
+        # stays small. Mirrors the commit side's `_fold_unrolled`. Knowledge:
+        # zorch-jagged-verify-jit-miscompiles-merkle-fold.
+        idx = index
+        for siblings in opening.path:
             if self.arity == 2:
-                return self._fold_with_sibling(node, idx, siblings), None
-            return self._fold_with_siblings(node, idx, siblings), None
-
-        (node, _), _ = jax.lax.scan(fold, (node, index), jnp.stack(opening.path))
+                node, idx = self._fold_with_sibling(node, idx, siblings)
+            else:
+                node, idx = self._fold_with_siblings(node, idx, siblings)
         return node
 
     def reconstruct_roots(
