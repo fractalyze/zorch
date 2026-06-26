@@ -10,10 +10,12 @@ host callback or zkVM FFI.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from functools import partial
+from functools import cache, partial
 from typing import TYPE_CHECKING, Any, Protocol, Self
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import Array, jit, lax, vmap
 from jax.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
@@ -144,17 +146,28 @@ def _absorb_permute(
     return permutation.permute(sponge.at[:rate].set(merged))
 
 
-@partial(register_dataclass, data_fields=["state"], meta_fields=["permutation", "rate"])
+@partial(
+    register_dataclass,
+    data_fields=["state"],
+    meta_fields=["permutation", "rate", "fs_on_host"],
+)
 @dataclass(frozen=True)
 class DuplexTranscript:
     """Overwrite-mode duplex sponge implementing `Transcript`. A JAX pytree whose
     `state` buffers are the leaves and whose `permutation`/`rate` are static, so
     the whole transcript threads through `@jit` (and, later, a `lax.scan` carry).
-    Every step is a device op — no host callback, no zkVM FFI."""
+    Every step is a device op — no host callback, no zkVM FFI.
+
+    `fs_on_host` opts the absorb/squeeze into `zorch.host_fs`: the transcript stays
+    device-resident, but the serial Poseidon chain runs on the host CPU via
+    `jax.pure_callback` (a latency-bound hash chain idles accelerator cores, so a
+    host-driven, per-round-kernel consumer offloads it). Off by default, so the
+    device path and its compiled graph are untouched unless a caller opts in."""
 
     permutation: Permutation
     rate: int
     state: DuplexState
+    fs_on_host: bool = False
 
     @property
     def has_dedicated_fusion(self) -> bool:
@@ -166,7 +179,9 @@ class DuplexTranscript:
         return self.permutation.has_dedicated_fusion
 
     @classmethod
-    def new(cls, permutation: Permutation, rate: int) -> DuplexTranscript:
+    def new(
+        cls, permutation: Permutation, rate: int, fs_on_host: bool = False
+    ) -> DuplexTranscript:
         if not 1 <= rate < permutation.width:
             raise ValueError(
                 f"rate ({rate}) must satisfy 1 <= rate < width ({permutation.width})"
@@ -179,10 +194,10 @@ class DuplexTranscript:
             in_pos=jnp.int32(0),
             out_pos=jnp.int32(0),
         )
-        return cls(permutation, rate, state)
+        return cls(permutation, rate, state, fs_on_host)
 
     def _with_state(self, state: DuplexState) -> DuplexTranscript:
-        return DuplexTranscript(self.permutation, self.rate, state)
+        return DuplexTranscript(self.permutation, self.rate, state, self.fs_on_host)
 
     def _duplexing(self) -> DuplexTranscript:
         """Flush the pending input prefix and refill the output buffer."""
@@ -204,6 +219,8 @@ class DuplexTranscript:
         """Absorb `values` (any field, flattened to the base field) into the
         transcript. The absorb is one `lax.scan` over the flat input, so the
         compiled graph size is independent of `len(values)`."""
+        if self.fs_on_host:
+            return _observe_host(self, values)
         return _observe_body(self, values)
 
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
@@ -226,6 +243,8 @@ class DuplexTranscript:
         return t._with_state(replace(t.state, out_pos=out_pos)), item
 
     def sample(self, n: int = 1) -> tuple[DuplexTranscript, Array]:
+        if self.fs_on_host:
+            return _sample_host(self, n)
         return _sample_body(self, n)
 
     def observe_and_sample(
@@ -235,6 +254,8 @@ class DuplexTranscript:
         Fiat-Shamir primitive (commit -> challenge). One method so the absorb and
         squeeze fuse into a single kernel under `@jit` by construction, never by a
         per-primitive pattern-match (the repo's fusion contract)."""
+        if self.fs_on_host:
+            return _observe_and_sample_host(self, values, n)
         return _observe_and_sample_body(self, values, n)
 
     def check_witness(
@@ -521,6 +542,129 @@ def _check_witness_body(
 ) -> tuple[DuplexTranscript, Array]:
     advanced, sample = _sample_body(_observe_body(t, witness), 1)
     return advanced, _pow_satisfied(sample[0], pow_bits)
+
+
+# ============================================================================
+# Host-FS backend — the duplex sponge run on the host CPU via `jax.pure_callback`,
+# the transcript staying device-resident. `DuplexTranscript.fs_on_host` routes
+# observe/sample/observe_and_sample here. A serial hash chain idles accelerator
+# cores, so a host-driven, per-round-kernel consumer offloads it; the device path
+# above is untouched.
+#
+# Byte-identical to the device sponge: the callback reconstructs a
+# `DuplexTranscript` (fs_on_host defaults False -> no recursion) and runs the SAME
+# `_observe_body`/`_sample_body` on the CPU. The `permutation` must lower its
+# `permute` to the host (a raw permute, not one pinning an inner accelerator jit).
+#
+# State leaves cross the callback as their own field dtype -- jax_fork#45 (FFI ABI
+# carries ZK field types) retired the uint32 bitcast workaround for the #44 abort.
+# ============================================================================
+
+
+@cache
+def _host_cpu():
+    """The host device, resolved lazily so a host-FS transcript -- not merely
+    importing -- is what requires a CPU backend."""
+    return jax.devices("cpu")[0]
+
+
+def _host_state_leaves(state: DuplexState):
+    return (state.input_buffer, state.output_buffer, state.sponge_state,
+            state.in_pos, state.out_pos)
+
+
+def _host_raw(permutation: Permutation) -> Permutation:
+    """The CPU sponge needs a permutation whose `permute` lowers to the host. A
+    wrapper pinning `permute` to an accelerator exposes the underlying one as
+    `_inner`; unwrap to it -- the accelerator jit is what host-FS bypasses."""
+    return getattr(permutation, "_inner", permutation)
+
+
+def _host_state_shapes(state: DuplexState):
+    base = state.sponge_state.dtype
+    return base, (
+        jax.ShapeDtypeStruct(state.input_buffer.shape, state.input_buffer.dtype),
+        jax.ShapeDtypeStruct(state.output_buffer.shape, state.output_buffer.dtype),
+        jax.ShapeDtypeStruct(state.sponge_state.shape, state.sponge_state.dtype),
+        jax.ShapeDtypeStruct(state.in_pos.shape, state.in_pos.dtype),
+        jax.ShapeDtypeStruct(state.out_pos.shape, state.out_pos.dtype),
+    )
+
+
+# Memoize per config: pure_callback keys its wrapper on the callback IDENTITY, so a
+# fresh closure per call would recompile every hop. device_put commits inputs to CPU.
+def _host_cb(f, c):
+    return lambda *a: tuple(np.asarray(o) for o in f(*jax.device_put(a, c)))
+
+
+@cache
+def _host_observe_caller(perm, rate):
+    @jit
+    def f(ib, ob, sp, ip, op, x):
+        s = DuplexState(ib, ob, sp, ip, op)
+        return _host_state_leaves(DuplexTranscript(perm, rate, s).observe(x).state)
+    return _host_cb(f, _host_cpu())
+
+
+@cache
+def _host_sample_caller(perm, rate, n):
+    @jit
+    def f(ib, ob, sp, ip, op):
+        t, out = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).sample(n)
+        nb, no, ns, ni, no2 = _host_state_leaves(t.state)
+        return nb, no, ns, ni, no2, out
+    return _host_cb(f, _host_cpu())
+
+
+@cache
+def _host_obs_sample_caller(perm, rate, n):
+    @jit
+    def f(ib, ob, sp, ip, op, x):
+        t = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).observe(x)
+        t, out = t.sample(n)
+        nb, no, ns, ni, no2 = _host_state_leaves(t.state)
+        return nb, no, ns, ni, no2, out
+    return _host_cb(f, _host_cpu())
+
+
+def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
+    """`observe` on the host sponge; the transcript stays on its device."""
+    s = transcript.state
+    _, shapes = _host_state_shapes(s)
+    fn = _host_observe_caller(_host_raw(transcript.permutation), transcript.rate)
+    nb, no, ns, ni, no2 = jax.pure_callback(
+        fn, shapes,
+        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos, values,
+    )
+    return transcript._with_state(DuplexState(nb, no, ns, ni, no2))
+
+
+def _sample_host(transcript: DuplexTranscript, n: int = 1) -> tuple[DuplexTranscript, Array]:
+    """`sample` n raw squeezes on the host sponge; they return on the transcript's
+    device."""
+    s = transcript.state
+    base, shapes = _host_state_shapes(s)
+    fn = _host_sample_caller(_host_raw(transcript.permutation), transcript.rate, n)
+    nb, no, ns, ni, no2, out = jax.pure_callback(
+        fn, (*shapes, jax.ShapeDtypeStruct((n,), base)),
+        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos,
+    )
+    return transcript._with_state(DuplexState(nb, no, ns, ni, no2)), out
+
+
+def _observe_and_sample_host(
+    transcript: DuplexTranscript, values: Array, n: int = 1
+) -> tuple[DuplexTranscript, Array]:
+    """`observe_and_sample`: absorb then squeeze n raw in ONE host callback -- the
+    per-round Fiat-Shamir primitive. The challenge reinterpret stays on the device."""
+    s = transcript.state
+    base, shapes = _host_state_shapes(s)
+    fn = _host_obs_sample_caller(_host_raw(transcript.permutation), transcript.rate, n)
+    nb, no, ns, ni, no2, out = jax.pure_callback(
+        fn, (*shapes, jax.ShapeDtypeStruct((n,), base)),
+        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos, values,
+    )
+    return transcript._with_state(DuplexState(nb, no, ns, ni, no2)), out
 
 
 if TYPE_CHECKING:
