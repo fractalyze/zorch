@@ -14,11 +14,13 @@ path to SP1. Mont-u32, no tolerances.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import export
+from jax import Array, export
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -28,8 +30,12 @@ from zorch.commit.testing.sp1_koalabear16 import koalabear16_params
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.poseidon2 import Poseidon2
 from zorch.hash.sponge import Sponge, SpongeParams
-from zorch.pcs.jagged.open import StackedRound, stacked_basefold_open
-from zorch.transcript import DuplexTranscript
+from zorch.pcs.jagged.open import (
+    StackedOpenProof,
+    StackedRound,
+    stacked_basefold_open,
+)
+from zorch.transcript import DuplexTranscript, GrindingTranscript
 
 _LOG_S = 6  # stacking height S = 64
 _S = 1 << _LOG_S
@@ -47,25 +53,21 @@ def _smcs() -> SingleMatrixCommitmentScheme:
     )
 
 
-def _u32(x) -> list[int]:
+def _u32(x: Array) -> list[int]:
     return np.asarray(jax.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
 
 
 class SymbolicKOpenExportTest(absltest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         super().setUpClass()
         cls.smcs = _smcs()
         cls.perm = Poseidon2(koalabear16_params())
-        cls.code = BitReversedReedSolomon(
-            message_len=_S, blowup=_BLOWUP, dtype=BF
-        )
+        cls.code = BitReversedReedSolomon(message_len=_S, blowup=_BLOWUP, dtype=BF)
         cls.rng = np.random.default_rng(0)
 
     def _make_round(self, k: int) -> StackedRound:
-        block = jnp.asarray(
-            self.rng.integers(0, _PRIME, (k, _S), np.uint32)
-        ).view(BF)
+        block = jnp.asarray(self.rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
         mle = block.T
         codeword = self.code.encode(block).T
         _root, digest_layers = self.smcs.commit(codeword)
@@ -94,7 +96,12 @@ class SymbolicKOpenExportTest(absltest.TestCase):
             DuplexTranscript.new(self.perm, rate=8),
         )
 
-        def fn(rounds, z, dense_eval, transcript):
+        def fn(
+            rounds: Sequence[StackedRound],
+            z: Array,
+            dense_eval: Array,
+            transcript: DuplexTranscript,
+        ) -> tuple[StackedOpenProof, GrindingTranscript]:
             return stacked_basefold_open(
                 self.smcs,
                 self.code,
@@ -110,7 +117,7 @@ class SymbolicKOpenExportTest(absltest.TestCase):
 
         return export.export(jax.jit(fn))([rd_abs], z_abs, de_abs, tr_abs)
 
-    def test_one_binary_byte_matches_concrete_for_every_k(self):
+    def test_one_binary_byte_matches_concrete_for_every_k(self) -> None:
         exported = self._export_symbolic()
         for k in (12, 16):
             rd = self._make_round(k)

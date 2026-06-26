@@ -10,6 +10,7 @@ byte-match equivalence against the reference prover is the FFI slice.
 
 import jax.numpy as jnp
 from absl.testing import absltest
+from jax import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -51,14 +52,14 @@ _SMCS_COMMIT_4X8 = jnp.array(
 )
 
 
-def _smcs():
+def _smcs() -> tuple[Sponge, Compression, SingleMatrixCommitmentScheme]:
     perm = Poseidon2(koalabear16_params())
     sponge = Sponge(perm, SpongeParams(rate=8, out=8))
     comp = Compression(perm, CompressionParams(arity=2, chunk=8))
     return sponge, comp, SingleMatrixCommitmentScheme(sponge, comp)
 
 
-def _proof_for(proofs, q):
+def _proof_for(proofs: list[Array], q: int) -> list[Array]:
     """Slice the per-level batched siblings down to query ``q``'s single path."""
     return [proofs[level][q] for level in range(len(proofs))]
 
@@ -221,7 +222,7 @@ class SingleMatrixCommitmentSchemeTest(absltest.TestCase):
 
 
 class BindStructureTest(absltest.TestCase):
-    def test_count_shape_mismatch_raises(self):
+    def test_count_shape_mismatch_raises(self) -> None:
         _, _, smcs = _smcs()
         commitment = jnp.arange(8, dtype=jnp.uint32).view(F)
         with self.assertRaises(ValueError):

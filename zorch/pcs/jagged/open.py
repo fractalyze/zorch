@@ -37,6 +37,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -47,7 +48,11 @@ from zorch.coding.reed_solomon import BitReversedReedSolomon
 from zorch.commit.smcs import SingleMatrixCommitmentScheme
 from zorch.pcs.basefold.batching import batch_staggered, partial_lagrange
 from zorch.poly.multilinear import eval_mle, mle_fold
-from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
+from zorch.transcript import (
+    GrindingTranscript,
+    TranscriptT,
+    sample_challenge,
+)
 from zorch.utils.bits import log2_ceil_usize, log2_strict_usize
 
 
@@ -80,8 +85,8 @@ Opening = tuple[Array, list[Array]]
 
 
 def sample_rlc_coeffs_bits(
-    transcript: Transcript, nbv: int, dtype
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, nbv: int, dtype: Any
+) -> tuple[TranscriptT, Array]:
     """The staggered partial-Lagrange RLC weights from ``nbv`` extension
     challenges expanded to the eq basis (``2^nbv`` weights). Split from
     ``sample_rlc_coeffs`` so the symbolic-K open can pass a static bit count
@@ -98,8 +103,8 @@ def sample_rlc_coeffs_bits(
 
 
 def sample_rlc_coeffs(
-    transcript: Transcript, total_width: int, dtype
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, total_width: int, dtype: Any
+) -> tuple[TranscriptT, Array]:
     """The staggered partial-Lagrange RLC weights over the batch's total
     column width: ``log2_ceil(total_width)`` extension challenges expanded to
     the eq basis. One definition driven by the open and its verifier dual,
@@ -108,8 +113,8 @@ def sample_rlc_coeffs(
 
 
 def sample_query_positions(
-    transcript: Transcript, block_len: int, num_queries: int
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, block_len: int, num_queries: int
+) -> tuple[TranscriptT, Array]:
     """SP1's ``sample_bits`` rule: one base squeeze per query, masked to the
     canonical low ``log2(block_len)`` bits. One definition driven by the open
     and its verifier dual — zorch's ``sample_positions`` reduces the Mont
@@ -264,6 +269,7 @@ def stacked_basefold_open(
     # ``log2_ceil`` is unavailable); ``batch_staggered`` consumes the leading
     # ``total_width`` of the ``2^rlc_bits`` weights.
     if symbolic_k:
+        assert rlc_bits is not None  # symbolic_k is exactly `rlc_bits is not None`
         t, coeffs = sample_rlc_coeffs_bits(t, rlc_bits, ef_dtype)
     else:
         total_width = sum(int(rd.mle.shape[1]) for rd in rounds)

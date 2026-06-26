@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -97,7 +98,7 @@ def assemble_columns(
     column_counts_rounds: Sequence[Sequence[int]],
     column_claims_rounds: Sequence[Array],
     *,
-    dtype,
+    dtype: Any,
 ) -> tuple[list[int], Array]:
     """Flatten the per-round (row_counts, column_counts, real claims) into the
     per-unit-column height list and the full column-claim buffer.
@@ -121,7 +122,7 @@ def assemble_columns(
 
 
 def sample_z_col(
-    transcript: Transcript, num_columns: int, dtype
+    transcript: Transcript, num_columns: int, dtype: Any
 ) -> tuple[Transcript, Array]:
     """One extension challenge per column variable — SP1 samples ``z_col`` as
     extension elements, not stacked base squeezes. One definition driven by
@@ -135,7 +136,9 @@ def sample_z_col(
     return transcript, z_col
 
 
-def merged_prefix_bits(col_heights: Sequence[int], num_bits: int, *, dtype) -> Array:
+def merged_prefix_bits(
+    col_heights: Sequence[int], num_bits: int, *, dtype: Any
+) -> Array:
     """The ``(L, 2·num_bits)`` merged prefix-bit buffer ``bits(t_c) ‖
     bits(t_{c+1})`` — the branching-program input both the inner sumcheck and
     its verifier leaf check read."""
@@ -161,7 +164,7 @@ def build_outer_indicator(
     z_col: Array,
     target_size: int,
     *,
-    dtype,
+    dtype: Any,
 ) -> Array:
     """Materialize ``J̃(z_row, z_col, ·)`` over the dense area ``[0, target_size)``.
 
@@ -232,7 +235,7 @@ def inner_sumcheck(
     z_trace: Array,
     transcript: Transcript,
     *,
-    dtype,
+    dtype: Any,
 ) -> tuple[Array, Array, Array, Transcript]:
     """Reprove ``J̃(z_row, z_col, z_trace)`` via the branching-program sumcheck.
 
@@ -314,7 +317,7 @@ class JaggedEvalRound(Round):
     inner branching-program sumcheck reproving ``J̃(z_row, z_col, z_final)``. See
     the module docstring for why both are bespoke loops, not ``SumcheckRound``s."""
 
-    def __init__(self, *, dtype) -> None:
+    def __init__(self, *, dtype: Any) -> None:
         self._dtype = dtype
 
     def __call__(

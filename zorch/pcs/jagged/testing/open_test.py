@@ -18,14 +18,17 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from absl.testing import absltest
+from jax import Array
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -35,7 +38,11 @@ from zorch.commit.testing.sp1_koalabear16 import koalabear16_params
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.poseidon2 import Poseidon2
 from zorch.hash.sponge import Sponge, SpongeParams
-from zorch.pcs.jagged.open import StackedRound, stacked_basefold_open
+from zorch.pcs.jagged.open import (
+    StackedOpenProof,
+    StackedRound,
+    stacked_basefold_open,
+)
 from zorch.pcs.jagged.verifier import stacked_basefold_verify
 from zorch.transcript import DuplexTranscript
 
@@ -54,15 +61,15 @@ def _smcs() -> SingleMatrixCommitmentScheme:
     )
 
 
-def _from_u32(u32, dtype):
+def _from_u32(u32: Any, dtype: Any) -> Array:
     return jax.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
 
 
-def _u32(a) -> np.ndarray:
+def _u32(a: Array) -> np.ndarray:
     return np.asarray(jax.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
 
 
-def _raw_area(round_meta) -> int:
+def _raw_area(round_meta: dict[str, Any]) -> int:
     return sum(
         int(r) * int(c)
         for r, c in zip(
@@ -71,7 +78,7 @@ def _raw_area(round_meta) -> int:
     )
 
 
-def _out(name):
+def _out(name: str) -> Any:
     return np.load(_FIXTURE / "outputs" / name)
 
 
@@ -98,17 +105,17 @@ class _ScriptedTranscript:
     _witness: jnp.ndarray
 
     @classmethod
-    def of(cls, samples, witness) -> _ScriptedTranscript:
+    def of(cls, samples: Sequence[Array], witness: Array) -> _ScriptedTranscript:
         return cls(jnp.stack(list(samples)), jnp.zeros((), jnp.int32), witness)
 
-    def observe(self, values):
+    def observe(self, values: Array) -> _ScriptedTranscript:
         return self
 
-    def sample(self, n=1):
+    def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
         out = jax.lax.dynamic_slice_in_dim(self._samples, self._cursor, n, axis=0)
         return dataclasses.replace(self, _cursor=self._cursor + n), out
 
-    def grind(self, pow_bits):
+    def grind(self, pow_bits: int) -> tuple[_ScriptedTranscript, Array]:
         return self, self._witness
 
 
@@ -123,7 +130,7 @@ _verify_jit = jax.jit(
 
 class StackedOpenByteMatchTest(absltest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         meta = json.loads((_FIXTURE / "meta.json").read_text())
         log_s = int(meta["rounds"][0]["log_stacking_height"])
         cfg = meta["basefold"]
@@ -141,7 +148,7 @@ class StackedOpenByteMatchTest(absltest.TestCase):
             np.load(_ZC_INPUTS / "main_dense.npy")[: _raw_area(meta["rounds"][1])], BF
         )
 
-        def build_round(dense):
+        def build_round(dense: Array) -> StackedRound:
             k = dense.shape[0] // S
             # Column-major stacking: dense block k is column k. Encode all columns
             # in one batched FFT (the code rides the leading axis), bit-reversed
@@ -189,16 +196,27 @@ class StackedOpenByteMatchTest(absltest.TestCase):
         # differ from the byte-match run.
         cls.smcs, cls.code, cls.rounds = smcs, code, rounds
         cls.z_final, cls.dense_eval, cls.log_s, cls.cfg = (
-            z_final, dense_eval, log_s, cfg)
+            z_final,
+            dense_eval,
+            log_s,
+            cfg,
+        )
         cls.perm = Poseidon2(koalabear16_params())
         cls.real_proof, _ = stacked_basefold_open(
-            smcs, code, rounds, z_final, dense_eval, log_s,
+            smcs,
+            code,
+            rounds,
+            z_final,
+            dense_eval,
+            log_s,
             num_queries=int(cfg["num_queries"]),
             pow_bits=int(cfg["pow_bits"]),
             transcript=DuplexTranscript.new(cls.perm, rate=8),
         )
 
-    def _assert_match(self, got, exp_u32, name, allow_zero=False):
+    def _assert_match(
+        self, got: Array, exp_u32: Any, name: str, allow_zero: bool = False
+    ) -> None:
         exp = np.asarray(exp_u32, dtype=np.uint32).reshape(-1)
         if not allow_zero:
             self.assertGreater(int(exp.sum()), 0, f"degenerate fixture {name}")
@@ -207,10 +225,11 @@ class StackedOpenByteMatchTest(absltest.TestCase):
         mism = np.nonzero(got != exp)[0]
         self.assertEqual(mism.size, 0, f"{name} diverged at u32 {mism[:8]}")
 
-    def test_batch_evals(self):
+    def test_batch_evals(self) -> None:
         for r in range(2):
             self._assert_match(
-                self.proof.batch_evals[r], _out(f"batch_evals_r{r}.npz")["mle0"],
+                self.proof.batch_evals[r],
+                _out(f"batch_evals_r{r}.npz")["mle0"],
                 f"batch_evals_r{r}",
             )
 
@@ -218,48 +237,59 @@ class StackedOpenByteMatchTest(absltest.TestCase):
     # zorch-internal digest with no SP1 reference — SP1's proof carries only the
     # separator-bound root, byte-matched by test_fri_commitments below.
 
-    def test_fri_commitments(self):
-        self._assert_match(self.proof.fri_commitments, _out("fri_commitments.npy"), "fri_commitments")
+    def test_fri_commitments(self) -> None:
+        self._assert_match(
+            self.proof.fri_commitments, _out("fri_commitments.npy"), "fri_commitments"
+        )
 
-    def test_univariate_messages(self):
+    def test_univariate_messages(self) -> None:
         self._assert_match(
             self.proof.univariate_messages,
             _out("univariate_messages.npy"),
             "univariate_messages",
         )
 
-    def test_final_poly(self):
+    def test_final_poly(self) -> None:
         self._assert_match(self.proof.final_poly, _out("final_poly.npy"), "final_poly")
 
-    def test_pow_witness(self):
+    def test_pow_witness(self) -> None:
         # pow_bits == 0 on this dev fixture, so the witness is the canonical zero.
         self._assert_match(
-            self.proof.pow_witness, _out("pow_witness.npy"), "pow_witness", allow_zero=True
+            self.proof.pow_witness,
+            _out("pow_witness.npy"),
+            "pow_witness",
+            allow_zero=True,
         )
 
-    def test_component_openings(self):
+    def test_component_openings(self) -> None:
         for r in range(2):
             rows, paths = self.proof.component_openings[r]
             dump = _out(f"component_openings_r{r}.npz")
             self._assert_match(rows, dump["rows"], f"component_openings_r{r}.rows")
             for lvl, path in enumerate(paths):
-                self._assert_match(path, dump[f"proof_l{lvl}"], f"component_r{r}.proof_l{lvl}")
+                self._assert_match(
+                    path, dump[f"proof_l{lvl}"], f"component_r{r}.proof_l{lvl}"
+                )
 
-    def test_query_openings(self):
+    def test_query_openings(self) -> None:
         for i, (rows, paths) in enumerate(self.proof.query_openings):
             dump = _out(f"query_openings_f{i}.npz")
             self._assert_match(rows, dump["rows"], f"query_openings_f{i}.rows")
             for lvl, path in enumerate(paths):
-                self._assert_match(path, dump[f"proof_l{lvl}"], f"query_f{i}.proof_l{lvl}")
+                self._assert_match(
+                    path, dump[f"proof_l{lvl}"], f"query_f{i}.proof_l{lvl}"
+                )
 
-    def _verify(self, proof):
+    def _verify(self, proof: StackedOpenProof) -> bool:
         round_widths = tuple(r.mle.shape[1] for r in self.rounds)
         _, ok = _verify_jit(
             self.smcs,
             self.code,
             round_widths,
             self.z_final,
-            self.dense_eval.reshape(()),  # dump stores it as (1,); verify wants the scalar
+            self.dense_eval.reshape(
+                ()
+            ),  # dump stores it as (1,); verify wants the scalar
             self.log_s,
             proof,
             DuplexTranscript.new(self.perm, rate=8),
@@ -268,12 +298,12 @@ class StackedOpenByteMatchTest(absltest.TestCase):
         )
         return bool(ok)
 
-    def test_open_verify_roundtrip(self):
+    def test_open_verify_roundtrip(self) -> None:
         # Completeness: the verifier accepts the open's own proof (no SP1 dump,
         # no shard prover) — the real-transcript dual of the open.
         self.assertTrue(self._verify(self.real_proof))
 
-    def test_verify_rejects_tampered_final_poly(self):
+    def test_verify_rejects_tampered_final_poly(self) -> None:
         # The final poly is the fold chain's residual; a flipped lane breaks it.
         u = jax.lax.bitcast_convert_type(self.real_proof.final_poly, jnp.uint32)
         u = u.at[0].set(u[0] ^ jnp.uint32(1))

@@ -18,6 +18,7 @@ layout (``prove_openings_at_indices``): all SP1 glue, all here.
 from __future__ import annotations
 
 from enum import IntEnum
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -30,7 +31,7 @@ from zorch.hash.sponge import Sponge
 from zorch.utils.bits import log2_strict_usize
 
 
-def _is_extension_field(dtype) -> bool:
+def _is_extension_field(dtype: Any) -> bool:
     """True if ``dtype`` is an extension field (``efinfo`` resolves it)."""
     try:
         zk_dtypes.efinfo(dtype)
@@ -95,7 +96,9 @@ class SingleMatrixCommitmentScheme:
         log_height = log2_strict_usize(height)  # power-of-two enforced by commit
         return self.bind_root(raw_root, log_height, width, matrix.dtype), digest_layers
 
-    def bind_root(self, raw_root: Array, log_height: int, width: int, dtype) -> Array:
+    def bind_root(
+        self, raw_root: Array, log_height: int, width: int, dtype: Any
+    ) -> Array:
         """Apply SP1's domain separator to a raw root: the single source of the
         ``compress([root, sponge([log_height, width])])`` formula, shared by
         ``commit``, ``verify_batch``, and the stacked-open dual's raw-root wire

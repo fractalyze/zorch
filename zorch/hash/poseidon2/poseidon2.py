@@ -17,13 +17,14 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import Array
+from jax import Array, lax
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
@@ -41,6 +42,17 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON2_MARKER_VERSION = 1
+
+# Whole-sponge marker: a padding-free overwrite absorb + squeeze as ONE region the
+# vendor expands into the fused `poseidon2_sponge_hash` kernel — state stays
+# register-resident across every absorb block, instead of a per-block permute
+# chain that round-trips the state through DRAM (dominates a wide-column leaf
+# hash). Same 6-operand Poseidon2Fusion ABI as the permute marker; the absorb
+# shape rides as attributes and the kernel reads the absorb length at runtime, so
+# one cubin serves every leaf width AND a symbolic width exports (no Python branch
+# on the block count).
+SPONGE_HASH_MARKER = "zorch.poseidon2_sponge_hash"
+SPONGE_HASH_MARKER_VERSION = 1
 
 
 class Poseidon2:
@@ -99,6 +111,19 @@ class Poseidon2:
                 f"{self.dtype}"
             )
         return _permute_body(self, state)
+
+    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Absorb `input` (1-D) in `rate`-blocks and squeeze `out` lanes as ONE
+        `zorch.poseidon2_sponge_hash` region the vendor expands into the fused
+        sponge kernel (state register-resident across blocks) instead of a
+        per-block permute chain. Only the dedicated (M4-structured) path emits the
+        marker; otherwise the inline absorb runs (a generic permutation has no
+        fused sponge kernel). Byte-identical to `Sponge.hash`'s padding-free
+        overwrite absorb, and lowers under a symbolic `len(input)` — the kernel
+        reads the absorb length at runtime — for recompile-free export."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        return _sponge_hash_body(self, input, rate, out)
 
 
 def _permutation_body(
@@ -243,6 +268,112 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         name=perm._fused_region_name,
         version=version,
         **attrs,
+    )
+
+
+def _absorb_symbolic(
+    input: Array,
+    state: Array,
+    rate: int,
+    out: int,
+    permute: Callable[[Array], Array],
+) -> Array:
+    """Shape-polymorphic padding-free absorb: one `while_loop` over `ceil(n/rate)`
+    blocks, no Python branch on `n`. Each block overwrites its `w = min(rate, n -
+    i*rate)` real lanes then permutes — byte-identical to the unrolled absorb. The
+    sponge-hash marker's decomposition for a symbolic `n` (export); the vendor
+    kernel does the real runtime loop."""
+    n = input.shape[0]
+    nb = (n + rate - 1) // rate  # ceil(n / rate)
+    lanes = jnp.arange(rate)
+
+    def cond(carry: tuple[Array, Array]) -> Array:
+        return carry[1] < nb
+
+    def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
+        s, i = carry
+        start = i * rate
+        w = jnp.minimum(rate, n - start)
+        # The last block reads past n; clamp OOB indices in-bounds (those lanes
+        # are masked out below, so the clamped values are discarded).
+        block = input[jnp.clip(start + lanes, 0, n - 1)]
+        s = s.at[:rate].set(jnp.where(lanes < w, block, s[:rate]))
+        return permute(s), i + 1
+
+    state, _ = lax.while_loop(cond, body, (state, jnp.int32(0)))
+    return state[:out]
+
+
+def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
+    """Emit the `zorch.poseidon2_sponge_hash` marker (dedicated path) or run the
+    inline absorb (generic path). The decomposition is byte-identical to
+    `Sponge.hash` — overwrite the leading lanes with each block then permute, a
+    partial last block overwriting only its own lanes — so the marked region's
+    fallback HLO matches the kernel. The 6-operand region carries the round
+    constants explicitly (a `lax.composite` would otherwise lift closed-over
+    consts as extra operands and break the Poseidon2Fusion ABI)."""
+    w = perm.width
+    absorb_len = input.shape[0]
+    symbolic = not isinstance(absorb_len, int)
+
+    def sponge(
+        inp: Array,
+        ext_init_rc: Array,
+        int_rc: Array,
+        ext_term_rc: Array,
+        diag: Array,
+        off_diag: Array,
+        **_attrs: object,
+    ) -> Array:
+        def permute(s: Array) -> Array:
+            return _permutation_body(
+                perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
+            )
+
+        state = jnp.zeros(w, dtype=inp.dtype)
+        if symbolic:  # shape-poly export: while_loop over the blocks
+            return _absorb_symbolic(inp, state, rate, out, permute)
+        n = absorb_len
+        if n == 0:
+            return state[:out]
+        if n <= rate:  # single (possibly partial) block
+            state = state.at[:n].set(inp[:n])
+            return permute(state)[:out]
+        state = state.at[:rate].set(inp[:rate])
+        state = permute(state)
+        full = n // rate
+        for i in range(1, full):  # remaining full blocks (unrolled; n is static)
+            state = state.at[:rate].set(inp[i * rate : (i + 1) * rate])
+            state = permute(state)
+        tail = n - full * rate
+        if tail:  # partial last block overwrites only its own lanes
+            state = state.at[:tail].set(inp[full * rate :])
+            state = permute(state)
+        return state[:out]
+
+    operands = _abi_operands(perm, input)
+    # A generic permutation has no fused sponge kernel — run the absorb inline (a
+    # LoopFusion over a whole sponge would register-spill); only the dedicated
+    # path emits the marker. The absorb shape rides as attributes; the body
+    # ignores them (the kernel reads width/rate/rounds from the backend config and
+    # the absorb length from the operand shape at runtime).
+    if not perm.has_dedicated_fusion:
+        return sponge(*operands)
+    p = perm._p
+    marker_attrs: dict[str, int] = {
+        "width": w,
+        "rate": rate,
+        "digest_elems": out,
+        "external_rounds": p.external_rounds,
+        "internal_rounds": p.internal_rounds,
+        "alpha": p.alpha,
+    }
+    return fused_region(
+        sponge,
+        *operands,
+        name=SPONGE_HASH_MARKER,
+        version=SPONGE_HASH_MARKER_VERSION,
+        **marker_attrs,
     )
 
 

@@ -35,6 +35,7 @@ References (pinned at the same SP1 commit as ``zerocheck/jagged.py``):
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -81,7 +82,7 @@ def verify_jagged_eval_msg(
     msg: JaggedEvalMsg,
     transcript: Transcript,
     *,
-    dtype,
+    dtype: Any,
 ) -> tuple[Transcript, Array, Array]:
     """Verify the sumcheck half of the stage-5 proof; returns
     ``(transcript, z_final, ok)``.
@@ -158,13 +159,11 @@ def verify_jagged_eval_msg(
     return transcript, z_final, ok
 
 
-def _ef_pairs(rows: Array, dtype) -> Array:
+def _ef_pairs(rows: Array, dtype: Any) -> Array:
     """The ``(Q, 2·limbs)`` base-field pair-leaf rows as ``(Q, 2)`` extension
     values — the inverse of the open's leaf bitcast."""
     limbs = efinfo(dtype).degree
-    return jax.lax.bitcast_convert_type(
-        rows.reshape(rows.shape[0], 2, limbs), dtype
-    )
+    return jax.lax.bitcast_convert_type(rows.reshape(rows.shape[0], 2, limbs), dtype)
 
 
 def stacked_basefold_verify(
@@ -304,7 +303,13 @@ def stacked_basefold_verify(
     # Merkle phase: every component matrix's opened rows rebuild its bound
     # commitment at the query positions, every fold layer's pair-leaves
     # rebuild its bound root at the halved index.
-    def verify_rows(root: Array, dims: tuple[int, int], idx, rows, paths) -> Array:
+    def verify_rows(
+        root: Array,
+        dims: tuple[int, int],
+        idx: Array,
+        rows: Array,
+        paths: list[Array],
+    ) -> Array:
         codes = jax.vmap(
             lambda i, row, path: smcs.verify_batch(root, dims, i, row, path)
         )(idx, rows, paths)
@@ -335,9 +340,7 @@ def stacked_basefold_verify(
         Opening(row=_ef_pairs(rows, ef), path=paths)
         for rows, paths in proof.query_openings
     ]
-    comp_val = batch_staggered(
-        [rows for rows, _ in proof.component_openings], coeffs
-    )
+    comp_val = batch_staggered([rows for rows, _ in proof.component_openings], coeffs)
     leaf0 = query_ops[0].row
     lo0, _ = code.pair_indices(layer_pos[0], 0)
     ok = ok & jnp.all(comp_val == jnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1]))

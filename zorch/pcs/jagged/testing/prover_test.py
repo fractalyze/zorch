@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from absl.testing import absltest
+from jax import Array
 from zk_dtypes import koalabear_mont, koalabearx4_mont
 
 from zorch.pcs.jagged.prover import (
@@ -29,7 +31,7 @@ from zorch.pcs.jagged.prover import (
 )
 from zorch.round import ProveChain
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import sample_challenge
+from zorch.transcript import DuplexTranscript, sample_challenge
 
 BF = koalabear_mont
 EF = koalabearx4_mont
@@ -40,19 +42,21 @@ _FIXTURE = Path(__file__).parent / "testdata" / "gpu_fibonacci"
 _ZC_INPUTS = Path(__file__).parent / "testdata" / "zerocheck_dense"
 
 
-def _from_u32(u32, dtype):
+def _from_u32(u32: Any, dtype: Any) -> Array:
     return jax.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
 
 
-def _u32(a) -> np.ndarray:
+def _u32(a: Array) -> np.ndarray:
     return np.asarray(jax.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
 
 
-def _raw_area(round_meta) -> int:
+def _raw_area(round_meta: dict[str, Any]) -> int:
     """Σ row_count·column_count — the round's unpadded packed-dense length."""
     return sum(
         int(r) * int(c)
-        for r, c in zip(round_meta["row_counts"], round_meta["column_counts"], strict=True)
+        for r, c in zip(
+            round_meta["row_counts"], round_meta["column_counts"], strict=True
+        )
     )
 
 
@@ -64,16 +68,16 @@ class _ScriptedTranscript:
     reassemble each EF challenge (the ``sample_challenge`` rule,
     fractalyze/sp1-zorch#88), so the script holds one flat base-limb stream."""
 
-    def __init__(self, challenges):
+    def __init__(self, challenges: Array) -> None:
         self._stream = jax.lax.bitcast_convert_type(
             jnp.asarray(challenges), BF
         ).reshape(-1)
         self._pos = 0
 
-    def observe(self, values):
+    def observe(self, values: Array) -> _ScriptedTranscript:
         return self
 
-    def sample(self, n=1):
+    def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
         out = self._stream[self._pos : self._pos + n]
         self._pos += n
         return self, out
@@ -81,7 +85,7 @@ class _ScriptedTranscript:
 
 class JaggedEvalRoundByteMatchTest(absltest.TestCase):
     @classmethod
-    def setUpClass(cls):
+    def setUpClass(cls) -> None:
         meta = json.loads((_FIXTURE / "meta.json").read_text())
         row_counts_rounds = [[int(x) for x in r["row_counts"]] for r in meta["rounds"]]
         column_counts_rounds = [
@@ -124,13 +128,15 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         # The outer sumcheck samples its 23 alphas first, then the inner its 48.
         chain = ProveChain([JaggedEvalRound(dtype=EF)])
         script = jnp.concatenate([outer_alphas, inner_alphas])
-        _, _, msgs = chain(carry, _ScriptedTranscript(script))
+        # _ScriptedTranscript is a replay-only test double: it implements just the
+        # observe/sample the round drives, not the full Transcript protocol.
+        _, _, msgs = chain(carry, _ScriptedTranscript(script))  # type: ignore[arg-type]
         cls.msg = msgs[0]
 
-    def _expect(self, name):
+    def _expect(self, name: str) -> np.ndarray:
         return np.load(_FIXTURE / "outputs" / name).reshape(-1)
 
-    def _assert_match(self, got, name):
+    def _assert_match(self, got: Array, name: str) -> None:
         exp = self._expect(name)
         self.assertGreater(int(exp.sum()), 0, "degenerate fixture")
         got = _u32(got)
@@ -138,25 +144,25 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         mism = np.nonzero(got != exp)[0]
         self.assertEqual(mism.size, 0, f"{name} diverged at u32 {mism[:8]}")
 
-    def test_outer_sumcheck_claim(self):
+    def test_outer_sumcheck_claim(self) -> None:
         self._assert_match(self.msg.outer_sumcheck_claim, "outer_sumcheck_claim.npy")
 
-    def test_outer_sumcheck_polys(self):
+    def test_outer_sumcheck_polys(self) -> None:
         self._assert_match(self.msg.outer_sumcheck_polys, "outer_sumcheck_polys.npy")
 
-    def test_outer_sumcheck_point(self):
+    def test_outer_sumcheck_point(self) -> None:
         self._assert_match(self.msg.outer_sumcheck_point, "outer_sumcheck_point.npy")
 
-    def test_dense_eval(self):
+    def test_dense_eval(self) -> None:
         self._assert_match(self.msg.dense_eval, "dense_eval.npy")
 
-    def test_inner_claimed_sum(self):
+    def test_inner_claimed_sum(self) -> None:
         self._assert_match(self.msg.inner_claimed_sum, "inner_claimed_sum.npy")
 
-    def test_inner_sumcheck_polys(self):
+    def test_inner_sumcheck_polys(self) -> None:
         self._assert_match(self.msg.inner_sumcheck_polys, "inner_sumcheck_polys.npy")
 
-    def test_inner_point(self):
+    def test_inner_point(self) -> None:
         self._assert_match(self.msg.inner_point, "inner_point.npy")
 
 
@@ -167,8 +173,8 @@ class ChallengeRuleTest(absltest.TestCase):
     definition (fractalyze/sp1-zorch#88). The scripted byte-match above
     bypasses the rule entirely, so it cannot catch a squeeze-count drift."""
 
-    def test_outer_and_inner_rounds_sample_extension_challenges(self):
-        def rand_ef(seed, shape):
+    def test_outer_and_inner_rounds_sample_extension_challenges(self) -> None:
+        def rand_ef(seed: int, shape: tuple[int, ...]) -> Array:
             ints = np.random.default_rng(seed).integers(
                 1, 1 << 30, size=(*shape, 4), dtype=np.int64
             )
@@ -188,7 +194,9 @@ class ChallengeRuleTest(absltest.TestCase):
         # message: observe each round poly, take one extension sample, and
         # match the point entry it bound (points are the challenge lists
         # reversed — SP1's insert-at-front).
-        def replay_rounds(t, polys, point, label):
+        def replay_rounds(
+            t: DuplexTranscript, polys: Array, point: Array, label: str
+        ) -> DuplexTranscript:
             self.assertEqual(point.dtype, EF, label)
             for r in range(polys.shape[0]):
                 t = t.observe(polys[r])

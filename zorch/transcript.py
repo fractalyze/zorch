@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import cache, partial
-from typing import TYPE_CHECKING, Any, Protocol, Self
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 
 import jax
 import jax.numpy as jnp
@@ -80,6 +80,12 @@ class GrindingTranscript(Transcript, Protocol):
     def grind(self, pow_bits: int) -> tuple[Self, Array]: ...
 
 
+# Generic over the transcript flavor so the free Fiat-Shamir helpers
+# (`sample_challenge`, the open/verifier's `sample_*`) preserve a
+# `GrindingTranscript` rather than widening it to the base `Transcript`.
+TranscriptT = TypeVar("TranscriptT", bound=Transcript)
+
+
 def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
     """Reinterpret consecutive transcript squeezes `raw` as one `dtype` challenge:
     the identity when `dtype` is the transcript's own field, else the extension
@@ -101,8 +107,8 @@ def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
 
 
 def sample_challenge(
-    transcript: Transcript, dtype: Any, limbs: int = 1
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, dtype: Any, limbs: int = 1
+) -> tuple[TranscriptT, Array]:
     """Squeeze one challenge of `dtype` as `limbs` transcript samples.
 
     A transcript squeezes elements of its own field; a challenge field that
@@ -576,11 +582,25 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # the rate lanes, byte-identical to the per-element absorb, and the static
     # `combined[k*rate:(k+1)*rate]` avoids the traced-index dynamic_slice.
     sponge = st.sponge_state
-    for k in range(num_blocks):
-        block = combined[k * rate : (k + 1) * rate]  # static slice
-        permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
-        # Blocks past the live count are padding-only: leave the sponge untouched.
-        sponge = jnp.where(jnp.int32(k) < active_blocks, permuted, sponge)
+    if isinstance(num_blocks, int):
+        for k in range(num_blocks):
+            block = combined[k * rate : (k + 1) * rate]  # static slice
+            permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
+            # Blocks past the live count are padding-only: leave the sponge alone.
+            sponge = jnp.where(jnp.int32(k) < active_blocks, permuted, sponge)
+    else:
+        # Symbolic M (shape-poly export): num_blocks is a symbolic dim, so the
+        # Python unroll is unavailable — loop the rate-blocks with a `fori_loop`.
+        # Export targets the GPU sponge plugin, not the CPU backend whose zkx#500
+        # scan miscompile the unroll protects against; the body is byte-identical
+        # (overwrite the rate lanes via concatenate, permute, mask blocks past the
+        # live count), so a concrete refinement reproduces the unrolled bytes.
+        def absorb_block(k: Array, sponge: Array) -> Array:
+            block = lax.dynamic_slice_in_dim(combined, k * rate, rate)
+            permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
+            return jnp.where(k < active_blocks, permuted, sponge)
+
+        sponge = lax.fori_loop(0, num_blocks, absorb_block, sponge)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode

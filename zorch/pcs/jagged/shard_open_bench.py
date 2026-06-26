@@ -17,15 +17,19 @@ Run:
     /tmp/sponge-venv/bin/python zorch/pcs/jagged/shard_open_bench.py \
         --shard-dir=/data/sp1_dumps/rsp_21740136_sp1/shard0
 """
+
 from __future__ import annotations
 
 import argparse
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from jax import Array
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 from zk_dtypes import pfinfo
@@ -36,8 +40,12 @@ from zorch.commit.testing.sp1_koalabear16 import koalabear16_params
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.poseidon2 import Poseidon2
 from zorch.hash.sponge import Sponge, SpongeParams
-from zorch.pcs.jagged.open import StackedRound, stacked_basefold_open
-from zorch.transcript import DuplexTranscript
+from zorch.pcs.jagged.open import (
+    StackedOpenProof,
+    StackedRound,
+    stacked_basefold_open,
+)
+from zorch.transcript import DuplexTranscript, GrindingTranscript
 
 MODULUS = pfinfo(BF).modulus
 _DEFAULT_SHARD = "/data/sp1_dumps/rsp_21740136_sp1/shard0"
@@ -56,7 +64,7 @@ def _smcs() -> SingleMatrixCommitmentScheme:
     )
 
 
-def _load_main_traces(trace_dir: Path):
+def _load_main_traces(trace_dir: Path) -> list[Array]:
     chips = []
     for meta_path in sorted(trace_dir.glob("*.meta")):
         meta = dict(
@@ -71,7 +79,7 @@ def _load_main_traces(trace_dir: Path):
     return chips
 
 
-def _pack_dense(chips, S: int):
+def _pack_dense(chips: list[Array], S: int) -> Array:
     """Column-major concat of every chip's columns, end-padded to a multiple of
     ``S`` (mirrors trace_commit's stacked packing the commit reshapes)."""
     flat = jnp.concatenate([c.T.reshape(-1) for c in chips])
@@ -81,7 +89,7 @@ def _pack_dense(chips, S: int):
     return flat
 
 
-def _rand_ef(key, n: int):
+def _rand_ef(key: Array, n: int) -> Array:
     return jax.random.randint(key, (n * 4,), 0, MODULUS, dtype=jnp.uint32).view(EF)
 
 
@@ -98,8 +106,11 @@ def main() -> None:
     chips = _load_main_traces(Path(args.shard_dir) / "gpu_traces")
     n_cols = sum(int(c.shape[1]) for c in chips)
     total = sum(int(c.shape[0]) * int(c.shape[1]) for c in chips)
-    print(f"  {len(chips)} chips, {n_cols} columns, {total} trace elements "
-          f"(~2^{total.bit_length()-1})", flush=True)
+    print(
+        f"  {len(chips)} chips, {n_cols} columns, {total} trace elements "
+        f"(~2^{total.bit_length()-1})",
+        flush=True,
+    )
 
     smcs = _smcs()
     code = BitReversedReedSolomon(message_len=S, blowup=_BLOWUP, dtype=BF)
@@ -113,8 +124,11 @@ def main() -> None:
     k = dense.shape[0] // S
     dmat = dense.reshape(k, S)  # [K, S] — code rides the leading axis
     jax.block_until_ready(dmat)
-    print(f"  packed dense {dense.shape} -> stacked [{S}, {k}] "
-          f"(codeword [{S * _BLOWUP}, {k}])", flush=True)
+    print(
+        f"  packed dense {dense.shape} -> stacked [{S}, {k}] "
+        f"(codeword [{S * _BLOWUP}, {k}])",
+        flush=True,
+    )
 
     encode = jax.jit(code.encode)
 
@@ -126,14 +140,14 @@ def main() -> None:
     # reads row-major. Wiring column-major through smcs would drop the transpose
     # + coalesce the 188-wide leaf reads — follow-up, not done here.
     @jax.jit
-    def commit_round(d):
+    def commit_round(d: Array) -> tuple[Array, list[Array]]:
         codeword = code.encode(d).T  # [S*blowup, K]
         _root, digest_layers = smcs.commit(codeword)
         return codeword, digest_layers
 
     key = jax.random.PRNGKey(args.seed)
 
-    def _time(label, fn, reps=2):
+    def _time(label: str, fn: Callable[[], Any], reps: int = 2) -> tuple[Any, float]:
         """Compile-warm then time ``reps`` steady-state calls, freeing each
         output before the next call so peak memory stays one-output (these
         codewords are GBs; holding two OOMs a 32 GB card)."""
@@ -167,17 +181,26 @@ def main() -> None:
     dense_eval = _rand_ef(kd, 1)[0]
     jax.block_until_ready((z_final, dense_eval))
 
-    def _open():
+    def _open() -> tuple[StackedOpenProof, GrindingTranscript]:
         return open_jit(
-            smcs, code, [rd], z_final, dense_eval, args.log_stacking_height,
-            num_queries=_NUM_QUERIES, pow_bits=_POW_BITS,
+            smcs,
+            code,
+            [rd],
+            z_final,
+            dense_eval,
+            args.log_stacking_height,
+            num_queries=_NUM_QUERIES,
+            pow_bits=_POW_BITS,
             transcript=DuplexTranscript.new(Poseidon2(koalabear16_params()), rate=8),
         )
 
     _proof, t_open = _time("open", _open)
-    print(f"\n[warm] commit={t_commit*1e3:.1f} ms (encode={t_encode*1e3:.1f} + "
-          f"merkle~={t_merkle*1e3:.1f})  open={t_open*1e3:.1f} ms  "
-          f"total={(t_commit+t_open)*1e3:.1f} ms", flush=True)
+    print(
+        f"\n[warm] commit={t_commit*1e3:.1f} ms (encode={t_encode*1e3:.1f} + "
+        f"merkle~={t_merkle*1e3:.1f})  open={t_open*1e3:.1f} ms  "
+        f"total={(t_commit+t_open)*1e3:.1f} ms",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
