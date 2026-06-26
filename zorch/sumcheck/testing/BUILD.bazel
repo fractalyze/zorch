@@ -11,6 +11,19 @@ py_library(
 )
 
 py_test(
+    name = "field_ops_test",
+    size = "small",
+    srcs = ["field_ops_test.py"],
+    deps = [
+        "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "prove_test",
     size = "small",
     srcs = ["prove_test.py"],
