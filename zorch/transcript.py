@@ -568,15 +568,20 @@ def _check_witness_body(
 
 
 @cache
-def _host_cpu():
+def _host_cpu() -> jax.Device:
     """The host device, resolved lazily so a host-FS transcript -- not merely
     importing -- is what requires a CPU backend."""
     return jax.devices("cpu")[0]
 
 
 def _host_state_leaves(state: DuplexState) -> tuple[Array, ...]:
-    return (state.input_buffer, state.output_buffer, state.sponge_state,
-            state.in_pos, state.out_pos)
+    return (
+        state.input_buffer,
+        state.output_buffer,
+        state.sponge_state,
+        state.in_pos,
+        state.out_pos,
+    )
 
 
 def _host_raw(permutation: Permutation) -> Permutation:
@@ -590,35 +595,42 @@ def _host_raw(permutation: Permutation) -> Permutation:
 # closure compiles once. Runs on the CPU because the caller feeds it a host-
 # resident state (`_state_on_host`) and CPU-committed `values`.
 @cache
-def _host_observe_jit(perm, rate):
+def _host_observe_jit(perm: Permutation, rate: int) -> Any:
     @jit
-    def f(ib, ob, sp, ip, op, x):
+    def f(
+        ib: Array, ob: Array, sp: Array, ip: Array, op: Array, x: Array
+    ) -> tuple[Array, ...]:
         s = DuplexState(ib, ob, sp, ip, op)
         return _host_state_leaves(DuplexTranscript(perm, rate, s).observe(x).state)
+
     return f
 
 
 @cache
-def _host_sample_jit(perm, rate, n):
+def _host_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
     @jit
-    def f(ib, ob, sp, ip, op):
+    def f(ib: Array, ob: Array, sp: Array, ip: Array, op: Array) -> tuple[Array, ...]:
         t, out = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).sample(n)
         return (*_host_state_leaves(t.state), out)
+
     return f
 
 
 @cache
-def _host_obs_sample_jit(perm, rate, n):
+def _host_obs_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
     @jit
-    def f(ib, ob, sp, ip, op, x):
+    def f(
+        ib: Array, ob: Array, sp: Array, ip: Array, op: Array, x: Array
+    ) -> tuple[Array, ...]:
         t = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).observe(x)
         t, out = t.sample(n)
         return (*_host_state_leaves(t.state), out)
+
     return f
 
 
 @cache
-def _host_compute_device():
+def _host_compute_device() -> jax.Device:
     """Where a squeezed challenge returns to -- the device the surrounding eager
     prove computes on (its kernels consume the challenge)."""
     return jax.devices()[0]
@@ -641,20 +653,28 @@ def _state_on_host(state: DuplexState) -> DuplexState:
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
     """`observe` on the host sponge; the state stays host-resident."""
     s = _state_on_host(transcript.state)
-    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
+    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)  # type: ignore[arg-type]
     leaves = f(
-        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos,
+        s.input_buffer,
+        s.output_buffer,
+        s.sponge_state,
+        s.in_pos,
+        s.out_pos,
         jax.device_put(values, _host_cpu()),
     )
     return transcript._with_state(DuplexState(*leaves))
 
 
-def _sample_host(transcript: DuplexTranscript, n: int = 1) -> tuple[DuplexTranscript, Array]:
+def _sample_host(
+    transcript: DuplexTranscript, n: int = 1
+) -> tuple[DuplexTranscript, Array]:
     """`sample` n raw squeezes on the host sponge; the state stays host-resident,
     the challenge returns to the compute device."""
     s = _state_on_host(transcript.state)
-    f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
-    *leaves, out = f(s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos)
+    f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
+    *leaves, out = f(
+        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos
+    )
     return (
         transcript._with_state(DuplexState(*leaves)),
         jax.device_put(out, _host_compute_device()),
@@ -667,9 +687,13 @@ def _observe_and_sample_host(
     """`observe_and_sample`: absorb then squeeze n raw in one host hop -- the
     per-round Fiat-Shamir primitive. The challenge returns to the compute device."""
     s = _state_on_host(transcript.state)
-    f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
+    f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
     *leaves, out = f(
-        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos,
+        s.input_buffer,
+        s.output_buffer,
+        s.sponge_state,
+        s.in_pos,
+        s.out_pos,
         jax.device_put(values, _host_cpu()),
     )
     return (

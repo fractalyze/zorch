@@ -355,8 +355,10 @@ def _jagged_transition_core(
     rather than the rolled `scan_build_jagged_pyramid` -- then pays one fused
     dispatch per transition instead of N eager ops. The schedule is pure static
     ints, so both segment gathers bake into the graph as constants and the
-    static count tuples key a per-shape compile cache that distinct transition
-    shapes warm-reuse.
+    static count tuples key the compile cache by value: repeated calls at one
+    transition shape warm-reuse a single trace, but each DISTINCT shape compiles
+    once -- so per-layer iteration recompiles down a deep pyramid, where the
+    rolled `scan_build_jagged_pyramid` stays one trace regardless of depth.
     """
     prepad_counts, folded_counts = _prepad_folded(row_counts)
     n0, n1, d0, d1 = _pad_neutral(

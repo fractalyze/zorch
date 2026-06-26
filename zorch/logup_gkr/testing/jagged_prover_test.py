@@ -13,7 +13,6 @@ from __future__ import annotations
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
-from unittest import mock
 
 import jax
 import jax.numpy as jnp
@@ -22,7 +21,6 @@ from absl.testing import absltest
 from jax import Array
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.logup_gkr import jagged_prover
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _interleave,
@@ -33,7 +31,11 @@ from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
     JaggedGkrLayerRound,
     JaggedLayerProof,
+    _InterpConsts,
     _jagged_round_zone,
+    _JaggedSchedule,
+    _JaggedState,
+    _Planes,
     _round_metadata,
     _run_jagged_rounds,
     prove_jagged_layer,
@@ -472,23 +474,24 @@ class ProveJaggedMarkedTest(absltest.TestCase):
         meta = _round_metadata(layer.row_counts, nrv)
         naturals = jnp.stack([jnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
         inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
-        challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds(
-            layer.numerator_0,
-            layer.numerator_1,
-            layer.denominator_0,
-            layer.denominator_1,
+        state = _JaggedState(
+            _Planes(
+                layer.numerator_0,
+                layer.numerator_1,
+                layer.denominator_0,
+                layer.denominator_1,
+            ),
             eq_row,
             eq_int,
             z,
             lam,
             claim,
-            self._poseidon_transcript(),
-            meta,
-            naturals,
-            inv_vand,
-            nrv,
-            niv,
-            challenge_limbs,
+        )
+        sched = _JaggedSchedule(
+            meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
+        )
+        challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds(
+            state, sched, self._poseidon_transcript()
         )
         return (
             challenges,

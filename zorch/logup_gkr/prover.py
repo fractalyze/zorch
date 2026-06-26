@@ -68,6 +68,19 @@ def logup_combine(
     return eq * (lam * (n0 * d1 + n1 * d0) + d0 * d1)
 
 
+def fold_carry(
+    n0: Array, n1: Array, d0: Array, d1: Array, point: Array, r: Array
+) -> tuple[Array, Array, Array]:
+    """Reduce a LogUp layer's four openings to the next GKR carry under the
+    child selector `r`: bind num/den, and append `r` as the low (last) bit of
+    the MSB-first point. Module-level for the same reason as `logup_combine` --
+    the prover and verifier carry folds must stay byte-identical or the verifier
+    accepts proofs the prover stopped producing."""
+    num_eval = n0 + (n1 - n0) * r
+    den_eval = d0 + (d1 - d0) * r
+    return num_eval, den_eval, jnp.concatenate([point, jnp.atleast_1d(r)])
+
+
 @partial(jax.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
 @dataclass(frozen=True)
 class LogupSumcheckRound(Round):
@@ -190,10 +203,7 @@ class GkrLayerRound(Round):
         _, n0, d1, n1, d0 = (factor[0] for factor in final_state)
         transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
-        num_eval = n0 + (n1 - n0) * r
-        den_eval = d0 + (d1 - d0) * r
-        # MSB-first point + the pyramid's child selector as the low (last) bit.
-        eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+        num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
 
         proof = LayerProof(round_polys, point, n0, n1, d0, d1)
         return (num_eval, den_eval, eval_point), transcript, proof

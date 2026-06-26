@@ -5,6 +5,8 @@ sponge. Every test compares `fs_on_host=True` against the default device path on
 same inputs."""
 from __future__ import annotations
 
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import zk_dtypes
@@ -24,7 +26,9 @@ EF = zk_dtypes.koalabearx4_mont
 _CPU_BACKEND = jax.default_backend() == "cpu"
 
 
-@absltest.skipIf(_CPU_BACKEND, "host-FS vs device sponge is only meaningful off CPU (zkx#500)")
+@absltest.skipIf(
+    _CPU_BACKEND, "host-FS vs device sponge is only meaningful off CPU (zkx#500)"
+)
 class TranscriptHostFsTest(parameterized.TestCase):
     """The `fs_on_host` opt-in: observe/sample/observe_and_sample/sample_challenge
     route to the host sponge and stay byte-identical to the device path."""
@@ -32,7 +36,7 @@ class TranscriptHostFsTest(parameterized.TestCase):
     def _new(self, fs_on_host: bool) -> DuplexTranscript:
         return DuplexTranscript.new(koalabear16_perm(), rate=8, fs_on_host=fs_on_host)
 
-    def _state_eq(self, a, b) -> bool:
+    def _state_eq(self, a: DuplexTranscript, b: DuplexTranscript) -> bool:
         return all(
             bool(jnp.all(x == y))
             for x, y in zip(tree_util.tree_leaves(a), tree_util.tree_leaves(b))
@@ -41,7 +45,9 @@ class TranscriptHostFsTest(parameterized.TestCase):
     @parameterized.parameters(3, 8, 19)  # partial block, full block, block-crossing
     def test_observe_byte_identical(self, n: int) -> None:
         v = rand_field(1, (n,), F)
-        self.assertTrue(self._state_eq(self._new(False).observe(v), self._new(True).observe(v)))
+        self.assertTrue(
+            self._state_eq(self._new(False).observe(v), self._new(True).observe(v))
+        )
 
     @parameterized.parameters(1, 4, 9)
     def test_sample_byte_identical(self, k: int) -> None:
@@ -61,7 +67,7 @@ class TranscriptHostFsTest(parameterized.TestCase):
         self.assertTrue(self._state_eq(ta, tb))
 
     @parameterized.named_parameters(("base_1limb", F, 1), ("ext_4limb", EF, 4))
-    def test_sample_challenge_byte_identical(self, dtype, limbs) -> None:
+    def test_sample_challenge_byte_identical(self, dtype: Any, limbs: int) -> None:
         # sample_challenge routes through the `sample` method, so it picks up the
         # host body; the multi-limb reinterpret stays on the device.
         v = rand_field(3, (5,), F)

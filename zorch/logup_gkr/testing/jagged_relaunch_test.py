@@ -15,6 +15,11 @@ from jax import Array
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
+    JaggedLayerProof,
+    _InterpConsts,
+    _JaggedSchedule,
+    _JaggedState,
+    _Planes,
     _round_metadata,
     _run_jagged_rounds,
     _run_jagged_rounds_relaunch,
@@ -25,9 +30,8 @@ from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_inv_vandermonde
 from zorch.testkit.random_field import rand_ext_field, rand_field
-from zorch.testkit.transcript import cheap_transcript
-from zorch.testkit.transcript import CheapPermutation
-from zorch.transcript import DuplexTranscript
+from zorch.testkit.transcript import CheapPermutation, cheap_transcript
+from zorch.transcript import DuplexTranscript, Transcript
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
@@ -40,7 +44,14 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
     boundary, so the bound point, round polys, pair openings, AND the advanced
     transcript state must all match, on every row/interaction/edge layout."""
 
-    def _setup(self, layer: JaggedGkrLayer, lam: Array, z: Array):
+    def _setup(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> tuple[
+        _JaggedState,
+        list[tuple[Array | None, Array, Array]],
+        Array,
+        Array,
+        int,
+        int,
+    ]:
         niv = layer.num_interaction_variables
         nrv = z.shape[0] - niv
         one = jnp.ones((), z.dtype)
@@ -52,36 +63,57 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
         meta = _round_metadata(layer.row_counts, nrv)
         naturals = jnp.stack([jnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
         inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
-        head = (
-            layer.numerator_0, layer.numerator_1,
-            layer.denominator_0, layer.denominator_1,
-            eq_row, eq_int, z, lam, claim,
+        state = _JaggedState(
+            _Planes(
+                layer.numerator_0,
+                layer.numerator_1,
+                layer.denominator_0,
+                layer.denominator_1,
+            ),
+            eq_row,
+            eq_int,
+            z,
+            lam,
+            claim,
         )
-        return head, (meta, naturals, inv_vand, nrv, niv)
+        return state, meta, naturals, inv_vand, nrv, niv
 
     def _assert_relaunch_equals(
         self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
     ) -> None:
-        head, (meta, naturals, inv_vand, nrv, niv) = self._setup(layer, lam, z)
-        tail = (meta, naturals, inv_vand, nrv, niv, challenge_limbs)
-        ref = _run_jagged_rounds(*head, cheap_transcript(KB), *tail)
+        state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
+        sched = _JaggedSchedule(
+            meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
+        )
+        ref = _run_jagged_rounds(state, sched, cheap_transcript(KB))
         # Both the eager-kernel relaunch AND the production export-dispatch relaunch
         # (the cached jax.export binaries, the 4*g / 2*pp brackets, the dtype-mix
         # key, the gather=None -> identity substitution) must reproduce the unrolled
         # reference byte-for-byte -- prove_jagged_layer ships export_dispatch=True.
         for export_dispatch in (False, True):
             got = _run_jagged_rounds_relaunch(
-                *head, cheap_transcript(KB), *tail, export_dispatch=export_dispatch
+                state, sched, cheap_transcript(KB), export_dispatch=export_dispatch
             )
-            self._assert_matches_reference(ref, got, f"export_dispatch={export_dispatch}")
+            self._assert_matches_reference(
+                ref, got, f"export_dispatch={export_dispatch}"
+            )
 
-    def _assert_matches_reference(self, a, b, label: str) -> None:
+    def _assert_matches_reference(
+        self,
+        a: tuple[Array, Transcript, Array, Array, Array, Array, Array],
+        b: tuple[Array, Transcript, Array, Array, Array, Array, Array],
+        label: str,
+    ) -> None:
         ach, at, apolys, *aopen = a
         bch, bt, bpolys, *bopen = b
         self.assertTrue(bool(jnp.all(ach == bch)), f"challenges diverged ({label})")
-        self.assertTrue(bool(jnp.all(apolys == bpolys)), f"round polys diverged ({label})")
+        self.assertTrue(
+            bool(jnp.all(apolys == bpolys)), f"round polys diverged ({label})"
+        )
         for i, (x, y) in enumerate(zip(aopen, bopen)):
-            self.assertTrue(bool(jnp.all(x == y)), f"pair opening {i} diverged ({label})")
+            self.assertTrue(
+                bool(jnp.all(x == y)), f"pair opening {i} diverged ({label})"
+            )
         if not isinstance(at, DuplexTranscript) or not isinstance(bt, DuplexTranscript):
             raise AssertionError("both paths must thread the DuplexTranscript back")
         for f in ("input_buffer", "output_buffer", "sponge_state"):
@@ -101,7 +133,9 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
         ("saturated", (1, 1, 1, 1), 5),
         ("niv0", (2,), 2),
     )
-    def test_relaunch_equals_base_field(self, row_counts, z_len) -> None:
+    def test_relaunch_equals_base_field(
+        self, row_counts: tuple[int, ...], z_len: int
+    ) -> None:
         layer = random_jagged_layer(7, row_counts)
         self._assert_relaunch_equals(
             layer, rand_field(17, (), KB), rand_field(18, (z_len,), KB)
@@ -116,7 +150,6 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
             rand_ext_field(52, (5,), KB, EF),
             challenge_limbs=4,
         )
-
 
 
 @absltest.skipIf(
@@ -136,25 +169,41 @@ class RelaunchHostFsEqualsDeviceTest(parameterized.TestCase):
         eq = expand_eq_to_hypercube(z, jnp.ones((), z.dtype))
         return jnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
 
-    def _prove(self, layer, lam, claim, z, limbs, fs_on_host):
+    def _prove(
+        self,
+        layer: JaggedGkrLayer,
+        lam: Array,
+        claim: Array,
+        z: Array,
+        limbs: int,
+        fs_on_host: bool,
+    ) -> tuple[Array, DuplexTranscript, JaggedLayerProof]:
         t = DuplexTranscript.new(
             CheapPermutation(width=8, dtype=KB), rate=4, fs_on_host=fs_on_host
         )
-        return prove_jagged_layer(layer, lam, claim, z, t, challenge_limbs=limbs)
+        # prove_jagged_layer threads `t` straight through, so the advanced
+        # transcript is the same DuplexTranscript -- only its Transcript-protocol
+        # return annotation hides the concrete type the .state access below needs.
+        return prove_jagged_layer(layer, lam, claim, z, t, challenge_limbs=limbs)  # type: ignore[return-value]
 
-    @parameterized.named_parameters(("base", (3, 1, 5, 2), 5, 1), ("ef", (3, 1, 5, 2), 5, 4))
-    def test_host_fs_relaunch_equals_device(self, row_counts, z_len, limbs) -> None:
+    @parameterized.named_parameters(
+        ("base", (3, 1, 5, 2), 5, 1), ("ef", (3, 1, 5, 2), 5, 4)
+    )
+    def test_host_fs_relaunch_equals_device(
+        self, row_counts: tuple[int, ...], z_len: int, limbs: int
+    ) -> None:
         layer = random_jagged_layer(7, row_counts)
         if limbs == 1:
             lam, z = rand_field(17, (), KB), rand_field(18, (z_len,), KB)
         else:
-            lam, z = rand_ext_field(51, (), KB, EF), rand_ext_field(52, (z_len,), KB, EF)
+            lam, z = rand_ext_field(51, (), KB, EF), rand_ext_field(
+                52, (z_len,), KB, EF
+            )
         claim = self._claim(layer, lam, z)
         pd, td, prd = self._prove(layer, lam, claim, z, limbs, False)
         ph, th, prh = self._prove(layer, lam, claim, z, limbs, True)
         self.assertTrue(bool(jnp.all(pd == ph)), "bound point diverged")
-        for a, b in zip(jax.tree_util.tree_leaves(prd),
-                        jax.tree_util.tree_leaves(prh)):
+        for a, b in zip(jax.tree_util.tree_leaves(prd), jax.tree_util.tree_leaves(prh)):
             self.assertTrue(bool(jnp.all(a == b)), "proof diverged")
         # host-FS keeps its state on the CPU, the device path on the accelerator,
         # so compare the values device-agnostically (a direct cross-device `==`
