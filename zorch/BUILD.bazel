@@ -49,6 +49,19 @@ py_library(
     ],
 )
 
+# Host-side byte-oriented Fiat-Shamir (SHA-256 Merlin duplex). Pure-Python /
+# hashlib — no jax, no zk_dtypes, no x64. The byte sibling of `transcript.py`;
+# see docs/transcript.md for the two-transcript taxonomy.
+py_library(
+    name = "byte_transcript",
+    srcs = [
+        "__init__.py",
+        "byte_transcript.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [],
+)
+
 py_library(
     name = "round",
     srcs = ["round.py"],

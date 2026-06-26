@@ -53,3 +53,15 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "sha256_test",
+    size = "small",
+    srcs = ["sha256_test.py"],
+    deps = [
+        "//zorch/hash:sha256",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

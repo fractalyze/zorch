@@ -40,3 +40,16 @@ py_library(
         requirement("jax"),
     ],
 )
+
+# Byte-oriented SHA-256 (FIPS 180-4). A standalone hash, not a Permutation; no
+# zk_dtypes / x64 dep. Used by the byte-duplex Fiat-Shamir transcript and batched
+# Merkle-over-SHA256.
+py_library(
+    name = "sha256",
+    srcs = ["sha256.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)

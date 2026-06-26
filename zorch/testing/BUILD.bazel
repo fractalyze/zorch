@@ -3,6 +3,16 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
+    name = "byte_transcript_test",
+    size = "small",
+    srcs = ["byte_transcript_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
     name = "_composite_test",
     size = "small",
     srcs = ["_composite_test.py"],
