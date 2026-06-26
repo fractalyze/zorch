@@ -159,10 +159,10 @@ class DuplexTranscript:
     @property
     def has_dedicated_fusion(self) -> bool:
         """Whether the Fiat-Shamir permutation lowers to a dedicated fusion marker
-        a vendor can expand — the gate `zorch.sumcheck.prover` reads to mark its
-        scan as one register-resident sumcheck kernel (mirrors `Sponge`/
-        `Compression`). False for a test `CheapPermutation`, so unit tests keep the
-        plain scan."""
+        a vendor can expand — the LogUp-GKR jagged prover's gate
+        (`zorch.logup_gkr.jagged_prover`) reads it to mark its sumcheck scan as one
+        register-resident kernel (mirrors `Sponge`/`Compression`). False for a test
+        `CheapPermutation`, so unit tests keep the plain scan."""
         return self.permutation.has_dedicated_fusion
 
     @classmethod
