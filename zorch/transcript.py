@@ -145,10 +145,84 @@ def _absorb_permute(
     return permutation.permute(sponge.at[:rate].set(merged))
 
 
+class _FsBackend(Protocol):
+    """The Fiat-Shamir sponge backend a `DuplexTranscript` dispatches every absorb /
+    squeeze through — device (graph ops) or host (CPU callback, state-resident). A
+    transcript meta-field, so the device/host choice is structural: every method
+    routes through it and none can silently forget to honor the host (the trap the
+    old per-method `if self.fs_on_host` invited -- `check_witness` once did)."""
+
+    @property
+    def on_host(self) -> bool: ...
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript: ...
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]: ...
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]: ...
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]: ...
+
+
+@dataclass(frozen=True)
+class _DeviceFs:
+    """The default backend: every duplex step is a device op (the compiled graph)."""
+
+    on_host: bool = False
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript:
+        return _observe_body(t, values)
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+        return _sample_body(t, n)
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _observe_and_sample_body(t, values, n)
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _check_witness_body(t, witness, pow_bits)
+
+
+@dataclass(frozen=True)
+class _HostFs:
+    """The host-FS backend: the serial sponge runs on the CPU and its state stays
+    host-resident across the stream (see the host-FS backend section below)."""
+
+    on_host: bool = True
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript:
+        return _observe_host(t, values)
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+        return _sample_host(t, n)
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _observe_and_sample_host(t, values, n)
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _check_witness_host(t, witness, pow_bits)
+
+
+_DEVICE_FS = _DeviceFs()
+_HOST_FS = _HostFs()
+
+
 @partial(
     register_dataclass,
     data_fields=["state"],
-    meta_fields=["permutation", "rate", "fs_on_host"],
+    meta_fields=["permutation", "rate", "fs"],
 )
 @dataclass(frozen=True)
 class DuplexTranscript:
@@ -157,16 +231,25 @@ class DuplexTranscript:
     the whole transcript threads through `@jit` (and, later, a `lax.scan` carry).
     Every step is a device op — no host callback, no zkVM FFI.
 
-    `fs_on_host` runs the serial Poseidon chain on the host CPU (a latency-bound
+    The `fs` backend (`_DeviceFs` / `_HostFs`) chooses where every absorb / squeeze
+    runs. `_HostFs` runs the serial Poseidon chain on the host CPU (a latency-bound
     hash chain idles accelerator cores, so a host-driven, per-round-kernel consumer
     offloads it), with the sponge state kept CPU-resident across the stream -- an
-    eager primitive (see the host-FS backend section below). Off by default, so the
-    device path and its compiled graph are untouched unless a caller opts in."""
+    eager primitive (see the host-FS backend section below). `_DeviceFs` (the
+    default) leaves the device path and its compiled graph untouched. Pick one via
+    `new(..., fs_on_host=)`."""
 
     permutation: Permutation
     rate: int
     state: DuplexState
-    fs_on_host: bool = False
+    fs: _FsBackend = _DEVICE_FS
+
+    @property
+    def fs_on_host(self) -> bool:
+        """Whether Fiat-Shamir runs on the host CPU — read off the `fs` backend.
+        Kept as a bool for callers (the `sumcheck.prover` gate, the consumer's
+        `.new(fs_on_host=...)`)."""
+        return self.fs.on_host
 
     @property
     def has_dedicated_fusion(self) -> bool:
@@ -193,10 +276,10 @@ class DuplexTranscript:
             in_pos=jnp.int32(0),
             out_pos=jnp.int32(0),
         )
-        return cls(permutation, rate, state, fs_on_host)
+        return cls(permutation, rate, state, _HOST_FS if fs_on_host else _DEVICE_FS)
 
     def _with_state(self, state: DuplexState) -> DuplexTranscript:
-        return DuplexTranscript(self.permutation, self.rate, state, self.fs_on_host)
+        return DuplexTranscript(self.permutation, self.rate, state, self.fs)
 
     def _duplexing(self) -> DuplexTranscript:
         """Flush the pending input prefix and refill the output buffer."""
@@ -218,9 +301,7 @@ class DuplexTranscript:
         """Absorb `values` (any field, flattened to the base field) into the
         transcript. The absorb is one `lax.scan` over the flat input, so the
         compiled graph size is independent of `len(values)`."""
-        if self.fs_on_host:
-            return _observe_host(self, values)
-        return _observe_body(self, values)
+        return self.fs.observe(self, values)
 
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
         # Permute when input is pending or the output buffer is drained.
@@ -242,9 +323,7 @@ class DuplexTranscript:
         return t._with_state(replace(t.state, out_pos=out_pos)), item
 
     def sample(self, n: int = 1) -> tuple[DuplexTranscript, Array]:
-        if self.fs_on_host:
-            return _sample_host(self, n)
-        return _sample_body(self, n)
+        return self.fs.sample(self, n)
 
     def observe_and_sample(
         self, values: Array, n: int = 1
@@ -253,9 +332,7 @@ class DuplexTranscript:
         Fiat-Shamir primitive (commit -> challenge). One method so the absorb and
         squeeze fuse into a single kernel under `@jit` by construction, never by a
         per-primitive pattern-match (the repo's fusion contract)."""
-        if self.fs_on_host:
-            return _observe_and_sample_host(self, values, n)
-        return _observe_and_sample_body(self, values, n)
+        return self.fs.observe_and_sample(self, values, n)
 
     def check_witness(
         self, pow_bits: int, witness: Array
@@ -277,7 +354,7 @@ class DuplexTranscript:
                 f"witness must be a scalar {field_dtype} field element (the grind "
                 f"search's domain), got shape {witness.shape} dtype {witness.dtype}"
             )
-        return _check_witness_body(self, witness, pow_bits)
+        return self.fs.check_witness(self, witness, pow_bits)
 
     @partial(jit, static_argnames=("pow_bits", "chunk"))
     def _grind_search(self, pow_bits: int, chunk: int) -> Array:
@@ -546,8 +623,8 @@ def _check_witness_body(
 # ============================================================================
 # Host-FS backend — the duplex sponge run on the host CPU. A serial hash chain
 # idles accelerator cores, so a host-driven, per-round-kernel consumer offloads it;
-# `DuplexTranscript.fs_on_host` routes observe/sample/observe_and_sample here and
-# the device path above is untouched.
+# The `_HostFs` backend routes observe/sample/observe_and_sample/check_witness here
+# and the device path above is untouched.
 #
 # The sponge state lives on the CPU for the whole Fiat-Shamir stream: the host op
 # calls the CPU sponge jit DIRECTLY on host-resident leaves and moves only `values`
@@ -574,7 +651,13 @@ def _host_cpu() -> jax.Device:
     return jax.devices("cpu")[0]
 
 
-def _host_state_leaves(state: DuplexState) -> tuple[Array, ...]:
+def _state_leaves(
+    state: DuplexState,
+) -> tuple[Array, Array, Array, Array, Array]:
+    """The five `DuplexState` arrays in field order — the sumcheck marker threads
+    them as its `lax.composite` operands and reads them back, and the zkx consumer
+    reads them in this order, so every producer/consumer shares this one ordering.
+    (`_state_on_host` also walks them to commit each leaf to the CPU.)"""
     return (
         state.input_buffer,
         state.output_buffer,
@@ -597,11 +680,8 @@ def _host_raw(permutation: Permutation) -> Permutation:
 @cache
 def _host_observe_jit(perm: Permutation, rate: int) -> Any:
     @jit
-    def f(
-        ib: Array, ob: Array, sp: Array, ip: Array, op: Array, x: Array
-    ) -> tuple[Array, ...]:
-        s = DuplexState(ib, ob, sp, ip, op)
-        return _host_state_leaves(DuplexTranscript(perm, rate, s).observe(x).state)
+    def f(s: DuplexState, x: Array) -> DuplexState:
+        return DuplexTranscript(perm, rate, s).observe(x).state
 
     return f
 
@@ -609,9 +689,9 @@ def _host_observe_jit(perm: Permutation, rate: int) -> Any:
 @cache
 def _host_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
     @jit
-    def f(ib: Array, ob: Array, sp: Array, ip: Array, op: Array) -> tuple[Array, ...]:
-        t, out = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).sample(n)
-        return (*_host_state_leaves(t.state), out)
+    def f(s: DuplexState) -> tuple[DuplexState, Array]:
+        t, out = DuplexTranscript(perm, rate, s).sample(n)
+        return t.state, out
 
     return f
 
@@ -619,12 +699,9 @@ def _host_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
 @cache
 def _host_obs_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
     @jit
-    def f(
-        ib: Array, ob: Array, sp: Array, ip: Array, op: Array, x: Array
-    ) -> tuple[Array, ...]:
-        t = DuplexTranscript(perm, rate, DuplexState(ib, ob, sp, ip, op)).observe(x)
-        t, out = t.sample(n)
-        return (*_host_state_leaves(t.state), out)
+    def f(s: DuplexState, x: Array) -> tuple[DuplexState, Array]:
+        t, out = DuplexTranscript(perm, rate, s).observe(x).sample(n)
+        return t.state, out
 
     return f
 
@@ -647,22 +724,14 @@ def _state_on_host(state: DuplexState) -> DuplexState:
     if _on_host(state.sponge_state):
         return state
     c = _host_cpu()
-    return DuplexState(*(jax.device_put(leaf, c) for leaf in _host_state_leaves(state)))
+    return DuplexState(*(jax.device_put(leaf, c) for leaf in _state_leaves(state)))
 
 
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
     """`observe` on the host sponge; the state stays host-resident."""
     s = _state_on_host(transcript.state)
     f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)  # type: ignore[arg-type]
-    leaves = f(
-        s.input_buffer,
-        s.output_buffer,
-        s.sponge_state,
-        s.in_pos,
-        s.out_pos,
-        jax.device_put(values, _host_cpu()),
-    )
-    return transcript._with_state(DuplexState(*leaves))
+    return transcript._with_state(f(s, jax.device_put(values, _host_cpu())))
 
 
 def _sample_host(
@@ -672,11 +741,9 @@ def _sample_host(
     the challenge returns to the compute device."""
     s = _state_on_host(transcript.state)
     f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
-    *leaves, out = f(
-        s.input_buffer, s.output_buffer, s.sponge_state, s.in_pos, s.out_pos
-    )
+    state, out = f(s)
     return (
-        transcript._with_state(DuplexState(*leaves)),
+        transcript._with_state(state),
         jax.device_put(out, _host_compute_device()),
     )
 
@@ -688,18 +755,22 @@ def _observe_and_sample_host(
     per-round Fiat-Shamir primitive. The challenge returns to the compute device."""
     s = _state_on_host(transcript.state)
     f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
-    *leaves, out = f(
-        s.input_buffer,
-        s.output_buffer,
-        s.sponge_state,
-        s.in_pos,
-        s.out_pos,
-        jax.device_put(values, _host_cpu()),
-    )
+    state, out = f(s, jax.device_put(values, _host_cpu()))
     return (
-        transcript._with_state(DuplexState(*leaves)),
+        transcript._with_state(state),
         jax.device_put(out, _host_compute_device()),
     )
+
+
+def _check_witness_host(
+    transcript: DuplexTranscript, witness: Array, pow_bits: int
+) -> tuple[DuplexTranscript, Array]:
+    """`check_witness` on the host sponge — observe + one squeeze + the pow check,
+    the host counterpart of `_check_witness_body`. Routing it through the backend
+    (not the device body unconditionally) keeps a host-FS grind and its re-check on
+    the same sponge, so the two can't disagree."""
+    advanced, sample = _observe_and_sample_host(transcript, witness, 1)
+    return advanced, _pow_satisfied(sample[0], pow_bits)
 
 
 if TYPE_CHECKING:

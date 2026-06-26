@@ -36,7 +36,7 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
 from typing import TYPE_CHECKING, Any, cast
@@ -64,13 +64,13 @@ from zorch.round import Round
 from zorch.sumcheck.prover import (
     SUMCHECK_MARKER,
     SUMCHECK_MARKER_VERSION,
-    _state_leaves,
     fold_pair,
 )
 from zorch.transcript import (
     DuplexState,
     DuplexTranscript,
     Transcript,
+    _state_leaves,
     reinterpret_challenge,
     sample_challenge,
 )
@@ -771,6 +771,21 @@ def _round_put(key: tuple, exp: export.Exported) -> None:
         _export_path(key).write_bytes(bytes(exp.serialize()))
 
 
+def _round_dispatch(
+    key: tuple, operands: tuple, build: Callable[[], export.Exported]
+) -> Any:
+    """The shared round export-cache dispatch every `_dispatch_*` runs: reuse the
+    cached binary for `key`, else `build()` it (the symbolic export is the cold
+    cost, so only on a miss) and cache it, then call it on the concrete `operands`.
+    The tracer fallback, `operands`, `key`, and the abstract shapes stay per-round;
+    only this get / export / put / call protocol is shared."""
+    exported = _round_get(key)
+    if exported is None:
+        exported = build()
+        _round_put(key, exported)
+    return exported.call(*operands)
+
+
 # `_Planes` / `_RoundScalars` cross the jax.export boundary as pytree operands;
 # register their (empty -- no meta_fields) aux so `Exported.serialize()` can
 # round-trip them for the on-disk cache above.
@@ -833,8 +848,8 @@ def _dispatch_fix_and_sum_int(
         consts.naturals.shape[0],
         consts.naturals.dtype,
     )
-    exported = _round_get(key)
-    if exported is None:
+
+    def build() -> export.Exported:
         (g,) = export.symbolic_shape(
             "g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"]
         )
@@ -850,9 +865,9 @@ def _dispatch_fix_and_sum_int(
             _abst_scalars(scalars),
         )
         fn = lambda p, e, al, sc: _fix_and_sum_int(p, e, al, sc, consts)  # noqa: E731
-        exported = export.export(jax.jit(fn))(*abst)
-        _round_put(key, exported)
-    return exported.call(*operands)
+        return export.export(jax.jit(fn))(*abst)
+
+    return _round_dispatch(key, operands, build)
 
 
 def _dispatch_fix_and_sum_boundary(
@@ -876,8 +891,8 @@ def _dispatch_fix_and_sum_boundary(
         consts.naturals.shape[0],
         consts.naturals.dtype,
     )
-    exported = _round_get(key)
-    if exported is None:
+
+    def build() -> export.Exported:
         (g,) = export.symbolic_shape(
             "g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"]
         )
@@ -895,9 +910,9 @@ def _dispatch_fix_and_sum_boundary(
         fn = lambda p, e, al, sc: _fix_and_sum_boundary(
             p, e, al, sc, consts
         )  # noqa: E731
-        exported = export.export(jax.jit(fn))(*abst)
-        _round_put(key, exported)
-    return exported.call(*operands)
+        return export.export(jax.jit(fn))(*abst)
+
+    return _round_dispatch(key, operands, build)
 
 
 def _dispatch_sum_as_poly_row(
@@ -929,8 +944,8 @@ def _dispatch_sum_as_poly_row(
         eq_int.shape,
         consts.naturals.shape[0],
     )
-    exported = _round_get(key)
-    if exported is None:
+
+    def build() -> export.Exported:
         h, p, rr = export.symbolic_shape(
             "h, p, rr",
             constraints=[
@@ -959,9 +974,9 @@ def _dispatch_sum_as_poly_row(
         fn = lambda pl, ga, ci, pi, er, ei, sc: _round_poly_row(  # noqa: E731
             pl, ga, ci, pi, er, ei, sc, consts
         )
-        exported = export.export(jax.jit(fn))(*abst)
-        _round_put(key, exported)
-    return exported.call(*operands)
+        return export.export(jax.jit(fn))(*abst)
+
+    return _round_dispatch(key, operands, build)
 
 
 def _dispatch_fix_and_sum_row(
@@ -1001,8 +1016,8 @@ def _dispatch_fix_and_sum_row(
         eq_int.shape,
         consts.naturals.shape[0],
     )
-    exported = _round_get(key)
-    if exported is None:
+
+    def build() -> export.Exported:
         pp, p, rr = export.symbolic_shape(
             "pp, p, rr",
             constraints=[
@@ -1032,9 +1047,9 @@ def _dispatch_fix_and_sum_row(
         fn = lambda pl, er, al, ga, ci, pi, ei, sc: _fix_and_sum_row(  # noqa: E731
             pl, er, al, ga, ci, pi, ei, sc, consts
         )
-        exported = export.export(jax.jit(fn))(*abst)
-        _round_put(key, exported)
-    return exported.call(*operands)
+        return export.export(jax.jit(fn))(*abst)
+
+    return _round_dispatch(key, operands, build)
 
 
 def _fold_scalars(

@@ -61,6 +61,7 @@ from zorch.transcript import (
     DuplexState,
     DuplexTranscript,
     Transcript,
+    _state_leaves,
     reinterpret_challenge,
 )
 from zorch.utils.bits import log2_strict_usize
@@ -425,13 +426,6 @@ def _prove_scan(
     init = (state, transcript, jnp.int32(half_max))
     (state, transcript, _), msgs = lax.scan(step, init, xs=None, length=rounds)
     return [buf[..., :1] for buf in state], transcript, msgs
-
-
-def _state_leaves(st: DuplexState) -> tuple[Array, Array, Array, Array, Array]:
-    """The five `DuplexState` arrays in field order — the marker threads them as its
-    mutable transcript operands and reads them back as results, so the producer here
-    and the zkx consumer share this one ordering."""
-    return (st.input_buffer, st.output_buffer, st.sponge_state, st.in_pos, st.out_pos)
 
 
 def _prove_marked(
