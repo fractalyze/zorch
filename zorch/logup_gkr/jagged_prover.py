@@ -400,8 +400,7 @@ def _run_jagged_rounds(
         polys.append(poly)
         challenges.append(r)
 
-        claim = eval_coeffs(poly, r)
-        pad_adj = pad_adj * (point[-1] * r + (one - point[-1]) * (one - r))
+        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1], one)
         n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
         if in_rows:
             eq_row = _bind_lsb(eq_row, r)
@@ -710,8 +709,9 @@ _ROUND_KERNEL_CACHE: dict[tuple, export.Exported] = {}
 # Opt-in on-disk cache for the exported round binaries (set ZORCH_EXPORT_CACHE_DIR):
 # their jax.export BUILD (symbolic StableHLO generation) re-runs every process and
 # dominates the cold start, which the XLA persistent compile cache does NOT cover.
-# Namespaced by jax version + a hash of the kernel sources (this module + circuit +
-# eq), so any kernel edit invalidates it. Unset -> unchanged in-memory behaviour.
+# Namespaced by jax version + a hash of every module the exported kernels close
+# over (see `_export_cache_dir`), so any kernel-arithmetic edit invalidates it.
+# Unset -> unchanged in-memory behaviour.
 _EXPORT_CACHE_DIR = os.environ.get("ZORCH_EXPORT_CACHE_DIR")
 
 
@@ -721,16 +721,26 @@ def _export_cache_dir() -> Path:
     from pathlib import Path
 
     import zorch.logup_gkr.circuit as _circuit
+    import zorch.logup_gkr.prover as _prover
     import zorch.poly.eq as _eq
+    import zorch.poly.univariate as _univariate
 
-    src = b"".join(
-        open(f, "rb").read() for f in (__file__, _circuit.__file__, _eq.__file__)
-    )
+    # Hash every module whose code the exported round kernels close over, so any
+    # edit to the round arithmetic invalidates the on-disk binary: this module, the
+    # eq / circuit plane builders, `logup_combine` (the summand) in logup_gkr.prover,
+    # and the Lagrange/Vandermonde interpolation in poly.univariate. Miss one and a
+    # stale binary silently emits the OLD arithmetic — a wrong proof.
+    h = hashlib.sha256()
+    for mod in (_circuit, _eq, _prover, _univariate):
+        src = mod.__file__
+        assert src is not None  # imported modules always carry a source path
+        h.update(Path(src).read_bytes())
+    h.update(Path(__file__).read_bytes())
     d = (
         # Reached only under the `_EXPORT_CACHE_DIR is not None` guards in
         # `_round_get`/`_round_put`, so the env var is a real path string here.
         Path(_EXPORT_CACHE_DIR)  # type: ignore[arg-type]
-        / f"{jax.__version__}-{hashlib.sha256(src).hexdigest()[:12]}"
+        / f"{jax.__version__}-{h.hexdigest()[:12]}"
     )
     d.mkdir(parents=True, exist_ok=True)
     return d
@@ -1027,15 +1037,24 @@ def _dispatch_fix_and_sum_row(
     return exported.call(*operands)
 
 
+def _fold_scalars(
+    poly: Array, r: Array, pad_adj: Array, z: Array, one: Array
+) -> tuple[Array, Array]:
+    """The per-round scalar fold: the next claim (round poly evaluated at `r`) and the
+    updated pad-mass `pad_adj`. One source for both the oracle `_run_jagged_rounds`
+    (which inlines it) and the relaunch `_scalar_reduce` (which jits it), so the two
+    cannot drift out of byte-equality."""
+    return eval_coeffs(poly, r), pad_adj * (z * r + (one - z) * (one - r))
+
+
 @jax.jit
 def _scalar_reduce(
     poly: Array, r: Array, pad_adj: Array, z_cur: Array, one: Array
 ) -> tuple[Array, Array]:
-    """The per-round scalar fold (next claim + pad_adj) as ONE jitted dispatch
-    instead of ~11 eager device ops -- the per-op JAX machinery (bind/apply_primitive)
-    dominates the warm wall, so collapsing the op count is the lever (the ops
-    themselves are async-cheap). Byte-identical."""
-    return eval_coeffs(poly, r), pad_adj * (z_cur * r + (one - z_cur) * (one - r))
+    """The per-round scalar fold as ONE jitted dispatch instead of ~11 eager device
+    ops -- the per-op JAX machinery (bind/apply_primitive) dominates the warm wall, so
+    collapsing the op count is the lever (the ops themselves are async-cheap)."""
+    return _fold_scalars(poly, r, pad_adj, z_cur, one)
 
 
 # One squeezed challenge's reshape/bitcast (`raw.view`) jitted -- shape-stable per

@@ -114,11 +114,14 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   the max width with the fold-neutral fraction, carry the live count as a traced
   threshold (`poly.geq.VirtualGeq`), and on a short layer's padding rounds select
   the unchanged carry — the transcript's sponge leaves included — so Fiat-Shamir
-  never over-advances. `logup_gkr.jagged_prover.prove_jagged_pyramid` (the prove)
-  and `logup_gkr.circuit.scan_build_jagged_pyramid` (the generation) do this:
-  O(1) in the layer count, byte-identical to the Python-`for` chain. The plain
-  `ProveChain` stays the default; reach for the roll when the layer count drives
-  compile time or eager-dispatch latency past the cost of the masking.
+  never over-advances. `logup_gkr.circuit.scan_build_jagged_pyramid` (the
+  generation) rolls this way: O(1) in the layer count. The matching device-FS
+  prove roll was retired — Fiat-Shamir now runs on the host between kernel
+  launches, so the jagged prove is the unrolled
+  `ProveChain(JaggedGkrLayerRound(l) for l in layers)` on a host-FS transcript
+  (the host-orchestrated `for` case below), not a `scan` roll. Reach for a
+  fixed-width roll when the layer count drives compile time or eager-dispatch
+  latency past the cost of the masking.
 
 The per-round Fiat-Shamir `observe` / `sample` is wrapped in a `Round` (the
 composable unit) by design, so a round loop is one of the two `Round` forms above:
@@ -178,11 +181,10 @@ capability is noise:
 - **Heterogeneous-chain rounds** — `logup_gkr`'s `GkrLayerRound` and the
   `ProveChain` / `VerifyChain` wrappers. The GKR pyramid halves every layer, so
   the layers carry different shapes and the chain is composed in plain Python by
-  default. The fixed-width roll (`prove_jagged_pyramid`, see the loops section)
-  *does* `scan` it, but threads the planes as `Array`s plus the already-registered
-  `JaggedLayerProof` — not the layer object — so `GkrLayer` / `JaggedGkrLayer`
-  still need no registration. Register only if a transform later threads one
-  directly.
+  default. Where a transform does cross the pyramid — the generation roll
+  (`scan_build_jagged_pyramid`, see the loops section) — it threads the planes as
+  `Array`s, not the layer object, so `GkrLayer` / `JaggedGkrLayer` still need no
+  registration. Register only if a transform later threads one directly.
 - **Plain data records** — `LayerProof`, `GkrLayer`, `LogUpGkrOutput`. They pass
   between un-`jit`-ed calls today. Register the moment one becomes `jit`/`scan`
   I/O, not before — as `prove.RoundMsg` now is.

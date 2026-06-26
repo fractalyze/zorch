@@ -159,9 +159,9 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
 class RelaunchHostFsEqualsDeviceTest(parameterized.TestCase):
     """A full jagged-layer prove through the relaunch with `fs_on_host=True` (the
     host sponge) is byte-identical to the same prove on the device sponge -- the
-    integration of the host-FS transcript and the relaunch round chain that the
-    SP1-shaped consumer runs in production. A `CheapPermutation` keeps both off the
-    marked path; only the Fiat-Shamir backend differs."""
+    integration of the host-FS transcript and the relaunch round chain used in
+    production. A `CheapPermutation` keeps both off the marked path; only the
+    Fiat-Shamir backend differs."""
 
     def _claim(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> Array:
         niv = layer.num_interaction_variables

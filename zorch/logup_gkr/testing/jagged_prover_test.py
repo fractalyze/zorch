@@ -59,18 +59,6 @@ from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
-# The pinned zkx CPU emitter recognizes the rolled `runtime_row_counts` marker but
-# routes it to the exact-fit emitter, which has no runtime-row-counts decompose
-# path and aborts (it requires factor length == sum(row_counts)). Until that CPU
-# decompose lands, tests that COMPILE the rolled marker run only where the emitter
-# supports it (GPU); the rolled path's CPU coverage is the unmarked byte-match in
-# RolledJaggedPyramidTest, and the marker contract is checked by the jaxpr-only
-# tests that never compile.
-_ON_CPU = jax.default_backend() == "cpu"
-_ROLLED_MARKER_CPU_SKIP = (
-    "pinned zkx CPU emitter has no runtime_row_counts decompose path; "
-    "the rolled marker compiles only where the emitter supports it (GPU)"
-)
 
 
 def _logup_combine(

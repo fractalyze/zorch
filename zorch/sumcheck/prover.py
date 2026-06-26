@@ -315,23 +315,28 @@ def prove(
     # the truncated-domain `eval_start` as a composite attribute (an extension
     # challenge needs none — a vendor reads it off the challenge dtype). The
     # isinstance narrows the type for `_prove_marked` (the merkle.py
-    # `has_dedicated_fusion` gate). An `fs_on_host` transcript is mutually exclusive
-    # with the device marked path: its sponge runs on the host between launches, so
-    # it falls to `_prove_scan`, whose per-round `observe_and_sample` honors the host.
-    if (
-        isinstance(transcript, DuplexTranscript)
-        and transcript.has_dedicated_fusion
-        and not transcript.fs_on_host
-    ):
-        return _prove_marked(
-            round,
-            state,
-            transcript,
-            num_real=num_real,
-            eval_start=eval_start,
-            challenge_dtype=challenge_dtype,
-            challenge_limbs=challenge_limbs,
-        )
+    # `has_dedicated_fusion` gate).
+    if isinstance(transcript, DuplexTranscript):
+        if transcript.fs_on_host:
+            # The host sponge is an eager primitive (`device_put` / `.devices()` on
+            # its inputs); it cannot run inside `_prove_scan`'s `lax.scan` body. A
+            # host-FS transcript must drive the host-relaunch round engine
+            # (`logup_gkr.jagged_prover`), not this dense scan prove — fail loud
+            # rather than abort deep in the scan trace with a ConcretizationError.
+            raise NotImplementedError(
+                "fs_on_host is unsupported on the dense sumcheck scan path; drive "
+                "the host-relaunch round engine instead"
+            )
+        if transcript.has_dedicated_fusion:
+            return _prove_marked(
+                round,
+                state,
+                transcript,
+                num_real=num_real,
+                eval_start=eval_start,
+                challenge_dtype=challenge_dtype,
+                challenge_limbs=challenge_limbs,
+            )
     return _prove_scan(
         round,
         state,
