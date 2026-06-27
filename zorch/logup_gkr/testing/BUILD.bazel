@@ -54,9 +54,9 @@ py_test(
 )
 
 py_test(
-    name = "jagged_relaunch_test",
+    name = "jagged_round_runner_test",
     size = "medium",
-    srcs = ["jagged_relaunch_test.py"],
+    srcs = ["jagged_round_runner_test.py"],
     deps = [
         ":testing",
         "//zorch:transcript",

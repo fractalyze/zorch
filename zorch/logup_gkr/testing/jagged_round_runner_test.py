@@ -1,6 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""`_run_jagged_rounds_relaunch` (the host loop relaunching one shape-polymorphic
-round kernel per round) is byte-identical to the unrolled `_run_jagged_rounds`
+"""`_run_jagged_rounds` (the host loop dispatching one shape-polymorphic
+round kernel per round) is byte-identical to the unrolled `_run_jagged_rounds_reference`
 oracle -- both the eager-kernel path and the production export_dispatch=True path,
 on every row/interaction/edge layout. The oracle is kept in-tree precisely for
 this gate."""
@@ -22,7 +22,7 @@ from zorch.logup_gkr.jagged_prover import (
     _Planes,
     _round_metadata,
     _run_jagged_rounds,
-    _run_jagged_rounds_relaunch,
+    _run_jagged_rounds_reference,
     prove_jagged_layer,
 )
 from zorch.logup_gkr.prover import logup_combine
@@ -37,12 +37,12 @@ KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 
 
-class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
-    """`_run_jagged_rounds_relaunch` — the host loop relaunching one
-    fold-then-compute kernel per round — is byte-identical to the unrolled
-    `_run_jagged_rounds`. Same arithmetic regrouped across the host Fiat-Shamir
-    boundary, so the bound point, round polys, pair openings, AND the advanced
-    transcript state must all match, on every row/interaction/edge layout."""
+class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
+    """`_run_jagged_rounds` — the host loop dispatching one fold-then-compute kernel
+    per round — is byte-identical to the unrolled `_run_jagged_rounds_reference`. Same
+    arithmetic regrouped across the host Fiat-Shamir boundary, so the bound point,
+    round polys, pair openings, AND the advanced transcript state must all match, on
+    every row/interaction/edge layout."""
 
     def _setup(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> tuple[
         _JaggedState,
@@ -78,20 +78,20 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
         )
         return state, meta, naturals, inv_vand, nrv, niv
 
-    def _assert_relaunch_equals(
+    def _check_round_runner(
         self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
     ) -> None:
         state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
         sched = _JaggedSchedule(
             meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
         )
-        ref = _run_jagged_rounds(state, sched, cheap_transcript(KB))
-        # Both the eager-kernel relaunch AND the production export-dispatch relaunch
+        ref = _run_jagged_rounds_reference(state, sched, cheap_transcript(KB))
+        # Both the eager-kernel path AND the production export-dispatch path
         # (the cached jax.export binaries, the 4*g / 2*pp brackets, the dtype-mix
         # key, the gather=None -> identity substitution) must reproduce the unrolled
         # reference byte-for-byte -- prove_jagged_layer ships export_dispatch=True.
         for export_dispatch in (False, True):
-            got = _run_jagged_rounds_relaunch(
+            got = _run_jagged_rounds(
                 state, sched, cheap_transcript(KB), export_dispatch=export_dispatch
             )
             self._assert_matches_reference(
@@ -133,18 +133,18 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
         ("saturated", (1, 1, 1, 1), 5),
         ("niv0", (2,), 2),
     )
-    def test_relaunch_equals_base_field(
+    def test_matches_reference_base_field(
         self, row_counts: tuple[int, ...], z_len: int
     ) -> None:
         layer = random_jagged_layer(7, row_counts)
-        self._assert_relaunch_equals(
+        self._check_round_runner(
             layer, rand_field(17, (), KB), rand_field(18, (z_len,), KB)
         )
 
-    def test_relaunch_equals_multi_limb_ef(self) -> None:
+    def test_matches_reference_multi_limb_ef(self) -> None:
         # koalabearx4 challenges (four squeezes reinterpreted) through the loop.
         layer = random_jagged_layer(41, (3, 1, 5, 2))
-        self._assert_relaunch_equals(
+        self._check_round_runner(
             layer,
             rand_ext_field(51, (), KB, EF),
             rand_ext_field(52, (5,), KB, EF),
@@ -156,10 +156,10 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
     jax.default_backend() == "cpu",
     "host-FS vs device is only meaningful off CPU (zkx#500)",
 )
-class RelaunchHostFsEqualsDeviceTest(parameterized.TestCase):
-    """A full jagged-layer prove through the relaunch with `fs_on_host=True` (the
+class HostFsRoundsEqualDeviceTest(parameterized.TestCase):
+    """A full jagged-layer prove through the round loop with `fs_on_host=True` (the
     host sponge) is byte-identical to the same prove on the device sponge -- the
-    integration of the host-FS transcript and the relaunch round chain used in
+    integration of the host-FS transcript and the round loop used in
     production. A `CheapPermutation` keeps both off the marked path; only the
     Fiat-Shamir backend differs."""
 
@@ -189,7 +189,7 @@ class RelaunchHostFsEqualsDeviceTest(parameterized.TestCase):
     @parameterized.named_parameters(
         ("base", (3, 1, 5, 2), 5, 1), ("ef", (3, 1, 5, 2), 5, 4)
     )
-    def test_host_fs_relaunch_equals_device(
+    def test_host_fs_equals_device(
         self, row_counts: tuple[int, ...], z_len: int, limbs: int
     ) -> None:
         layer = random_jagged_layer(7, row_counts)

@@ -14,13 +14,11 @@ import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
 
-import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _interleave,
@@ -28,16 +26,9 @@ from zorch.logup_gkr.circuit import (
     jagged_layer_transition,
 )
 from zorch.logup_gkr.jagged_prover import (
-    _DEGREE,
     JaggedGkrLayerRound,
     JaggedLayerProof,
-    _InterpConsts,
     _jagged_round_zone,
-    _JaggedSchedule,
-    _JaggedState,
-    _Planes,
-    _round_metadata,
-    _run_jagged_rounds,
     prove_jagged_layer,
 )
 from zorch.logup_gkr.prover import Carry, bind_output
@@ -49,9 +40,8 @@ from zorch.logup_gkr.testing import (
 )
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
-from zorch.poly.univariate import compute_inv_vandermonde, eval_coeffs
+from zorch.poly.univariate import eval_coeffs
 from zorch.round import ProveChain
-from zorch.sumcheck.prover import SUMCHECK_MARKER, SUMCHECK_MARKER_VERSION
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -427,195 +417,6 @@ class ChainedJaggedProveTest(absltest.TestCase):
         # At each build, only the round just proved could still be alive.
         self.assertEqual(live_log, [0] + [1] * (len(yielded) - 1))
         self.assertEqual([ref() for ref in yielded], [None] * len(yielded))
-
-
-class ProveJaggedMarkedTest(absltest.TestCase):
-    """Over a transcript whose permutation has a dedicated fusion marker (real
-    poseidon2), `prove_jagged_layer` wraps its round loop in a `zorch.sumcheck`
-    composite with Fiat-Shamir INSIDE. Unrecognized -- every CPU path here -- the
-    marker decomposes to the same `_run_jagged_rounds`, so the proof, the bound
-    point, and the advanced transcript are byte-identical to the plain loop; the
-    recognized -> register-resident GPU path is exercised in zkx (zkx#544)."""
-
-    ROW_COUNTS = (3, 1, 5, 2)
-    NRV = 3
-
-    def _poseidon_transcript(self) -> DuplexTranscript:
-        return DuplexTranscript.new(koalabear16_perm(), rate=8)
-
-    def _plain(
-        self,
-        layer: JaggedGkrLayer,
-        lam: Array,
-        claim: Array,
-        z: Array,
-        challenge_limbs: int = 1,
-    ) -> tuple[Array, Transcript, JaggedLayerProof]:
-        # The unmarked decomposition over a fresh identical transcript: the same
-        # setup `prove_jagged_layer` does, then `_run_jagged_rounds` directly,
-        # bypassing the dedicated-fusion gate the poseidon transcript would trip.
-        niv = layer.num_interaction_variables
-        nrv = z.shape[0] - niv
-        one = jnp.ones((), z.dtype)
-        eq_row = expand_eq_to_hypercube(z[niv:], one)
-        eq_int = expand_eq_to_hypercube(z[:niv], one)
-        meta = _round_metadata(layer.row_counts, nrv)
-        naturals = jnp.stack([jnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
-        inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
-        state = _JaggedState(
-            _Planes(
-                layer.numerator_0,
-                layer.numerator_1,
-                layer.denominator_0,
-                layer.denominator_1,
-            ),
-            eq_row,
-            eq_int,
-            z,
-            lam,
-            claim,
-        )
-        sched = _JaggedSchedule(
-            meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
-        )
-        challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds(
-            state, sched, self._poseidon_transcript()
-        )
-        return (
-            challenges,
-            t,
-            JaggedLayerProof(lam, claim, polys, challenges, fn0, fn1, fd0, fd1),
-        )
-
-    def _virtual_claim(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> Array:
-        n0, n1, d0, d1 = virtual_planes(layer, self.NRV)
-        eq = expand_eq_to_hypercube(z, jnp.ones((), z.dtype))
-        return jnp.sum(_logup_combine(lam, eq, n0, d1, n1, d0))
-
-    def _assert_marked_equals_plain(
-        self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
-    ) -> None:
-        claim = self._virtual_claim(layer, lam, z)
-        gp, gt, gproof = prove_jagged_layer(
-            layer,
-            lam,
-            claim,
-            z,
-            self._poseidon_transcript(),
-            challenge_limbs=challenge_limbs,
-        )
-        wp, wt, wproof = self._plain(layer, lam, claim, z, challenge_limbs)
-        self.assertTrue(bool(jnp.all(gp == wp)))  # bound point
-        for f in fields(JaggedLayerProof):
-            self.assertTrue(
-                bool(jnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
-                f"proof.{f.name} diverged",
-            )
-        if not isinstance(gt, DuplexTranscript) or not isinstance(wt, DuplexTranscript):
-            raise AssertionError("both paths must thread the DuplexTranscript back")
-        gs, ws = gt.state, wt.state
-        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
-        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
-        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
-        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
-        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
-
-    def test_marked_equals_plain_base(self) -> None:
-        layer = random_jagged_layer(7, self.ROW_COUNTS)
-        self._assert_marked_equals_plain(
-            layer, rand_field(17, (), KB), rand_field(18, (self.NRV + 2,), KB)
-        )
-
-    def test_marked_equals_plain_multi_limb_ef(self) -> None:
-        # koalabearx4 challenges (four squeezes reinterpreted) through the marker.
-        layer = random_jagged_layer(41, self.ROW_COUNTS)
-        self._assert_marked_equals_plain(
-            layer,
-            rand_ext_field(51, (), KB, EF),
-            rand_ext_field(52, (self.NRV + 2,), KB, EF),
-            challenge_limbs=4,
-        )
-
-    def test_cheap_transcript_stays_unmarked(self) -> None:
-        layer = random_jagged_layer(7, self.ROW_COUNTS)
-        lam, z = rand_field(17, (), KB), rand_field(18, (self.NRV + 2,), KB)
-        claim = self._virtual_claim(layer, lam, z)
-        # Return only the bound point (a JAX array): the marker check only needs
-        # the jaxpr's primitives, and the point alone keeps the traced output small.
-        jaxpr = jax.make_jaxpr(
-            lambda l_, c_, z_: prove_jagged_layer(
-                layer, l_, c_, z_, cheap_transcript(KB)
-            )[0]
-        )(lam, claim, z).jaxpr
-        self.assertFalse(any(e.primitive.name == "composite" for e in jaxpr.eqns))
-
-    def test_marker_envelope_carries_jagged_attributes(self) -> None:
-        # The recognition contract off the jaxpr: bare name + version, the shape in
-        # composite.attributes, and the jagged row_counts vector / fold-order /
-        # poly-form declarations the dense scalar path lacks.
-        layer = random_jagged_layer(7, self.ROW_COUNTS)
-        lam, z = rand_field(17, (), KB), rand_field(18, (self.NRV + 2,), KB)
-        claim = self._virtual_claim(layer, lam, z)
-        t0 = self._poseidon_transcript()
-        jaxpr = jax.make_jaxpr(
-            lambda l_, c_, z_: prove_jagged_layer(layer, l_, c_, z_, t0)[0]
-        )(lam, claim, z).jaxpr
-        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
-        self.assertEqual(eqn.params["name"], SUMCHECK_MARKER)
-        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
-        attrs = {k: leaves[0] for k, leaves, _ in eqn.params["attributes"]}
-        self.assertEqual(int(attrs["degree"]), _DEGREE)
-        self.assertEqual(int(attrs["num_vars"]), self.NRV + 2)
-        self.assertEqual(attrs["fold_order"], "lsb")
-        self.assertEqual(attrs["poly_form"], "coefficient")
-        # row_counts rides as an array<i64> attribute (lax.composite wraps it in a
-        # HashableArray); the dense scalar `num_real` path carries no such vector.
-        row_counts = attrs["row_counts"]
-        row_counts = getattr(row_counts, "val", row_counts)
-        self.assertEqual([int(c) for c in row_counts], list(self.ROW_COUNTS))
-
-    def test_base_field_first_layer_marker_keeps_numerators_narrow(self) -> None:
-        # zkx#681 acceptance #1 at the producer/IR boundary: a first layer with
-        # base-field numerators under extension-field denominators emits a
-        # `zorch.sumcheck` marker whose two numerator plane operands stay
-        # base-field (4B) while the two denominator planes are EF (16B) -- the
-        # first-layer-numerator read an all-extension layer pays in full. The
-        # GPU emitter (zkx#681 PR2) codegens that narrow read; here we only pin
-        # that the producer hands it the narrow operands.
-        from collections import Counter
-
-        height = sum(self.ROW_COUNTS)
-        n0 = rand_field(7, (height,), KB)
-        n1 = rand_field(8, (height,), KB)
-        d0 = rand_ext_field(9, (height,), KB, EF)
-        d1 = rand_ext_field(10, (height,), KB, EF)
-        mixed = JaggedGkrLayer(n0, n1, d0, d1, self.ROW_COUNTS)
-        all_ef = JaggedGkrLayer(n0.astype(EF), n1.astype(EF), d0, d1, self.ROW_COUNTS)
-        lam = rand_ext_field(51, (), KB, EF)
-        z = rand_ext_field(52, (self.NRV + 2,), KB, EF)
-
-        def plane_dtypes(layer: JaggedGkrLayer) -> "Counter[str]":
-            # The four planes are the only marker operands shaped (height,); the
-            # eq tables / point / constants / sponge leaves carry other shapes,
-            # so this isolates the planes without relying on operand order.
-            t = self._poseidon_transcript()
-            jaxpr = jax.make_jaxpr(
-                lambda l_, c_, z_: prove_jagged_layer(
-                    layer, l_, c_, z_, t, challenge_limbs=4
-                )[0]
-            )(lam, jnp.zeros((), EF), z).jaxpr
-            eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
-            return Counter(
-                str(iv.aval.dtype)
-                for iv in eqn.invars
-                if getattr(iv, "aval", None) is not None and iv.aval.shape == (height,)
-            )
-
-        self.assertEqual(
-            plane_dtypes(mixed),
-            Counter({"koalabear_mont": 2, "koalabearx4_mont": 2}),
-        )
-        self.assertEqual(plane_dtypes(all_ef), Counter({"koalabearx4_mont": 4}))
 
 
 class JaggedGkrLayerRoundJitTest(absltest.TestCase):

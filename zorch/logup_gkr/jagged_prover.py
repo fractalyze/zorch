@@ -39,14 +39,13 @@ import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache, partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array, export
 
-from zorch.fusion import fused_region
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _pad_neutral,
@@ -61,16 +60,9 @@ from zorch.poly.univariate import (
     eval_coeffs,
 )
 from zorch.round import Round
-from zorch.sumcheck.prover import (
-    SUMCHECK_MARKER,
-    SUMCHECK_MARKER_VERSION,
-    fold_pair,
-)
+from zorch.sumcheck.prover import fold_pair
 from zorch.transcript import (
-    DuplexState,
-    DuplexTranscript,
     Transcript,
-    _state_leaves,
     reinterpret_challenge,
     sample_challenge,
 )
@@ -151,38 +143,6 @@ def _round_metadata(
         host_meta.append((_segment_gather_np(counts, padded), col_index, pair_index))
         counts = pairs
     return jax.device_put(host_meta)
-
-
-def _flatten_meta(
-    meta: list[tuple[Array | None, Array, Array]],
-) -> tuple[list[Array], list[bool]]:
-    """Flatten the per-round `(gather, col_index, pair_index)` schedule into a flat
-    operand list for the marker, dropping the `None` gathers (rounds needing no
-    re-pad). The returned `gather_present` mask is the static structure
-    `_unflatten_meta` rebuilds the tuples by -- it carries no array data, so it
-    stays a Python value rather than a marker operand."""
-    present = [gather is not None for gather, _, _ in meta]
-    ops: list[Array] = []
-    for gather, col_index, pair_index in meta:
-        if gather is not None:
-            ops.append(gather)
-        ops.extend((col_index, pair_index))
-    return ops, present
-
-
-def _unflatten_meta(
-    ops: Sequence[Array], present: list[bool]
-) -> list[tuple[Array | None, Array, Array]]:
-    """Inverse of `_flatten_meta`: rebuild the per-round meta tuples from the flat
-    marker operands and the static presence mask."""
-    meta: list[tuple[Array | None, Array, Array]] = []
-    p = 0
-    for has_gather in present:
-        gather = ops[p] if has_gather else None
-        p += int(has_gather)
-        meta.append((gather, ops[p], ops[p + 1]))
-        p += 2
-    return meta
 
 
 def _bind_lsb(arr: Array, r: Array) -> Array:
@@ -268,7 +228,7 @@ def _paired_sums(
 
 
 # Jit the eq-table build: its eager log-depth doubling dispatches ~2*nrv ops a
-# layer -- the relaunch's biggest non-kernel eager site. One pjit instead.
+# layer -- the round loop's biggest non-kernel eager site. One pjit instead.
 # Recompile-free here: the point length is nrv/niv, bounded by the row/segment
 # variable count (a fixed bracket across shards, unlike the data-sized planes).
 _jit_expand_eq = jax.jit(expand_eq_to_hypercube)
@@ -319,27 +279,17 @@ def prove_jagged_layer(
     sched = _JaggedSchedule(
         meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
     )
-    # Mark only a DuplexTranscript with a dedicated-fusion permutation, mirroring
-    # `sumcheck.prover.prove`: the marker threads the sponge's leaves as operands.
-    # The marked path decomposes through the same `_run_jagged_rounds`, so it is
-    # byte-identical to the plain loop -- a vendor codegens it register-resident
-    # over the sparse layout from the `row_counts` attribute (zkx#544).
-    if (
-        isinstance(transcript, DuplexTranscript)
-        and transcript.has_dedicated_fusion
-        and not transcript.fs_on_host
-    ):
-        out = _prove_jagged_marked(layer, state, sched, transcript)
-    else:
-        out = _run_jagged_rounds_relaunch(
-            state, sched, transcript, export_dispatch=True
-        )
+    # One path: the host round loop dispatches a recompile-free exported kernel
+    # per round (FS device or host per fs_on_host). The whole-scan `zorch.sumcheck`
+    # megakernel was retired -- it never compiled at real sizes (mirrors #332's drop
+    # of the dense megakernel); per-round fusion markers are the follow-up.
+    out = _run_jagged_rounds(state, sched, transcript, export_dispatch=True)
     bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
     proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
     return bound_point, advanced, proof
 
 
-def _run_jagged_rounds(
+def _run_jagged_rounds_reference(
     state: _JaggedState,
     sched: _JaggedSchedule,
     transcript: Transcript,
@@ -425,8 +375,8 @@ def _run_jagged_rounds(
     )
 
 
-# ===== host-relaunch sumcheck engine =====
-# Recompile-free symbolic-export round kernels + the host loop relaunching one
+# ===== per-round jagged sumcheck engine =====
+# Recompile-free symbolic-export round kernels + the host loop dispatching one
 # per round; FS runs through the transcript (device or host per fs_on_host).
 
 
@@ -522,7 +472,7 @@ def _round_poly_int(
 ) -> Array:
     """The `sum_as_poly` step for the dense interaction phase: the round
     univariate from the current state, no fold (the entry kernel of a
-    relaunch chain, before any challenge is bound).
+    round loop, before any challenge is bound).
 
     Fiat-Shamir-less by construction — the host observes the returned poly and
     samples the challenge between launches — so the body is pure field
@@ -560,7 +510,7 @@ def _fix_and_sum_int(
 ) -> tuple[Array, _Planes, Array]:
     """The `fix_and_sum` step for the dense interaction phase: bind the previous
     round's challenge `alpha` (state size `m -> m/2`) **then** compute the next
-    round's univariate, one relaunch of a single device kernel at the halved
+    round's univariate, one dispatch of a single device kernel at the halved
     size. Returns `(poly, planes, eq_int)` so the host threads the folded state
     into the next launch and only the scalar poly crosses back up.
 
@@ -668,7 +618,7 @@ def _fix_and_sum_boundary(
 
 def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array]:
     """The `fix_last` step: bind the final challenge and read off the four pair
-    openings (the fully-folded length-1 state's single element). The relaunch tail
+    openings (the fully-folded length-1 state's single element). The round-loop tail
     fuses this into one kernel via `_jit_finalize` -- a fold step lowering to one
     kernel is the fusion-by-construction rule, not just a speedup."""
     p = _bind_planes(planes, alpha)
@@ -681,7 +631,7 @@ def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
     per dtype. Both depend only on `_DEGREE`, so rebuilding them inside every
     `prove_jagged_layer` is pure redundant host work -- `compute_inv_vandermonde`
     is an O(DEGREE^2) numpy coefficient build, and the per-GKR-layer recompute
-    dominated the eager host glue around the relaunch loop."""
+    dominated the eager host glue around the round loop."""
     # Force concrete eval: `@cache` memoizes the result, so building it inside a
     # jit trace (the jit=True round zone) would cache a tracer that then escapes the
     # trace (UnexpectedTracerError). The constants are trace-independent anyway.
@@ -693,7 +643,7 @@ def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
 
 # Exported per-round kernels, keyed by the operand signature so one binary
 # serves every round size in its bracket and is reused across rounds, layers, and
-# shards (the recompile-free relaunch). Only the per-round-REPEATED variants are
+# shards (the recompile-free dispatch). Only the per-round-REPEATED variants are
 # cached here -- `fix_and_sum_row` (the row rounds) and `fix_and_sum_int` (the
 # interaction rounds); `sum_as_poly_row` / `_boundary` / `_last` fire once a layer
 # and stay eager. The state dtype is part of the key: a multi-limb sumcheck folds
@@ -841,7 +791,7 @@ def _dispatch_fix_and_sum_int(
 
     `exported.call` is a host dispatch; under a `jax.jit` trace the operands are
     tracers, so fall back to the eager kernel -- the jit compiles the round
-    itself, the host-relaunch export being its alternative."""
+    itself, the per-round export being its alternative."""
     if isinstance(planes.n0, jax.core.Tracer):
         return _fix_and_sum_int(planes, eq_int, alpha, scalars, consts)
     operands = (planes, eq_int, alpha, scalars)
@@ -887,7 +837,8 @@ def _dispatch_fix_and_sum_boundary(
     then sum the first interaction round over the still-unfolded `eq_int`) through
     one cached binary. Mirrors `_dispatch_fix_and_sum_int` without the `eq_int`
     bind: the bind halves the state (`4*g -> 2*g`) and `eq_int` rides unfolded at
-    `2*g` (= the post-bind state), so a single relaunch replaces the eager kernel."""
+    `2*g` (= the post-bind state), so one dispatched kernel replaces the eager one.
+    """
     if isinstance(planes.n0, jax.core.Tracer):
         return _fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
     operands = (planes, eq_int, alpha, scalars)
@@ -934,7 +885,7 @@ def _dispatch_sum_as_poly_row(
     """Dispatch the round-0 sum (no fold, no challenge) through one cached binary
     symbolic over the RAW layer height (`h`), the re-pad layout (`2*p` gather / `p`
     schedule), and `eq_row` (`2*rr`); `eq_int` rides fixed. Mirrors
-    `_dispatch_fix_and_sum_row` without the bind -- a single relaunch replaces the
+    `_dispatch_fix_and_sum_row` without the bind -- one dispatched kernel replaces the
     eager entry kernel. A round needing no re-pad (`gather` None) gets an identity
     gather over the full height (no `//2` fold) so it hits the same binary."""
     if isinstance(planes.n0, jax.core.Tracer):
@@ -1062,9 +1013,9 @@ def _fold_scalars(
     poly: Array, r: Array, pad_adj: Array, z: Array, one: Array
 ) -> tuple[Array, Array]:
     """The per-round scalar fold: the next claim (round poly evaluated at `r`) and the
-    updated pad-mass `pad_adj`. One source for both the oracle `_run_jagged_rounds`
-    (which inlines it) and the relaunch `_scalar_reduce` (which jits it), so the two
-    cannot drift out of byte-equality."""
+    updated pad-mass `pad_adj`. One source for both the oracle
+    `_run_jagged_rounds_reference` (which inlines it) and the round loop's
+    `_scalar_reduce` (which jits it), so the two cannot drift out of byte-equality."""
     return eval_coeffs(poly, r), pad_adj * (z * r + (one - z) * (one - r))
 
 
@@ -1099,25 +1050,25 @@ def _finalize_layer(
 _jit_finalize = jax.jit(_finalize_layer)
 
 
-def _run_jagged_rounds_relaunch(
+def _run_jagged_rounds(
     state: _JaggedState,
     sched: _JaggedSchedule,
     transcript: Transcript,
     *,
     export_dispatch: bool = False,
 ) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
-    """Host-relaunch sibling of `_run_jagged_rounds`: the same per-layer
-    sumcheck as a host loop relaunching one fold-then-compute kernel per round at
+    """Per-round-kernel sibling of `_run_jagged_rounds_reference`: the same per-layer
+    sumcheck as a host loop dispatching one fold-then-compute kernel per round at
     the round's real (halving) state size, Fiat-Shamir on the host between
     launches. One `sum_as_poly` (round 0, no fold), one `fix_and_sum` per
     subsequent round (row / boundary / interaction variant by round index), one
-    `fix_last`. Byte-identical to `_run_jagged_rounds` — it regroups the same
+    `fix_last`. Byte-identical to `_run_jagged_rounds_reference` — it regroups the same
     helper calls across the host FS boundary (fold of round k, sum of round k+1,
     in one kernel) rather than changing any arithmetic.
 
     Restructuring the per-round compute into one shape-polymorphic kernel is what
     lets a single `jax.export` binary serve every round size in a power-of-2
-    bracket (the recompile-free relaunch); dispatching the kernels eagerly here
+    bracket (the recompile-free dispatch); dispatching the kernels eagerly here
     is byte-equal to dispatching the exported binary, so this is the reference
     the export test pins to."""
     eq_row, eq_int, eval_point, lam, claim = (
@@ -1195,96 +1146,6 @@ def _run_jagged_rounds_relaunch(
         fd0,
         fd1,
     )
-
-
-def _prove_jagged_marked(
-    layer: JaggedGkrLayer,
-    state: _JaggedState,
-    sched: _JaggedSchedule,
-    transcript: DuplexTranscript,
-) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
-    """Wrap `_run_jagged_rounds` in the hash-agnostic `zorch.sumcheck` composite,
-    Fiat-Shamir INSIDE, so the body is the *same* loop and the result is
-    bit-identical to the plain path.
-
-    The static per-round schedule (`meta`), the interpolation tables
-    (`naturals`/`inv_vand`), and `eval_point` ride as **explicit operands** -- they
-    are tracer-valued under `@jit`, and only *closed-over* tracers are rejected by
-    `lax.composite`, so passing them positionally keeps the leading auto-lifted
-    operands the round-constant set alone (the emitter parses those by position).
-    The duplex sponge threads through as the five `DuplexState` leaves; the FS
-    permutation rides as the nested `zorch.poseidon2` marker inside `sample_challenge`.
-    `row_counts` rides as the `array<i64>` attribute the vendor bounds each
-    segment's reduction with (zkx#544); `fold_order`/`poly_form` declare the
-    jagged LSB / coefficient-form contract (the dense defaults are MSB / value).
-    """
-    n0, n1, d0, d1 = state.planes.n0, state.planes.n1, state.planes.d0, state.planes.d1
-    eq_row, eq_int, eval_point, lam, claim = (
-        state.eq_row,
-        state.eq_int,
-        state.eval_point,
-        state.lam,
-        state.claim,
-    )
-    meta, nrv, niv = sched.meta, sched.nrv, sched.niv
-    naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
-    challenge_limbs = sched.challenge_limbs
-    perm, rate = transcript.permutation, transcript.rate
-    leaves = _state_leaves(transcript.state)
-    meta_ops, gather_present = _flatten_meta(meta)
-    n_meta = len(meta_ops)
-
-    def body(*operands: Array, **_attrs: object) -> tuple[Array, ...]:
-        bn0, bn1, bd0, bd1, beq_row, beq_int, beval, blam, bclaim = operands[:9]
-        idx = 9
-        lv = operands[idx : idx + len(leaves)]
-        idx += len(leaves)
-        bmeta = _unflatten_meta(operands[idx : idx + n_meta], gather_present)
-        idx += n_meta
-        bnaturals, binv_vand = operands[idx], operands[idx + 1]
-        challenges, t, polys, fn0, fn1, fd0, fd1 = _run_jagged_rounds(
-            _JaggedState(
-                _Planes(bn0, bn1, bd0, bd1), beq_row, beq_int, beval, blam, bclaim
-            ),
-            _JaggedSchedule(
-                bmeta, _InterpConsts(bnaturals, binv_vand), nrv, niv, challenge_limbs
-            ),
-            DuplexTranscript(perm, rate, DuplexState(*lv)),
-        )
-        # `_run_jagged_rounds` types its transcript as the generic `Transcript`;
-        # here it is the DuplexTranscript built just above, so read its leaves back.
-        # Result order is the recognizer's contract, shared with the dense
-        # `_prove_marked`: [folded][5 sponge leaves][round polys][challenges].
-        leaves_out = _state_leaves(cast(DuplexTranscript, t).state)
-        return (fn0, fn1, fd0, fd1, *leaves_out, polys, challenges)
-
-    out = fused_region(
-        body,
-        n0,
-        n1,
-        d0,
-        d1,
-        eq_row,
-        eq_int,
-        eval_point,
-        lam,
-        claim,
-        *leaves,
-        *meta_ops,
-        naturals,
-        inv_vand,
-        name=SUMCHECK_MARKER,
-        version=SUMCHECK_MARKER_VERSION,
-        degree=_DEGREE,
-        num_vars=nrv + niv,
-        num_factors=4,
-        row_counts=np.asarray(layer.row_counts, dtype=np.int64),
-        fold_order="lsb",
-        poly_form="coefficient",
-    )
-    fn0, fn1, fd0, fd1, *out_leaves, polys, challenges = out
-    t = DuplexTranscript(perm, rate, DuplexState(*out_leaves))
-    return challenges, t, polys, fn0, fn1, fd0, fd1
 
 
 def _prove_jagged_layer_round(
