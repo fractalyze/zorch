@@ -39,7 +39,9 @@ class TranscriptHostFsTest(parameterized.TestCase):
     def _state_eq(self, a: DuplexTranscript, b: DuplexTranscript) -> bool:
         return all(
             bool(jnp.all(x == y))
-            for x, y in zip(tree_util.tree_leaves(a), tree_util.tree_leaves(b))
+            for x, y in zip(
+                tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
+            )
         )
 
     @parameterized.parameters(3, 8, 19)  # partial block, full block, block-crossing

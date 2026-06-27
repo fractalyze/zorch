@@ -167,7 +167,7 @@ gotcha — live in [`conventions.md` → Pytree registration](conventions.md#pyt
 explosion**, or **recompiling on a new shape**. There are three distinct phases,
 and they fail differently:
 
-```
+```text
 your Python  --trace-->  jaxpr  --lower-->  StableHLO/MLIR  --compile-->  XLA binary
               (Python)            (jaxpr→IR)                  (XLA, the slow one)
 ```

@@ -656,7 +656,7 @@ def _state_leaves(
 ) -> tuple[Array, Array, Array, Array, Array]:
     """The five `DuplexState` arrays in field order — the jagged LogUp-GKR prover's
     `zorch.sumcheck` marker threads them as its `lax.composite` operands and reads
-    them back, and the zkx consumer reads them in this order, so every
+    them back, and a downstream consumer reads them in this order, so every
     producer/consumer shares this one ordering. (`_state_on_host` also walks them to
     commit each leaf to the CPU.)"""
     return (
@@ -753,13 +753,17 @@ def _observe_and_sample_host(
     transcript: DuplexTranscript, values: Array, n: int = 1
 ) -> tuple[DuplexTranscript, Array]:
     """`observe_and_sample`: absorb then squeeze n raw in one host hop -- the
-    per-round Fiat-Shamir primitive. The challenge returns to the compute device."""
+    per-round Fiat-Shamir primitive. The challenge returns to the device `values`
+    came from -- the accelerator the round polys are produced on -- so a
+    multi-device prove gets it back where its kernels consume it (the sponge state
+    is CPU-resident in steady state, so its device can't name the compute one)."""
+    compute_device = next(iter(values.devices()))
     s = _state_on_host(transcript.state)
     f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
     state, out = f(s, jax.device_put(values, _host_cpu()))
     return (
         transcript._with_state(state),
-        jax.device_put(out, _host_compute_device()),
+        jax.device_put(out, compute_device),
     )
 
 

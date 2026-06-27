@@ -110,7 +110,7 @@ class RelaunchEqualsRunJaggedRoundsTest(parameterized.TestCase):
         self.assertTrue(
             bool(jnp.all(apolys == bpolys)), f"round polys diverged ({label})"
         )
-        for i, (x, y) in enumerate(zip(aopen, bopen)):
+        for i, (x, y) in enumerate(zip(aopen, bopen, strict=True)):
             self.assertTrue(
                 bool(jnp.all(x == y)), f"pair opening {i} diverged ({label})"
             )
@@ -203,7 +203,9 @@ class RelaunchHostFsEqualsDeviceTest(parameterized.TestCase):
         pd, td, prd = self._prove(layer, lam, claim, z, limbs, False)
         ph, th, prh = self._prove(layer, lam, claim, z, limbs, True)
         self.assertTrue(bool(jnp.all(pd == ph)), "bound point diverged")
-        for a, b in zip(jax.tree_util.tree_leaves(prd), jax.tree_util.tree_leaves(prh)):
+        for a, b in zip(
+            jax.tree_util.tree_leaves(prd), jax.tree_util.tree_leaves(prh), strict=True
+        ):
             self.assertTrue(bool(jnp.all(a == b)), "proof diverged")
         # host-FS keeps its state on the CPU, the device path on the accelerator,
         # so compare the values device-agnostically (a direct cross-device `==`

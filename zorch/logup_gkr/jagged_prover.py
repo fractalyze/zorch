@@ -425,7 +425,7 @@ def _run_jagged_rounds(
     )
 
 
-# ===== host-relaunch sumcheck engine (ported from the issue327 prototype) =====
+# ===== host-relaunch sumcheck engine =====
 # Recompile-free symbolic-export round kernels + the host loop relaunching one
 # per round; FS runs through the transcript (device or host per fs_on_host).
 
@@ -768,7 +768,13 @@ def _round_get(key: tuple) -> export.Exported | None:
 def _round_put(key: tuple, exp: export.Exported) -> None:
     _ROUND_KERNEL_CACHE[key] = exp
     if _EXPORT_CACHE_DIR is not None:
-        _export_path(key).write_bytes(bytes(exp.serialize()))
+        # Atomic publish: write a per-pid sibling temp then os.replace into place,
+        # so a process sharing ZORCH_EXPORT_CACHE_DIR never deserializes a
+        # half-written .bin (rename is atomic within one filesystem).
+        path = _export_path(key)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_bytes(bytes(exp.serialize()))
+        os.replace(tmp, path)
 
 
 def _round_dispatch(
@@ -844,7 +850,7 @@ def _dispatch_fix_and_sum_int(
     # each (round-shape, dtype-mix) gets its own binary; `consts` is baked in.
     key = (
         "int",
-        tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
         consts.naturals.shape[0],
         consts.naturals.dtype,
     )
@@ -887,7 +893,7 @@ def _dispatch_fix_and_sum_boundary(
     operands = (planes, eq_int, alpha, scalars)
     key = (
         "boundary",
-        tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
         consts.naturals.shape[0],
         consts.naturals.dtype,
     )
@@ -940,7 +946,7 @@ def _dispatch_sum_as_poly_row(
     operands = (planes, gather, col_index, pair_index, eq_row, eq_int, scalars)
     key = (
         "sum0",
-        tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
         eq_int.shape,
         consts.naturals.shape[0],
     )
@@ -1012,7 +1018,7 @@ def _dispatch_fix_and_sum_row(
     operands = (planes, eq_row, alpha, gather, col_index, pair_index, eq_int, scalars)
     key = (
         "row",
-        tuple(l.dtype for l in jax.tree_util.tree_leaves(operands)),
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
         eq_int.shape,
         consts.naturals.shape[0],
     )
