@@ -1,0 +1,226 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+"""`_run_jagged_rounds` (the host loop dispatching one shape-polymorphic
+round kernel per round) is byte-identical to the unrolled `_run_jagged_rounds_reference`
+oracle -- both the eager-kernel path and the production export_dispatch=True path,
+on every row/interaction/edge layout. The oracle is kept in-tree precisely for
+this gate."""
+from __future__ import annotations
+
+import jax
+import jax.numpy as jnp
+import zk_dtypes
+from absl.testing import absltest, parameterized
+from jax import Array
+
+from zorch.logup_gkr.circuit import JaggedGkrLayer
+from zorch.logup_gkr.jagged_prover import (
+    _DEGREE,
+    JaggedLayerProof,
+    _InterpConsts,
+    _JaggedSchedule,
+    _JaggedState,
+    _Planes,
+    _round_metadata,
+    _run_jagged_rounds,
+    _run_jagged_rounds_reference,
+    prove_jagged_layer,
+)
+from zorch.logup_gkr.prover import logup_combine
+from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
+from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.poly.univariate import compute_inv_vandermonde
+from zorch.testkit.random_field import rand_ext_field, rand_field
+from zorch.testkit.transcript import CheapPermutation, cheap_transcript
+from zorch.transcript import DuplexTranscript, Transcript
+
+KB = zk_dtypes.koalabear_mont
+EF = zk_dtypes.koalabearx4_mont
+
+
+class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
+    """`_run_jagged_rounds` — the host loop dispatching one fold-then-compute kernel
+    per round — is byte-identical to the unrolled `_run_jagged_rounds_reference`. Same
+    arithmetic regrouped across the host Fiat-Shamir boundary, so the bound point,
+    round polys, pair openings, AND the advanced transcript state must all match, on
+    every row/interaction/edge layout."""
+
+    def _setup(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> tuple[
+        _JaggedState,
+        list[tuple[Array | None, Array, Array]],
+        Array,
+        Array,
+        int,
+        int,
+    ]:
+        niv = layer.num_interaction_variables
+        nrv = z.shape[0] - niv
+        one = jnp.ones((), z.dtype)
+        eq_row = expand_eq_to_hypercube(z[niv:], one)
+        eq_int = expand_eq_to_hypercube(z[:niv], one)
+        n0, n1, d0, d1 = virtual_planes(layer, nrv)
+        eq = expand_eq_to_hypercube(z, one)
+        claim = jnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
+        meta = _round_metadata(layer.row_counts, nrv)
+        naturals = jnp.stack([jnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
+        inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
+        state = _JaggedState(
+            _Planes(
+                layer.numerator_0,
+                layer.numerator_1,
+                layer.denominator_0,
+                layer.denominator_1,
+            ),
+            eq_row,
+            eq_int,
+            z,
+            lam,
+            claim,
+        )
+        return state, meta, naturals, inv_vand, nrv, niv
+
+    def _check_round_runner(
+        self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
+    ) -> None:
+        state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
+        sched = _JaggedSchedule(
+            meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
+        )
+        ref = _run_jagged_rounds_reference(state, sched, cheap_transcript(KB))
+        # Both the eager-kernel path AND the production export-dispatch path
+        # (the cached jax.export binaries, the 4*g / 2*pp brackets, the dtype-mix
+        # key, the gather=None -> identity substitution) must reproduce the unrolled
+        # reference byte-for-byte -- prove_jagged_layer ships export_dispatch=True.
+        for export_dispatch in (False, True):
+            got = _run_jagged_rounds(
+                state, sched, cheap_transcript(KB), export_dispatch=export_dispatch
+            )
+            self._assert_matches_reference(
+                ref, got, f"export_dispatch={export_dispatch}"
+            )
+
+    def _assert_matches_reference(
+        self,
+        a: tuple[Array, Transcript, Array, Array, Array, Array, Array],
+        b: tuple[Array, Transcript, Array, Array, Array, Array, Array],
+        label: str,
+    ) -> None:
+        ach, at, apolys, *aopen = a
+        bch, bt, bpolys, *bopen = b
+        self.assertTrue(bool(jnp.all(ach == bch)), f"challenges diverged ({label})")
+        self.assertTrue(
+            bool(jnp.all(apolys == bpolys)), f"round polys diverged ({label})"
+        )
+        for i, (x, y) in enumerate(zip(aopen, bopen, strict=True)):
+            self.assertTrue(
+                bool(jnp.all(x == y)), f"pair opening {i} diverged ({label})"
+            )
+        if not isinstance(at, DuplexTranscript) or not isinstance(bt, DuplexTranscript):
+            raise AssertionError("both paths must thread the DuplexTranscript back")
+        for f in ("input_buffer", "output_buffer", "sponge_state"):
+            self.assertTrue(
+                bool(jnp.all(getattr(at.state, f) == getattr(bt.state, f))),
+                f"transcript {f} diverged ({label})",
+            )
+        self.assertEqual(int(at.state.in_pos), int(bt.state.in_pos), label)
+        self.assertEqual(int(at.state.out_pos), int(bt.state.out_pos), label)
+
+    @parameterized.named_parameters(
+        # Row + interaction phases, odd/saturated/even segments, the nrv==1 and
+        # niv==0 edges (no fix_and_sum_row chain / no boundary+interaction).
+        ("std", (3, 1, 5, 2), 5),
+        ("small", (3, 1), 3),
+        ("nrv1", (1, 1), 2),
+        ("saturated", (1, 1, 1, 1), 5),
+        ("niv0", (2,), 2),
+    )
+    def test_matches_reference_base_field(
+        self, row_counts: tuple[int, ...], z_len: int
+    ) -> None:
+        layer = random_jagged_layer(7, row_counts)
+        self._check_round_runner(
+            layer, rand_field(17, (), KB), rand_field(18, (z_len,), KB)
+        )
+
+    def test_matches_reference_multi_limb_ef(self) -> None:
+        # koalabearx4 challenges (four squeezes reinterpreted) through the loop.
+        layer = random_jagged_layer(41, (3, 1, 5, 2))
+        self._check_round_runner(
+            layer,
+            rand_ext_field(51, (), KB, EF),
+            rand_ext_field(52, (5,), KB, EF),
+            challenge_limbs=4,
+        )
+
+
+@absltest.skipIf(
+    jax.default_backend() == "cpu",
+    "host-FS vs device is only meaningful off CPU (zkx#500)",
+)
+class HostFsRoundsEqualDeviceTest(parameterized.TestCase):
+    """A full jagged-layer prove through the round loop with `fs_on_host=True` (the
+    host sponge) is byte-identical to the same prove on the device sponge -- the
+    integration of the host-FS transcript and the round loop used in
+    production. A `CheapPermutation` keeps both off the marked path; only the
+    Fiat-Shamir backend differs."""
+
+    def _claim(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> Array:
+        niv = layer.num_interaction_variables
+        n0, n1, d0, d1 = virtual_planes(layer, z.shape[0] - niv)
+        eq = expand_eq_to_hypercube(z, jnp.ones((), z.dtype))
+        return jnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
+
+    def _prove(
+        self,
+        layer: JaggedGkrLayer,
+        lam: Array,
+        claim: Array,
+        z: Array,
+        limbs: int,
+        fs_on_host: bool,
+    ) -> tuple[Array, DuplexTranscript, JaggedLayerProof]:
+        t = DuplexTranscript.new(
+            CheapPermutation(width=8, dtype=KB), rate=4, fs_on_host=fs_on_host
+        )
+        # prove_jagged_layer threads `t` straight through, so the advanced
+        # transcript is the same DuplexTranscript -- only its Transcript-protocol
+        # return annotation hides the concrete type the .state access below needs.
+        return prove_jagged_layer(layer, lam, claim, z, t, challenge_limbs=limbs)  # type: ignore[return-value]
+
+    @parameterized.named_parameters(
+        ("base", (3, 1, 5, 2), 5, 1), ("ef", (3, 1, 5, 2), 5, 4)
+    )
+    def test_host_fs_equals_device(
+        self, row_counts: tuple[int, ...], z_len: int, limbs: int
+    ) -> None:
+        layer = random_jagged_layer(7, row_counts)
+        if limbs == 1:
+            lam, z = rand_field(17, (), KB), rand_field(18, (z_len,), KB)
+        else:
+            lam, z = rand_ext_field(51, (), KB, EF), rand_ext_field(
+                52, (z_len,), KB, EF
+            )
+        claim = self._claim(layer, lam, z)
+        pd, td, prd = self._prove(layer, lam, claim, z, limbs, False)
+        ph, th, prh = self._prove(layer, lam, claim, z, limbs, True)
+        self.assertTrue(bool(jnp.all(pd == ph)), "bound point diverged")
+        for a, b in zip(
+            jax.tree_util.tree_leaves(prd), jax.tree_util.tree_leaves(prh), strict=True
+        ):
+            self.assertTrue(bool(jnp.all(a == b)), "proof diverged")
+        # host-FS keeps its state on the CPU, the device path on the accelerator,
+        # so compare the values device-agnostically (a direct cross-device `==`
+        # raises) -- byte-identity of the state is the point.
+        for f in ("input_buffer", "output_buffer", "sponge_state"):
+            self.assertTrue(
+                bool(
+                    jnp.all(
+                        jax.device_get(getattr(td.state, f))
+                        == jax.device_get(getattr(th.state, f))
+                    )
+                ),
+                f"transcript {f} diverged",
+            )
+
+
+if __name__ == "__main__":
+    absltest.main()

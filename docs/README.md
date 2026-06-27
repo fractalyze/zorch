@@ -11,6 +11,7 @@ ______________________________________________________________________
 | Question                                                        | Where                                                                 |
 | --------------------------------------------------------------- | --------------------------------------------------------------------- |
 | What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
+| New to JAX — the mental models behind the conventions, and the canonical references to learn from | [`jax.md`](jax.md)                  |
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
 | Polynomial primitives — `eq`, multilinear eval/fold, and the ZKX field-dtype gotchas | [`poly.md`](poly.md)                                  |
 | Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2 | [`hash.md`](hash.md)                                          |

@@ -46,7 +46,7 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from zorch.round import Round
-from zorch.transcript import DuplexState, Transcript, reinterpret_challenge
+from zorch.transcript import DuplexTranscript, Transcript, reinterpret_challenge
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
@@ -253,6 +253,16 @@ def prove(
             "challenge_limbs must be 1 when challenge_dtype is None, got "
             f"{challenge_limbs}"
         )
+    if isinstance(transcript, DuplexTranscript) and transcript.fs_on_host:
+        # The host sponge is an eager primitive (`device_put` / `.devices()` on its
+        # inputs); it cannot run inside `_prove_scan`'s `lax.scan` body. A host-FS
+        # transcript must drive the host-relaunch round engine
+        # (`logup_gkr.jagged_prover`), not this dense scan prove — fail loud rather
+        # than abort deep in the scan trace with a ConcretizationError.
+        raise NotImplementedError(
+            "fs_on_host is unsupported on the dense sumcheck scan path; drive the "
+            "host-relaunch round engine instead"
+        )
     return _prove_scan(
         round,
         state,
@@ -316,14 +326,6 @@ def _prove_scan(
     init = (state, transcript, jnp.int32(half_max))
     (state, transcript, _), msgs = lax.scan(step, init, xs=None, length=rounds)
     return [buf[..., :1] for buf in state], transcript, msgs
-
-
-def _state_leaves(st: DuplexState) -> tuple[Array, Array, Array, Array, Array]:
-    """The five `DuplexState` arrays in field order — a `zorch.sumcheck` marker
-    threads them as its mutable transcript operands and reads them back as results,
-    so the producer (now the jagged LogUp-GKR prover) and the zkx consumer share
-    this one ordering. Lives here with the marker definition it belongs to."""
-    return (st.input_buffer, st.output_buffer, st.sponge_state, st.in_pos, st.out_pos)
 
 
 if TYPE_CHECKING:
