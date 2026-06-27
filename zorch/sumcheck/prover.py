@@ -1,7 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Sumcheck prover: per-variable rounds, the fold/lift helpers they share, and the
-homogeneous scan driver `prove` (with the register-resident `zorch.sumcheck`
-marker).
+homogeneous scan driver `prove`.
 
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial over the domain [0..degree], then folds every MLE at the verifier's
@@ -10,8 +9,7 @@ independent, so they live as `split_halves` / `factors_on_domain` / `fold` and
 each round supplies only its summand via `_round_poly`: `SumcheckRound` (here)
 sums a product of factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums
 the LogUp combine. The round body is element-wise field ops plus the one inherent
-Sigma (no reduce/gather beyond it), so each round stays wrappable by a single-
-kernel marker without restructuring. The verifier dual lives in
+Sigma (no reduce/gather beyond it). The verifier dual lives in
 `zorch.sumcheck.verifier`.
 
 `prove` is the multilinear sumcheck driver, generic over the round's summand: the
@@ -28,19 +26,11 @@ Python-loop fold. This is the multilinear-sumcheck specialization; the
 scheme-agnostic round loop (any `Round`, any message shape) is
 `zorch.prove.fold_rounds`. A univariate / FFT prover would be its own driver.
 
-When the transcript's Fiat-Shamir permutation lowers to a dedicated fusion marker
-(`transcript.has_dedicated_fusion`), `prove` wraps that whole scan in one
-hash-agnostic `zorch.sumcheck` composite a vendor codegens as a single
-register-resident kernel — reduce → Fiat-Shamir → fold looped on-chip, the MLE
-state and the sponge never round-tripping HBM between rounds. The marker is
-transparent (callers still just call `prove`) and carries computation, not
-parameters: no pre-sampled challenges (FS stays inside the body scan), no hash
-identity (it rides as a nested `zorch.poseidon2` marker whose round constants
-auto-lift, keeping the hash off the wrapper's marker). Unrecognized — a vendor
-without the emitter — it decomposes to the same scan, byte-identical and sound. A
-test `CheapPermutation`
-(`has_dedicated_fusion=False`) keeps the plain scan, so unit tests never need the
-marker. This is the register-resident lever reached transparently from `prove`.
+Fiat-Shamir stays a per-permute `zorch.poseidon2` marker (one fused kernel per
+permute, fractalyze/xla_fork#76) and the reduce/fold is its own kernel — the path
+a vendor compiles at scale. (An earlier `zorch.sumcheck` whole-scan megakernel
+that wrapped the entire scan register-resident was dropped: it ptxas-overflowed
+shared memory around 2^20, so it never compiled at real sizes.)
 """
 
 from __future__ import annotations
@@ -49,21 +39,14 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol
 
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.fusion import fused_region
 from zorch.round import Round
-from zorch.transcript import (
-    DuplexState,
-    DuplexTranscript,
-    Transcript,
-    _state_leaves,
-    reinterpret_challenge,
-)
+from zorch.transcript import DuplexTranscript, Transcript, reinterpret_challenge
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
@@ -140,9 +123,8 @@ class SumcheckRound(Round):
 
     def combine(self, scalars: Sequence[Array], *factors: Array) -> Array:
         """Product summand `prod_k f_k` (the scalar-explicit seam; product takes no
-        scalars). Single source of the combine math: `_combine`, the round-poly
-        reduction, and the marked path's nested `zorch.sumcheck.combine` region all
-        route here, so they cannot drift."""
+        scalars). Single source of the combine math: `_combine` and the round-poly
+        reduction both route here, so they cannot drift."""
         del scalars  # product has none
         return reduce(operator.mul, factors)
 
@@ -198,9 +180,8 @@ class SumcheckSummand(Protocol):
     settable attribute that neither provides.
 
     `combine` is the scalar-explicit form of the summand and `combine_scalars` the
-    loop-invariant scalars it reads (LogUp's λ; empty for product). The marked path
-    threads those scalars as marker operands and delineates `combine` as a nested
-    `zorch.sumcheck.combine` region, so a vendor inlines any summand generically."""
+    loop-invariant scalars it reads (LogUp's λ; empty for product), hoisted out of
+    the per-variable scan so they bind once rather than per round."""
 
     @property
     def degree(self) -> int: ...
@@ -212,30 +193,15 @@ class SumcheckSummand(Protocol):
     def _combine(self, *factors: Array) -> Array: ...
 
 
-# Hash-agnostic boundary `prove` wraps its whole scan in when the transcript's FS
-# permutation has a dedicated fusion marker. The structural shape rides in
-# `composite.attributes` (`degree`/`num_vars`/`num_factors`), not the name — named,
-# typed, and optional-extensible (the recognizer's contract, vs a brittle
-# positional name suffix). The combine is a body sub-region and the hash rides as a
-# nested `zorch.poseidon2` marker (round constants auto-lift), so the marker names no
-# hash and carries no pre-sampled challenges.
+# The hash-agnostic `zorch.sumcheck` register-resident marker. `sumcheck.prove` no
+# longer emits it — the whole-scan megakernel it once wrapped was dropped (it
+# ptxas-overflowed shared memory around 2^20; see the module docstring). The name
+# and version live here as the shared definition the LogUp-GKR jagged prover
+# (`zorch.logup_gkr.jagged_prover`) still emits and the zkx `SumcheckRecognizer`
+# gates on (`composite.version`); the version is reserved for a future
+# cross-release ABI break.
 SUMCHECK_MARKER = "zorch.sumcheck"
-# Marker revision the zkx `SumcheckRecognizer` gates on (`composite.version`).
-# All rounds ride revision 1; the round shape (a truncated `eval_start` domain,
-# an extension-field fold challenge) is carried in attributes / operand dtypes a
-# recognizer reads, not in the version. The version is reserved for a future
-# cross-release ABI break — there are no released marker consumers to gate yet,
-# and producer and recognizer move together behind one pin, so a shape the
-# recognizer cannot codegen fails loud at compile rather than silently.
 SUMCHECK_MARKER_VERSION = 1
-
-# Nested region delineating the per-round combine (the summand over the lifted
-# factors) inside the sumcheck scan, so a vendor inlines it generically rather
-# than hardcoding one combine (#113). Carries the computation, not
-# params: operands are `[lifted factors][combine scalars]` and the body is
-# `round.combine`; found by recursive search like the nested `zorch.poseidon2` marker.
-SUMCHECK_COMBINE_MARKER = "zorch.sumcheck.combine"
-SUMCHECK_COMBINE_MARKER_VERSION = 1
 
 
 def prove(
@@ -243,7 +209,6 @@ def prove(
     state: Sequence[Array],
     transcript: Transcript,
     *,
-    num_real: int | None = None,
     eval_start: int = 0,
     challenge_dtype: object | None = None,
     challenge_limbs: int = 1,
@@ -256,19 +221,6 @@ def prove(
     per-variable loops share this scan. The heterogeneous case (distinct rounds in
     sequence) stays on `zorch.prove.fold_rounds`.
 
-    When the transcript's Fiat-Shamir permutation lowers to a dedicated fusion
-    marker (`has_dedicated_fusion`), the whole scan is wrapped in one
-    `zorch.sumcheck` composite a vendor codegens register-resident (see the module
-    docstring); otherwise it runs directly. The two are byte-identical — the marker
-    decomposes to the same scan — so callers see one `prove`.
-
-    `num_real` declares how many leading entries of each factor table are real,
-    the rest being zero padding (a jagged table padded to a power of two). It
-    rides on the marker as an optional composite attribute so a vendor bounds the
-    first round's reduction to the real prefix; the computation is unchanged —
-    skipping the tail is sound only because a padded summand sums to zero there,
-    which is the caller's contract.
-
     `eval_start` controls the round-poly evaluation domain `[eval_start..degree]`:
     the default 0 sends `degree+1` values; 1 omits `s(0)` and sends `degree`, the
     compressed wire form a verifier reconstructs as `s(0) = claim − s(1)`.
@@ -276,11 +228,7 @@ def prove(
     field: the default (None / 1) folds with one transcript-field squeeze; a
     challenge in an extension reinterprets `challenge_limbs` consecutive squeezes
     as one `challenge_dtype` element (the `sample_challenge` packing, applied
-    inside the scan), as a downstream scheme's extension-field sumchecks need. A
-    non-default `eval_start` rides the dedicated-fusion marker as a composite
-    attribute (the truncated domain a recognizer reads); the extension-field fold
-    challenge rides no attr — a vendor infers it from the challenge result dtype.
-    Both keep the marker byte-identical to the plain scan when unrecognized.
+    inside the scan), as a downstream scheme's extension-field sumchecks need.
     """
     state = list(state)
     if not state:
@@ -289,12 +237,6 @@ def prove(
     if log2_strict_usize(width) == 0:
         raise ValueError(
             f"prove requires a state width >= 2 (at least one round), got width {width}"
-        )
-    # Mirror the zkx recognizer's bound so a bad value fails at emission, and on
-    # the unmarked path too — the two paths must reject identically.
-    if num_real is not None and not 1 <= num_real <= width:
-        raise ValueError(
-            f"num_real must be within [1, table width {width}], got {num_real}"
         )
     if not 0 <= eval_start <= round.degree:
         raise ValueError(
@@ -311,33 +253,16 @@ def prove(
             "challenge_limbs must be 1 when challenge_dtype is None, got "
             f"{challenge_limbs}"
         )
-    # Mark any DuplexTranscript with a dedicated-fusion permutation — the marker
-    # threads the sponge's five-leaf state as operands, and `_prove_marked` carries
-    # the truncated-domain `eval_start` as a composite attribute (an extension
-    # challenge needs none — a vendor reads it off the challenge dtype). The
-    # isinstance narrows the type for `_prove_marked` (the merkle.py
-    # `has_dedicated_fusion` gate).
-    if isinstance(transcript, DuplexTranscript):
-        if transcript.fs_on_host:
-            # The host sponge is an eager primitive (`device_put` / `.devices()` on
-            # its inputs); it cannot run inside `_prove_scan`'s `lax.scan` body. A
-            # host-FS transcript must drive the host-relaunch round engine
-            # (`logup_gkr.jagged_prover`), not this dense scan prove — fail loud
-            # rather than abort deep in the scan trace with a ConcretizationError.
-            raise NotImplementedError(
-                "fs_on_host is unsupported on the dense sumcheck scan path; drive "
-                "the host-relaunch round engine instead"
-            )
-        if transcript.has_dedicated_fusion:
-            return _prove_marked(
-                round,
-                state,
-                transcript,
-                num_real=num_real,
-                eval_start=eval_start,
-                challenge_dtype=challenge_dtype,
-                challenge_limbs=challenge_limbs,
-            )
+    if isinstance(transcript, DuplexTranscript) and transcript.fs_on_host:
+        # The host sponge is an eager primitive (`device_put` / `.devices()` on its
+        # inputs); it cannot run inside `_prove_scan`'s `lax.scan` body. A host-FS
+        # transcript must drive the host-relaunch round engine
+        # (`logup_gkr.jagged_prover`), not this dense scan prove — fail loud rather
+        # than abort deep in the scan trace with a ConcretizationError.
+        raise NotImplementedError(
+            "fs_on_host is unsupported on the dense sumcheck scan path; drive the "
+            "host-relaunch round engine instead"
+        )
     return _prove_scan(
         round,
         state,
@@ -353,35 +278,21 @@ def _prove_scan(
     state: list[Array],
     transcript: Transcript,
     *,
-    mark_combine: bool = False,
-    scalars: Sequence[Array] | None = None,
     eval_start: int = 0,
     challenge_dtype: object | None = None,
     challenge_limbs: int = 1,
 ) -> tuple[list[Array], Transcript, RoundMsg]:
     """The per-variable sumcheck scan: split / lift / round-poly / Fiat-Shamir /
-    fold, one `lax.scan` step per variable. This is both the plain prover body and
-    the decomposition `prove`'s `zorch.sumcheck` marker wraps, so the marked and
-    unmarked paths are byte-identical by construction. Assumes a validated,
-    non-empty `state` (`prove` guards the empty / zero-round cases).
+    fold, one `lax.scan` step per variable. The body `prove` always runs, on a
+    validated, non-empty `state` (`prove` guards the empty / zero-round cases).
 
     `eval_start` / `challenge_dtype` / `challenge_limbs` are the round-poly domain
-    and fold-challenge-field controls `prove` documents; the marked path forwards
-    them unchanged (and mirrors them onto the marker as composite attributes), so
-    the decomposition stays byte-identical whatever the round shape.
-
-    `mark_combine` wraps each round's combine in a nested `zorch.sumcheck.combine`
-    region (#113) — set only on the marked path, where `_prove_marked`
-    threads the combine `scalars` (λ) in as marker operands so the body reads them
-    instead of closing over the round (no duplicate auto-lift). The region is
-    transparent, so the wrapped scan stays byte-identical to the plain one. When
-    `scalars is None` the round binds its own (the plain path)."""
+    and fold-challenge-field controls `prove` documents."""
     width = state[0].shape[-1]
     rounds = log2_strict_usize(width)
     degree = round.degree
     half_max = width // 2
-    n_factors = len(state)
-    scalars = round.combine_scalars() if scalars is None else scalars
+    scalars = round.combine_scalars()
 
     def step(
         carry: tuple[list[Array], Transcript, Array], _: None
@@ -393,18 +304,7 @@ def _prove_scan(
             for buf in state
         ]
         lifted = [lift_to_domain(p0, p1, degree, eval_start) for p0, p1 in pairs]
-        if mark_combine:
-            # operands [lifted factors][scalars]; body reads passed scalars, so the
-            # round (and its λ) is not captured — λ rides as an explicit operand.
-            integrand = fused_region(
-                lambda *ops: round.combine(ops[n_factors:], *ops[:n_factors]),
-                *lifted,
-                *scalars,
-                name=SUMCHECK_COMBINE_MARKER,
-                version=SUMCHECK_COMBINE_MARKER_VERSION,
-            )
-        else:
-            integrand = round.combine(scalars, *lifted)
+        integrand = round.combine(scalars, *lifted)
         msg = jnp.sum(
             jnp.where(live, integrand, jnp.zeros((), integrand.dtype)), axis=-1
         )
@@ -426,91 +326,6 @@ def _prove_scan(
     init = (state, transcript, jnp.int32(half_max))
     (state, transcript, _), msgs = lax.scan(step, init, xs=None, length=rounds)
     return [buf[..., :1] for buf in state], transcript, msgs
-
-
-def _prove_marked(
-    round: SumcheckSummand,
-    state: list[Array],
-    transcript: DuplexTranscript,
-    num_real: int | None = None,
-    *,
-    eval_start: int = 0,
-    challenge_dtype: object | None = None,
-    challenge_limbs: int = 1,
-) -> tuple[list[Array], DuplexTranscript, RoundMsg]:
-    """Wrap `_prove_scan` in the hash-agnostic `zorch.sumcheck` composite —
-    Fiat-Shamir INSIDE, so the body is the *same* scan and the folded state,
-    advanced transcript, and proof are bit-identical to the plain path.
-
-    The shape (`degree`, `num_vars`, `num_factors`, plus `num_real` when given)
-    rides as `composite.attributes` — the recognizer's contract; the body ignores
-    them (metadata only). A non-default `eval_start` (the truncated domain) rides
-    as a further attribute under the same `version` 1 — the recognizer keys off
-    the attribute, not the version. (An extension-field fold challenge rides no
-    attr — a vendor infers it from the challenge result dtype.) The duplex sponge
-    threads
-    through as the five `DuplexState` leaves (the
-    mutable carry); the FS permutation rides as the nested `zorch.poseidon2` marker
-    inside `observe_and_sample`, whose round constants auto-lift into this
-    composite's operands — so the marker names no hash and carries no pre-sampled
-    challenges. Operands: `[factor tables][combine scalars][5 sponge leaves]` plus
-    the auto-lifted round constants; results: `[folded state][5 sponge leaves]
-    [round polys][challenges]` — `prove`'s return, repacked. The per-round combine
-    rides as a nested `zorch.sumcheck.combine` region and its scalars (λ) as the
-    `[combine scalars]` operand segment — empty for product, so a product marker's
-    operand layout is unchanged.
-    """
-    perm, rate = transcript.permutation, transcript.rate
-    num_vars = log2_strict_usize(state[0].shape[-1])
-    n_factors = len(state)
-    scalars = round.combine_scalars()
-    n_scalars = len(scalars)
-    leaves = _state_leaves(transcript.state)
-
-    def body(
-        *operands: Array, **_attrs: object
-    ) -> tuple[list[Array], tuple[Array, Array, Array, Array, Array], RoundMsg]:
-        tables = list(operands[:n_factors])
-        sca = operands[n_factors : n_factors + n_scalars]
-        lv = operands[n_factors + n_scalars : n_factors + n_scalars + len(leaves)]
-        # Rebuild the transcript from its leaves so the body closes over no sponge
-        # state; `_prove_scan` runs the per-round FS, keeping this the one prover.
-        # Forward the combine scalars so the nested combine region reads them as
-        # operands. `_attrs` is marker metadata passed through — the decomposition
-        # itself does not read it.
-        folded, t, msgs = _prove_scan(
-            round,
-            tables,
-            DuplexTranscript(perm, rate, DuplexState(*lv)),
-            mark_combine=True,
-            scalars=sca,
-            eval_start=eval_start,
-            challenge_dtype=challenge_dtype,
-            challenge_limbs=challenge_limbs,
-        )
-        return folded, _state_leaves(cast(DuplexTranscript, t).state), msgs
-
-    # Optional attrs: emitted only when non-default, so a default prove's envelope
-    # is unchanged for a recognizer that predates them. `num_real` bounds a zero
-    # tail; `eval_start` declares the truncated round-poly domain. Both are read
-    # off the attribute. The extension fold challenge rides no attr — a vendor
-    # infers it from the challenge dtype.
-    opt_attrs = {} if num_real is None else {"num_real": num_real}
-    if eval_start != 0:
-        opt_attrs["eval_start"] = eval_start
-    folded, out_leaves, msgs = fused_region(
-        body,
-        *state,
-        *scalars,
-        *leaves,
-        name=SUMCHECK_MARKER,
-        version=SUMCHECK_MARKER_VERSION,
-        degree=round.degree,
-        num_vars=num_vars,
-        num_factors=n_factors,
-        **opt_attrs,
-    )
-    return folded, DuplexTranscript(perm, rate, DuplexState(*out_leaves)), msgs
 
 
 if TYPE_CHECKING:

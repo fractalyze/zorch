@@ -254,10 +254,10 @@ class DuplexTranscript:
     @property
     def has_dedicated_fusion(self) -> bool:
         """Whether the Fiat-Shamir permutation lowers to a dedicated fusion marker
-        a vendor can expand — the gate `zorch.sumcheck.prover` reads to mark its
-        scan as one register-resident sumcheck kernel (mirrors `Sponge`/
-        `Compression`). False for a test `CheapPermutation`, so unit tests keep the
-        plain scan."""
+        a vendor can expand — the LogUp-GKR jagged prover's gate
+        (`zorch.logup_gkr.jagged_prover`) reads it to mark its sumcheck scan as one
+        register-resident kernel (mirrors `Sponge`/`Compression`). False for a test
+        `CheapPermutation`, so unit tests keep the plain scan."""
         return self.permutation.has_dedicated_fusion
 
     @classmethod
@@ -654,10 +654,11 @@ def _host_cpu() -> jax.Device:
 def _state_leaves(
     state: DuplexState,
 ) -> tuple[Array, Array, Array, Array, Array]:
-    """The five `DuplexState` arrays in field order — the sumcheck marker threads
-    them as its `lax.composite` operands and reads them back, and the zkx consumer
-    reads them in this order, so every producer/consumer shares this one ordering.
-    (`_state_on_host` also walks them to commit each leaf to the CPU.)"""
+    """The five `DuplexState` arrays in field order — the jagged LogUp-GKR prover's
+    `zorch.sumcheck` marker threads them as its `lax.composite` operands and reads
+    them back, and the zkx consumer reads them in this order, so every
+    producer/consumer shares this one ordering. (`_state_on_host` also walks them to
+    commit each leaf to the CPU.)"""
     return (
         state.input_buffer,
         state.output_buffer,
