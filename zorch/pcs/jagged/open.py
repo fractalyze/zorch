@@ -79,14 +79,14 @@ class StackedRound:
 Opening = tuple[Array, list[Array]]
 
 
-def sample_rlc_coeffs(
-    transcript: Transcript, total_width: int, dtype
+def sample_rlc_coeffs_bits(
+    transcript: Transcript, nbv: int, dtype
 ) -> tuple[Transcript, Array]:
-    """The staggered partial-Lagrange RLC weights over the batch's total
-    column width: ``log2_ceil(total_width)`` extension challenges expanded to
-    the eq basis. One definition driven by the open and its verifier dual,
-    so the batching weights cannot drift between their Fiat-Shamir streams."""
-    nbv = log2_ceil_usize(total_width)
+    """The staggered partial-Lagrange RLC weights from ``nbv`` extension
+    challenges expanded to the eq basis (``2^nbv`` weights). Split from
+    ``sample_rlc_coeffs`` so the symbolic-K open can pass a static bit count
+    directly (``total_width`` is then a symbolic dim and ``log2_ceil`` of it is
+    unavailable); both entries share this body so the weights cannot drift."""
     if nbv == 0:
         return transcript, jnp.ones(1, dtype)
     limbs = efinfo(dtype).degree
@@ -95,6 +95,16 @@ def sample_rlc_coeffs(
         transcript, challenge = sample_challenge(transcript, dtype, limbs)
         samples.append(challenge)
     return transcript, partial_lagrange(jnp.stack(samples))
+
+
+def sample_rlc_coeffs(
+    transcript: Transcript, total_width: int, dtype
+) -> tuple[Transcript, Array]:
+    """The staggered partial-Lagrange RLC weights over the batch's total
+    column width: ``log2_ceil(total_width)`` extension challenges expanded to
+    the eq basis. One definition driven by the open and its verifier dual,
+    so the batching weights cannot drift between their Fiat-Shamir streams."""
+    return sample_rlc_coeffs_bits(transcript, log2_ceil_usize(total_width), dtype)
 
 
 def sample_query_positions(
@@ -177,6 +187,7 @@ class StackedOpenProof:
         "log_stacking_height",
         "num_queries",
         "pow_bits",
+        "rlc_bits",
     ),
 )
 def stacked_basefold_open(
@@ -190,6 +201,7 @@ def stacked_basefold_open(
     num_queries: int,
     pow_bits: int,
     transcript: GrindingTranscript,
+    rlc_bits: int | None = None,
 ) -> tuple[StackedOpenProof, GrindingTranscript]:
     """Open the stacked dense at ``z_final`` via one batched FRI over ``rounds``.
 
@@ -198,6 +210,17 @@ def stacked_basefold_open(
     ``dense_eval`` and the batch evals, samples the RLC + fold challenges, grinds,
     then samples query positions, so a scripted replay cannot drive it. Returns
     ``(proof, transcript)``.
+
+    ``rlc_bits`` switches the open into the **symbolic-K** mode used for a
+    recompile-free ``jax.export``: when set, each round's column count ``K`` may
+    be a symbolic dim. The two K-dependent steps are made shape-polymorphic — the
+    per-column evals run under ``vmap`` over the column axis (not a static
+    ``range(K)``), and the RLC samples exactly ``rlc_bits`` challenges instead of
+    deriving the count from ``log2_ceil(total_width)``. ``rlc_bits`` must equal
+    ``log2_ceil`` of the bracket's total column width (one binary per power-of-2
+    column bracket); the resulting ``2^rlc_bits`` weights cover any ``K`` in the
+    bracket, and ``batch_staggered`` consumes the leading ``total_width`` of them.
+    Left ``None`` (the default) the open is byte-identical to the concrete path.
     """
     if not rounds:
         raise ValueError("the stacked open needs at least one committed round")
@@ -208,15 +231,26 @@ def stacked_basefold_open(
     stack_point = z_final[-log_stacking_height:]
     num_vars = stack_point.shape[0]
 
+    symbolic_k = rlc_bits is not None
+
     # Each round's per-column evaluation at the stacking point — SP1's batch
     # evaluations, observed into the transcript by the open. Evaluated one column
     # at a time: the batched 2-D ``(mle * eq).sum(axis=0)`` over a 2^log_s-row
     # extension-field matrix faults the XLA CPU backend, while the 1-D per-column
-    # reduce (the outer-sumcheck idiom) lowers cleanly.
-    batch_evals = [
-        jnp.stack([eval_mle(rd.mle[:, k], stack_point) for k in range(rd.mle.shape[1])])
-        for rd in rounds
-    ]
+    # reduce (the outer-sumcheck idiom) lowers cleanly. Under symbolic K the
+    # static ``range(K)`` is replaced by a ``vmap`` over the column axis (the same
+    # per-column 1-D reduce, byte-identical to the unrolled form).
+    if symbolic_k:
+        batch_evals = [
+            jax.vmap(eval_mle, in_axes=(1, None))(rd.mle, stack_point) for rd in rounds
+        ]
+    else:
+        batch_evals = [
+            jnp.stack(
+                [eval_mle(rd.mle[:, k], stack_point) for k in range(rd.mle.shape[1])]
+            )
+            for rd in rounds
+        ]
 
     t: GrindingTranscript = transcript
     # SP1's prove_untrusted_evaluation observes the scalar D(z_final) first.
@@ -225,9 +259,15 @@ def stacked_basefold_open(
         t = t.observe(evals)
 
     # Staggered RLC weights over the total column width, allocated staggered
-    # across the rounds (round r consumes its K_r weights).
-    total_width = sum(int(rd.mle.shape[1]) for rd in rounds)
-    t, coeffs = sample_rlc_coeffs(t, total_width, ef_dtype)
+    # across the rounds (round r consumes its K_r weights). Under symbolic K the
+    # bit count is the static bracket arg (``total_width`` is symbolic, so its
+    # ``log2_ceil`` is unavailable); ``batch_staggered`` consumes the leading
+    # ``total_width`` of the ``2^rlc_bits`` weights.
+    if symbolic_k:
+        t, coeffs = sample_rlc_coeffs_bits(t, rlc_bits, ef_dtype)
+    else:
+        total_width = sum(int(rd.mle.shape[1]) for rd in rounds)
+        t, coeffs = sample_rlc_coeffs(t, total_width, ef_dtype)
     mle = batch_staggered([rd.mle for rd in rounds], coeffs)
     codeword = batch_staggered([rd.codeword for rd in rounds], coeffs)
     claim = batch_staggered(batch_evals, coeffs)
@@ -328,5 +368,6 @@ __all__ = [
     "StackedOpenProof",
     "sample_query_positions",
     "sample_rlc_coeffs",
+    "sample_rlc_coeffs_bits",
     "stacked_basefold_open",
 ]
