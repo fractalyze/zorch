@@ -22,22 +22,12 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-import zk_dtypes
 from jax import Array
 
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import log2_strict_usize
-
-
-def _is_extension_field(dtype: Any) -> bool:
-    """True if ``dtype`` is an extension field (``efinfo`` resolves it)."""
-    try:
-        zk_dtypes.efinfo(dtype)
-        return True
-    except ValueError:
-        return False
 
 
 class VerifyCode(IntEnum):
@@ -97,16 +87,12 @@ class SingleMatrixCommitmentScheme:
         with the matrix, which holds the openable rows) rather than holding a
         tree object.
 
-        Extension-field matrices are rejected for now: SP1 commits each EF row as
-        ``width * degree`` base-field elements, and that reinterpretation isn't
-        wired through zorch's blocks yet (it's the FFI byte-match slice). Without
-        the guard an EF matrix faults in the base-field permutation.
+        Extension-field matrices are not yet supported (SP1 commits each EF row as
+        ``width * degree`` base-field elements, a reinterpretation not wired through
+        zorch's blocks yet — the FFI byte-match slice, fractalyze/zorch#37). No
+        explicit guard: the permutation's field check raises ``TypeError`` on an EF
+        matrix ("state dtype ... must match the permutation field ...").
         """
-        if _is_extension_field(matrix.dtype):
-            raise NotImplementedError(
-                "extension-field matrices are not yet supported; pass a base-field "
-                "matrix (EF commit is the FFI byte-match slice, fractalyze/zorch#37)"
-            )
         tree = self._tree_column_major if column_major else self._tree
         raw_root, digest_layers = tree.commit(matrix)
         # Column-major commit takes [width, height]; row-major takes [height, width].

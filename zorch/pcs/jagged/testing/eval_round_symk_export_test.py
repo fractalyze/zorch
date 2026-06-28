@@ -25,11 +25,7 @@ from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.pcs.jagged.dense import log_area_tier
-from zorch.pcs.jagged.poly import (
-    JaggedStaticConfig,
-    _offset_bit_tensor,
-    build_jagged_layout,
-)
+from zorch.pcs.jagged.poly import _offset_bit_tensor, build_jagged_layout
 from zorch.pcs.jagged.prover import eval_round_core, merged_prefix_bits
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.testkit.transcript import cheap_transcript
@@ -65,10 +61,10 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
     def _inputs(self, heights: list[int]) -> tuple[Array, Array, Array, Array]:
         """(offsets, merged, weights, all_claims) as JaggedEvalRound builds them."""
         l_max = len(heights)
-        _, cfg = build_jagged_layout(heights, l_max, self.z_row.shape[0], EF)
-        assert cfg.n_d == _N_D
-        offsets = _offset_bit_tensor(heights, l_max, cfg)
-        merged = merged_prefix_bits(heights, cfg.n_d, dtype=EF)
+        _, n_d = build_jagged_layout(heights, l_max, EF)
+        assert n_d == _N_D
+        offsets = _offset_bit_tensor(heights, l_max, n_d, EF)
+        merged = merged_prefix_bits(heights, n_d, dtype=EF)
         weights = expand_eq_to_hypercube(self.z_col, jnp.ones((), EF))[:l_max]
         all_claims = _rand_ef(100 + l_max, (l_max,))
         return offsets, merged, weights, all_claims
@@ -146,8 +142,7 @@ class SymbolicNdEvalRoundExportTest(absltest.TestCase):
         ).view(BF)
 
     def _offsets_merged(self, n_d: int) -> tuple[Array, Array]:
-        cfg = JaggedStaticConfig(l_max=self.col, n_c=2, n_r=_N_R, n_d=n_d, dtype=EF)
-        offsets = _offset_bit_tensor(_ND_HEIGHTS, self.col, cfg)
+        offsets = _offset_bit_tensor(_ND_HEIGHTS, self.col, n_d, EF)
         merged = merged_prefix_bits(_ND_HEIGHTS, n_d, dtype=EF)
         return offsets, merged
 
@@ -203,10 +198,7 @@ class SymbolicNrEvalRoundExportTest(absltest.TestCase):
         heights = _ND_HEIGHTS  # tallest 5 -> needs n_r >= 3
         self.col = len(heights)
         self.z_col = _rand_ef(1, (2,))
-        cfg = JaggedStaticConfig(
-            l_max=self.col, n_c=2, n_r=self._ND, n_d=self._ND, dtype=EF
-        )
-        self.offsets = _offset_bit_tensor(heights, self.col, cfg)
+        self.offsets = _offset_bit_tensor(heights, self.col, self._ND, EF)
         self.merged = merged_prefix_bits(heights, self._ND, dtype=EF)
         self.weights = expand_eq_to_hypercube(self.z_col, jnp.ones((), EF))[: self.col]
         self.all_claims = _rand_ef(4, (self.col,))

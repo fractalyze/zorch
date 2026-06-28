@@ -49,7 +49,6 @@ from zorch.pcs.jagged.poly import (
     build_jagged_layout,
     build_prefix_sums,
     msb_first_bits,
-    partial_eval,
     partial_eval_core,
 )
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -174,28 +173,6 @@ def outer_sumcheck_claim(all_claims: Array, z_col: Array) -> Array:
     dtype = z_col.dtype
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))  # (2^n_c,)
     return jnp.sum(col_eq[: all_claims.shape[0]] * all_claims)
-
-
-def build_outer_indicator(
-    col_heights: Sequence[int],
-    z_row: Array,
-    z_col: Array,
-    target_size: int,
-    *,
-    dtype: Any,
-) -> Array:
-    """Materialize ``J̃(z_row, z_col, ·)`` over the dense area ``[0, target_size)``.
-
-    ``partial_eval`` allocates ``2^n_d`` (``n_d`` = prefix-bit width, which can
-    exceed the dense area's address width when the total area is itself a power
-    of two), reading its scatter offsets from the canonical-limb tensor; every
-    nonzero entry lands below ``total_area <= target_size``, so the tail is zero
-    and slicing to ``target_size`` recovers the indicator over the dense area."""
-    heights = list(col_heights)
-    l_max = len(heights)
-    _, cfg = build_jagged_layout(heights, l_max, z_row.shape[0], dtype)
-    offsets = _offset_bit_tensor(heights, l_max, cfg)
-    return partial_eval(offsets, z_row, z_col, cfg=cfg)[:target_size]
 
 
 def outer_sumcheck(
@@ -402,46 +379,6 @@ def inner_sumcheck_core(
     return polys, challenges[::-1], claimed_sum, transcript
 
 
-def inner_sumcheck(
-    col_heights: Sequence[int],
-    z_row: Array,
-    z_col: Array,
-    z_trace: Array,
-    transcript: Transcript,
-    *,
-    dtype: Any,
-) -> tuple[Array, Array, Array, Transcript]:
-    """Reprove ``J̃(z_row, z_col, z_trace)`` via the branching-program sumcheck.
-
-    Returns ``(round_polys (n_vars,3), inner_point (n_vars,), claimed_sum,
-    transcript)``. ``n_vars = 2·n_d`` over the merged prefix-bit buffer,
-    eliminated LSB-first (buffer column ``n_vars-1`` down to ``0``); each round's
-    coefficient-form poly is observed and the next challenge sampled.
-
-    Builds the ``(merged, weights)`` for the concrete layout, then defers to
-    ``inner_sumcheck_core``; ``z_col`` weights only the real columns
-    (``col_eq[:l_max]``)."""
-    heights = list(col_heights)
-    l_max = len(heights)
-    _, cfg = build_jagged_layout(heights, l_max, z_row.shape[0], dtype)
-
-    # num_bits = cfg.n_d holds prefix sums up to the total area; the merged
-    # buffer carries bits(t_c) ‖ bits(t_{c+1}) -> n_vars = 2·n_d.
-    num_bits = cfg.n_d
-    merged = merged_prefix_bits(heights, num_bits, dtype=dtype)
-    weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:l_max]
-
-    return inner_sumcheck_core(
-        merged,
-        weights,
-        z_row,
-        z_trace,
-        transcript,
-        dtype=dtype,
-        num_bits=num_bits,
-    )
-
-
 def eval_round_core(
     offsets: Array,
     merged: Array,
@@ -493,6 +430,22 @@ def eval_round_core(
     return msg, transcript
 
 
+def _eval_inputs(
+    col_heights: Sequence[int], z_col: Array, dtype: Any
+) -> tuple[Array, Array, Array]:
+    """Host-build the column arrays ``eval_round_core`` consumes: the canonical-limb
+    offset tensor ``(L+1, n_d)``, the merged prefix-bit buffer ``(L, 2·n_d)``, and
+    the column-eq weights ``col_eq[:L]``. ``n_d`` (= log-area tier) is the only
+    static dim; the shape-polymorphic cores derive the rest from these shapes."""
+    heights = list(col_heights)
+    l_max = len(heights)
+    _, n_d = build_jagged_layout(heights, l_max, dtype)
+    offsets = _offset_bit_tensor(heights, l_max, n_d, dtype)
+    merged = merged_prefix_bits(heights, n_d, dtype=dtype)
+    weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:l_max]
+    return offsets, merged, weights
+
+
 class JaggedEvalRound(Round):
     """The jagged PCS evaluation-proof sumcheck as a composable IOP ``Round``.
 
@@ -512,13 +465,9 @@ class JaggedEvalRound(Round):
     def __call__(
         self, carry: JaggedEvalInputs, transcript: Transcript
     ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
-        dtype = self._dtype
-        heights = list(carry.col_heights)
-        l_max = len(heights)
-        _, cfg = build_jagged_layout(heights, l_max, carry.z_row.shape[0], dtype)
-        offsets = _offset_bit_tensor(heights, l_max, cfg)
-        merged = merged_prefix_bits(heights, cfg.n_d, dtype=dtype)
-        weights = expand_eq_to_hypercube(carry.z_col, jnp.ones((), dtype))[:l_max]
+        offsets, merged, weights = _eval_inputs(
+            carry.col_heights, carry.z_col, self._dtype
+        )
         msg, transcript = eval_round_core(
             offsets,
             merged,
@@ -528,7 +477,7 @@ class JaggedEvalRound(Round):
             carry.z_row,
             carry.z_col,
             transcript,
-            dtype=dtype,
+            dtype=self._dtype,
         )
         return carry, transcript, msg
 
@@ -540,10 +489,8 @@ __all__ = [
     "assemble_columns",
     "merged_prefix_bits",
     "outer_sumcheck_claim",
-    "build_outer_indicator",
     "outer_sumcheck",
     "outer_sumcheck_scan",
-    "inner_sumcheck",
     "inner_sumcheck_core",
     "eval_round_core",
     "sample_z_col",

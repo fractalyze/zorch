@@ -70,8 +70,8 @@ class FromBlocksTest(unittest.TestCase):
             jnp.arange(3, dtype=F).reshape(3, 1),
         ]
         _, layout = from_blocks(blocks, log_stacking_height=2)
-        _, cfg = build_jagged_layout([3, 3, 3], l_max=3, n_r=2, dtype=F)
-        self.assertEqual(layout.log_m, cfg.n_d)
+        _, n_d = build_jagged_layout([3, 3, 3], l_max=3, dtype=F)
+        self.assertEqual(layout.log_m, n_d)
 
     def test_k_gt_1_reachable(self) -> None:
         # area 9 -> tier log2_ceil(9)+1 = 5; log_s=3 leaves K = 2^(5-3) = 4.

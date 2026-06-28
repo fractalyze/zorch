@@ -52,11 +52,11 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> Array:
     return jax.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
 
 
-def _build(heights: list[int], z_col: Array, z_row: Array) -> tuple[Array, Array]:
-    """(merged, weights) for a concrete layout — the same path inner_sumcheck uses."""
-    _, cfg = build_jagged_layout(heights, len(heights), z_row.shape[0], EF)
-    assert cfg.n_d == _N_D
-    merged = merged_prefix_bits(heights, cfg.n_d, dtype=EF)
+def _build(heights: list[int], z_col: Array) -> tuple[Array, Array]:
+    """(merged, weights) for a concrete layout — the same path eval_round_core uses."""
+    _, n_d = build_jagged_layout(heights, len(heights), EF)
+    assert n_d == _N_D
+    merged = merged_prefix_bits(heights, n_d, dtype=EF)
     weights = expand_eq_to_hypercube(z_col, jnp.ones((), EF))[: len(heights)]
     return merged, weights
 
@@ -91,7 +91,7 @@ class SymbolicColumnInnerExportTest(absltest.TestCase):
     def test_one_binary_byte_matches_concrete_for_every_l(self) -> None:
         exported = self._export()
         for length, heights in _LAYOUTS.items():
-            merged, weights = _build(heights, self.z_col, self.z_row)
+            merged, weights = _build(heights, self.z_col)
             self.assertEqual(merged.shape[0], length)
 
             ref = self._fn(merged, weights, cheap_transcript(BF))

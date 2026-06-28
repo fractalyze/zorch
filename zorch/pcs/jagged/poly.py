@@ -10,8 +10,6 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import partial
-from functools import reduce as _reduce
 from typing import Any
 
 import jax
@@ -21,7 +19,6 @@ from jax import Array
 
 from zorch.pcs.jagged.dense import log_area_tier
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.utils.bits import log2_ceil_usize
 
 NUM_MEMORY_STATES = 4  # (carry, comparison_so_far)
 NUM_BIT_STATES = 16  # (row_bit, index_bit, t_c_bit, t_{c+1}_bit)
@@ -171,50 +168,33 @@ def build_prefix_sums(row_counts: Sequence[int]) -> list[int]:
     return sums
 
 
-@dataclass(frozen=True)
-class JaggedStaticConfig:
-    """Static key for eval_jagged_mle. frozen -> hashes by field (jit static_argnames).
-
-    l_max: compiled-max column count.  n_c = ceil(log2 l_max).
-    n_r:   row-bit width (capacity ceiling).  n_d: BP layer count (this
-           instance's log-area tier).
-    dtype: field dtype (field-agnostic).
-    """
-
-    l_max: int
-    n_c: int
-    n_r: int
-    n_d: int
-    dtype: object
-
-
 def build_jagged_layout(
-    row_counts: Sequence[int], l_max: int, n_r: int, dtype: Any
-) -> tuple[Array, JaggedStaticConfig]:
-    """heights -> (col_prefix_sums (l_max+1, n_d) field bit tensor, JaggedStaticConfig).
+    row_counts: Sequence[int], l_max: int, dtype: Any
+) -> tuple[Array, int]:
+    """heights -> (col_prefix_sums (l_max+1, n_d) field bit tensor, n_d).
 
-    Padding columns use an EMPTY RANGE (t_c = t_{c+1} = t_L) — zero-bit padding
-    injects a phantom range that corrupts J̃, so it is forbidden.
+    ``n_d`` (the BP layer count = log-area tier) is the only static dim downstream
+    code needs; every other dim is derived from array shapes by the shape-polymorphic
+    cores. Padding columns use an EMPTY RANGE (t_c = t_{c+1} = t_L) — zero-bit
+    padding injects a phantom range that corrupts J̃, so it is forbidden.
     """
     real_L = len(row_counts)
     if real_L > l_max:
         raise ValueError(f"real_L={real_L} > l_max={l_max}")
     prefix = build_prefix_sums(row_counts)  # length real_L+1
-    total_area = prefix[-1]
-    n_d = log_area_tier(total_area)
-    n_c = log2_ceil_usize(l_max)
+    n_d = log_area_tier(prefix[-1])
     padded = prefix + [prefix[-1]] * (l_max - real_L)  # length l_max+1, empty-range pad
     cps = jnp.asarray(msb_first_bits(padded, n_d), dtype=dtype)
-    return cps, JaggedStaticConfig(l_max=l_max, n_c=n_c, n_r=n_r, n_d=n_d, dtype=dtype)
+    return cps, n_d
 
 
 def _offset_bit_tensor(
-    col_heights: list[int], l_max: int, cfg: JaggedStaticConfig
+    col_heights: list[int], l_max: int, n_d: int, dtype: Any
 ) -> Array:
     """`(l_max+1, n_d)` prefix-sum bit tensor whose canonical int32 limb-0 holds
-    each MSB-first bit, typed as `cfg.dtype`.
+    each MSB-first bit, typed as `dtype`.
 
-    `partial_eval` derives its integer scatter offsets by bitcasting the bit
+    `partial_eval_core` derives its integer scatter offsets by bitcasting the bit
     tensor to int32 and reading limb 0 — it needs the *canonical* bit there. A
     Montgomery field dtype encodes `astype(1)` as `R mod p` (limb 0 ≠ 1), so
     `build_jagged_layout`'s field-valued tensor (correct for the inner sumcheck's
@@ -225,13 +205,13 @@ def _offset_bit_tensor(
     """
     prefix = build_prefix_sums(col_heights)  # length len+1
     padded = prefix + [prefix[-1]] * (l_max - len(col_heights))  # empty-range pad
-    bits = msb_first_bits(padded, cfg.n_d)  # (l_max+1, n_d) int
+    bits = msb_first_bits(padded, n_d)  # (l_max+1, n_d) int
     # int32 limbs per field element (4 for a 128-bit EF, 1 for a 32-bit base).
-    probe = jax.lax.bitcast_convert_type(jnp.zeros((1,), cfg.dtype), jnp.int32)
+    probe = jax.lax.bitcast_convert_type(jnp.zeros((1,), dtype), jnp.int32)
     n_limbs = probe.shape[-1] if probe.ndim > 1 else 1
-    limbs = np.zeros((bits.shape[0], cfg.n_d, n_limbs), dtype=np.int32)
+    limbs = np.zeros((bits.shape[0], n_d, n_limbs), dtype=np.int32)
     limbs[..., 0] = bits
-    return jax.lax.bitcast_convert_type(jnp.asarray(limbs), cfg.dtype)
+    return jax.lax.bitcast_convert_type(jnp.asarray(limbs), dtype)
 
 
 def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
@@ -331,73 +311,3 @@ def partial_eval_core(
     )
     val = col_eq[c_idx] * row_vals
     return jnp.where(mask, val, jnp.zeros([], dtype=dtype))
-
-
-@partial(jax.jit, static_argnames=("cfg",))
-def partial_eval(
-    col_prefix_sums: Array,
-    z_row: Array,
-    z_col: Array,
-    *,
-    cfg: JaggedStaticConfig,
-) -> Array:
-    """J̃(z_row, z_col, ·) materialized over the dense hypercube.
-
-    Returns indicator[i] = Σ_c eq(z_col, c) · eq(z_row, i−t_c) · [t_c ≤ i < t_{c+1}]
-    for every i in {0,…,2^n_d − 1}, holding (z_row, z_col) fixed.
-
-    col_prefix_sums: (l_max+1, n_d) bit tensor with the canonical bit in int32
-    limb 0 (`_offset_bit_tensor`) — NOT `build_jagged_layout`'s field tensor,
-    whose Montgomery limb 0 misdecodes (see `_decode_prefix_sums`).
-    Output shape: (2^n_d,).
-
-    Concrete entry point: ``cfg`` is the per-shape ``@jax.jit`` key; the math is
-    ``partial_eval_core`` (which derives every dim from shapes, so it also serves
-    the symbolic-column-count export). Every output element gathers from its
-    owning column — the last c with t_c ≤ i, found by binary search over the
-    monotone prefix sums. The single-owner gather is one parallel elementwise
-    pass; the per-column scatter dual is a loop-carried RMW chain whose
-    overlapping [t_c, t_c + 2^n_r) windows serialize column order on GPU (the
-    scatter form survives as the differential oracle in `testing/`). Padding
-    columns (t_c == t_{c+1}) own no element, and the tail i ≥ t_L clamps to a
-    column it sits past the height of — both zero out through the height mask.
-    """
-    return partial_eval_core(col_prefix_sums, z_row, z_col, 1 << cfg.n_d)
-
-
-@partial(jax.jit, static_argnames=("cfg",))
-def eval_jagged_mle(
-    col_prefix_sums: Array,
-    z_row: Array,
-    z_col: Array,
-    z_index: Array,
-    *,
-    cfg: JaggedStaticConfig,
-) -> Array:
-    """J̃(z_row, z_col, z_index) = Σ_c eq(z_col, c) · h(z_row, z_index; t_c, t_{c+1}).
-
-    col_prefix_sums: (l_max+1, n_d) field bit tensor.  z_*: (n_r/n_c/n_d,) challenges.
-    Output shape () — a function of input SHAPES (no value dependence). The
-    column vmap is over the static l_max.
-
-    NOTE: jnp.sum(arr) aborts on the ZKX backend — EF (koalabearx4) reduce_sum is
-    unsupported and hits an MLIR assertion. Since cfg.l_max is static, sum via a
-    Python-level functools.reduce, unrolled at trace time (same semantics,
-    AOT-clean). This unroll grows the trace linearly in l_max — fine for the
-    verifier-once / small-l_max case here, but revert to a single reduction once
-    EF reduce_sum is supported.
-    """
-    dtype = z_row.dtype
-    t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
-    num_vars = max(cfg.n_r, cfg.n_d)
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # 2^{n_c}
-    all_left = col_prefix_sums[: cfg.l_max]
-    all_right = col_prefix_sums[1:]
-    bp_evals = jax.vmap(
-        lambda pl, pr: bp_eval_core(z_row, z_index, pl, pr, t_matrix, num_vars),
-        in_axes=(0, 0),
-    )(all_left, all_right)
-    # Unroll sum at trace time (l_max is static) — avoids EF reduce_sum crash.
-    return _reduce(
-        lambda a, b: a + b, [col_eq[c] * bp_evals[c] for c in range(cfg.l_max)]
-    )

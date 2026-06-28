@@ -99,8 +99,7 @@ def verify_jagged_eval_msg(
     ef_limbs = efinfo(dtype).degree
     heights = list(col_heights)
     l_max = len(heights)
-    _, cfg = build_jagged_layout(heights, l_max, z_row.shape[0], dtype)
-    num_bits = cfg.n_d
+    _, num_bits = build_jagged_layout(heights, l_max, dtype)
     if msg.inner_sumcheck_polys.shape != (2 * num_bits, _DEGREE + 1):
         raise ValueError(
             f"need one degree-{_DEGREE} coefficient poly per merged prefix "
@@ -148,7 +147,7 @@ def verify_jagged_eval_msg(
         inner_point[:num_bits],
         inner_point[num_bits:],
         t_matrix,
-        max(cfg.n_r, cfg.n_d),
+        max(z_row.shape[0], num_bits),
     )
     ok = ok & jnp.array_equal(inner_final, jnp.sum(col_eq[:l_max] * eqs) * h_bp)
 
