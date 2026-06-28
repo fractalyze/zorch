@@ -14,6 +14,8 @@ Mont-u32, no tolerances.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -60,27 +62,36 @@ def _raw_area(round_meta: dict[str, Any]) -> int:
     )
 
 
+@partial(
+    jax.tree_util.register_dataclass, data_fields=["stream", "pos"], meta_fields=[]
+)
+@dataclass(frozen=True)
 class _ScriptedTranscript:
     """Replays the dumped per-round challenges — the byte-match reproduces the
     reference run's Fiat-Shamir outcomes rather than re-deriving them (the duplex
     encoding is the pipeline's concern, not this round's). Mirrors
     ``zerocheck/jagged_byte_match_test``: the sumchecks squeeze base limbs and
     reassemble each EF challenge (the ``sample_challenge`` rule,
-    fractalyze/sp1-zorch#88), so the script holds one flat base-limb stream."""
+    fractalyze/sp1-zorch#88), so the script holds one flat base-limb stream.
 
-    def __init__(self, challenges: Array) -> None:
-        self._stream = jax.lax.bitcast_convert_type(
-            jnp.asarray(challenges), BF
-        ).reshape(-1)
-        self._pos = 0
+    A registered pytree with a traced ``pos``: ``inner_sumcheck_core`` threads the
+    transcript through a ``lax.scan``, whose carry must be a JAX type (the prior
+    mutable double broke under scan)."""
+
+    stream: Array
+    pos: Array
+
+    @classmethod
+    def create(cls, challenges: Array) -> _ScriptedTranscript:
+        stream = jax.lax.bitcast_convert_type(jnp.asarray(challenges), BF).reshape(-1)
+        return cls(stream=stream, pos=jnp.array(0, jnp.int32))
 
     def observe(self, values: Array) -> _ScriptedTranscript:
         return self
 
     def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
-        out = self._stream[self._pos : self._pos + n]
-        self._pos += n
-        return self, out
+        out = jax.lax.dynamic_slice(self.stream, (self.pos,), (n,))
+        return replace(self, pos=self.pos + n), out
 
 
 class JaggedEvalRoundByteMatchTest(absltest.TestCase):
@@ -130,7 +141,7 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         script = jnp.concatenate([outer_alphas, inner_alphas])
         # _ScriptedTranscript is a replay-only test double: it implements just the
         # observe/sample the round drives, not the full Transcript protocol.
-        _, _, msgs = chain(carry, _ScriptedTranscript(script))  # type: ignore[arg-type]
+        _, _, msgs = chain(carry, _ScriptedTranscript.create(script))  # type: ignore[arg-type]
         cls.msg = msgs[0]
 
     def _expect(self, name: str) -> np.ndarray:

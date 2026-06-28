@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
 import jax
@@ -49,6 +50,7 @@ from zorch.pcs.jagged.poly import (
     build_prefix_sums,
     msb_first_bits,
     partial_eval,
+    partial_eval_core,
 )
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_coeffs
@@ -76,13 +78,29 @@ class JaggedEvalInputs:
     dense: Array
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[
+        "outer_sumcheck_claim",
+        "outer_sumcheck_polys",
+        "outer_sumcheck_point",
+        "dense_eval",
+        "inner_sumcheck_polys",
+        "inner_point",
+        "inner_claimed_sum",
+    ],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class JaggedEvalMsg:
     """Proof message: the outer Hadamard sumcheck (initial column claim, its
     coefficient-form round polys, the folded point ``z_final``, and
     ``dense_eval = D(z_final)``) and the inner branching-program sumcheck
     transcript (coefficient-form round polys, the folded point, the reproved
-    claim)."""
+    claim).
+
+    A registered pytree so it crosses the ``eval_round_core`` ``@jax.jit`` /
+    ``jax.export`` boundary (mirrors ``open.py``'s ``StackedOpenProof``)."""
 
     outer_sumcheck_claim: Array
     outer_sumcheck_polys: Array
@@ -148,14 +166,14 @@ def merged_prefix_bits(
 
 
 def outer_sumcheck_claim(all_claims: Array, z_col: Array) -> Array:
-    """``Σ_c eq(z_col, c)·claim[c]`` over the padded 2^⌈log L⌉ column hypercube."""
+    """``Σ_c eq(z_col, c)·claim[c]`` over the real columns of the 2^⌈log L⌉ hypercube.
+
+    The eq tail past ``L`` would multiply zero-padded claims, so summing only the
+    real columns (``col_eq[:L]``) is identical and shape-polymorphic in ``L`` — a
+    symbolic-length pad-and-concatenate does not lower to a static width."""
     dtype = z_col.dtype
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))  # (2^n_c,)
-    width = col_eq.shape[0]
-    padded = jnp.concatenate(
-        [all_claims, jnp.zeros((width - all_claims.shape[0],), dtype=dtype)], axis=0
-    )
-    return jnp.sum(col_eq * padded)
+    return jnp.sum(col_eq[: all_claims.shape[0]] * all_claims)
 
 
 def build_outer_indicator(
@@ -228,50 +246,121 @@ def outer_sumcheck(
     return jnp.stack(polys), z_final, dense_eval, transcript
 
 
-def inner_sumcheck(
-    col_heights: Sequence[int],
+def outer_sumcheck_scan(
+    dense: Array,
+    indicator: Array,
+    claim: Array,
+    transcript: Transcript,
+    n_rounds: Any,
+) -> tuple[Array, Array, Array, Transcript]:
+    """Fixed-width-mask form of ``outer_sumcheck`` so the round count
+    ``n = log2(len(dense))`` can be a symbolic ``jax.export`` dim.
+
+    A ``lax.scan`` can't carry the halving state's shrinking shape, so the buffers
+    stay full width with the live data front-packed (``zeros(M).at[:half].set``)
+    and the dead tail masked out of each round-poly sum (the same device as
+    ``zorch.sumcheck.prover.prove``, here LSB-first to match the jagged schedule).
+    Byte-identical to ``outer_sumcheck``.
+
+    TRADEOFF: full-width work every round (~n× the halving's 2·M total). That is
+    the necessary cost of one symbolic binary over a halving fold; the live
+    ``JaggedEvalRound`` keeps the real-halving ``outer_sumcheck``. ``n_rounds`` is
+    passed in because ``log2`` is not polynomial in the dense length, so under
+    export it is its own symbolic dim (paired with the length at the call)."""
+    ef = claim.dtype
+    ef_limbs = efinfo(ef).degree
+    two = jnp.array(2, ef)
+    full = dense.shape[0]
+    half = full // 2
+    # Lift dense (base field) to EF up front: the halving fold promotes the state
+    # BF->EF after round 0, but a scan carry must keep one dtype. The lift is the
+    # constant-term embedding, so the round-0 BF*EF product is byte-identical.
+    dense_ef = dense * jnp.ones((), ef)
+
+    def _round(carry: Any, _: Array) -> tuple[Any, tuple[Array, Array]]:
+        a, b, cur, transcript, valid_pairs = carry
+        # Pair via reshape (full -> (half, 2)), not a[0::2]/[1::2]: a strided slice
+        # of a symbolic length lowers to (full+1)//2, which the export solver can't
+        # prove equals half. Row j = [arr[2j], arr[2j+1]] == the even/odd split.
+        pa, pb = a.reshape(half, 2), b.reshape(half, 2)
+        even_a, odd_a = pa[:, 0], pa[:, 1]
+        even_b, odd_b = pb[:, 0], pb[:, 1]
+        valid = (jnp.arange(half) < valid_pairs).astype(ef)
+        s0 = jnp.sum(even_a * even_b * valid)
+        s_inf = jnp.sum((odd_a - even_a) * (odd_b - even_b) * valid)
+        coef = jnp.stack([s0, cur - two * s0 - s_inf, s_inf])
+        transcript = transcript.observe(coef)
+        transcript, alpha = sample_challenge(transcript, ef, ef_limbs)
+        fold_a = even_a + alpha * (odd_a - even_a)
+        fold_b = even_b + alpha * (odd_b - even_b)
+        a = jnp.zeros((full,), ef).at[:half].set(fold_a)
+        b = jnp.zeros((full,), ef).at[:half].set(fold_b)
+        cur = eval_coeffs(coef, alpha)
+        return (a, b, cur, transcript, valid_pairs // 2), (coef, alpha)
+
+    vp0 = jnp.asarray(half, jnp.int32)
+    (a_f, _, _, transcript, _), (polys, challenges) = jax.lax.scan(
+        _round,
+        (dense_ef, indicator, claim, transcript, vp0),
+        jnp.arange(n_rounds, dtype=jnp.int32),
+    )
+    return polys, challenges[::-1], a_f[0], transcript
+
+
+def _bp_all(
+    buf: Array,
     z_row: Array,
-    z_col: Array,
+    z_trace: Array,
+    t_matrix: Array,
+    bp_num_vars: Any,
+    num_bits: Any,
+) -> Array:
+    """Vectorize ``bp_eval_core`` over the column axis of ``buf`` ``(L,
+    2·num_bits)``.
+
+    ``num_bits`` (= n_d) and ``bp_num_vars`` (= max(n_r, n_d), the BP layer count)
+    are passed as VALUES, not static args, so both the column count ``L`` and the
+    prefix-bit width ``num_bits`` can be symbolic export dims: the half-split
+    ``buf[:, :num_bits]`` / ``buf[:, num_bits:]`` slices at a symbolic midpoint and
+    ``bp_eval_core``'s layer ``fori_loop`` takes a symbolic trip count."""
+    return jax.vmap(
+        lambda left, right: bp_eval_core(
+            z_row, z_trace, left, right, t_matrix, bp_num_vars
+        )
+    )(buf[:, :num_bits], buf[:, num_bits:])
+
+
+def inner_sumcheck_core(
+    merged: Array,
+    weights: Array,
+    z_row: Array,
     z_trace: Array,
     transcript: Transcript,
     *,
     dtype: Any,
+    num_bits: Any,
 ) -> tuple[Array, Array, Array, Transcript]:
-    """Reprove ``J̃(z_row, z_col, z_trace)`` via the branching-program sumcheck.
+    """The branching-program sumcheck over a prebuilt ``(merged, weights)``,
+    shape-polymorphic in BOTH the column count ``merged.shape[0]`` and the
+    prefix-bit width ``num_bits`` (= n_d).
 
-    Returns ``(round_polys (n_vars,3), inner_point (n_vars,), claimed_sum,
-    transcript)``. ``n_vars = 2·n_d`` over the merged prefix-bit buffer,
-    eliminated LSB-first (buffer column ``n_vars-1`` down to ``0``); each round's
-    coefficient-form poly is observed and the next challenge sampled."""
-    heights = list(col_heights)
-    l_max = len(heights)
-    _, cfg = build_jagged_layout(heights, l_max, z_row.shape[0], dtype)
-
-    # num_bits = cfg.n_d holds prefix sums up to the total area; the merged
-    # buffer carries bits(t_c) ‖ bits(t_{c+1}) -> n_vars = 2·n_d.
-    num_bits = cfg.n_d
+    Column axis: per-column work is a ``vmap`` + ``jnp.sum`` over ``merged``'s real
+    columns (no padding), mirroring ``stacked_basefold_open``'s symbolic ``K``.
+    ``n_d`` axis: the round loop is a ``lax.scan`` over ``n_vars = 2·num_bits``
+    rounds (fixed-shape carry — the buffer is bound in place), so the round count
+    can be a symbolic export dim; ``bp_num_vars = max(n_r, n_d)`` is the BP layer
+    count, derived as a value so it stays symbolic-safe. ``weights`` is the
+    column-eq table ``col_eq[:L]`` the caller derives from ``z_col`` (``z_col``
+    stays at the real ``n_c``, so SP1 byte-match is preserved)."""
     n_vars = 2 * num_bits
-    # The BP indexes over n_d prefix bits, not z_trace's length — the layer loop
-    # must cover all prefix bits or it drops the MSB (matches eval_jagged_mle's
-    # num_vars = max(n_r, n_d)).
-    bp_num_vars = max(cfg.n_r, cfg.n_d)
+    bp_num_vars = jnp.maximum(z_row.shape[0], num_bits)
     t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
-
-    merged = merged_prefix_bits(heights, num_bits, dtype=dtype)
-
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))
-    weights = col_eq[:l_max]
     one = jnp.ones((), dtype)
     two = jnp.array(2, dtype)
     ef_limbs = efinfo(dtype).degree
 
-    @jax.jit
     def bp_all(buf: Array) -> Array:
-        return jax.vmap(
-            lambda left, right: bp_eval_core(
-                z_row, z_trace, left, right, t_matrix, bp_num_vars
-            )
-        )(buf[:, :num_bits], buf[:, num_bits:])
+        return _bp_all(buf, z_row, z_trace, t_matrix, bp_num_vars, num_bits)
 
     # claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c. Computed via
     # jnp.sum (CPU EF reduce works) rather than eval_jagged_mle's trace-time
@@ -282,11 +371,14 @@ def inner_sumcheck(
     # rounds; its verifier re-absorbs it the same way (fractalyze/sp1-zorch#90).
     transcript = transcript.observe(claimed_sum)
 
-    buf = merged
-    claim = claimed_sum
-    polys: list[Array] = []
-    challenges: list[Array] = []
-    for round_idx in range(n_vars - 1, -1, -1):
+    # Eliminate LSB-first, buffer column n_vars-1 down to 0, as a lax.scan so the
+    # round count (= n_vars = 2·n_d) can be a symbolic export dim. The carry keeps
+    # a FIXED shape (the buffer is bound in place, never shrunk), which scan
+    # requires; bits_i reads `merged` (the round's column is untouched until its
+    # own step, so merged == buf there). Stacked outputs land in scan order
+    # (n_vars-1 .. 0) — same as the unrolled append order.
+    def _round(carry: Any, round_idx: Array) -> tuple[Any, tuple[Array, Array]]:
+        buf, claim, weights, transcript = carry
         bits_i = merged[:, round_idx]
         eq0 = one - bits_i
         bp0 = bp_all(buf.at[:, round_idx].set(0))
@@ -301,10 +393,104 @@ def inner_sumcheck(
         buf = buf.at[:, round_idx].set(alpha)
         weights = weights * (alpha * bits_i + (one - alpha) * eq0)
         claim = eval_coeffs(coef, alpha)
-        polys.append(coef)
-        challenges.append(alpha)
+        return (buf, claim, weights, transcript), (coef, alpha)
 
-    return jnp.stack(polys), jnp.stack(challenges)[::-1], claimed_sum, transcript
+    round_ids = jnp.arange(n_vars, dtype=jnp.int32)[::-1]
+    (_, _, _, transcript), (polys, challenges) = jax.lax.scan(
+        _round, (merged, claimed_sum, weights, transcript), round_ids
+    )
+    return polys, challenges[::-1], claimed_sum, transcript
+
+
+def inner_sumcheck(
+    col_heights: Sequence[int],
+    z_row: Array,
+    z_col: Array,
+    z_trace: Array,
+    transcript: Transcript,
+    *,
+    dtype: Any,
+) -> tuple[Array, Array, Array, Transcript]:
+    """Reprove ``J̃(z_row, z_col, z_trace)`` via the branching-program sumcheck.
+
+    Returns ``(round_polys (n_vars,3), inner_point (n_vars,), claimed_sum,
+    transcript)``. ``n_vars = 2·n_d`` over the merged prefix-bit buffer,
+    eliminated LSB-first (buffer column ``n_vars-1`` down to ``0``); each round's
+    coefficient-form poly is observed and the next challenge sampled.
+
+    Builds the ``(merged, weights)`` for the concrete layout, then defers to
+    ``inner_sumcheck_core``; ``z_col`` weights only the real columns
+    (``col_eq[:l_max]``)."""
+    heights = list(col_heights)
+    l_max = len(heights)
+    _, cfg = build_jagged_layout(heights, l_max, z_row.shape[0], dtype)
+
+    # num_bits = cfg.n_d holds prefix sums up to the total area; the merged
+    # buffer carries bits(t_c) ‖ bits(t_{c+1}) -> n_vars = 2·n_d.
+    num_bits = cfg.n_d
+    merged = merged_prefix_bits(heights, num_bits, dtype=dtype)
+    weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:l_max]
+
+    return inner_sumcheck_core(
+        merged,
+        weights,
+        z_row,
+        z_trace,
+        transcript,
+        dtype=dtype,
+        num_bits=num_bits,
+    )
+
+
+def eval_round_core(
+    offsets: Array,
+    merged: Array,
+    weights: Array,
+    all_claims: Array,
+    dense: Array,
+    z_row: Array,
+    z_col: Array,
+    transcript: Transcript,
+    *,
+    dtype: Any,
+) -> tuple[JaggedEvalMsg, Transcript]:
+    """The whole eval-proof sumcheck over prebuilt column arrays, shape-polymorphic
+    in the column count.
+
+    All four column-indexed inputs share the column dim — ``offsets`` is
+    ``(L+1, n_d)``, ``merged`` ``(L, 2·n_d)``, ``weights`` and ``all_claims``
+    ``(L,)``. Every column-dependent step (the outer indicator's searchsorted
+    gather, the outer ``Σ D·J̃`` Hadamard sumcheck, the inner branching-program
+    sumcheck) runs over the REAL column count, so one ``jax.export`` binary serves
+    every column count at real-size cost — no padding. The host builds ``offsets``
+    / ``merged`` / ``weights`` from ``col_heights``; taking them as arrays here is
+    what lets the column dim be symbolic. ``n_d = merged.shape[1] // 2``."""
+    num_bits = merged.shape[1] // 2
+
+    claim = outer_sumcheck_claim(all_claims, z_col)
+    indicator = partial_eval_core(offsets, z_row, z_col, dense.shape[0])
+    outer_polys, z_final, dense_eval, transcript = outer_sumcheck(
+        dense, indicator, claim, transcript
+    )
+    inner_polys, inner_point, inner_claimed_sum, transcript = inner_sumcheck_core(
+        merged,
+        weights,
+        z_row,
+        z_final,
+        transcript,
+        dtype=dtype,
+        num_bits=num_bits,
+    )
+    msg = JaggedEvalMsg(
+        outer_sumcheck_claim=claim,
+        outer_sumcheck_polys=outer_polys,
+        outer_sumcheck_point=z_final,
+        dense_eval=dense_eval,
+        inner_sumcheck_polys=inner_polys,
+        inner_point=inner_point,
+        inner_claimed_sum=inner_claimed_sum,
+    )
+    return msg, transcript
 
 
 class JaggedEvalRound(Round):
@@ -315,7 +501,10 @@ class JaggedEvalRound(Round):
     half: the outer Hadamard sumcheck ``Σ D·J̃`` over the committed dense buffer
     (round polys + ``dense_eval``), whose folded point ``z_final`` then feeds the
     inner branching-program sumcheck reproving ``J̃(z_row, z_col, z_final)``. See
-    the module docstring for why both are bespoke loops, not ``SumcheckRound``s."""
+    the module docstring for why both are bespoke loops, not ``SumcheckRound``s.
+
+    Host-prepares the column arrays from ``col_heights`` then defers to
+    ``eval_round_core`` (shape-polymorphic in the column count)."""
 
     def __init__(self, *, dtype: Any) -> None:
         self._dtype = dtype
@@ -323,33 +512,23 @@ class JaggedEvalRound(Round):
     def __call__(
         self, carry: JaggedEvalInputs, transcript: Transcript
     ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
-        claim = outer_sumcheck_claim(carry.all_claims, carry.z_col)
-        indicator = build_outer_indicator(
-            carry.col_heights,
+        dtype = self._dtype
+        heights = list(carry.col_heights)
+        l_max = len(heights)
+        _, cfg = build_jagged_layout(heights, l_max, carry.z_row.shape[0], dtype)
+        offsets = _offset_bit_tensor(heights, l_max, cfg)
+        merged = merged_prefix_bits(heights, cfg.n_d, dtype=dtype)
+        weights = expand_eq_to_hypercube(carry.z_col, jnp.ones((), dtype))[:l_max]
+        msg, transcript = eval_round_core(
+            offsets,
+            merged,
+            weights,
+            carry.all_claims,
+            carry.dense,
             carry.z_row,
             carry.z_col,
-            carry.dense.shape[0],
-            dtype=self._dtype,
-        )
-        outer_polys, z_final, dense_eval, transcript = outer_sumcheck(
-            carry.dense, indicator, claim, transcript
-        )
-        inner_polys, inner_point, inner_claimed_sum, transcript = inner_sumcheck(
-            carry.col_heights,
-            carry.z_row,
-            carry.z_col,
-            z_final,
             transcript,
-            dtype=self._dtype,
-        )
-        msg = JaggedEvalMsg(
-            outer_sumcheck_claim=claim,
-            outer_sumcheck_polys=outer_polys,
-            outer_sumcheck_point=z_final,
-            dense_eval=dense_eval,
-            inner_sumcheck_polys=inner_polys,
-            inner_point=inner_point,
-            inner_claimed_sum=inner_claimed_sum,
+            dtype=dtype,
         )
         return carry, transcript, msg
 
@@ -363,6 +542,9 @@ __all__ = [
     "outer_sumcheck_claim",
     "build_outer_indicator",
     "outer_sumcheck",
+    "outer_sumcheck_scan",
     "inner_sumcheck",
+    "inner_sumcheck_core",
+    "eval_round_core",
     "sample_z_col",
 ]

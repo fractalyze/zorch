@@ -234,20 +234,103 @@ def _offset_bit_tensor(
     return jax.lax.bitcast_convert_type(jnp.asarray(limbs), cfg.dtype)
 
 
-def _decode_prefix_sums(col_prefix_sums: Array, n_d: int) -> Array:
+def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
     """(l_max+1, n_d) MSB-first bit tensor → (l_max+1,) int32 prefix sums.
 
-    Derives the integers on-device via bitcast (no host numpy). The reshape
-    normalizes the limb axis: base field (4B→1 int32) gets shape
-    (l_max+1, n_d, 1); EF (16B→4 int32) gets (l_max+1, n_d, 4). Both cases
-    then take limb 0 correctly — without the reshape, base-field bitcast omits
-    the trailing axis and [..., 0] would index the n_d axis instead.
-    """
+    Derives the integers on-device via bitcast (no host numpy), shape-polymorphic
+    in BOTH axes: ``n_d`` (the prefix-bit width) may be a symbolic export dim.
+    EF bitcasts to a trailing limb axis (16B→4 int32), base field does not
+    (4B→1 int32); take canonical limb 0 either way via an ndim test, NOT a reshape
+    (a symbolic-``n_d`` reshape can't infer the -1 limb dim). The MSB-first weights
+    ``2^(n_d-1-k)`` are built with a vectorized ``arange(n_d)`` (``range(n_d)`` is
+    a Python loop that can't iterate a symbolic dim)."""
     limbs = jax.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
-    limbs = limbs.reshape(col_prefix_sums.shape[0], n_d, -1)  # (l_max+1, n_d, L)
-    bit_vals = limbs[..., 0]  # (l_max+1, n_d) — canonical 0/1 representative
-    powers = jnp.array([1 << (n_d - 1 - k) for k in range(n_d)], dtype=jnp.int32)
+    bit_vals = limbs[..., 0] if limbs.ndim > col_prefix_sums.ndim else limbs
+    powers = jnp.left_shift(jnp.int32(1), n_d - 1 - jnp.arange(n_d, dtype=jnp.int32))
     return jnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
+
+
+def _count_leq_sorted(sorted_arr: Array, queries: Array, n_steps: int) -> Array:
+    """For each ``q`` in ``queries``: ``#{j : sorted_arr[j] <= q}`` —
+    ``searchsorted(side="right")`` over an ascending array.
+
+    A vectorized binary search of a STATIC ``n_steps`` (>= ⌈log2(len+1)⌉), so it is
+    both memory-light (no ``(len(queries), len)`` materialization) and symbolic-safe
+    in ``len(sorted_arr)``: ``jnp.searchsorted`` bakes that length as a constant,
+    which a symbolic column count forbids. Over-provisioned steps are no-ops (once
+    ``lo == hi`` the update is idempotent)."""
+    n = sorted_arr.shape[0]
+    lo = jnp.zeros(queries.shape, jnp.int32)
+    hi = jnp.full(queries.shape, n, jnp.int32)
+    for _ in range(n_steps):
+        mid = (lo + hi) // 2
+        val = sorted_arr[jnp.minimum(mid, n - 1)]  # guard mid == n
+        go_right = (mid < n) & (val <= queries)
+        lo = jnp.where(go_right, mid + 1, lo)
+        hi = jnp.where(go_right, hi, mid)
+    return lo
+
+
+def partial_eval_core(
+    col_prefix_sums: Array,
+    z_row: Array,
+    z_col: Array,
+    size: Any,
+) -> Array:
+    """J̃(z_row, z_col, ·) over the first ``size`` dense indices — shape-polymorphic
+    in the column count ``col_prefix_sums.shape[0]`` AND the prefix-bit width
+    ``n_d = col_prefix_sums.shape[1]``.
+
+    ``size`` is the output domain (the caller's dense area). Materializing only
+    ``[0, size)`` — rather than the full ``2^n_d`` then slicing — is what lets
+    ``n_d`` be a symbolic dim: ``2^n_d`` is exponential in ``n_d`` (not a
+    polynomial export dim), whereas ``n_d`` survives ONLY as the decode bit width
+    (polynomial). Every nonzero indicator entry lands below ``total_area <= size``,
+    so this is byte-identical to the full-domain-then-slice form. See
+    ``partial_eval`` for the gather / searchsorted rationale and the limb
+    convention.  Output shape: ``(size,)``."""
+    dtype = z_row.dtype
+    one = jnp.ones([], dtype=dtype)
+    n_d = col_prefix_sums.shape[1]
+    n_r = z_row.shape[0]
+    row_len = jnp.left_shift(jnp.int32(1), n_r)  # 2^n_r, as a value (n_r symbolic)
+
+    prefix_sums_int = _decode_prefix_sums(col_prefix_sums, n_d)
+
+    col_eq = expand_eq_to_hypercube(z_col, one)  # [2^n_c] (n_c static, a table)
+
+    # c_idx = (#prefix entries ≤ i) − 1 — the owning column, last c with t_c ≤ i
+    # (searchsorted side="right"; duplicate prefix entries from zero-height columns
+    # resolve to the real owner). n_steps = n_c + 1 covers the l_max+1 entries. No
+    # clamp on c_idx — the tail i ≥ t_L lands c_idx at the last index; the t_{c+1}
+    # gather clamps OOB by default and the height mask zeros it (byte-identical to
+    # the clamped form).
+    i_idx = jnp.arange(size, dtype=jnp.int32)
+    c_idx = _count_leq_sorted(prefix_sums_int, i_idx, z_col.shape[0] + 1) - 1
+    t_c = prefix_sums_int[c_idx]
+    h = prefix_sums_int[c_idx + 1] - t_c  # column height (0 for padding columns)
+    local = i_idx - t_c
+    # min(h, row_len): the row eq covers 2^n_r rows, so a taller-than-capacity
+    # column truncates — identical to the scatter form's fixed-width window.
+    mask = local < jnp.minimum(h, row_len)
+
+    # eq(z_row, local) per element instead of a 2^n_r gather table, so n_r can be
+    # symbolic (2^n_r is exponential in n_r). row_eq[j] = ∏_k eq(z_row[k],
+    # bit_{n_r-1-k}(j)) — expand_eq_to_hypercube's MSB-first convention (z_row[0] =
+    # MSB). A lax.scan over the n_r bits (field multiplies, no EF reduce_prod) so
+    # the trip count can be symbolic; the product commutes, so scan order is moot.
+    # The mask zeros entries with local >= row capacity, so the low-n_r-bit read
+    # (no clamp) is identical to the table's clamped gather.
+    def _eq_bit(acc: Array, k: Array) -> tuple[Array, None]:
+        bit = ((local >> (n_r - 1 - k)) & 1).astype(dtype)
+        z_k = z_row[k]
+        return acc * (bit * z_k + (one - bit) * (one - z_k)), None
+
+    row_vals, _ = jax.lax.scan(
+        _eq_bit, jnp.ones(i_idx.shape, dtype), jnp.arange(n_r, dtype=jnp.int32)
+    )
+    val = col_eq[c_idx] * row_vals
+    return jnp.where(mask, val, jnp.zeros([], dtype=dtype))
 
 
 @partial(jax.jit, static_argnames=("cfg",))
@@ -268,41 +351,18 @@ def partial_eval(
     whose Montgomery limb 0 misdecodes (see `_decode_prefix_sums`).
     Output shape: (2^n_d,).
 
-    Every output element gathers from its owning column — the last c with
-    t_c ≤ i, found by binary search over the monotone prefix sums. The
-    single-owner gather is one parallel elementwise pass; the per-column
-    scatter dual is a loop-carried RMW chain whose overlapping
-    [t_c, t_c + 2^n_r) windows serialize column order on GPU (the scatter
-    form survives as the differential oracle in `testing/`). Padding columns
-    (t_c == t_{c+1}) own no element, and the tail i ≥ t_L clamps to a column
-    it sits past the height of — both zero out through the height mask.
+    Concrete entry point: ``cfg`` is the per-shape ``@jax.jit`` key; the math is
+    ``partial_eval_core`` (which derives every dim from shapes, so it also serves
+    the symbolic-column-count export). Every output element gathers from its
+    owning column — the last c with t_c ≤ i, found by binary search over the
+    monotone prefix sums. The single-owner gather is one parallel elementwise
+    pass; the per-column scatter dual is a loop-carried RMW chain whose
+    overlapping [t_c, t_c + 2^n_r) windows serialize column order on GPU (the
+    scatter form survives as the differential oracle in `testing/`). Padding
+    columns (t_c == t_{c+1}) own no element, and the tail i ≥ t_L clamps to a
+    column it sits past the height of — both zero out through the height mask.
     """
-    dtype = z_row.dtype
-    n_d = cfg.n_d
-    row_len = 1 << cfg.n_r  # static
-
-    prefix_sums_int = _decode_prefix_sums(col_prefix_sums, n_d)
-
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # [2^n_c]
-    row_eq = expand_eq_to_hypercube(z_row, jnp.ones([], dtype=dtype))  # [2^n_r]
-
-    # side="right" counts entries ≤ i, so duplicate prefix entries (zero-height
-    # columns) resolve to the real owner; "scan_unrolled" lowers the binary
-    # search to straight-line gathers/selects (AOT-clean, no while loop).
-    i_idx = jnp.arange(1 << n_d, dtype=jnp.int32)
-    c_idx = (
-        jnp.searchsorted(prefix_sums_int, i_idx, side="right", method="scan_unrolled")
-        - 1
-    )
-    c_idx = jnp.minimum(c_idx, cfg.l_max - 1)
-    t_c = prefix_sums_int[c_idx]
-    h = prefix_sums_int[c_idx + 1] - t_c  # column height (0 for padding columns)
-    local = i_idx - t_c
-    # min(h, row_len): row_eq covers 2^n_r rows, so a taller-than-capacity
-    # column truncates — identical to the scatter form's fixed-width window.
-    mask = local < jnp.minimum(h, row_len)
-    val = col_eq[c_idx] * row_eq[jnp.minimum(local, row_len - 1)]
-    return jnp.where(mask, val, jnp.zeros([], dtype=dtype))
+    return partial_eval_core(col_prefix_sums, z_row, z_col, 1 << cfg.n_d)
 
 
 @partial(jax.jit, static_argnames=("cfg",))
