@@ -1052,7 +1052,10 @@ def _reinterpret_and_reduce(
     `claim`, `pad_adj`, the next round's `z_cur`, and the decremented `pos`."""
     r = reinterpret_challenge(raw, dtype)
     claim, pad_adj = _fold_scalars(poly, r, pad_adj, z_cur, one)
-    pos_next = pos - 1
+    # The last round's `pos_next` is -1 (a dead output -- no round consumes it);
+    # clamp so the slice index is provably in-bounds rather than leaning on
+    # `dynamic_slice`'s implicit index clamp. No-op for every live round (pos >= 1).
+    pos_next = jnp.maximum(pos - 1, jnp.int32(0))
     z_next = jax.lax.dynamic_index_in_dim(eval_point, pos_next, keepdims=False)
     return r, claim, pad_adj, z_next, pos_next
 
