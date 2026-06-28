@@ -32,6 +32,7 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
+from zorch.hash.sponge import _absorb_symbolic
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -41,6 +42,14 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON2_MARKER_VERSION = 1
+
+# Whole-sponge marker: absorb + squeeze as ONE region the vendor expands into the
+# fused `poseidon2_sponge_hash` kernel (state register-resident vs a per-block
+# permute chain through DRAM). Same 6-operand ABI as the permute marker; the
+# kernel reads the absorb length at runtime, so one cubin serves every leaf width
+# and a symbolic width exports.
+SPONGE_HASH_MARKER = "zorch.poseidon2_sponge_hash"
+SPONGE_HASH_MARKER_VERSION = 1
 
 
 class Poseidon2:
@@ -99,6 +108,16 @@ class Poseidon2:
                 f"{self.dtype}"
             )
         return _permute_body(self, state)
+
+    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Absorb `input` and squeeze `out` lanes as ONE `poseidon2_sponge_hash`
+        region (fused kernel, state register-resident) — byte-identical to
+        `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
+        generic permutation runs the inline absorb. Lowers under symbolic
+        `len(input)` (the kernel reads the length at runtime) for export."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        return _sponge_hash_body(self, input, rate, out)
 
 
 def _permutation_body(
@@ -243,6 +262,74 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         name=perm._fused_region_name,
         version=version,
         **attrs,
+    )
+
+
+def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
+    """Emit the `poseidon2_sponge_hash` marker (dedicated path) or run the inline
+    absorb (generic). The decomposition is byte-identical to `Sponge.hash` so the
+    marked region's fallback HLO matches the kernel. The 6-operand region carries
+    the round constants explicitly — a `lax.composite` would lift closed-over
+    consts as extra operands and break the Poseidon2Fusion ABI."""
+    w = perm.width
+    absorb_len = input.shape[0]
+    symbolic = not isinstance(absorb_len, int)
+
+    def sponge(
+        inp: Array,
+        ext_init_rc: Array,
+        int_rc: Array,
+        ext_term_rc: Array,
+        diag: Array,
+        off_diag: Array,
+        **_attrs: object,
+    ) -> Array:
+        def permute(s: Array) -> Array:
+            return _permutation_body(
+                perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
+            )
+
+        state = jnp.zeros(w, dtype=inp.dtype)
+        if symbolic:  # shape-poly export: while_loop over the blocks
+            return _absorb_symbolic(inp, state, rate, out, permute)
+        n = absorb_len
+        if n == 0:
+            return state[:out]
+        if n <= rate:  # single (possibly partial) block
+            state = state.at[:n].set(inp[:n])
+            return permute(state)[:out]
+        state = state.at[:rate].set(inp[:rate])
+        state = permute(state)
+        full = n // rate
+        for i in range(1, full):  # remaining full blocks (unrolled; n is static)
+            state = state.at[:rate].set(inp[i * rate : (i + 1) * rate])
+            state = permute(state)
+        tail = n - full * rate
+        if tail:  # partial last block overwrites only its own lanes
+            state = state.at[:tail].set(inp[full * rate :])
+            state = permute(state)
+        return state[:out]
+
+    operands = _abi_operands(perm, input)
+    # Generic permutation: no fused sponge kernel, run the absorb inline (a whole-
+    # sponge LoopFusion register-spills); only the dedicated path emits the marker.
+    if not perm.has_dedicated_fusion:
+        return sponge(*operands)
+    p = perm._p
+    marker_attrs: dict[str, int] = {
+        "width": w,
+        "rate": rate,
+        "digest_elems": out,
+        "external_rounds": p.external_rounds,
+        "internal_rounds": p.internal_rounds,
+        "alpha": p.alpha,
+    }
+    return fused_region(
+        sponge,
+        *operands,
+        name=SPONGE_HASH_MARKER,
+        version=SPONGE_HASH_MARKER_VERSION,
+        **marker_attrs,
     )
 
 

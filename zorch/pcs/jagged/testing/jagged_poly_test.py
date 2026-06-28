@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import operator
-from functools import partial, reduce
+from functools import reduce
 from typing import Any
 
 import jax
@@ -16,15 +16,18 @@ from zorch.pcs.jagged.poly import (
     _TRANSITION_ROWS,
     NUM_BIT_STATES,
     NUM_MEMORY_STATES,
-    JaggedStaticConfig,
     _offset_bit_tensor,
     bp_eval_core,
     build_jagged_layout,
     build_prefix_sums,
-    eval_jagged_mle,
-    partial_eval,
+    partial_eval_core,
 )
-from zorch.pcs.jagged.testing import scatter_partial_eval
+from zorch.pcs.jagged.testing import (
+    JaggedStaticConfig,
+    eval_jagged_mle,
+    oracle_cfg,
+    scatter_partial_eval,
+)
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.testkit.random_field import rand_ext_field
 
@@ -40,6 +43,12 @@ def _field_val(x: Array) -> bytes:
     base-field scalars.
     """
     return np.array(x).tobytes()
+
+
+def _indicator(offsets: Array, z_row: Array, z_col: Array, n_d: int) -> Array:
+    """Production partial_eval_core over the full 2^n_d domain (the cfg-free
+    entry point; the old cfg-keyed `partial_eval` wrapper is retired)."""
+    return partial_eval_core(offsets, z_row, z_col, 1 << n_d)
 
 
 class TransitionTableTest(absltest.TestCase):
@@ -87,15 +96,15 @@ class BpEvalCoreTest(absltest.TestCase):
 class LayoutBuilderTest(absltest.TestCase):
     def test_shape_and_empty_range_pad(self) -> None:
         # heights [4,2,3] → prefix [0,4,6,9], t_L=9, n_d=log2_ceil(9)+1=5.
-        cps, cfg = build_jagged_layout([4, 2, 3], l_max=4, n_r=3, dtype=EF)
+        cps, n_d = build_jagged_layout([4, 2, 3], l_max=4, dtype=EF)
         self.assertEqual(cps.shape, (5, 5))  # (l_max+1, n_d)
-        self.assertEqual((cfg.l_max, cfg.n_c, cfg.n_d), (4, 2, 5))
+        self.assertEqual(n_d, 5)
         # Padding column (c=3): row 3 == row 4 == bits(9) -> empty range.
         self.assertEqual(cps[3].tolist(), cps[4].tolist())
 
     def test_capacity_assert(self) -> None:
         with self.assertRaises(ValueError):
-            build_jagged_layout([4, 2, 3], l_max=2, n_r=3, dtype=EF)  # real_L=3 > 2
+            build_jagged_layout([4, 2, 3], l_max=2, dtype=EF)  # real_L=3 > 2
 
 
 def _eq_at(z: Array, idx: int, nbits: int) -> Array:
@@ -137,14 +146,14 @@ class EvalJaggedMleTest(absltest.TestCase):
         l_max, n_r = 4, 3
         z_row = rand_ext_field(1, (n_r,), KB, EF)
         # cfg is identical across instances (same tier) — z_col/z_index widths too.
-        _, cfg = build_jagged_layout(heights_list[0], l_max, n_r, EF)
+        cfg = oracle_cfg(heights_list[0], l_max, n_r, EF)
         z_col = rand_ext_field(2, (cfg.n_c,), KB, EF)
         z_index = rand_ext_field(3, (cfg.n_d,), KB, EF)
-        fn = jax.jit(partial(eval_jagged_mle, cfg=cfg))
+        fn = jax.jit(lambda cps: eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg))
         for hc in heights_list:
-            cps, cfg2 = build_jagged_layout(hc, l_max, n_r, EF)
-            self.assertEqual((cfg2.n_d, cfg2.n_c), (cfg.n_d, cfg.n_c))  # same tier
-            got = fn(cps, z_row, z_col, z_index)
+            cps, n_d = build_jagged_layout(hc, l_max, EF)
+            self.assertEqual(n_d, cfg.n_d)  # same tier
+            got = fn(cps)
             want = _naive_jagged_mle(hc, cfg, z_row, z_col, z_index)
             self.assertEqual(_field_val(got), _field_val(want))
         # Compiled once: a single cache entry (no re-trace).
@@ -153,7 +162,8 @@ class EvalJaggedMleTest(absltest.TestCase):
     def test_zero_bit_pad_diverges(self) -> None:
         # Negative test: zero-bit padding (vs empty-range) changes J̃.
         l_max, n_r = 4, 3
-        cps, cfg = build_jagged_layout([4, 2, 3], l_max, n_r, EF)
+        cps, _ = build_jagged_layout([4, 2, 3], l_max, EF)
+        cfg = oracle_cfg([4, 2, 3], l_max, n_r, EF)
         z_row = rand_ext_field(1, (n_r,), KB, EF)
         z_col = rand_ext_field(2, (cfg.n_c,), KB, EF)
         z_index = rand_ext_field(3, (cfg.n_d,), KB, EF)
@@ -169,7 +179,8 @@ class EvalJaggedMleTest(absltest.TestCase):
         # log-area tiering rationale. Exact identity: with all mass below the
         # tier, J̃_{n_d+2} = (1−z₀)(1−z₁)·J̃_{n_d}.
         heights, l_max, n_r = [4, 2, 3], 4, 3
-        cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)  # n_d = 5
+        cps, _ = build_jagged_layout(heights, l_max, EF)  # n_d = 5
+        cfg = oracle_cfg(heights, l_max, n_r, EF)
         pad = 2
         n_d_wide = cfg.n_d + pad
         prefix = build_prefix_sums(heights)
@@ -194,15 +205,16 @@ class PartialEvalTest(absltest.TestCase):
     def test_partial_eval_matches_eval_jagged_mle(self) -> None:
         heights = [4, 2, 3]
         l_max, n_r = 4, 3
-        cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)
-        # partial_eval reads its scatter offsets from limb 0 of the tensor it is
-        # given; a Montgomery tensor's limb 0 is R mod p, not the canonical bit, so
-        # pass the canonical-limb offsets sibling (the production caller's path).
-        offsets = _offset_bit_tensor(heights, l_max, cfg)
+        cps, _ = build_jagged_layout(heights, l_max, EF)
+        cfg = oracle_cfg(heights, l_max, n_r, EF)
+        # partial_eval_core reads its scatter offsets from limb 0 of the tensor it
+        # is given; a Montgomery tensor's limb 0 is R mod p, not the canonical bit,
+        # so pass the canonical-limb offsets sibling (the production caller's path).
+        offsets = _offset_bit_tensor(heights, l_max, cfg.n_d, cfg.dtype)
         z_row = rand_ext_field(10, (cfg.n_r,), KB, EF)
         z_col = rand_ext_field(11, (cfg.n_c,), KB, EF)
         z_index = rand_ext_field(12, (cfg.n_d,), KB, EF)
-        indicator = partial_eval(offsets, z_row, z_col, cfg=cfg)
+        indicator = _indicator(offsets, z_row, z_col, cfg.n_d)
         self.assertEqual(indicator.shape, (2**cfg.n_d,))
         eq_idx = expand_eq_to_hypercube(z_index, jnp.array(1, EF))
         # jnp.sum aborts on EF (koalabearx4_mont) — unroll at trace time.
@@ -221,11 +233,11 @@ class PartialEvalTest(absltest.TestCase):
         layouts = [[4, 2, 3], [4, 0, 3, 2], [9], [3, 3, 2, 1]]
         for heights in layouts:
             with self.subTest(heights=heights):
-                _cps, cfg = build_jagged_layout(heights, l_max, n_r, EF)
-                offsets = _offset_bit_tensor(heights, l_max, cfg)
+                cfg = oracle_cfg(heights, l_max, n_r, EF)
+                offsets = _offset_bit_tensor(heights, l_max, cfg.n_d, cfg.dtype)
                 z_row = rand_ext_field(30, (cfg.n_r,), KB, EF)
                 z_col = rand_ext_field(31, (cfg.n_c,), KB, EF)
-                got = partial_eval(offsets, z_row, z_col, cfg=cfg)
+                got = _indicator(offsets, z_row, z_col, cfg.n_d)
                 want = scatter_partial_eval(offsets, z_row, z_col, cfg=cfg)
                 self.assertEqual(_field_val(got), _field_val(want))
 
@@ -238,20 +250,20 @@ class PartialEvalTest(absltest.TestCase):
         l_max = 4
         zeros = [0, 0, 0]
         # n_r=1: window fits the buffer — differential vs the oracle.
-        _cps, cfg = build_jagged_layout(zeros, l_max, n_r=1, dtype=EF)
-        offsets = _offset_bit_tensor(zeros, l_max, cfg)
+        cfg = oracle_cfg(zeros, l_max, 1, EF)
+        offsets = _offset_bit_tensor(zeros, l_max, cfg.n_d, cfg.dtype)
         z_row = rand_ext_field(40, (cfg.n_r,), KB, EF)
         z_col = rand_ext_field(41, (cfg.n_c,), KB, EF)
-        got = partial_eval(offsets, z_row, z_col, cfg=cfg)
+        got = _indicator(offsets, z_row, z_col, cfg.n_d)
         want = scatter_partial_eval(offsets, z_row, z_col, cfg=cfg)
         self.assertEqual(_field_val(got), _field_val(want))
         self.assertEqual(_field_val(got), _field_val(jnp.zeros(1 << cfg.n_d, dtype=EF)))
         # n_r=3: scatter-untraceable region — pin the gather's zero indicator.
-        _cps, cfg = build_jagged_layout(zeros, l_max, n_r=3, dtype=EF)
-        offsets = _offset_bit_tensor(zeros, l_max, cfg)
+        cfg = oracle_cfg(zeros, l_max, 3, EF)
+        offsets = _offset_bit_tensor(zeros, l_max, cfg.n_d, cfg.dtype)
         z_row = rand_ext_field(42, (cfg.n_r,), KB, EF)
         z_col = rand_ext_field(43, (cfg.n_c,), KB, EF)
-        got = partial_eval(offsets, z_row, z_col, cfg=cfg)
+        got = _indicator(offsets, z_row, z_col, cfg.n_d)
         self.assertEqual(_field_val(got), _field_val(jnp.zeros(1 << cfg.n_d, dtype=EF)))
 
     def test_partial_eval_jits_and_compiles_once_across_heights(self) -> None:
@@ -261,14 +273,14 @@ class PartialEvalTest(absltest.TestCase):
         l_max, n_r = 4, 3
         heights_a = [4, 2, 3]  # area 9, n_d=5
         heights_b = [1, 5, 3]  # area 9, n_d=5 (same tier)
-        _cps_a, cfg = build_jagged_layout(heights_a, l_max, n_r, EF)
-        _cps_b, cfg_b = build_jagged_layout(heights_b, l_max, n_r, EF)
-        self.assertEqual((cfg.n_d, cfg.n_c), (cfg_b.n_d, cfg_b.n_c))  # same tier
-        off_a = _offset_bit_tensor(heights_a, l_max, cfg)
-        off_b = _offset_bit_tensor(heights_b, l_max, cfg)
+        cfg = oracle_cfg(heights_a, l_max, n_r, EF)
+        cfg_b = oracle_cfg(heights_b, l_max, n_r, EF)
+        self.assertEqual(cfg.n_d, cfg_b.n_d)  # same tier
+        off_a = _offset_bit_tensor(heights_a, l_max, cfg.n_d, cfg.dtype)
+        off_b = _offset_bit_tensor(heights_b, l_max, cfg.n_d, cfg.dtype)
         z_row = rand_ext_field(20, (cfg.n_r,), KB, EF)
         z_col = rand_ext_field(21, (cfg.n_c,), KB, EF)
-        run = jax.jit(lambda cps, zr, zc: partial_eval(cps, zr, zc, cfg=cfg))
+        run = jax.jit(lambda cps, zr, zc: partial_eval_core(cps, zr, zc, 1 << cfg.n_d))
         out1 = run(off_a, z_row, z_col)
         out1.block_until_ready()
         out2 = run(off_b, z_row, z_col)

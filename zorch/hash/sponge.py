@@ -14,6 +14,7 @@ input width instead of paying one permute trace per block (#135).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +22,37 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from zorch.hash.permutation import Permutation
+
+
+def _absorb_symbolic(
+    input: Array,
+    state: Array,
+    rate: int,
+    out: int,
+    permute: Callable[[Array], Array],
+) -> Array:
+    """Shape-polymorphic absorb for a symbolic ``n`` (export only): a ``while_loop``
+    over ``ceil(n/rate)`` blocks, byte-identical to the concrete ``Sponge.hash``.
+    Used where ``n // rate`` is undecidable; shared by ``Sponge.hash`` and the
+    poseidon2 sponge-hash marker body so the two cannot drift."""
+    n = input.shape[0]
+    nb = (n + rate - 1) // rate
+    lanes = jnp.arange(rate)
+
+    def cond(carry: tuple[Array, Array]) -> Array:
+        return carry[1] < nb
+
+    def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
+        s, i = carry
+        start = i * rate
+        w = jnp.minimum(rate, n - start)
+        # Last block reads past n; clamp OOB indices (masked out below).
+        block = input[jnp.clip(start + lanes, 0, n - 1)]
+        s = s.at[:rate].set(jnp.where(lanes < w, block, s[:rate]))
+        return permute(s), i + 1
+
+    state, _ = lax.while_loop(cond, body, (state, jnp.int32(0)))
+    return state[:out]
 
 
 @dataclass(frozen=True)
@@ -99,6 +131,15 @@ class Sponge:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         state = jnp.zeros(self._permutation.width, dtype=input.dtype)
         n = input.shape[0]
+        if not isinstance(n, int):  # shape-poly export: symbolic n
+            # Dedicated permutation → fused sponge kernel (reads the absorb length
+            # at runtime); generic → the inline while_loop absorb.
+            fused = getattr(self._permutation, "sponge_hash", None)
+            if fused is not None:
+                return fused(input, self.rate, self.out)
+            return _absorb_symbolic(
+                input, state, self.rate, self.out, self._permutation.permute
+            )
         if n == 0:
             return state[: self.out]
         if n <= self.rate:  # single (possibly partial) block

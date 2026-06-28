@@ -30,3 +30,17 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "smcs",
+    srcs = ["smcs.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/commit:merkle",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/utils:bits",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
