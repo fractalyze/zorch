@@ -270,7 +270,9 @@ def partial_eval_core(
     # clamp: the tail i ≥ t_L lands at the last index, where the default OOB gather
     # and the height mask zero it — byte-identical to clamping.
     i_idx = jnp.arange(size, dtype=jnp.int32)
-    c_idx = _count_leq_sorted(prefix_sums_int, i_idx, z_col.shape[0] + 1) - 1
+    # n_c+2 steps (not n_c+1): l_max==1 gives n_c==0, where one step under-searches
+    # the 2 prefix entries; over-provisioned steps are no-ops.
+    c_idx = _count_leq_sorted(prefix_sums_int, i_idx, z_col.shape[0] + 2) - 1
     t_c = prefix_sums_int[c_idx]
     h = prefix_sums_int[c_idx + 1] - t_c  # column height (0 for padding columns)
     local = i_idx - t_c

@@ -196,7 +196,7 @@ class SingleMatrixCommitmentScheme:
         matches = jnp.array_equal(bound, commitment)
         # Priority order: bounds first, then the reconstructed-root check.
         return jnp.where(
-            index >= height,
+            (index < 0) | (index >= height),
             VerifyCode.INDEX_OUT_OF_BOUNDS,
             jnp.where(matches, VerifyCode.OK, VerifyCode.ROOT_MISMATCH),
         ).astype(jnp.int32)

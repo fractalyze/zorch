@@ -202,6 +202,10 @@ def stacked_basefold_verify(
             f"need at least one stacking variable, got "
             f"log_stacking_height={log_stacking_height}"
         )
+    if num_queries < 1:
+        # Zero queries make the Merkle/fold query phase vacuous, so a malformed
+        # proof would pass it; SP1 fixes a positive query count.
+        raise ValueError(f"need at least one query, got num_queries={num_queries}")
     if not (
         len(proof.component_commitments)
         == len(round_widths)

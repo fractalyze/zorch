@@ -129,6 +129,11 @@ def assemble_columns(
     ):
         for rc, cc in zip(rcs, ccs, strict=True):
             col_heights.extend([int(rc)] * int(cc))
+        if len(ccs) < 2:
+            raise ValueError(
+                f"each round needs the trailing (stacking-dummy, leftover) "
+                f"column-count pair; got {len(ccs)} counts"
+            )
         n_pad = int(ccs[-2]) + int(ccs[-1])
         claim_blocks.append(jnp.asarray(claims_r, dtype=dtype))
         if n_pad:

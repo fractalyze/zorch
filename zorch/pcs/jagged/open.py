@@ -227,6 +227,13 @@ def stacked_basefold_open(
     bf_dtype = code.dtype
     ef_degree = efinfo(ef_dtype).degree
 
+    if log_stacking_height < 1:
+        # z_final[-0:] is the whole vector, not an empty suffix; reject the
+        # degenerate zero-stacking open up front (the verifier rejects it too).
+        raise ValueError(
+            f"need at least one stacking variable, got "
+            f"log_stacking_height={log_stacking_height}"
+        )
     stack_point = z_final[-log_stacking_height:]
     num_vars = stack_point.shape[0]
 
