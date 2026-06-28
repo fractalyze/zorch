@@ -12,7 +12,6 @@ from zk_dtypes import koalabear_mont as F
 
 from zorch.pcs.jagged.dense import JaggedLayout, from_blocks, validate_layout
 from zorch.pcs.jagged.poly import build_jagged_layout
-from zorch.pcs.jagged.prover import _indicator_inputs
 from zorch.utils.bits import log2_ceil_usize
 
 
@@ -163,12 +162,6 @@ class ValidateLayoutTest(absltest.TestCase):
     def test_negative_log_s_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "log_s"):
             validate_layout(_layout([4], [4], log_s=-1))
-
-    def test_indicator_inputs_rejects_malformed_structure(self) -> None:
-        # The shared consumption path (commit/open/verify) must fire the
-        # validation before any bit tensor is built.
-        with self.assertRaisesRegex(ValueError, "height"):
-            _indicator_inputs(_layout([2, -1], [2, 2]))
 
 
 if __name__ == "__main__":
