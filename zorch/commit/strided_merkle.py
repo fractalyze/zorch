@@ -72,8 +72,8 @@ class StridedMerkleTree:
         self._compressor = compressor
         self._rows_per_query = rows_per_query
         self.digest_elems = compressor.chunk
-        # The query layer up is a plain binary tree; reuse MerkleTree's scanned
-        # regular fold rather than re-implement it.
+        # The query layer up is a plain binary tree; reuse MerkleTree's fold
+        # rather than re-implement it.
         self._top = MerkleTree(leaf_hasher, compressor)
 
     # Value equality/hash for static jit-zone keys (#214) — identity equality
@@ -134,7 +134,7 @@ class StridedMerkleTree:
         # query-layer node is already the root.
         if layer.shape[0] == 1:
             return layer[0], [layer]
-        return self._top._fold_unrolled(layer)
+        return self._top._fold_to_root(layer)
 
     def opened_rows(self, matrix: Array, index: int) -> Array:
         """The ``rows_per_query`` rows query ``index`` opens —
@@ -193,14 +193,14 @@ class StridedMerkleTree:
         Returns the root Array, not a verdict (a separator-binding consumer
         rebinds it before comparing). Single-index; batch by `vmap`-ing over
         `(index, opening)`. Mirrors `MerkleTree.reconstruct_root`."""
-        # Collapse the coset to its query-layer node with the same `_fold_unrolled`
+        # Collapse the coset to its query-layer node with the same `_fold_to_root`
         # `_build` uses; `rows_per_query == 1` adds no strided level (the lone
         # hashed row is already the node).
         leaves = jax.vmap(self._leaf_hasher.hash)(opening.row)  # (rows_per_query, d)
         if self._rows_per_query == 1:
             query_node = leaves[0]
         else:
-            query_node, _ = self._top._fold_unrolled(leaves)
+            query_node, _ = self._top._fold_to_root(leaves)
         if not opening.path:
             return query_node
 

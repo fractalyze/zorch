@@ -18,7 +18,7 @@ Each layer is one `vmap` over its nodes: an internal layer batches one
 `compress` = one permute; the leaf layer batches one `hash` = one permute per
 absorbed block. Those collapse to one GPU kernel per permute once the
 permutation itself is captured to a kernel (the poseidon2 fusion path, #25). The
-tree folds the layers one right-sized level at a time (`_fold_unrolled`) — see
+tree folds the layers one right-sized level at a time (`_fold_to_root`) — see
 `_build` for why this beats a full-width `scan`.
 
 `commit` emits no whole-tree marker: each `permute` inside the leaf hash and the
@@ -26,7 +26,7 @@ fold carries its own dedicated `zorch.poseidon2` marker, which the vendor lowers
 to a kernel directly. A dedicated whole-tree `zorch.merkle_commit` chain fusion
 was benchmarked SLOWER than these per-permute kernels (1.05-1.19x at 2^16..2^20),
 and the markerless body is what lowers under symbolic dims for recompile-free
-export — so the tree is committed by its plain vmap / unrolled-fold body.
+export — so the tree is committed by its plain vmap / fold body.
 """
 
 from __future__ import annotations
@@ -155,15 +155,15 @@ class MerkleTree:
         """The commit body: vmap the leaf hash, fold arity-sized groups per level
         to the root (`self._column_major` fixes the leaf layout).
 
-        `_fold_unrolled` compresses only each level's live nodes — a single `scan`
+        `_fold_to_root` compresses only each level's live nodes — a single `scan`
         would carry a full-width buffer and recompress the zero padding every
         level (~height× the work, the dominant commit runtime). The cost is an
         O(depth) compile: the per-level compresses are distinct shapes, so they
         don't share a cubin (#163 traded the other way); amortized once under the
         polymorphic compile-many-shards path."""
-        return self._fold_unrolled(self._hash_leaves(matrix))
+        return self._fold_to_root(self._hash_leaves(matrix))
 
-    def _fold_unrolled(self, layer: Array) -> tuple[Array, list[Array]]:
+    def _fold_to_root(self, layer: Array) -> tuple[Array, list[Array]]:
         """Fold the leaf layer to the root one level at a time, completing a
         short top level with zero digests (a binary power-of-two tree never pads;
         a k-ary tree may). The padded form is stored, so an opening adjacent to a

@@ -9,12 +9,9 @@ SP1's structure-hash convention — per-chip entries first, then a trailing
 trailing zero pad — and are bound into the commitment hash, so their encoding
 is part of the commitment format, not a packing detail.
 
-This deliberately diverges from a generic power-of-two-area jagged layout: SP1
-pads to a multiple of the stacking height (a generic scheme pads to a
-power-of-two area tier) and its structure hash includes the pad pair (a generic
-one excludes the pad). Both are commitment-format facts of SP1's jagged scheme,
-so they live with this PCS's commit rather than in the generic ``zorch/commit``
-blocks.
+SP1 pads to a multiple of the stacking height (not a power-of-two area tier) and
+its structure hash includes the trailing pad pair — both commitment-format facts,
+so they live with this PCS's commit, not the generic ``zorch/commit`` blocks.
 """
 
 from __future__ import annotations

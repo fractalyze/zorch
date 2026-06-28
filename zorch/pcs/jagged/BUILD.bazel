@@ -49,28 +49,6 @@ py_library(
 )
 
 py_library(
-    name = "stacked",
-    srcs = ["stacked.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//zorch/pcs/basefold",
-        "//zorch/pcs/jagged:dense",
-        "//zorch/poly",
-        requirement("jax"),
-    ],
-)
-
-py_library(
-    name = "config",
-    srcs = ["config.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        "//zorch/pcs/basefold",
-        requirement("jax"),
-    ],
-)
-
-py_library(
     name = "prover",
     srcs = ["prover.py"],
     visibility = ["//visibility:public"],

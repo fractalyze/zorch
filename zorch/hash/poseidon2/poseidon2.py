@@ -17,14 +17,13 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import Array, lax
+from jax import Array
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
@@ -33,6 +32,7 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
+from zorch.hash.sponge import _absorb_symbolic
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -43,14 +43,11 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # a future contract change can be staged without renaming the marker.
 POSEIDON2_MARKER_VERSION = 1
 
-# Whole-sponge marker: a padding-free overwrite absorb + squeeze as ONE region the
-# vendor expands into the fused `poseidon2_sponge_hash` kernel — state stays
-# register-resident across every absorb block, instead of a per-block permute
-# chain that round-trips the state through DRAM (dominates a wide-column leaf
-# hash). Same 6-operand Poseidon2Fusion ABI as the permute marker; the absorb
-# shape rides as attributes and the kernel reads the absorb length at runtime, so
-# one cubin serves every leaf width AND a symbolic width exports (no Python branch
-# on the block count).
+# Whole-sponge marker: absorb + squeeze as ONE region the vendor expands into the
+# fused `poseidon2_sponge_hash` kernel (state register-resident vs a per-block
+# permute chain through DRAM). Same 6-operand ABI as the permute marker; the
+# kernel reads the absorb length at runtime, so one cubin serves every leaf width
+# and a symbolic width exports.
 SPONGE_HASH_MARKER = "zorch.poseidon2_sponge_hash"
 SPONGE_HASH_MARKER_VERSION = 1
 
@@ -113,14 +110,11 @@ class Poseidon2:
         return _permute_body(self, state)
 
     def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` (1-D) in `rate`-blocks and squeeze `out` lanes as ONE
-        `zorch.poseidon2_sponge_hash` region the vendor expands into the fused
-        sponge kernel (state register-resident across blocks) instead of a
-        per-block permute chain. Only the dedicated (M4-structured) path emits the
-        marker; otherwise the inline absorb runs (a generic permutation has no
-        fused sponge kernel). Byte-identical to `Sponge.hash`'s padding-free
-        overwrite absorb, and lowers under a symbolic `len(input)` — the kernel
-        reads the absorb length at runtime — for recompile-free export."""
+        """Absorb `input` and squeeze `out` lanes as ONE `poseidon2_sponge_hash`
+        region (fused kernel, state register-resident) — byte-identical to
+        `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
+        generic permutation runs the inline absorb. Lowers under symbolic
+        `len(input)` (the kernel reads the length at runtime) for export."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         return _sponge_hash_body(self, input, rate, out)
@@ -271,47 +265,12 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
     )
 
 
-def _absorb_symbolic(
-    input: Array,
-    state: Array,
-    rate: int,
-    out: int,
-    permute: Callable[[Array], Array],
-) -> Array:
-    """Shape-polymorphic padding-free absorb: one `while_loop` over `ceil(n/rate)`
-    blocks, no Python branch on `n`. Each block overwrites its `w = min(rate, n -
-    i*rate)` real lanes then permutes — byte-identical to the unrolled absorb. The
-    sponge-hash marker's decomposition for a symbolic `n` (export); the vendor
-    kernel does the real runtime loop."""
-    n = input.shape[0]
-    nb = (n + rate - 1) // rate  # ceil(n / rate)
-    lanes = jnp.arange(rate)
-
-    def cond(carry: tuple[Array, Array]) -> Array:
-        return carry[1] < nb
-
-    def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
-        s, i = carry
-        start = i * rate
-        w = jnp.minimum(rate, n - start)
-        # The last block reads past n; clamp OOB indices in-bounds (those lanes
-        # are masked out below, so the clamped values are discarded).
-        block = input[jnp.clip(start + lanes, 0, n - 1)]
-        s = s.at[:rate].set(jnp.where(lanes < w, block, s[:rate]))
-        return permute(s), i + 1
-
-    state, _ = lax.while_loop(cond, body, (state, jnp.int32(0)))
-    return state[:out]
-
-
 def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
-    """Emit the `zorch.poseidon2_sponge_hash` marker (dedicated path) or run the
-    inline absorb (generic path). The decomposition is byte-identical to
-    `Sponge.hash` — overwrite the leading lanes with each block then permute, a
-    partial last block overwriting only its own lanes — so the marked region's
-    fallback HLO matches the kernel. The 6-operand region carries the round
-    constants explicitly (a `lax.composite` would otherwise lift closed-over
-    consts as extra operands and break the Poseidon2Fusion ABI)."""
+    """Emit the `poseidon2_sponge_hash` marker (dedicated path) or run the inline
+    absorb (generic). The decomposition is byte-identical to `Sponge.hash` so the
+    marked region's fallback HLO matches the kernel. The 6-operand region carries
+    the round constants explicitly — a `lax.composite` would lift closed-over
+    consts as extra operands and break the Poseidon2Fusion ABI."""
     w = perm.width
     absorb_len = input.shape[0]
     symbolic = not isinstance(absorb_len, int)
@@ -352,11 +311,8 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
         return state[:out]
 
     operands = _abi_operands(perm, input)
-    # A generic permutation has no fused sponge kernel — run the absorb inline (a
-    # LoopFusion over a whole sponge would register-spill); only the dedicated
-    # path emits the marker. The absorb shape rides as attributes; the body
-    # ignores them (the kernel reads width/rate/rounds from the backend config and
-    # the absorb length from the operand shape at runtime).
+    # Generic permutation: no fused sponge kernel, run the absorb inline (a whole-
+    # sponge LoopFusion register-spills); only the dedicated path emits the marker.
     if not perm.has_dedicated_fusion:
         return sponge(*operands)
     p = perm._p

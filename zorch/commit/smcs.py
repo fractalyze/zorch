@@ -66,12 +66,10 @@ class SingleMatrixCommitmentScheme:
         # Keep sponge + compressor too: the domain separator calls them directly
         # and zorch's MerkleTree does not expose its internals.
         #
-        # column-major is a per-``commit`` choice, NOT a scheme property: the same
-        # SMCS commits the trace codeword column-major (a leaf is a column,
-        # skipping the encode transpose) AND the FRI fold's conjugate-pair leaves
-        # row-major. Hold both layout trees over the one block pair and pick per
-        # call; open/verify re-hash individually-extracted leaf rows (the same K
-        # values either way), so they always use the row-major tree.
+        # column-major is a per-``commit`` choice, not a scheme property: the same
+        # SMCS commits the trace codeword column-major (a leaf is a column) and the
+        # FRI fold's pair-leaves row-major. Hold both trees; open/verify re-hash
+        # extracted leaf rows, so they always use the row-major one.
         self._tree = MerkleTree(sponge, compressor)
         self._tree_column_major = MerkleTree(sponge, compressor, column_major=True)
         self._sponge = sponge
