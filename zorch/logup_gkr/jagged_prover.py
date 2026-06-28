@@ -45,6 +45,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array, export
+from jax._src.export._export import call_exported_p as _call_exported_p
 
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
@@ -734,12 +735,21 @@ def _round_dispatch(
     cached binary for `key`, else `build()` it (the symbolic export is the cold
     cost, so only on a miss) and cache it, then call it on the concrete `operands`.
     The tracer fallback, `operands`, `key`, and the abstract shapes stay per-round;
-    only this get / export / put / call protocol is shared."""
+    only this get / export / put / call protocol is shared.
+
+    The call binds `call_exported_p` directly rather than going through
+    `Exported.call`: that method wraps every invocation in a `custom_vjp` (its
+    `f_imported`/`f_flat` AD path), which the eager host round loop never
+    differentiates. Skipping it is ~177us -> ~55us warm per dispatch (a `jax.jit`
+    dispatch costs the same) on the dispatch-bound host-FS prove, with the SAME one
+    symbolic binary -- no per-shape recompile, byte-identical (same primitive, same
+    flat operands)."""
     exported = _round_get(key)
     if exported is None:
         exported = build()
         _round_put(key, exported)
-    return exported.call(*operands)
+    flat = jax.tree_util.tree_leaves(operands)
+    return exported.out_tree.unflatten(_call_exported_p.bind(*flat, exported=exported))
 
 
 # `_Planes` / `_RoundScalars` cross the jax.export boundary as pytree operands;
@@ -1015,23 +1025,39 @@ def _fold_scalars(
     """The per-round scalar fold: the next claim (round poly evaluated at `r`) and the
     updated pad-mass `pad_adj`. One source for both the oracle
     `_run_jagged_rounds_reference` (which inlines it) and the round loop's
-    `_scalar_reduce` (which jits it), so the two cannot drift out of byte-equality."""
+    `_reinterpret_and_reduce` (which jits it), so the two cannot drift out of
+    byte-equality."""
     return eval_coeffs(poly, r), pad_adj * (z * r + (one - z) * (one - r))
 
 
-@jax.jit
-def _scalar_reduce(
-    poly: Array, r: Array, pad_adj: Array, z_cur: Array, one: Array
-) -> tuple[Array, Array]:
-    """The per-round scalar fold as ONE jitted dispatch instead of ~11 eager device
-    ops -- the per-op JAX machinery (bind/apply_primitive) dominates the warm wall, so
-    collapsing the op count is the lever (the ops themselves are async-cheap)."""
-    return _fold_scalars(poly, r, pad_adj, z_cur, one)
-
-
-# One squeezed challenge's reshape/bitcast (`raw.view`) jitted -- shape-stable per
-# (limbs, dtype), so the ~2 eager ops per FS hop collapse to one dispatch.
-_jit_reinterpret = jax.jit(reinterpret_challenge, static_argnums=(1,))
+@partial(jax.jit, static_argnums=(7,))
+def _reinterpret_and_reduce(
+    raw: Array,
+    poly: Array,
+    pad_adj: Array,
+    z_cur: Array,
+    one: Array,
+    eval_point: Array,
+    pos: Array,
+    dtype: Any,
+) -> tuple[Array, Array, Array, Array, Array]:
+    """Reinterpret the squeezed challenge, fold the round scalars, AND slice the
+    next round's eval-point coordinate -- all in ONE jitted dispatch. The host-FS
+    warm wall is dominated by dispatch count (GPU ~97% idle), so each per-round hop
+    folded out is a direct win. Three hops collapse here: the challenge
+    reshape/bitcast, the scalar fold, and the per-round `eval_point` gather (a
+    `jnp.take` is a real ~22us dispatch, NOT a buffer view). `pos` indexes this
+    round's coordinate; the next is `pos - 1`, threaded device-resident so no
+    per-round index round-trips the host. Returns the round challenge `r`, the next
+    `claim`, `pad_adj`, the next round's `z_cur`, and the decremented `pos`."""
+    r = reinterpret_challenge(raw, dtype)
+    claim, pad_adj = _fold_scalars(poly, r, pad_adj, z_cur, one)
+    # The last round's `pos_next` is -1 (a dead output -- no round consumes it);
+    # clamp so the slice index is provably in-bounds rather than leaning on
+    # `dynamic_slice`'s implicit index clamp. No-op for every live round (pos >= 1).
+    pos_next = jnp.maximum(pos - 1, jnp.int32(0))
+    z_next = jax.lax.dynamic_index_in_dim(eval_point, pos_next, keepdims=False)
+    return r, claim, pad_adj, z_next, pos_next
 
 
 # The layer tail in one jitted dispatch: the final fold (`_fix_last`) plus stacking
@@ -1096,11 +1122,16 @@ def _run_jagged_rounds(
     polys: list[Array] = []
     challenges: list[Array] = []
     prev_r = one  # unused until the first fold (round 1)
+    # z_cur is eval_point's coordinate for round k (== eval_point[-(k+1)]). Rather
+    # than a standalone `jnp.take` every round (a real ~22us gather dispatch, not a
+    # free buffer view), the coordinate is threaded device-resident: round 0 reads
+    # the last coordinate and each `_reinterpret_and_reduce` slices the next via a
+    # decremented `pos`, riding the fold's dispatch instead of its own. The fold stays
+    # on the compute device (a host CPU reduce forces the carry to round-trip back to
+    # GPU before each bind, which serializes the bind pipeline -- net slower).
+    pos = jnp.asarray(eval_point.shape[0] - 1, jnp.int32)
+    z_cur = jnp.take(eval_point, -1)
     for rnd in range(nrv + niv):
-        # z_cur is eval_point's coordinate for this round (round k binds -(k+1)).
-        # `jnp.take` with a static index lowers a single-element gather to a buffer
-        # view -- zero dispatch -- where `eval_point[-(rnd+1)]` costs a slice+squeeze.
-        z_cur = jnp.take(eval_point, -(rnd + 1))
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         if rnd == 0:
             gather, col_index, pair_index = meta[0]
@@ -1125,10 +1156,11 @@ def _run_jagged_rounds(
         else:
             poly, planes, eq_int = fix_int(planes, eq_int, prev_r, scalars, consts)
         transcript, raw = transcript.observe_and_sample(poly, challenge_limbs)
-        r = _jit_reinterpret(raw, claim.dtype)
+        r, claim, pad_adj, z_cur, pos = _reinterpret_and_reduce(
+            raw, poly, pad_adj, z_cur, one, eval_point, pos, claim.dtype
+        )
         polys.append(poly)
         challenges.append(r)
-        claim, pad_adj = _scalar_reduce(poly, r, pad_adj, z_cur, one)
         if rnd == nrv - 1:
             eq_adj = pad_adj
             pad_adj = one
