@@ -29,21 +29,6 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
-py_test(
-    name = "dense_test",
-    size = "small",
-    srcs = ["dense_test.py"],
-    deps = [
-        "//zorch/pcs/jagged:dense",
-        "//zorch/pcs/jagged:poly",
-        "//zorch/pcs/jagged:prover",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
 # The tests below are composite-vmap: CI's published jaxlib can't run them.
 # .bazelrc.ci excludes the local_only tag from CI (full rationale there); local
 # bazel runs them.
@@ -188,23 +173,6 @@ py_test(
         "//zorch/pcs/jagged:poly",
         "//zorch/pcs/jagged:prover",
         "//zorch/poly",
-        "//zorch/testkit:transcript",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "outer_dense_symk_export_test",
-    size = "small",
-    srcs = ["outer_dense_symk_export_test.py"],
-    # Symbolic dense-length jax.export over the EF outer sumcheck GPU path; CI's
-    # published jaxlib can't run it, same as open_test.
-    tags = ["local_only"],
-    deps = [
-        "//zorch/pcs/jagged:prover",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),

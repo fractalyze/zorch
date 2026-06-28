@@ -144,9 +144,7 @@ class StackedOpenProof:
     """The stacked BaseFold open proof, byte-matched field-for-field against the
     SP1 reference dump.
 
-    A registered pytree so the proof crosses the open's `@jax.jit` boundary — see
-    the `stacked_basefold_open` note (the jit currently byte-fails on the sponge
-    plugin's poseidon2 emitter; that's a plugin bug to fix, not the jit to drop).
+    A registered pytree so the proof crosses the open's `@jax.jit` boundary.
 
     component_commitments: per round, the shape-bound SMCS root of the
         committed codeword — SP1's ``merkle_tree_commitments``, the roots the
@@ -179,11 +177,7 @@ class StackedOpenProof:
 
 
 # One @jit zone: collapses the FRI fold loop's ~1.2k eager per-op module compiles
-# into one. KNOWN-FAILING on the sponge plugin today: its poseidon2 emitter
-# mis-emits in a large fusion so `fri_commitments`/`query_openings` byte-diverge
-# from the eager result (which byte-matches SP1). The fix is in the plugin
-# (xla_fork poseidon2 emitter), NOT here — do NOT revert this to eager to dodge
-# the bug. Knowledge smcs-bind-root-standalone-poseidon2-miscompiles-in-jit-fusion.
+# into one.
 @partial(
     jax.jit,
     static_argnames=(
@@ -238,24 +232,12 @@ def stacked_basefold_open(
 
     symbolic_k = rlc_bits is not None
 
-    # Each round's per-column evaluation at the stacking point — SP1's batch
-    # evaluations, observed into the transcript by the open. Evaluated one column
-    # at a time: the batched 2-D ``(mle * eq).sum(axis=0)`` over a 2^log_s-row
-    # extension-field matrix faults the XLA CPU backend, while the 1-D per-column
-    # reduce (the outer-sumcheck idiom) lowers cleanly. Under symbolic K the
-    # static ``range(K)`` is replaced by a ``vmap`` over the column axis (the same
-    # per-column 1-D reduce, byte-identical to the unrolled form).
-    if symbolic_k:
-        batch_evals = [
-            jax.vmap(eval_mle, in_axes=(1, None))(rd.mle, stack_point) for rd in rounds
-        ]
-    else:
-        batch_evals = [
-            jnp.stack(
-                [eval_mle(rd.mle[:, k], stack_point) for k in range(rd.mle.shape[1])]
-            )
-            for rd in rounds
-        ]
+    # Each round's per-column evaluation at the stacking point (SP1's batch
+    # evaluations, observed into the transcript). vmap over the column axis serves
+    # concrete and symbolic K alike, byte-identical to a per-column unroll.
+    batch_evals = [
+        jax.vmap(eval_mle, in_axes=(1, None))(rd.mle, stack_point) for rd in rounds
+    ]
 
     t: GrindingTranscript = transcript
     # SP1's prove_untrusted_evaluation observes the scalar D(z_final) first.

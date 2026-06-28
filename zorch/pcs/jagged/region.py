@@ -6,12 +6,9 @@ every chip column-major-flattened into one dense buffer, end-padded with zeros
 to a multiple of the stacking height. ``row_counts``/``column_counts`` follow
 SP1's structure-hash convention — per-chip entries first, then a trailing
 ``(max_height, leftover)`` / ``(num_added_cols - 1, 1)`` pair that decodes the
-trailing zero pad — and are bound into the commitment hash, so their encoding
-is part of the commitment format, not a packing detail.
-
-SP1 pads to a multiple of the stacking height (not a power-of-two area tier) and
-its structure hash includes the trailing pad pair — both commitment-format facts,
-so they live with this PCS's commit, not the generic ``zorch/commit`` blocks.
+trailing zero pad — and are bound into the commitment hash, so their encoding is
+part of the commitment format (it lives with this PCS's commit, not the generic
+``zorch/commit`` blocks), not a packing detail.
 """
 
 from __future__ import annotations

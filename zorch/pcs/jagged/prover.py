@@ -16,9 +16,7 @@ challenge list reversed (insert-at-front). zorch's ``SumcheckRound`` / ``prove``
 fold MSB-first over a fixed dense shape — they can't byte-match SP1's LSB-first
 jagged schedule, so this ``Round`` runs its own loop over zorch's order-free leaf
 blocks (``build_jagged_layout`` / ``bp_eval_core`` / ``eval_coeffs``), same as
-``zerocheck/jagged.py``. (Consequently it does not emit the ``zorch.sumcheck``
-composite — the dense-only SVO / register-resident codegen does not apply; the
-jagged equivalent is separate GPU-codegen work.)
+``zerocheck/jagged.py``.
 
 The inner challenges are sampled from the threaded transcript; ``z_col`` /
 ``z_trace`` arrive on the carry (fixed upstream — ``z_col`` at commitment,
@@ -223,67 +221,6 @@ def outer_sumcheck(
     return jnp.stack(polys), z_final, dense_eval, transcript
 
 
-def outer_sumcheck_scan(
-    dense: Array,
-    indicator: Array,
-    claim: Array,
-    transcript: Transcript,
-    n_rounds: Any,
-) -> tuple[Array, Array, Array, Transcript]:
-    """Fixed-width-mask form of ``outer_sumcheck`` so the round count
-    ``n = log2(len(dense))`` can be a symbolic ``jax.export`` dim.
-
-    A ``lax.scan`` can't carry the halving state's shrinking shape, so the buffers
-    stay full width with the live data front-packed (``zeros(M).at[:half].set``)
-    and the dead tail masked out of each round-poly sum (the same device as
-    ``zorch.sumcheck.prover.prove``, here LSB-first to match the jagged schedule).
-    Byte-identical to ``outer_sumcheck``.
-
-    TRADEOFF: full-width work every round (~n× the halving's 2·M total). That is
-    the necessary cost of one symbolic binary over a halving fold; the live
-    ``JaggedEvalRound`` keeps the real-halving ``outer_sumcheck``. ``n_rounds`` is
-    passed in because ``log2`` is not polynomial in the dense length, so under
-    export it is its own symbolic dim (paired with the length at the call)."""
-    ef = claim.dtype
-    ef_limbs = efinfo(ef).degree
-    two = jnp.array(2, ef)
-    full = dense.shape[0]
-    half = full // 2
-    # Lift dense (base field) to EF up front: the halving fold promotes the state
-    # BF->EF after round 0, but a scan carry must keep one dtype. The lift is the
-    # constant-term embedding, so the round-0 BF*EF product is byte-identical.
-    dense_ef = dense * jnp.ones((), ef)
-
-    def _round(carry: Any, _: Array) -> tuple[Any, tuple[Array, Array]]:
-        a, b, cur, transcript, valid_pairs = carry
-        # Pair via reshape (full -> (half, 2)), not a[0::2]/[1::2]: a strided slice
-        # of a symbolic length lowers to (full+1)//2, which the export solver can't
-        # prove equals half. Row j = [arr[2j], arr[2j+1]] == the even/odd split.
-        pa, pb = a.reshape(half, 2), b.reshape(half, 2)
-        even_a, odd_a = pa[:, 0], pa[:, 1]
-        even_b, odd_b = pb[:, 0], pb[:, 1]
-        valid = (jnp.arange(half) < valid_pairs).astype(ef)
-        s0 = jnp.sum(even_a * even_b * valid)
-        s_inf = jnp.sum((odd_a - even_a) * (odd_b - even_b) * valid)
-        coef = jnp.stack([s0, cur - two * s0 - s_inf, s_inf])
-        transcript = transcript.observe(coef)
-        transcript, alpha = sample_challenge(transcript, ef, ef_limbs)
-        fold_a = even_a + alpha * (odd_a - even_a)
-        fold_b = even_b + alpha * (odd_b - even_b)
-        a = jnp.zeros((full,), ef).at[:half].set(fold_a)
-        b = jnp.zeros((full,), ef).at[:half].set(fold_b)
-        cur = eval_coeffs(coef, alpha)
-        return (a, b, cur, transcript, valid_pairs // 2), (coef, alpha)
-
-    vp0 = jnp.asarray(half, jnp.int32)
-    (a_f, _, _, transcript, _), (polys, challenges) = jax.lax.scan(
-        _round,
-        (dense_ef, indicator, claim, transcript, vp0),
-        jnp.arange(n_rounds, dtype=jnp.int32),
-    )
-    return polys, challenges[::-1], a_f[0], transcript
-
-
 def _bp_all(
     buf: Array,
     z_row: Array,
@@ -339,21 +276,18 @@ def inner_sumcheck_core(
     def bp_all(buf: Array) -> Array:
         return _bp_all(buf, z_row, z_trace, t_matrix, bp_num_vars, num_bits)
 
-    # claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c. Computed via
-    # jnp.sum (CPU EF reduce works) rather than eval_jagged_mle's trace-time
-    # 1726-deep unroll, which compiles abysmally.
+    # claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c — a jnp.sum,
+    # not eval_jagged_mle's ~1700-deep trace-time unroll (which compiles abysmally).
     claimed_sum = jnp.sum(weights * bp_all(merged))
 
     # SP1's prove_jagged_evaluation absorbs the claimed J̃ value before the
     # rounds; its verifier re-absorbs it the same way (fractalyze/sp1-zorch#90).
     transcript = transcript.observe(claimed_sum)
 
-    # Eliminate LSB-first, buffer column n_vars-1 down to 0, as a lax.scan so the
-    # round count (= n_vars = 2·n_d) can be a symbolic export dim. The carry keeps
-    # a FIXED shape (the buffer is bound in place, never shrunk), which scan
-    # requires; bits_i reads `merged` (the round's column is untouched until its
-    # own step, so merged == buf there). Stacked outputs land in scan order
-    # (n_vars-1 .. 0) — same as the unrolled append order.
+    # Eliminate LSB-first via lax.scan (round n_vars-1 down to 0) so the round count
+    # 2·n_d can be a symbolic export dim. The carry is fixed-shape (buffer bound in
+    # place, never shrunk) as scan requires; bits_i reads `merged` since the round's
+    # column is untouched until its own step (merged == buf there).
     def _round(carry: Any, round_idx: Array) -> tuple[Any, tuple[Array, Array]]:
         buf, claim, weights, transcript = carry
         bits_i = merged[:, round_idx]
@@ -490,7 +424,6 @@ __all__ = [
     "merged_prefix_bits",
     "outer_sumcheck_claim",
     "outer_sumcheck",
-    "outer_sumcheck_scan",
     "inner_sumcheck_core",
     "eval_round_core",
     "sample_z_col",

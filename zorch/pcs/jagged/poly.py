@@ -104,15 +104,10 @@ def bp_eval_core(
     t_matrix: Array,
     num_vars: int,
 ) -> Array:
-    """h(z_row, z_index; t_c, t_{c+1}) — 4-state DP fused via lax.fori_loop.
-
-    num_vars is a compile-time constant. The layer loop runs MSB->LSB
-    (layer = num_vars->0); each layer: 4 bits -> eq16 -> [4,4] transition
-    matrix (vmap) -> sv update.
-
-    NOTE: jnp.tile aborts on ZKX field dtypes with an MLIR bit-width assertion,
-    so it is replaced by vmap(lambda tm: eq16 @ tm)(t_res) — mathematically
-    identical.
+    """h(z_row, z_index; t_c, t_{c+1}) — 4-state DP over the BP layers via
+    lax.fori_loop, MSB->LSB. ``num_vars`` (the layer count) may be a traced value
+    so it can be a symbolic export dim. Each layer: 4 bits -> eq16 -> [4,4]
+    transition matrix -> state-vector update.
     """
     dtype = z_row.dtype
     r_dim, i_dim = z_row.shape[0], z_index.shape[0]
@@ -191,17 +186,14 @@ def build_jagged_layout(
 def _offset_bit_tensor(
     col_heights: list[int], l_max: int, n_d: int, dtype: Any
 ) -> Array:
-    """`(l_max+1, n_d)` prefix-sum bit tensor whose canonical int32 limb-0 holds
-    each MSB-first bit, typed as `dtype`.
+    """`(l_max+1, n_d)` MSB-first prefix-sum bit tensor, typed as `dtype`, whose
+    raw int32 limb 0 holds each bit canonically.
 
-    `partial_eval_core` derives its integer scatter offsets by bitcasting the bit
-    tensor to int32 and reading limb 0 — it needs the *canonical* bit there. A
-    Montgomery field dtype encodes `astype(1)` as `R mod p` (limb 0 ≠ 1), so
-    `build_jagged_layout`'s field-valued tensor (correct for the inner sumcheck's
-    field arithmetic) misreads under that raw bitcast. Build a separate tensor
-    by packing the bits into int32 limb 0 (other limbs zero) and bitcasting to
-    the field dtype — its raw bytes give the right offsets regardless of the
-    field's Montgomery-ness. Limb count is derived from the dtype's storage.
+    `partial_eval_core` reads integer offsets by bitcasting limb 0, so it needs
+    the canonical bit there. A Montgomery dtype encodes `astype(1)` as `R mod p`
+    (limb 0 ≠ 1), so `build_jagged_layout`'s field-valued tensor misreads under a
+    raw bitcast; pack the bits straight into int32 limb 0 (other limbs zero) and
+    bitcast, so the bytes decode canonically regardless of Montgomery-ness.
     """
     prefix = build_prefix_sums(col_heights)  # length len+1
     padded = prefix + [prefix[-1]] * (l_max - len(col_heights))  # empty-range pad
@@ -217,13 +209,11 @@ def _offset_bit_tensor(
 def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
     """(l_max+1, n_d) MSB-first bit tensor → (l_max+1,) int32 prefix sums.
 
-    Derives the integers on-device via bitcast (no host numpy), shape-polymorphic
-    in BOTH axes: ``n_d`` (the prefix-bit width) may be a symbolic export dim.
-    EF bitcasts to a trailing limb axis (16B→4 int32), base field does not
-    (4B→1 int32); take canonical limb 0 either way via an ndim test, NOT a reshape
-    (a symbolic-``n_d`` reshape can't infer the -1 limb dim). The MSB-first weights
-    ``2^(n_d-1-k)`` are built with a vectorized ``arange(n_d)`` (``range(n_d)`` is
-    a Python loop that can't iterate a symbolic dim)."""
+    On-device (no host numpy), symbolic-safe in ``n_d``. EF bitcasts to a trailing
+    limb axis (16B→4 int32), base field does not (4B→1 int32); read limb 0 via an
+    ndim test, not a reshape (symbolic ``n_d`` can't infer the -1 limb dim). Weights
+    ``2^(n_d-1-k)`` use a vectorized ``arange(n_d)`` (``range`` can't iterate a
+    symbolic dim)."""
     limbs = jax.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
     bit_vals = limbs[..., 0] if limbs.ndim > col_prefix_sums.ndim else limbs
     powers = jnp.left_shift(jnp.int32(1), n_d - 1 - jnp.arange(n_d, dtype=jnp.int32))
@@ -234,11 +224,10 @@ def _count_leq_sorted(sorted_arr: Array, queries: Array, n_steps: int) -> Array:
     """For each ``q`` in ``queries``: ``#{j : sorted_arr[j] <= q}`` —
     ``searchsorted(side="right")`` over an ascending array.
 
-    A vectorized binary search of a STATIC ``n_steps`` (>= ⌈log2(len+1)⌉), so it is
-    both memory-light (no ``(len(queries), len)`` materialization) and symbolic-safe
-    in ``len(sorted_arr)``: ``jnp.searchsorted`` bakes that length as a constant,
-    which a symbolic column count forbids. Over-provisioned steps are no-ops (once
-    ``lo == hi`` the update is idempotent)."""
+    A vectorized binary search of a STATIC ``n_steps`` (>= ⌈log2(len+1)⌉): memory-
+    light and symbolic-safe in ``len(sorted_arr)`` (``jnp.searchsorted`` bakes that
+    length as a constant, which a symbolic column count forbids). Over-provisioned
+    steps are no-ops (idempotent once ``lo == hi``)."""
     n = sorted_arr.shape[0]
     lo = jnp.zeros(queries.shape, jnp.int32)
     hi = jnp.full(queries.shape, n, jnp.int32)
@@ -257,18 +246,15 @@ def partial_eval_core(
     z_col: Array,
     size: Any,
 ) -> Array:
-    """J̃(z_row, z_col, ·) over the first ``size`` dense indices — shape-polymorphic
-    in the column count ``col_prefix_sums.shape[0]`` AND the prefix-bit width
-    ``n_d = col_prefix_sums.shape[1]``.
+    """J̃(z_row, z_col, ·) over the first ``size`` dense indices, shape-polymorphic
+    in the column count ``col_prefix_sums.shape[0]`` and the prefix-bit width
+    ``n_d = col_prefix_sums.shape[1]``. Output shape ``(size,)``.
 
-    ``size`` is the output domain (the caller's dense area). Materializing only
-    ``[0, size)`` — rather than the full ``2^n_d`` then slicing — is what lets
-    ``n_d`` be a symbolic dim: ``2^n_d`` is exponential in ``n_d`` (not a
-    polynomial export dim), whereas ``n_d`` survives ONLY as the decode bit width
-    (polynomial). Every nonzero indicator entry lands below ``total_area <= size``,
-    so this is byte-identical to the full-domain-then-slice form. See
-    ``partial_eval`` for the gather / searchsorted rationale and the limb
-    convention.  Output shape: ``(size,)``."""
+    Building only ``[0, size)`` (the caller's dense area) rather than the full
+    ``2^n_d`` then slicing is what lets ``n_d`` be symbolic: ``2^n_d`` is
+    exponential in ``n_d``, but over ``size`` it survives only as the decode bit
+    width. Every nonzero indicator entry lands below ``total_area <= size``, so
+    this is byte-identical to the full-domain-then-slice form."""
     dtype = z_row.dtype
     one = jnp.ones([], dtype=dtype)
     n_d = col_prefix_sums.shape[1]
@@ -279,12 +265,10 @@ def partial_eval_core(
 
     col_eq = expand_eq_to_hypercube(z_col, one)  # [2^n_c] (n_c static, a table)
 
-    # c_idx = (#prefix entries ≤ i) − 1 — the owning column, last c with t_c ≤ i
-    # (searchsorted side="right"; duplicate prefix entries from zero-height columns
-    # resolve to the real owner). n_steps = n_c + 1 covers the l_max+1 entries. No
-    # clamp on c_idx — the tail i ≥ t_L lands c_idx at the last index; the t_{c+1}
-    # gather clamps OOB by default and the height mask zeros it (byte-identical to
-    # the clamped form).
+    # c_idx = owning column = (#prefix entries ≤ i) − 1 (searchsorted side="right";
+    # duplicate prefixes from zero-height columns resolve to the real owner). No
+    # clamp: the tail i ≥ t_L lands at the last index, where the default OOB gather
+    # and the height mask zero it — byte-identical to clamping.
     i_idx = jnp.arange(size, dtype=jnp.int32)
     c_idx = _count_leq_sorted(prefix_sums_int, i_idx, z_col.shape[0] + 1) - 1
     t_c = prefix_sums_int[c_idx]
@@ -296,11 +280,8 @@ def partial_eval_core(
 
     # eq(z_row, local) per element instead of a 2^n_r gather table, so n_r can be
     # symbolic (2^n_r is exponential in n_r). row_eq[j] = ∏_k eq(z_row[k],
-    # bit_{n_r-1-k}(j)) — expand_eq_to_hypercube's MSB-first convention (z_row[0] =
-    # MSB). A lax.scan over the n_r bits (field multiplies, no EF reduce_prod) so
-    # the trip count can be symbolic; the product commutes, so scan order is moot.
-    # The mask zeros entries with local >= row capacity, so the low-n_r-bit read
-    # (no clamp) is identical to the table's clamped gather.
+    # bit_{n_r-1-k}(j)), MSB-first per expand_eq_to_hypercube. A lax.scan over the
+    # n_r bits gives a symbolic trip count; the product commutes, so order is moot.
     def _eq_bit(acc: Array, k: Array) -> tuple[Array, None]:
         bit = ((local >> (n_r - 1 - k)) & 1).astype(dtype)
         z_k = z_row[k]
