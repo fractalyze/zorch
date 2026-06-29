@@ -1,0 +1,32 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_library(
+    name = "basis",
+    srcs = [
+        "__init__.py",
+        "basis.py",
+    ],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        "//zorch/pcs/ipa",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
+    name = "ipa_test",
+    size = "small",
+    srcs = ["ipa_test.py"],
+    deps = [
+        ":basis",
+        "//zorch:transcript",
+        "//zorch/pcs/ipa",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
