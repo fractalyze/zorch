@@ -32,27 +32,32 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import jax.numpy as jnp
 from jax import Array, lax
 
+from zorch.pcs.ipa.challenger import IpaChallenger, TranscriptChallenger
 from zorch.pcs.ipa.config import IpaCommitment, IpaProof
 from zorch.pcs.ipa.math import _check_pow2, inner_powers
 from zorch.pcs.ipa.setup import IpaKey
-from zorch.transcript import Transcript, sample_challenge
+from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
 
+_Ch = TypeVar("_Ch", bound=IpaChallenger)
+
 
 @dataclass(frozen=True)
 class IpaProverData:
-    """Retained witness from `IpaProver.commit`: the coefficient vectors, kept to
-    drive the fold in `open`. Holds references to the (immutable) inputs — no
+    """Retained witness from `IpaProver.commit`: the coefficient vectors (to drive
+    the fold in `open`) and the commitments (the opening's Fiat-Shamir binds them
+    as part of the statement). Holds references to the (immutable) inputs — no
     polynomial data is copied."""
 
     coeffs: tuple[Array, ...]
+    commitments: Array  # G1 affine [K] — P_j per poly, bound into the FS seed
 
 
 @dataclass(frozen=True)
@@ -61,9 +66,12 @@ class IpaProver:
 
     def commit(self, polys: Sequence[Array]) -> tuple[IpaCommitment, IpaProverData]:
         """Pedersen-commit a batch of coefficient vectors: `P_j = ⟨a_j, G⟩`.
-        Returns the stacked G1 commitments and the coeffs as prover data."""
-        commitments = [lax.msm(c, self.key.basis[: c.shape[0]]) for c in polys]
-        return jnp.stack(commitments), IpaProverData(tuple(polys))
+        Returns the stacked G1 commitments and the prover data (coeffs plus the
+        commitments, which the opening's Fiat-Shamir binds)."""
+        commitments = jnp.stack(
+            [lax.msm(c, self.key.basis[: c.shape[0]]) for c in polys]
+        )
+        return commitments, IpaProverData(tuple(polys), commitments)
 
     def open(
         self,
@@ -72,26 +80,32 @@ class IpaProver:
         transcript: Transcript,
     ) -> tuple[Array, list[IpaProof], Transcript]:
         """Open poly `j` at `points[j]`. Returns `(values, proofs, transcript)`
-        with `values[j] = p_j(points[j])` and one `IpaProof` per opening, the
-        transcript threaded through every round's challenge."""
+        with `values[j] = p_j(points[j])` and one `IpaProof` per opening. Wraps the
+        transcript in the default `TranscriptChallenger` (the zorch-native FS) and
+        threads it through every opening; a byte-exact consumer drives `_open_one`
+        with its own `IpaChallenger` instead."""
         if len(prover_data.coeffs) != len(points):
             raise ValueError(
                 f"batch mismatch: {len(prover_data.coeffs)} polys vs "
                 f"{len(points)} points"
             )
+        fs = TranscriptChallenger(transcript, prover_data.coeffs[0].dtype)
         values, proofs = [], []
-        t = transcript
-        for coeffs, x in zip(prover_data.coeffs, points):
-            t, value, proof = _open_one(self.key, coeffs, x, t)
+        for commitment, coeffs, x in zip(
+            prover_data.commitments, prover_data.coeffs, points
+        ):
+            fs, value, proof = _open_one(self.key, commitment, coeffs, x, fs)
             values.append(value)
             proofs.append(proof)
-        return jnp.stack(values), proofs, t
+        return jnp.stack(values), proofs, fs.transcript
 
 
 def _open_one(
-    key: IpaKey, coeffs: Array, x: Array, transcript: Transcript
-) -> tuple[Transcript, Array, IpaProof]:
-    """Fold one (poly, point) to a proof. Returns `(transcript, value, proof)`."""
+    key: IpaKey, commitment: Array, coeffs: Array, x: Array, fs: _Ch
+) -> tuple[_Ch, Array, IpaProof]:
+    """Fold one (poly, point) to a proof, deriving challenges through the injected
+    `fs`. Returns `(challenger, value, proof)`. Challenger-generic so an
+    accumulation consumer can drive it with an arkworks-faithful `IpaChallenger`."""
     n = coeffs.shape[0]
     k = _check_pow2(n)
     affine = key.basis.dtype  # the point representation msm consumes
@@ -102,8 +116,8 @@ def _open_one(
     g = key.basis[:n]
     value = jnp.sum(a * b)  # ⟨a, b⟩ = p(x)
 
+    fs = fs.seed(commitment, x, value)  # bind the opening statement (P, x, v)
     ls, rs = [], []
-    t = transcript
     for _ in range(k):
         m = a.shape[0] // 2
         a_lo, a_hi = a[:m], a[m:]
@@ -120,7 +134,7 @@ def _open_one(
             jnp.concatenate([a_hi, jnp.sum(a_hi * b_lo)[None]]),
             jnp.concatenate([g_lo, key.u[None]]),
         )
-        t, uj = sample_challenge(t.observe(jnp.stack([cl, cr])), coeffs.dtype)
+        fs, uj = fs.challenge(cl, cr)
         uj_inv = one / uj
 
         a = a_lo * uj + a_hi * uj_inv
@@ -129,7 +143,7 @@ def _open_one(
         ls.append(cl)
         rs.append(cr)
 
-    return t, value, IpaProof(jnp.stack(ls), jnp.stack(rs), a[0])
+    return fs, value, IpaProof(jnp.stack(ls), jnp.stack(rs), a[0])
 
 
 if TYPE_CHECKING:

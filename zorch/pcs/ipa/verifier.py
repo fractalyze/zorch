@@ -25,18 +25,21 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import jax.numpy as jnp
 from jax import Array, lax
 
+from zorch.pcs.ipa.challenger import IpaChallenger, TranscriptChallenger
 from zorch.pcs.ipa.config import IpaCommitment, IpaProof
 from zorch.pcs.ipa.math import challenge_vector, eval_challenge_poly
 from zorch.pcs.ipa.setup import IpaKey
-from zorch.transcript import Transcript, sample_challenge
+from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
+
+_Ch = TypeVar("_Ch", bound=IpaChallenger)
 
 
 @dataclass(frozen=True)
@@ -63,18 +66,20 @@ def reduce_opening(
     point: Array,
     value: Array,
     proof: IpaProof,
-    transcript: Transcript,
-) -> tuple[Transcript, IpaReducedClaim]:
+    fs: _Ch,
+) -> tuple[_Ch, IpaReducedClaim]:
     """The O(log n) half of verification for one opening: replay challenges, fold
     the commitment to `Q`, and evaluate `b = g(point)`. Touches no size-`n` MSM —
-    the seam an accumulation scheme reuses to defer the expensive check."""
+    the seam an accumulation scheme reuses to defer the expensive check. Derives
+    challenges through the injected `fs` (challenger-generic), so an accumulation
+    consumer drives it with the same arkworks-faithful FS as its prover."""
     k = proof.l.shape[0]
     one = jnp.ones((), dtype=value.dtype)
 
-    t = transcript
+    fs = fs.seed(commitment, point, value)
     us, us_inv = [], []
     for j in range(k):
-        t, uj = sample_challenge(t.observe(jnp.stack([proof.l[j], proof.r[j]])), value.dtype)
+        fs, uj = fs.challenge(proof.l[j], proof.r[j])
         us.append(uj)
         us_inv.append(one / uj)
     u = jnp.stack(us)
@@ -89,7 +94,7 @@ def reduce_opening(
     combined = lax.msm(jnp.stack(scalars), jnp.stack(pts))
 
     b = eval_challenge_poly(u, u_inv, point)
-    return t, IpaReducedClaim(combined, u, u_inv, proof.a, b)
+    return fs, IpaReducedClaim(combined, u, u_inv, proof.a, b)
 
 
 def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
@@ -99,9 +104,7 @@ def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
     path."""
     s = challenge_vector(claim.u, claim.u_inv)
     g_final = lax.msm(s, key.basis[: s.shape[0]])
-    rhs = lax.msm(
-        jnp.stack([claim.a, claim.a * claim.b]), jnp.stack([g_final, key.u])
-    )
+    rhs = lax.msm(jnp.stack([claim.a, claim.a * claim.b]), jnp.stack([g_final, key.u]))
     return jnp.all(claim.combined == rhs)
 
 
@@ -118,19 +121,21 @@ class IpaVerifier:
         transcript: Transcript,
     ) -> tuple[Array, Transcript]:
         """Check each opening: reduce to `Q` (cheap), then settle the deferred
-        MSM (expensive). Returns `(all_ok, transcript)`."""
+        MSM (expensive). Returns `(all_ok, transcript)`. Wraps the transcript in the
+        default `TranscriptChallenger` (zorch-native FS); a byte-exact consumer
+        drives `reduce_opening` with its own `IpaChallenger`."""
         k = commitment.shape[0]
         if not len(points) == values.shape[0] == len(proof) == k:
             raise ValueError(
                 f"batch mismatch: commitment={k}, points={len(points)}, "
                 f"values={values.shape[0]}, proof={len(proof)}"
             )
+        fs = TranscriptChallenger(transcript, values.dtype)
         oks = []
-        t = transcript
         for c, x, v, pf in zip(commitment, points, values, proof):
-            t, claim = reduce_opening(self.key, c, x, v, pf, t)
+            fs, claim = reduce_opening(self.key, c, x, v, pf, fs)
             oks.append(settle(self.key, claim))
-        return jnp.all(jnp.stack(oks)), t
+        return jnp.all(jnp.stack(oks)), fs.transcript
 
 
 if TYPE_CHECKING:

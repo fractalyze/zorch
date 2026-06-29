@@ -7,6 +7,7 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from jax import Array
 
+from zorch.pcs.ipa.challenger import TranscriptChallenger
 from zorch.pcs.ipa.config import IpaProof
 from zorch.pcs.ipa.math import (
     _check_pow2,
@@ -116,13 +117,29 @@ class IpaRoundTripTest(parameterized.TestCase):
     def test_reduced_claim_defers_the_msm(
         self, sf: type, curve: basis.ToyCurve
     ) -> None:
-        # reduce_opening reaches the same accept verdict as verify when its
-        # deferred claim is settled — the accumulation reuse contract.
+        # reduce_opening, driven by an injected IpaChallenger, reaches the same
+        # accept verdict as verify once its deferred claim is settled — the
+        # accumulation reuse contract (an arkworks consumer swaps in its own
+        # challenger here).
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         _, claim = reduce_opening(
-            verifier.key, commitment[0], x, values[0], proof[0], _transcript(sf)
+            verifier.key,
+            commitment[0],
+            x,
+            values[0],
+            proof[0],
+            TranscriptChallenger(_transcript(sf), sf),
         )
         self.assertTrue(bool(settle(verifier.key, claim)))
+
+    @parameterized.named_parameters(*_CURVES)
+    def test_wrong_commitment_rejected(self, sf: type, curve: basis.ToyCurve) -> None:
+        # The Fiat-Shamir now binds the commitment: verifying against a different
+        # one rejects (statement binding the bare fold lacked).
+        verifier, x, commitment, values, proof = self._commit_open(sf, curve)
+        bad = jnp.stack([verifier.key.u])  # U as a stand-in P ≠ the real commitment
+        ok, _ = verifier.verify(bad, [x], values, proof, _transcript(sf))
+        self.assertFalse(bool(ok))
 
 
 class IpaBatchValidationTest(absltest.TestCase):
@@ -132,8 +149,12 @@ class IpaBatchValidationTest(absltest.TestCase):
         key = basis.toy_key(basis.BN254, n=4)
         coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
         x = jnp.array(7, dtype=sf)
+        # commitments is never read — open raises on the length check first.
+        dummy = jnp.zeros((1,), dtype=basis.BN254.g1)
         with self.assertRaises(ValueError):
-            IpaProver(key).open(IpaProverData((coeffs,)), [x, x], _transcript(sf))
+            IpaProver(key).open(
+                IpaProverData((coeffs,), dummy), [x, x], _transcript(sf)
+            )
 
 
 if __name__ == "__main__":

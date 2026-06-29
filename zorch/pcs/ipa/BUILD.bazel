@@ -5,6 +5,7 @@ py_library(
     name = "ipa",
     srcs = [
         "__init__.py",
+        "challenger.py",
         "config.py",
         "math.py",
         "prover.py",
