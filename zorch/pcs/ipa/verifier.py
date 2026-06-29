@@ -5,7 +5,7 @@ The verifier's work divides cleanly (study note §1.4/§2.3):
 
 - **cheap (O(log n))** — replay the round challenges from `L_j, R_j`, fold the
   commitment to the left-hand point
-  `Q = P + v·U + Σ_j (u_j²·L_j + u_j⁻²·R_j)`, and evaluate `b = g(x)` from the
+  `Q = P + v·U + Σ_j (u_j·L_j + u_j⁻¹·R_j)`, and evaluate `b = h(x)` from the
   challenges alone. `reduce_opening` does exactly this and returns an
   `IpaReducedClaim` — the deferred statement "`Q == a·G_final + a·b·U` where
   `G_final = ⟨s, G⟩`", carried as its succinct witness (the challenges) without
@@ -17,7 +17,7 @@ The verifier's work divides cleanly (study note §1.4/§2.3):
   private helper.
 
 The point combinations are `lax.msm`s (GPU-only on this stack); the field-only
-pieces (`b = g(x)`, the size-`n` `s`) come from `math.py`, which a CPU test
+pieces (`b = h(x)`, the size-`n` `s`) come from `math.py`, which a CPU test
 exercises without the EC path.
 """
 
@@ -46,18 +46,17 @@ _Ch = TypeVar("_Ch", bound=IpaChallenger)
 class IpaReducedClaim:
     """The cheap reduction of one IPA opening — everything but the size-`n` MSM.
 
-    `combined` is the folded left-hand point `Q`; `u`/`u_inv` are the round
-    challenges and their inverses (the succinct representation of the challenge
-    polynomial `g`, and of `s` via `math.challenge_vector`); `a` is the proof's
-    collapsed coefficient; `b` is `g(x)`, the collapsed evaluation. The deferred
-    statement is `combined == a·⟨s, G⟩ + a·b·U`; settling it needs only the one
-    MSM `⟨s, G⟩`, which `verify` runs and an accumulator defers."""
+    `combined` is the folded left-hand point `Q`; `u` are the round challenges
+    (the succinct representation of the check polynomial `h`, and of `s` via
+    `math.challenge_vector`); `a` is the proof's collapsed coefficient; `b` is
+    `h(x)`, the collapsed evaluation. The deferred statement is
+    `combined == a·⟨s, G⟩ + a·b·U`; settling it needs only the one MSM `⟨s, G⟩`,
+    which `verify` runs and an accumulator defers."""
 
-    combined: Array  # G1 affine — Q = P + v·U + Σ (u²·L + u⁻²·R)
+    combined: Array  # G1 affine — Q = P + v·U + Σ (u·L + u⁻¹·R)
     u: Array  # scalar field [k] — round challenges
-    u_inv: Array  # scalar field [k] — their inverses
     a: Array  # scalar field — collapsed coefficient (from the proof)
-    b: Array  # scalar field — g(x), the collapsed evaluation
+    b: Array  # scalar field — h(x), the collapsed evaluation
 
 
 def reduce_opening(
@@ -69,7 +68,7 @@ def reduce_opening(
     fs: _Ch,
 ) -> tuple[_Ch, IpaReducedClaim]:
     """The O(log n) half of verification for one opening: replay challenges, fold
-    the commitment to `Q`, and evaluate `b = g(point)`. Touches no size-`n` MSM —
+    the commitment to `Q`, and evaluate `b = h(point)`. Touches no size-`n` MSM —
     the seam an accumulation scheme reuses to defer the expensive check. Derives
     challenges through the injected `fs` (challenger-generic), so an accumulation
     consumer drives it with the same arkworks-faithful FS as its prover."""
@@ -85,16 +84,16 @@ def reduce_opening(
     u = jnp.stack(us)
     u_inv = jnp.stack(us_inv)
 
-    # Q = P + v·U + Σ_j (u_j²·L_j + u_j⁻²·R_j), one MSM over O(log n) points.
+    # Q = P + v·U + Σ_j (u_j·L_j + u_j⁻¹·R_j), one MSM over O(log n) points.
     scalars = [one, value]
     pts = [commitment, key.u]
     for j in range(k):
-        scalars += [u[j] * u[j], u_inv[j] * u_inv[j]]
+        scalars += [u[j], u_inv[j]]
         pts += [proof.l[j], proof.r[j]]
     combined = lax.msm(jnp.stack(scalars), jnp.stack(pts))
 
-    b = eval_challenge_poly(u, u_inv, point)
-    return fs, IpaReducedClaim(combined, u, u_inv, proof.a, b)
+    b = eval_challenge_poly(u, point)
+    return fs, IpaReducedClaim(combined, u, proof.a, b)
 
 
 def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
@@ -102,7 +101,7 @@ def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
     and the final point identity `Q == a·G_final + a·b·U`. Returns a scalar bool.
     Factored out so `verify` and an accumulation decider settle by one code
     path."""
-    s = challenge_vector(claim.u, claim.u_inv)
+    s = challenge_vector(claim.u)
     g_final = lax.msm(s, key.basis[: s.shape[0]])
     rhs = lax.msm(jnp.stack([claim.a, claim.a * claim.b]), jnp.stack([g_final, key.u]))
     return jnp.all(claim.combined == rhs)

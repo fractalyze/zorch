@@ -11,13 +11,17 @@ of the `k = log₂ n` rounds sends two cross-term group elements
 absorbs them into the Fiat-Shamir transcript, samples a challenge `u_j`, and folds
 all three vectors in half
 
-    a ← a_lo·u_j   + a_hi·u_j⁻¹
-    b ← b_lo·u_j⁻¹ + b_hi·u_j
-    G ← G_lo·u_j⁻¹ + G_hi·u_j
+    a ← a_lo + a_hi·u_j⁻¹
+    b ← b_lo + b_hi·u_j
+    G ← G_lo + G_hi·u_j
 
-until each collapses to a single element. Each cross term is one `lax.msm` (the U
-term folded in as one extra (scalar, point) pair), so the only raw EC arithmetic
-is the basis fold `G_lo·u⁻¹ + G_hi·u` — vectorized scalar-mul and point-add, with
+This is arkworks `ipa_pc`'s no-inverse fold (the low half carried unscaled, the
+high half scaled by `u_j`), the convention the check polynomial
+`h(X) = ∏(1 + u_j·X^…)` and the decider's final-key MSM are written against (see
+`math.py` and zorch#339). Folding continues until each vector collapses to a
+single element. Each cross term is one `lax.msm` (the U term folded in as one
+extra (scalar, point) pair), so the only raw EC arithmetic is the basis fold
+`G_lo + G_hi·u` — vectorized scalar-mul and point-add, with
 the result converted back to affine each round to keep the point representation
 (and thus the next round's `lax.msm` input) stable. The fold is a Python `for`
 over the static round count, so each round lowers to one fused kernel (the same
@@ -137,9 +141,13 @@ def _open_one(
         fs, uj = fs.challenge(cl, cr)
         uj_inv = one / uj
 
-        a = a_lo * uj + a_hi * uj_inv
-        b = b_lo * uj_inv + b_hi * uj
-        g = lax.convert_element_type(g_lo * uj_inv + g_hi * uj, affine)
+        a = a_lo + a_hi * uj_inv
+        b = b_lo + b_hi * uj
+        # Basis fold G_lo + u·G_hi: the low half is unscaled, but scalar-mul
+        # widens points to the jacobian accumulator, so lift it via `· one` to
+        # match `g_hi · uj`'s representation before the point-add, then narrow the
+        # folded basis back to affine for the next round's msm input.
+        g = lax.convert_element_type(g_lo * one + g_hi * uj, affine)
         ls.append(cl)
         rs.append(cr)
 

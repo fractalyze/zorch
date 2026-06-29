@@ -40,26 +40,32 @@ class ChallengeMathTest(absltest.TestCase):
     def test_challenge_poly_matches_explicit_s(self) -> None:
         # eval_challenge_poly(u, x) is the succinct read of ⟨challenge_vector, b⟩.
         u = jnp.array([2, 3, 5], dtype=KB)  # k = 3 → n = 8
-        u_inv = jnp.array(1, dtype=KB) / u
         x = jnp.array(7, dtype=KB)
-        s = challenge_vector(u, u_inv)
+        s = challenge_vector(u)
         self.assertEqual(s.shape, (8,))
         explicit = jnp.sum(s * inner_powers(x, 8))
-        self.assertEqual(int(eval_challenge_poly(u, u_inv, x)), int(explicit))
+        self.assertEqual(int(eval_challenge_poly(u, x)), int(explicit))
 
     def test_challenge_vector_is_the_fold_inverse(self) -> None:
         # Folding any vector by the prover's basis recurrence
-        # (V ← V_lo·u⁻¹ + V_hi·u) collapses to ⟨s, V⟩ — the property that makes
+        # (V ← V_lo + V_hi·u) collapses to ⟨s, V⟩ — the property that makes
         # G_final = ⟨s, G⟩ reproduce the prover's folded basis.
         u = jnp.array([2, 3, 5], dtype=KB)
-        u_inv = jnp.array(1, dtype=KB) / u
         v = jnp.arange(1, 9, dtype=KB)
         folded = v
         for j in range(3):
             m = folded.shape[0] // 2
-            folded = folded[:m] * u_inv[j] + folded[m:] * u[j]
+            folded = folded[:m] + folded[m:] * u[j]
         self.assertEqual(folded.shape, (1,))
-        self.assertEqual(int(folded[0]), int(jnp.sum(challenge_vector(u, u_inv) * v)))
+        self.assertEqual(int(folded[0]), int(jnp.sum(challenge_vector(u) * v)))
+
+    def test_challenge_vector_matches_arkworks_h_coeffs(self) -> None:
+        # The dense coeffs are arkworks' SuccinctCheckPolynomial::compute_coeffs of
+        # h(X) = ∏(1 + u_j·X^{2^{k-1-j}}) (no inverses) — the descending-block layout
+        # the decider's final-key MSM byte-matches (zorch#339 W4). For k=2,
+        # h(X) = (1 + u0·X²)(1 + u1·X) → [1, u1, u0, u0·u1].
+        u = jnp.array([2, 3], dtype=KB)
+        self.assertEqual([int(c) for c in challenge_vector(u)], [1, 3, 2, 6])
 
 
 # --- full commit -> open -> verify (GPU: lax.msm is GPU-only) -------------------

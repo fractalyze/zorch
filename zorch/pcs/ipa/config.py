@@ -31,7 +31,7 @@ class IpaProof:
     `l`, `r` are the round cross terms `L_j`, `R_j` (bn254 G1 affine, `[k]` each
     for `k = log₂ n` rounds); `a` is the single field scalar the coefficient
     vector collapses to after the last fold. The verifier needs no folded `b`
-    scalar in the proof — it recomputes `b = g(x)` from the round challenges in
+    scalar in the proof — it recomputes `b = h(x)` from the round challenges in
     O(log n) (see `math.eval_challenge_poly`). A registered pytree so the proof
     crosses the `open`/`verify` `@jit` boundary."""
 
