@@ -30,11 +30,15 @@ from zorch.transcript import Transcript, sample_challenge
 
 class IpaChallenger(Protocol):
     """Derives the IPA fold challenges. `seed` binds the opening statement
-    `(commitment, point, value)` before the rounds; `challenge` absorbs a round's
-    cross terms `l`, `r` and returns the fold challenge. Both return the advanced
+    `(commitment, point, value)` before the rounds and returns the *seed challenge*
+    ξ₀, which scales the inner-product generator into `h' = U·ξ₀` (arkworks
+    `ipa_pc`'s `h_prime = svk.h·ξ₀`); `challenge` absorbs a round's cross terms
+    `l`, `r` and returns the fold challenge. Both also return the advanced
     challenger (threaded functionally, like `Transcript`)."""
 
-    def seed(self, commitment: Array, point: Array, value: Array) -> Self: ...
+    def seed(
+        self, commitment: Array, point: Array, value: Array
+    ) -> tuple[Self, Array]: ...
 
     def challenge(self, l: Array, r: Array) -> tuple[Self, Array]: ...
 
@@ -42,19 +46,20 @@ class IpaChallenger(Protocol):
 @dataclass(frozen=True)
 class TranscriptChallenger:
     """The default `IpaChallenger`: zorch's own running `DuplexTranscript`. `seed`
-    binds the statement (closing the gap that the bare fold left it unbound);
-    `challenge` observes the round's cross terms and squeezes one `dtype`
-    challenge — byte-for-byte the fold's prior per-round Fiat-Shamir, now with the
-    statement mixed in. This is the zorch-native FS, NOT arkworks-byte-exact."""
+    binds the statement `(commitment, point, value)` and squeezes the seed
+    challenge ξ₀ (the inner-product generator scale `h' = U·ξ₀`); `challenge`
+    observes the round's cross terms and squeezes one `dtype` challenge. This is
+    the zorch-native FS, NOT arkworks-byte-exact."""
 
     transcript: Transcript
     dtype: Any  # the challenge field (a zk_dtypes scalar-field dtype)
 
     def seed(
         self, commitment: Array, point: Array, value: Array
-    ) -> TranscriptChallenger:
+    ) -> tuple[TranscriptChallenger, Array]:
         t = self.transcript.observe(commitment).observe(jnp.stack([point, value]))
-        return TranscriptChallenger(t, self.dtype)
+        t, xi0 = sample_challenge(t, self.dtype)
+        return TranscriptChallenger(t, self.dtype), xi0
 
     def challenge(self, l: Array, r: Array) -> tuple[TranscriptChallenger, Array]:
         t, u = sample_challenge(self.transcript.observe(jnp.stack([l, r])), self.dtype)

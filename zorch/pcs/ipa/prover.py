@@ -2,11 +2,13 @@
 """IPA prover: commit and open by log-n basis folding.
 
 `commit` is the Pedersen MSM `P = ⟨a, G⟩ = msm(coeffs, basis)`. `open` proves
-`p(x) = ⟨a, b⟩` for `b = (1, x, …, x^{n-1})` by the Bulletproofs/Halo fold: each
-of the `k = log₂ n` rounds sends two cross-term group elements
+`p(x) = ⟨a, b⟩` for `b = (1, x, …, x^{n-1})` by the Bulletproofs/Halo fold. The
+opening first squeezes a seed challenge ξ₀ binding `(P, x, v)` and scales the
+inner-product generator to `h' = U·ξ₀` (arkworks `ipa_pc`'s `h_prime`); each of
+the `k = log₂ n` rounds then sends two cross-term group elements
 
-    L_j = ⟨a_lo, G_hi⟩ + ⟨a_lo, b_hi⟩·U
-    R_j = ⟨a_hi, G_lo⟩ + ⟨a_hi, b_lo⟩·U
+    L_j = ⟨a_hi, G_lo⟩ + ⟨a_hi, b_lo⟩·h'
+    R_j = ⟨a_lo, G_hi⟩ + ⟨a_lo, b_hi⟩·h'
 
 absorbs them into the Fiat-Shamir transcript, samples a challenge `u_j`, and folds
 all three vectors in half
@@ -15,17 +17,18 @@ all three vectors in half
     b ← b_lo + b_hi·u_j
     G ← G_lo + G_hi·u_j
 
-This is arkworks `ipa_pc`'s no-inverse fold (the low half carried unscaled, the
-high half scaled by `u_j`), the convention the check polynomial
-`h(X) = ∏(1 + u_j·X^…)` and the decider's final-key MSM are written against (see
-`math.py` and zorch#339). Folding continues until each vector collapses to a
-single element. Each cross term is one `lax.msm` (the U term folded in as one
-extra (scalar, point) pair), so the only raw EC arithmetic is the basis fold
-`G_lo + G_hi·u` — vectorized scalar-mul and point-add, with
-the result converted back to affine each round to keep the point representation
-(and thus the next round's `lax.msm` input) stable. The fold is a Python `for`
-over the static round count, so each round lowers to one fused kernel (the same
-shape as the FRI prover's fold loop), not a `lax.scan` carry.
+The L/R labeling (`L` pairs `a_hi` with `G_lo`) and the no-inverse fold (the low
+half carried unscaled, the high half scaled by `u_j`) are arkworks `ipa_pc`'s
+convention — the same the check polynomial `h(X) = ∏(1 + u_j·X^…)` and the
+decider's final-key MSM are written against (see `math.py` and zorch#339).
+Folding continues until each vector collapses to a single element. Each cross
+term is one `lax.msm` (the `h'` term folded in as one extra (scalar, point) pair),
+so the only raw EC arithmetic is the basis fold `G_lo + G_hi·u` — vectorized
+scalar-mul and point-add, with the result converted back to affine each round to
+keep the point representation (and thus the next round's `lax.msm` input) stable.
+The fold is a Python `for` over the static round count, so each round lowers to
+one fused kernel (the same shape as the FRI prover's fold loop), not a `lax.scan`
+carry.
 
 Scope: one base-field polynomial per opening, power-of-two length, no hiding
 (`U`-blinding omitted, matching the study note). A demonstration of the seam, not
@@ -120,7 +123,11 @@ def _open_one(
     g = key.basis[:n]
     value = jnp.sum(a * b)  # ⟨a, b⟩ = p(x)
 
-    fs = fs.seed(commitment, x, value)  # bind the opening statement (P, x, v)
+    # Seed ξ₀ binds the statement (P, x, v) and scales the inner-product generator
+    # to h' = U·ξ₀ (arkworks h_prime). The cross-term inner products absorb the ξ₀
+    # factor (one extra (scalar, point) pair `(⟨·,·⟩·ξ₀, U)`) rather than forming
+    # h' as its own point.
+    fs, xi0 = fs.seed(commitment, x, value)
     ls, rs = [], []
     for _ in range(k):
         m = a.shape[0] // 2
@@ -128,17 +135,17 @@ def _open_one(
         b_lo, b_hi = b[:m], b[m:]
         g_lo, g_hi = g[:m], g[m:]
 
-        # Each cross term: an MSM over the half-basis with the inner-product
-        # value folded in as one extra (scalar, point) pair against U.
-        cl = lax.msm(
-            jnp.concatenate([a_lo, jnp.sum(a_lo * b_hi)[None]]),
-            jnp.concatenate([g_hi, key.u[None]]),
-        )
-        cr = lax.msm(
-            jnp.concatenate([a_hi, jnp.sum(a_hi * b_lo)[None]]),
+        # arkworks L/R: L pairs a_hi with G_lo, R pairs a_lo with G_hi; the
+        # inner-product cross term rides h' = U·ξ₀ (the ·ξ₀ on the U scalar).
+        lj = lax.msm(
+            jnp.concatenate([a_hi, (jnp.sum(a_hi * b_lo) * xi0)[None]]),
             jnp.concatenate([g_lo, key.u[None]]),
         )
-        fs, uj = fs.challenge(cl, cr)
+        rj = lax.msm(
+            jnp.concatenate([a_lo, (jnp.sum(a_lo * b_hi) * xi0)[None]]),
+            jnp.concatenate([g_hi, key.u[None]]),
+        )
+        fs, uj = fs.challenge(lj, rj)
         uj_inv = one / uj
 
         a = a_lo + a_hi * uj_inv
@@ -148,8 +155,8 @@ def _open_one(
         # match `g_hi · uj`'s representation before the point-add, then narrow the
         # folded basis back to affine for the next round's msm input.
         g = lax.convert_element_type(g_lo * one + g_hi * uj, affine)
-        ls.append(cl)
-        rs.append(cr)
+        ls.append(lj)
+        rs.append(rj)
 
     return fs, value, IpaProof(jnp.stack(ls), jnp.stack(rs), a[0])
 

@@ -5,11 +5,12 @@ The verifier's work divides cleanly (study note §1.4/§2.3):
 
 - **cheap (O(log n))** — replay the round challenges from `L_j, R_j`, fold the
   commitment to the left-hand point
-  `Q = P + v·U + Σ_j (u_j·L_j + u_j⁻¹·R_j)`, and evaluate `b = h(x)` from the
-  challenges alone. `reduce_opening` does exactly this and returns an
-  `IpaReducedClaim` — the deferred statement "`Q == a·G_final + a·b·U` where
-  `G_final = ⟨s, G⟩`", carried as its succinct witness (the challenges) without
-  ever touching the size-`n` basis.
+  `Q = P + v·h' + Σ_j (u_j⁻¹·L_j + u_j·R_j)` (h' = U·ξ₀, the seed-scaled
+  inner-product generator), and evaluate `b = h(x)` from the challenges alone.
+  `reduce_opening` does exactly this and returns an `IpaReducedClaim` — the
+  deferred statement "`Q == a·G_final + a·b·h'` where `G_final = ⟨s, G⟩`", carried
+  as its succinct witness (the challenges + ξ₀) without ever touching the size-`n`
+  basis.
 - **expensive (O(n))** — the one MSM `G_final = ⟨s, G⟩`. `verify` pays it inline
   to settle a single opening; an accumulation scheme instead *keeps* the
   `IpaReducedClaim`, folds many of them, and pays one MSM at the very end (the
@@ -48,13 +49,15 @@ class IpaReducedClaim:
 
     `combined` is the folded left-hand point `Q`; `u` are the round challenges
     (the succinct representation of the check polynomial `h`, and of `s` via
-    `math.challenge_vector`); `a` is the proof's collapsed coefficient; `b` is
-    `h(x)`, the collapsed evaluation. The deferred statement is
-    `combined == a·⟨s, G⟩ + a·b·U`; settling it needs only the one MSM `⟨s, G⟩`,
+    `math.challenge_vector`); `seed` is ξ₀, scaling the inner-product generator to
+    `h' = U·ξ₀`; `a` is the proof's collapsed coefficient; `b` is `h(x)`, the
+    collapsed evaluation. The deferred statement is
+    `combined == a·⟨s, G⟩ + a·b·h'`; settling it needs only the one MSM `⟨s, G⟩`,
     which `verify` runs and an accumulator defers."""
 
-    combined: Array  # G1 affine — Q = P + v·U + Σ (u·L + u⁻¹·R)
+    combined: Array  # G1 affine — Q = P + v·h' + Σ (u⁻¹·L + u·R)
     u: Array  # scalar field [k] — round challenges
+    seed: Array  # scalar field — ξ₀, the inner-product generator scale (h' = U·ξ₀)
     a: Array  # scalar field — collapsed coefficient (from the proof)
     b: Array  # scalar field — h(x), the collapsed evaluation
 
@@ -75,35 +78,45 @@ def reduce_opening(
     k = proof.l.shape[0]
     one = jnp.ones((), dtype=value.dtype)
 
-    fs = fs.seed(commitment, point, value)
-    us, us_inv = [], []
+    fs, xi0 = fs.seed(commitment, point, value)
+    us = []
     for j in range(k):
         fs, uj = fs.challenge(proof.l[j], proof.r[j])
         us.append(uj)
-        us_inv.append(one / uj)
     u = jnp.stack(us)
-    u_inv = jnp.stack(us_inv)
+    u_inv = one / u
 
-    # Q = P + v·U + Σ_j (u_j·L_j + u_j⁻¹·R_j), one MSM over O(log n) points.
-    scalars = [one, value]
-    pts = [commitment, key.u]
-    for j in range(k):
-        scalars += [u[j], u_inv[j]]
-        pts += [proof.l[j], proof.r[j]]
-    combined = lax.msm(jnp.stack(scalars), jnp.stack(pts))
+    # Q = P + v·h' + Σ_j (u_j⁻¹·L_j + u_j·R_j), h' = U·ξ₀, one MSM over O(log n)
+    # points. The v·h' term rides U with the ξ₀ factor on its scalar; arkworks'
+    # L/R labeling puts u⁻¹ on L (a_hi·G_lo) and u on R (a_lo·G_hi). Interleave the
+    # per-round (u⁻¹, u) and (L, R) with static-shape ops, no per-element gather.
+    scalars = jnp.concatenate(
+        [jnp.stack([one, value * xi0]), jnp.stack([u_inv, u], axis=1).reshape(-1)]
+    )
+    pts = jnp.concatenate(
+        [
+            jnp.stack([commitment, key.u]),
+            jnp.stack([proof.l, proof.r], axis=1).reshape(-1),
+        ]
+    )
+    combined = lax.msm(scalars, pts)
 
     b = eval_challenge_poly(u, point)
-    return fs, IpaReducedClaim(combined, u, proof.a, b)
+    return fs, IpaReducedClaim(combined, u, xi0, proof.a, b)
 
 
 def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
     """Pay one reduced claim's deferred debt: the size-`n` MSM `G_final = ⟨s, G⟩`
-    and the final point identity `Q == a·G_final + a·b·U`. Returns a scalar bool.
-    Factored out so `verify` and an accumulation decider settle by one code
-    path."""
+    and the final point identity `Q == a·G_final + a·b·h'` (h' = U·ξ₀). Returns a
+    scalar bool. Factored out so `verify` and an accumulation decider settle by one
+    code path."""
     s = challenge_vector(claim.u)
     g_final = lax.msm(s, key.basis[: s.shape[0]])
-    rhs = lax.msm(jnp.stack([claim.a, claim.a * claim.b]), jnp.stack([g_final, key.u]))
+    # rhs = a·G_final + a·b·h', h' = U·ξ₀ → the U scalar carries the ξ₀ factor.
+    rhs = lax.msm(
+        jnp.stack([claim.a, claim.a * claim.b * claim.seed]),
+        jnp.stack([g_final, key.u]),
+    )
     return jnp.all(claim.combined == rhs)
 
 
