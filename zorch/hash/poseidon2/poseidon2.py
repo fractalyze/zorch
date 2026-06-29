@@ -115,6 +115,22 @@ class Poseidon2:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         return _sponge_hash_body(self, input, rate, out)
 
+    def linear_hash(self, input: Array, rate: int, out: int) -> Array:
+        """pil2's CHAINED linear hash as ONE `poseidon2_sponge_hash` region
+        (chained=1): each block zero-pads its partial tail and chains the prior
+        block's digest (state[:out]) through the capacity lanes [rate:rate+out],
+        instead of the overwrite sponge's carry-forward. Requires
+        rate + out == width; byte-identical to zisk-zorch's hand-rolled
+        LinearHash. Concrete `len(input)` only (the bench jits at fixed widths)."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        if rate + out != self.width:
+            raise ValueError(
+                f"chained linear hash needs rate + out == width, got "
+                f"{rate} + {out} != {self.width}"
+            )
+        return _sponge_hash_body(self, input, rate, out, chained=True)
+
 
 def _permutation_body(
     perm: Poseidon2,
@@ -263,7 +279,9 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
     )
 
 
-def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
+def _sponge_hash_body(
+    perm: Poseidon2, input: Array, rate: int, out: int, chained: bool = False
+) -> Array:
     """Emit the `sponge_hash` marker (dedicated path) or run the
     `while_loop` absorb (generic). The decomposition is byte-identical to
     `Sponge.hash` so the region's fallback HLO matches the kernel. The 6-operand
@@ -291,6 +309,36 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
         # a wide leaf paid O(blocks) trace + compile for a body the recognizer
         # discards anyway — it matches the marker by name + attrs, not its shape.
         state = jnp.zeros(w, dtype=inp.dtype)
+        if chained:
+            # pil2 chained linear hash: each block is [data(rate, zero-padded) |
+            # prior-digest(out)] (rate + out == width), permuted. Block 0's zero
+            # capacity falls out of the zeroed initial state. Concrete n only.
+            #
+            # Written const-free (only the one `jnp.zeros(w)` state init, like the
+            # `_absorb_symbolic` path below): jax.lax.composite lifts every traced
+            # const to a leading operand, which would break the Poseidon2 6-operand
+            # ABI. So the block lanes come from `.at[].set(inp slice)`, the capacity
+            # from a slice, and the partial-tail zero-pad from field
+            # self-subtraction (`pad - pad`) rather than a fresh `jnp.zeros`.
+            n = input.shape[0]
+            if not isinstance(n, int):  # shape-poly export unsupported for chained
+                raise NotImplementedError(
+                    "chained linear hash does not support symbolic-n export"
+                )
+            if n == 0:
+                return state[:out]
+            num_blocks = (n + rate - 1) // rate  # permute every block
+            for blk in range(num_blocks):
+                start = blk * rate
+                count = min(rate, n - start)
+                cap = state[:out]  # prior digest (zeros on block 0)
+                state = state.at[:count].set(inp[start : start + count])
+                if count < rate:  # zero-pad the partial tail (no const)
+                    pad = state[count:rate]
+                    state = state.at[count:rate].set(pad - pad)
+                state = state.at[rate : rate + out].set(cap)  # chain
+                state = permute(state)
+            return state[:out]
         return _absorb_symbolic(inp, state, rate, out, permute)
 
     operands = _abi_operands(perm, input)
@@ -312,6 +360,12 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
         "alpha": p.alpha,
         "external_m4": _external_m4_attr(perm),
     }
+    if chained:
+        # Chained selects EmitLinearHashAbsorb; encoded as an int (1) since bool
+        # composite attributes have no precedent. external_m4 already rides in
+        # marker_attrs above (via _external_m4_attr), matching the
+        # decomposition's apply_external_m4.
+        marker_attrs["chained"] = 1
     return fused_region(
         sponge,
         *operands,
