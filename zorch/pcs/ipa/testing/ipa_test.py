@@ -4,7 +4,7 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 import zk_dtypes
-from absl.testing import absltest
+from absl.testing import absltest, parameterized
 from jax import Array
 
 from zorch.pcs.ipa.config import IpaProof
@@ -15,8 +15,8 @@ from zorch.pcs.ipa.math import (
     inner_powers,
 )
 from zorch.pcs.ipa.prover import IpaProver, IpaProverData
-from zorch.pcs.ipa.testing.basis import toy_key
-from zorch.pcs.ipa.verifier import IpaVerifier, reduce_opening
+from zorch.pcs.ipa.testing import basis
+from zorch.pcs.ipa.verifier import IpaVerifier, reduce_opening, settle
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
@@ -29,9 +29,7 @@ KB = zk_dtypes.koalabear_mont
 class ChallengeMathTest(absltest.TestCase):
     def test_inner_powers(self) -> None:
         x = jnp.array(3, dtype=KB)
-        self.assertEqual(
-            [int(v) for v in inner_powers(x, 4)], [1, 3, 9, 27]
-        )
+        self.assertEqual([int(v) for v in inner_powers(x, 4)], [1, 3, 9, 27])
 
     def test_check_pow2_rejects_non_power_of_two(self) -> None:
         for bad in (0, 3, 6, 12):
@@ -60,75 +58,82 @@ class ChallengeMathTest(absltest.TestCase):
             m = folded.shape[0] // 2
             folded = folded[:m] * u_inv[j] + folded[m:] * u[j]
         self.assertEqual(folded.shape, (1,))
-        self.assertEqual(
-            int(folded[0]), int(jnp.sum(challenge_vector(u, u_inv) * v))
-        )
+        self.assertEqual(int(folded[0]), int(jnp.sum(challenge_vector(u, u_inv) * v)))
 
 
-# --- full commit -> open -> verify over bn254 (GPU: lax.msm is GPU-only) --------
+# --- full commit -> open -> verify (GPU: lax.msm is GPU-only) -------------------
+#
+# The fold / MSM path is curve-generic — only the bases' dtype changes — so run it
+# over every G1 the seam targets. Scalars are drawn in Montgomery form (the
+# production encoding) over the standard-domain toy basis, the same split KZG's
+# round-trip test uses.
 
-SF = zk_dtypes.bn254_sf
 _GPU = jax.default_backend() == "gpu"
 
+# (subtest name, Montgomery scalar field, standard-domain toy curve)
+_CURVES = (
+    ("bn254", zk_dtypes.bn254_sf_mont, basis.BN254),
+    ("pallas", zk_dtypes.pallas_sf_mont, basis.PALLAS),
+)
 
-def _transcript() -> DuplexTranscript:
-    return cheap_transcript(SF)
+
+def _transcript(sf: type) -> DuplexTranscript:
+    return cheap_transcript(sf)
 
 
 @absltest.skipUnless(_GPU, "IPA commit/open/verify use lax.msm, a GPU-only kernel")
-class IpaRoundTripTest(absltest.TestCase):
-    def setUp(self) -> None:
-        self.key = toy_key(n=4)
-        self.coeffs = jnp.array([3, 1, 4, 1], dtype=SF)  # p(x) = 3 + x + 4x² + x³
-        self.x = jnp.array(7, dtype=SF)
-        self.prover = IpaProver(self.key)
-        self.verifier = IpaVerifier(self.key)
+class IpaRoundTripTest(parameterized.TestCase):
+    def _commit_open(
+        self, sf: type, curve: basis.ToyCurve
+    ) -> tuple[IpaVerifier, Array, Array, Array, list[IpaProof]]:
+        key = basis.toy_key(curve, n=4)
+        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
+        x = jnp.array(7, dtype=sf)
+        commitment, data = IpaProver(key).commit([coeffs])
+        values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
+        return IpaVerifier(key), x, commitment, values, proof
 
-    def _open(self) -> tuple[Array, Array, list[IpaProof]]:
-        commitment, data = self.prover.commit([self.coeffs])
-        values, proof, _ = self.prover.open(data, [self.x], _transcript())
-        return commitment, values, proof
-
-    def test_value_is_evaluation(self) -> None:
+    @parameterized.named_parameters(*_CURVES)
+    def test_value_is_evaluation(self, sf: type, curve: basis.ToyCurve) -> None:
         # p(7) = 3 + 7 + 4·49 + 343 = 549.
-        _, values, _ = self._open()
+        _, _, _, values, _ = self._commit_open(sf, curve)
         self.assertEqual(int(values[0]), 549)
 
-    def test_open_verifies(self) -> None:
-        commitment, values, proof = self._open()
-        ok, _ = self.verifier.verify(
-            commitment, [self.x], values, proof, _transcript()
-        )
+    @parameterized.named_parameters(*_CURVES)
+    def test_open_verifies(self, sf: type, curve: basis.ToyCurve) -> None:
+        verifier, x, commitment, values, proof = self._commit_open(sf, curve)
+        ok, _ = verifier.verify(commitment, [x], values, proof, _transcript(sf))
         self.assertTrue(bool(ok))
 
-    def test_wrong_value_rejected(self) -> None:
-        commitment, values, proof = self._open()
-        bad = values + jnp.array(1, dtype=SF)
-        ok, _ = self.verifier.verify(
-            commitment, [self.x], bad, proof, _transcript()
-        )
+    @parameterized.named_parameters(*_CURVES)
+    def test_wrong_value_rejected(self, sf: type, curve: basis.ToyCurve) -> None:
+        verifier, x, commitment, values, proof = self._commit_open(sf, curve)
+        bad = values + jnp.array(1, dtype=sf)
+        ok, _ = verifier.verify(commitment, [x], bad, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
-    def test_reduced_claim_defers_the_msm(self) -> None:
+    @parameterized.named_parameters(*_CURVES)
+    def test_reduced_claim_defers_the_msm(
+        self, sf: type, curve: basis.ToyCurve
+    ) -> None:
         # reduce_opening reaches the same accept verdict as verify when its
         # deferred claim is settled — the accumulation reuse contract.
-        commitment, values, proof = self._open()
-        from zorch.pcs.ipa.verifier import settle
-
+        verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         _, claim = reduce_opening(
-            self.key, commitment[0], self.x, values[0], proof[0], _transcript()
+            verifier.key, commitment[0], x, values[0], proof[0], _transcript(sf)
         )
-        self.assertTrue(bool(settle(self.key, claim)))
+        self.assertTrue(bool(settle(verifier.key, claim)))
 
 
 class IpaBatchValidationTest(absltest.TestCase):
     # The batch-length guards fire before any MSM, so these need no GPU.
     def test_open_rejects_batch_mismatch(self) -> None:
-        key = toy_key(n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=SF)
-        x = jnp.array(7, dtype=SF)
+        sf = zk_dtypes.bn254_sf_mont
+        key = basis.toy_key(basis.BN254, n=4)
+        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
+        x = jnp.array(7, dtype=sf)
         with self.assertRaises(ValueError):
-            IpaProver(key).open(IpaProverData((coeffs,)), [x, x], _transcript())
+            IpaProver(key).open(IpaProverData((coeffs,)), [x, x], _transcript(sf))
 
 
 if __name__ == "__main__":
