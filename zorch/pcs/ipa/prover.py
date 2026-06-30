@@ -44,8 +44,12 @@ from typing import TYPE_CHECKING, TypeVar
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.pcs.ipa.challenger import IpaChallenger, TranscriptChallenger
-from zorch.pcs.ipa.config import IpaCommitment, IpaProof
+from zorch.pcs.ipa.challenger import (
+    IpaChallenger,
+    TranscriptChallenger,
+    ZkIpaChallenger,
+)
+from zorch.pcs.ipa.config import IpaCommitment, IpaProof, IpaZkProof
 from zorch.pcs.ipa.setup import IpaKey
 from zorch.poly.univariate import powers
 from zorch.transcript import Transcript
@@ -55,6 +59,7 @@ if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
 
 _Ch = TypeVar("_Ch", bound=IpaChallenger)
+_ZkCh = TypeVar("_ZkCh", bound=ZkIpaChallenger)
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,28 @@ class IpaProver:
         commitments, which the opening's Fiat-Shamir binds)."""
         commitments = jnp.stack(
             [lax.msm(c, self.key.basis[: c.shape[0]]) for c in polys]
+        )
+        return commitments, IpaProverData(tuple(polys), commitments)
+
+    def commit_zk(
+        self, polys: Sequence[Array], randomnesses: Sequence[Array]
+    ) -> tuple[IpaCommitment, IpaProverData]:
+        """Hiding Pedersen commit: `P_j = ⟨a_j, G⟩ + r_j·s`. The blinding `r_j·s`
+        makes the commitment hiding; `_open_one_zk` opens such a commitment to a
+        zero-knowledge proof, removing the blinding inside the fold (the
+        `− combined_rand·s` term, which is why the commitment must carry `r_j·s` to
+        begin with). Requires the key's blinding generator `key.s`."""
+        s = self.key.s
+        if s is None:
+            raise ValueError("zk commit requires the blinding generator key.s")
+        commitments = jnp.stack(
+            [
+                lax.msm(
+                    jnp.concatenate([c, r[None]]),
+                    jnp.concatenate([self.key.basis[: c.shape[0]], s[None]]),
+                )
+                for c, r in zip(polys, randomnesses)
+            ]
         )
         return commitments, IpaProverData(tuple(polys), commitments)
 
@@ -165,6 +192,54 @@ def _open_one(
         rs.append(rj)
 
     return fs, value, IpaProof(jnp.stack(ls), jnp.stack(rs), a[0])
+
+
+def _open_one_zk(
+    key: IpaKey,
+    commitment: Array,
+    coeffs: Array,
+    x: Array,
+    hiding_poly: Array,
+    hiding_rand: Array,
+    commitment_randomness: Array,
+    fs: _ZkCh,
+) -> tuple[_ZkCh, Array, IpaZkProof]:
+    """Hiding/zk open of one (poly, point): commit a blinding polynomial, fold it
+    into the statement under one extra challenge, then run the *same* fold as
+    `_open_one` on the blinded `(commitment, coeffs)`. The blinding hides the
+    witness while preserving the opened value — the blinding polynomial is shifted
+    to vanish at `x`, so `mod_coeffs(x) = coeffs(x)`. Challenger-generic, like
+    `_open_one`; the byte-exact arkworks variant lives in the consumer's
+    `ZkIpaChallenger`. Requires the key's blinding generator `key.s`."""
+    s = key.s
+    if s is None:
+        raise ValueError("zk opening requires the blinding generator key.s")
+    n = coeffs.shape[0]
+    one = jnp.ones((), dtype=coeffs.dtype)
+    b = powers(x, n)
+    value = jnp.sum(coeffs * b)  # p(x); the blinding below preserves it
+
+    # Shift the blinding poly to vanish at x (keeps the value), Pedersen-commit it
+    # under the blinding generator s, and squeeze the one hiding challenge hc.
+    hiding_poly = hiding_poly.at[0].add(-jnp.sum(hiding_poly * b))
+    hiding_comm = lax.msm(
+        jnp.concatenate([hiding_poly, hiding_rand[None]]),
+        jnp.concatenate([key.basis[:n], s[None]]),
+    )
+    fs, hc = fs.hiding_challenge(commitment, hiding_comm, x, value)
+
+    # Fold the blinding into the statement: the blinded coefficients, the
+    # accumulated randomness, and the blinded commitment the fold actually opens
+    # (commitment + hc·hiding_comm − s·combined_rand).
+    mod_coeffs = coeffs + hc * hiding_poly
+    combined_rand = commitment_randomness + hc * hiding_rand
+    mod_commitment = lax.msm(
+        jnp.stack([one, hc, -combined_rand]),
+        jnp.stack([commitment, hiding_comm, s]),
+    )
+
+    fs, _, proof = _open_one(key, mod_commitment, mod_coeffs, x, fs)
+    return fs, value, IpaZkProof(proof.l, proof.r, proof.a, hiding_comm, combined_rand)
 
 
 if TYPE_CHECKING:

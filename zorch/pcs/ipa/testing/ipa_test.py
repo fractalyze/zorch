@@ -8,11 +8,17 @@ from absl.testing import absltest, parameterized
 from jax import Array
 
 from zorch.pcs.ipa.challenger import TranscriptChallenger
-from zorch.pcs.ipa.config import IpaProof
+from zorch.pcs.ipa.config import IpaProof, IpaZkProof
 from zorch.pcs.ipa.math import challenge_vector, eval_challenge_poly
-from zorch.pcs.ipa.prover import IpaProver, IpaProverData
+from zorch.pcs.ipa.prover import IpaProver, IpaProverData, _open_one_zk
+from zorch.pcs.ipa.setup import IpaKey
 from zorch.pcs.ipa.testing import basis
-from zorch.pcs.ipa.verifier import IpaVerifier, reduce_opening, settle
+from zorch.pcs.ipa.verifier import (
+    IpaVerifier,
+    reduce_opening,
+    reduce_opening_zk,
+    settle,
+)
 from zorch.pcs.testing import curves
 from zorch.poly.univariate import powers
 from zorch.testkit.transcript import cheap_transcript
@@ -134,6 +140,71 @@ class IpaRoundTripTest(parameterized.TestCase):
         bad = jnp.stack([verifier.key.u])  # U as a stand-in P ≠ the real commitment
         ok, _ = verifier.verify(bad, [x], values, proof, _transcript(sf))
         self.assertFalse(bool(ok))
+
+    # --- hiding / zk path ---------------------------------------------------
+    #
+    # The zk open blinds (commitment, coeffs) with a shifted blinding poly under
+    # one extra challenge, then runs the *same* fold; the verifier re-derives the
+    # blinded statement and settles by the identical reduced claim. The blinding
+    # preserves the opened value.
+
+    def _commit_open_zk(
+        self, sf: type, curve: curves.Curve
+    ) -> tuple[IpaKey, Array, Array, Array, IpaZkProof]:
+        key = basis.toy_key(curve, n=4)
+        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
+        x = jnp.array(7, dtype=sf)
+        hiding = jnp.array([2, 9, 1, 8], dtype=sf)  # blinding polynomial
+        hiding_rand = jnp.array(5, dtype=sf)
+        commitment_randomness = jnp.array(11, dtype=sf)
+        # The zk path opens a *hiding* commitment ⟨coeffs,G⟩ + cr·s (open_zk
+        # removes all randomness inside the fold).
+        commitment, _ = IpaProver(key).commit_zk([coeffs], [commitment_randomness])
+        fs = TranscriptChallenger(_transcript(sf), sf)
+        _, value, proof = _open_one_zk(
+            key,
+            commitment[0],
+            coeffs,
+            x,
+            hiding,
+            hiding_rand,
+            commitment_randomness,
+            fs,
+        )
+        return key, x, commitment, value, proof
+
+    @parameterized.named_parameters(*_CURVES)
+    def test_zk_value_is_evaluation(self, sf: type, curve: curves.Curve) -> None:
+        # Blinding preserves the value: p(7) = 549 despite the random blinding poly.
+        _, _, _, value, _ = self._commit_open_zk(sf, curve)
+        self.assertEqual(int(value), 549)
+
+    @parameterized.named_parameters(*_CURVES)
+    def test_zk_open_verifies(self, sf: type, curve: curves.Curve) -> None:
+        key, x, commitment, value, proof = self._commit_open_zk(sf, curve)
+        _, claim = reduce_opening_zk(
+            key,
+            commitment[0],
+            x,
+            value,
+            proof,
+            TranscriptChallenger(_transcript(sf), sf),
+        )
+        self.assertTrue(bool(settle(key, claim)))
+
+    @parameterized.named_parameters(*_CURVES)
+    def test_zk_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
+        key, x, commitment, value, proof = self._commit_open_zk(sf, curve)
+        bad = value + jnp.array(1, dtype=sf)
+        _, claim = reduce_opening_zk(
+            key,
+            commitment[0],
+            x,
+            bad,
+            proof,
+            TranscriptChallenger(_transcript(sf), sf),
+        )
+        self.assertFalse(bool(settle(key, claim)))
 
 
 class IpaBatchValidationTest(absltest.TestCase):
