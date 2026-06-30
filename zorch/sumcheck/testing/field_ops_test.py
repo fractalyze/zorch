@@ -17,26 +17,30 @@ from zorch.testkit.random_field import rand_field
 
 
 class NativeFieldOpsTest(absltest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self.ops = NativeFieldOps(F)
         self.a = rand_field(1, (8,), F)
         self.b = rand_field(2, (8,), F)
 
-    def test_add_sub_mul(self):
+    def test_add_sub_mul(self) -> None:
         self.assertTrue(jnp.array_equal(self.ops.add(self.a, self.b), self.a + self.b))
         self.assertTrue(jnp.array_equal(self.ops.sub(self.a, self.b), self.a - self.b))
         self.assertTrue(jnp.array_equal(self.ops.mul(self.a, self.b), self.a * self.b))
 
-    def test_sum(self):
+    def test_sum(self) -> None:
         x = rand_field(3, (4, 8), F)
         self.assertTrue(jnp.array_equal(self.ops.sum(x, axis=-1), jnp.sum(x, axis=-1)))
 
-    def test_identities_and_domain_point(self):
+    def test_identities_and_domain_point(self) -> None:
         self.assertTrue(jnp.array_equal(self.ops.add(self.a, self.ops.zero), self.a))
         self.assertTrue(jnp.array_equal(self.ops.mul(self.a, self.ops.one), self.a))
         for u in (0, 1, 2, 3):
-            self.assertTrue(jnp.array_equal(self.ops.domain_point(u, self.a), jnp.array(u, F)))
-        self.assertTrue(jnp.array_equal(self.ops.zeros_like(self.a), jnp.zeros_like(self.a)))
+            self.assertTrue(
+                jnp.array_equal(self.ops.domain_point(u, self.a), jnp.array(u, F))
+            )
+        self.assertTrue(
+            jnp.array_equal(self.ops.zeros_like(self.a), jnp.zeros_like(self.a))
+        )
 
 
 if __name__ == "__main__":

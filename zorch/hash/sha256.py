@@ -16,33 +16,113 @@ host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
 """
 from __future__ import annotations
 
-import numpy as np
+from functools import partial
+
 import jax
 import jax.numpy as jnp
+import numpy as np
+from jax import Array
+
+from zorch.fusion import fused_region
 
 U32 = jnp.uint32
 
+SHA256_MARKER = "zorch.sha256"
+# Marker revision riding as `composite.version`. zkx recognizes the marker by
+# name + attributes and deliberately does not gate on the version; it lets a
+# future contract change be staged without renaming the marker (cf. POSEIDON2).
+SHA256_MARKER_VERSION = 1
+
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
 # first 64 primes) and initial hash state (sqrt of first 8 primes).
-_K = np.array([
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-], dtype=np.uint32)
-_H0 = np.array([
-    0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-], dtype=np.uint32)
+_K = np.array(
+    [
+        0x428A2F98,
+        0x71374491,
+        0xB5C0FBCF,
+        0xE9B5DBA5,
+        0x3956C25B,
+        0x59F111F1,
+        0x923F82A4,
+        0xAB1C5ED5,
+        0xD807AA98,
+        0x12835B01,
+        0x243185BE,
+        0x550C7DC3,
+        0x72BE5D74,
+        0x80DEB1FE,
+        0x9BDC06A7,
+        0xC19BF174,
+        0xE49B69C1,
+        0xEFBE4786,
+        0x0FC19DC6,
+        0x240CA1CC,
+        0x2DE92C6F,
+        0x4A7484AA,
+        0x5CB0A9DC,
+        0x76F988DA,
+        0x983E5152,
+        0xA831C66D,
+        0xB00327C8,
+        0xBF597FC7,
+        0xC6E00BF3,
+        0xD5A79147,
+        0x06CA6351,
+        0x14292967,
+        0x27B70A85,
+        0x2E1B2138,
+        0x4D2C6DFC,
+        0x53380D13,
+        0x650A7354,
+        0x766A0ABB,
+        0x81C2C92E,
+        0x92722C85,
+        0xA2BFE8A1,
+        0xA81A664B,
+        0xC24B8B70,
+        0xC76C51A3,
+        0xD192E819,
+        0xD6990624,
+        0xF40E3585,
+        0x106AA070,
+        0x19A4C116,
+        0x1E376C08,
+        0x2748774C,
+        0x34B0BCB5,
+        0x391C0CB3,
+        0x4ED8AA4A,
+        0x5B9CCA4F,
+        0x682E6FF3,
+        0x748F82EE,
+        0x78A5636F,
+        0x84C87814,
+        0x8CC70208,
+        0x90BEFFFA,
+        0xA4506CEB,
+        0xBEF9A3F7,
+        0xC67178F2,
+    ],
+    dtype=np.uint32,
+)
+_H0 = np.array(
+    [
+        0x6A09E667,
+        0xBB67AE85,
+        0x3C6EF372,
+        0xA54FF53A,
+        0x510E527F,
+        0x9B05688C,
+        0x1F83D9AB,
+        0x5BE0CD19,
+    ],
+    dtype=np.uint32,
+)
 
 
 _Kd = jnp.asarray(_K)
 
 
-def _rotr(x, n: int):
+def _rotr(x: Array, n: int) -> Array:
     return (x >> U32(n)) | (x << U32(32 - n))
 
 
@@ -57,13 +137,20 @@ def _pad(msg: np.ndarray) -> np.ndarray:
     padded = np.zeros((b, nblocks * 64), dtype=np.uint8)
     padded[:, :length] = msg
     padded[:, length] = 0x80
-    padded[:, nblocks * 64 - 8:] = np.frombuffer(np.uint64(bitlen).byteswap().tobytes(), dtype=np.uint8)
+    padded[:, nblocks * 64 - 8 :] = np.frombuffer(
+        np.uint64(bitlen).byteswap().tobytes(), dtype=np.uint8
+    )
     words = padded.reshape(b, nblocks, 16, 4).astype(np.uint32)
-    be = (words[..., 0] << 24) | (words[..., 1] << 16) | (words[..., 2] << 8) | words[..., 3]
+    be = (
+        (words[..., 0] << 24)
+        | (words[..., 1] << 16)
+        | (words[..., 2] << 8)
+        | words[..., 3]
+    )
     return be  # [B, nblocks, 16]
 
 
-def _compress(state, w16):
+def _compress(state: Array, w16: Array) -> Array:
     """One block: state [B, 8] (a..h) + message words w16 [B, 16] -> state [B, 8].
 
     The 64-round compression and the message schedule are fused into ONE
@@ -72,7 +159,8 @@ def _compress(state, w16):
     *static* column slices are used (no dynamic array indexing), so XLA keeps the
     window + a..h fusion-/register-friendly — critical for GPU throughput.
     """
-    def round_t(t, carry):
+
+    def round_t(t: Array, carry: tuple) -> tuple:
         a, b, c, d, e, f, g, h, w = carry
         word = w[:, 0]
         kt = _Kd[t]
@@ -94,27 +182,63 @@ def _compress(state, w16):
     return state + jnp.stack([a, b, c, d, e, f, g, h], axis=1)
 
 
-def _digest_words(blocks):
+def _digest_words(blocks: Array) -> Array:
     """blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32] big-endian digest."""
     b, nblocks, _ = blocks.shape
     state = jnp.broadcast_to(jnp.asarray(_H0), (b, 8))
     for i in range(nblocks):  # nblocks is static and small
         state = _compress(state, blocks[:, i])
     # Serialize 8 u32 words big-endian -> 32 bytes.
-    out = jnp.stack([
-        (state >> U32(24)) & U32(0xFF),
-        (state >> U32(16)) & U32(0xFF),
-        (state >> U32(8)) & U32(0xFF),
-        state & U32(0xFF),
-    ], axis=-1).astype(jnp.uint8)  # [B, 8, 4]
+    out = jnp.stack(
+        [
+            (state >> U32(24)) & U32(0xFF),
+            (state >> U32(16)) & U32(0xFF),
+            (state >> U32(8)) & U32(0xFF),
+            state & U32(0xFF),
+        ],
+        axis=-1,
+    ).astype(
+        jnp.uint8
+    )  # [B, 8, 4]
     return out.reshape(b, 32)
 
 
-def digest(msg) -> jnp.ndarray:
+# Module-level jit zone: `lax.composite` re-traces its decomposition on every
+# emission, and one PCS open emits the leaf + every internal level of a Merkle
+# commit plus each transcript squeeze — so the uncached re-trace of the 64-round
+# body would dominate the first-trace floor (cf. poseidon2._permute_body, #216).
+# `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
+# module (one composite marker per digest) is unchanged.
+@partial(jax.jit, inline=True)
+def _digest_words_marked(blocks: Array) -> Array:
+    """`_digest_words`, wrapped in the name-routed `zorch.sha256` composite.
+
+    blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32]. SHA-256 is Merkle-Damgard —
+    a 64-round compression over a `fori_loop`, not straight-line — so it takes the
+    *name-routed* marker (exempt from the generic single-kernel rule, the way
+    `zorch.poseidon2` is) and routes to a dedicated zkx Sha256Fusion emitter. With
+    no emitter wired the marker inlines its decomposition, so the bytes are
+    unchanged. The emitter reads the block count from the operand's shape.
+    """
+
+    def decomposition(b: Array, **_attrs: object) -> Array:
+        return _digest_words(b)
+
+    return fused_region(
+        decomposition,
+        blocks,
+        name=SHA256_MARKER,
+        version=SHA256_MARKER_VERSION,
+    )
+
+
+def digest(msg: Array) -> jnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
-    Byte-identical to the FIPS 180-4 standard per message.
+    Byte-identical to the FIPS 180-4 standard per message. The device compression
+    is emitted as the name-routed `zorch.sha256` marker (host padding stays out of
+    the region, since it is static and data-independent).
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
-    return _digest_words(blocks)
+    return _digest_words_marked(blocks)
