@@ -150,11 +150,16 @@ def _open_one(
 
         a = a_lo + a_hi * uj_inv
         b = b_lo + b_hi * uj
-        # Basis fold G_lo + u·G_hi: the low half is unscaled, but scalar-mul
-        # widens points to the jacobian accumulator, so lift it via `· one` to
-        # match `g_hi · uj`'s representation before the point-add, then narrow the
-        # folded basis back to affine for the next round's msm input.
-        g = lax.convert_element_type(g_lo * one + g_hi * uj, affine)
+        # Basis fold G_lo + u·G_hi: scalar-mul widens the high half to the jacobian
+        # accumulator, so lift the unscaled low half into that same representation
+        # before the point-add, then narrow back to affine for the next round's msm
+        # input. Convert explicitly to `g_hi·uj`'s dtype rather than via `· one`: a
+        # scalar-mul by one is folded away under `@jit`, leaving the low half affine
+        # and the point-add a representation mismatch (affine + jacobian).
+        g_hi_scaled = g_hi * uj
+        g = lax.convert_element_type(
+            lax.convert_element_type(g_lo, g_hi_scaled.dtype) + g_hi_scaled, affine
+        )
         ls.append(lj)
         rs.append(rj)
 
