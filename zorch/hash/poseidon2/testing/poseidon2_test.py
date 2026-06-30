@@ -13,6 +13,7 @@ from zk_dtypes import koalabear_mont as F
 from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
     POSEIDON2_MARKER_VERSION,
+    SPONGE_HASH_MARKER,
     Poseidon2,
     _permute_body,
 )
@@ -110,6 +111,32 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
         txt = jax.jit(p.permute).lower(jnp.arange(w, dtype=F)).as_text()
         self.assertIn(POSEIDON2_MARKER, txt)
+        self.assertIn(
+            "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"
+            " tensor<16xi64>",
+            txt,
+        )
+
+    def test_sponge_hash_marker_carries_external_m4(self) -> None:
+        # The fused sponge kernel applies the matrix's M4 like the permute kernel,
+        # so the sponge marker must carry external_m4 too — including a non-default
+        # M4 (here the HorizenLabs reference), not a hardcoded one.
+        hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
+        w = 16
+        mds = jnp.array(
+            [
+                [hl_m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(w)]
+                for i in range(w)
+            ],
+            dtype=F,
+        )
+        p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
+        txt = (
+            jax.jit(lambda x: p.sponge_hash(x, 8, 8))
+            .lower(jnp.arange(w, dtype=F))
+            .as_text()
+        )
+        self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"
             " tensor<16xi64>",
