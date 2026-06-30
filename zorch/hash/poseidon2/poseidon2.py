@@ -266,14 +266,13 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
 
 
 def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
-    """Emit the `poseidon2_sponge_hash` marker (dedicated path) or run the inline
-    absorb (generic). The decomposition is byte-identical to `Sponge.hash` so the
-    marked region's fallback HLO matches the kernel. The 6-operand region carries
+    """Emit the `poseidon2_sponge_hash` marker (dedicated path) or run the
+    `while_loop` absorb (generic). The decomposition is byte-identical to
+    `Sponge.hash` so the region's fallback HLO matches the kernel. The 6-operand
+    region carries
     the round constants explicitly — a `lax.composite` would lift closed-over
     consts as extra operands and break the Poseidon2Fusion ABI."""
     w = perm.width
-    absorb_len = input.shape[0]
-    symbolic = not isinstance(absorb_len, int)
 
     def sponge(
         inp: Array,
@@ -289,30 +288,16 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
                 perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
             )
 
+        # One `while_loop` absorb for any length, concrete or symbolic. A static
+        # unroll traced once per emission (`lax.composite` has no trace cache), so
+        # a wide leaf paid O(blocks) trace + compile for a body the recognizer
+        # discards anyway — it matches the marker by name + attrs, not its shape.
         state = jnp.zeros(w, dtype=inp.dtype)
-        if symbolic:  # shape-poly export: while_loop over the blocks
-            return _absorb_symbolic(inp, state, rate, out, permute)
-        n = absorb_len
-        if n == 0:
-            return state[:out]
-        if n <= rate:  # single (possibly partial) block
-            state = state.at[:n].set(inp[:n])
-            return permute(state)[:out]
-        state = state.at[:rate].set(inp[:rate])
-        state = permute(state)
-        full = n // rate
-        for i in range(1, full):  # remaining full blocks (unrolled; n is static)
-            state = state.at[:rate].set(inp[i * rate : (i + 1) * rate])
-            state = permute(state)
-        tail = n - full * rate
-        if tail:  # partial last block overwrites only its own lanes
-            state = state.at[:tail].set(inp[full * rate :])
-            state = permute(state)
-        return state[:out]
+        return _absorb_symbolic(inp, state, rate, out, permute)
 
     operands = _abi_operands(perm, input)
-    # Generic permutation: no fused sponge kernel, run the absorb inline (a whole-
-    # sponge LoopFusion register-spills); only the dedicated path emits the marker.
+    # Generic permutation: no fused sponge kernel, run the absorb directly (a
+    # whole-sponge LoopFusion register-spills); only the dedicated path marks it.
     if not perm.has_dedicated_fusion:
         return sponge(*operands)
     p = perm._p

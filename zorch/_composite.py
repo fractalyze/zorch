@@ -23,8 +23,8 @@ from typing import TypeVar
 from jax import Array, lax
 
 # The region's output: a single Array for a one-kernel marker, or a pytree of
-# Arrays for a name-routed region a vendor expands (e.g. a whole-tree commit
-# returning (root, layers)). Both paths below preserve it.
+# Arrays for a name-routed region a vendor expands into a kernel chain. Both
+# paths below preserve it.
 _Region = TypeVar("_Region")
 
 

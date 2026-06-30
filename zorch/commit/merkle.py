@@ -15,18 +15,18 @@ siblings like any others. A binary tree on a power-of-two height never pads,
 so the arity-2 layout is exactly the historical one.
 
 Each layer is one `vmap` over its nodes: an internal layer batches one
-`compress` = one permute; the leaf layer batches one `hash` = one permute per
-absorbed block. Those collapse to one GPU kernel per permute once the
-permutation itself is captured to a kernel (the poseidon2 fusion path, #25). The
-tree folds the layers one right-sized level at a time (`_fold_to_root`) — see
-`_build` for why this beats a full-width `scan`.
+`compress` = one permute; the leaf layer batches one `hash`, which lowers as one
+`zorch.poseidon2_sponge_hash` region per leaf (the whole rate-block absorb fused
+into a single register-resident kernel, not a per-block permute chain). Those
+collapse to one GPU kernel per node-batch once the permutation is captured to a
+kernel (the poseidon2 fusion path, #25). The tree folds the layers one
+right-sized level at a time (`_fold_to_root`) — see `_build` for why this beats a
+full-width `scan`.
 
-`commit` emits no whole-tree marker: each `permute` inside the leaf hash and the
-fold carries its own dedicated `zorch.poseidon2` marker, which the vendor lowers
-to a kernel directly. A dedicated whole-tree `zorch.merkle_commit` chain fusion
-was benchmarked SLOWER than these per-permute kernels (1.05-1.19x at 2^16..2^20),
-and the markerless body is what lowers under symbolic dims for recompile-free
-export — so the tree is committed by its plain vmap / fold body.
+`commit` lowers each leaf hash to a `zorch.poseidon2_sponge_hash` marker and each
+fold layer's `compress` to a `zorch.poseidon2` permute marker, which the vendor
+lowers to kernels directly. Committing by this plain vmap/fold body keeps the fast
+per-permute kernels and lowers under symbolic dims for recompile-free export.
 """
 
 from __future__ import annotations
@@ -133,16 +133,12 @@ class MerkleTree:
         num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
         if self.arity == 2 and not is_power_of_two(num_leaves):
             raise ValueError(f"leaf count ({num_leaves}) must be a power of two")
-        # No `zorch.merkle_commit` wrap: the dedicated GPU merkle-chain fusion is
-        # slower than letting each nested poseidon2 marker become its own kernel
-        # (benchmarked 1.05-1.19x at 2^16..2^20), and markerless lowers under
-        # symbolic dims for recompile-free export.
         return self._build(matrix)
 
-    # Batch the single-element leaf hash / compress with `vmap`: the dedicated
-    # `zorch.poseidon2` marker lowers identically batched (one shared
-    # `@zorch.poseidon2` decomposition), so `vmap(single)` IS the batched kernel —
-    # a hand-written batched twin would buy nothing.
+    # Batch the single-element leaf hash / compress with `vmap`: each op's
+    # dedicated marker lowers identically batched (one shared decomposition), so
+    # `vmap(single)` IS the batched kernel — a hand-written batched twin would
+    # buy nothing.
     def _hash_leaves(self, matrix: Array) -> Array:
         return jax.vmap(self._leaf_hasher.hash, in_axes=1 if self._column_major else 0)(
             matrix

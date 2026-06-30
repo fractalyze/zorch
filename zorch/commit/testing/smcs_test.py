@@ -214,10 +214,9 @@ class SingleMatrixCommitmentSchemeTest(absltest.TestCase):
 
     def test_extension_field_matrix_not_yet_supported(self) -> None:
         # EF commit (base-field reinterpretation of EF rows) is the FFI byte-match
-        # slice; until then committing EF raises via the permutation's field check
-        # (no separate guard — the hash inherently rejects a field mismatch).
+        # slice; until then the leaf hash's field guard rejects an EF matrix.
         _, _, smcs = _smcs()
-        with self.assertRaisesRegex(TypeError, "must match the permutation field"):
+        with self.assertRaisesRegex(TypeError, "must match the sponge field"):
             smcs.commit(jnp.zeros((4, 4), dtype=EF))
 
 

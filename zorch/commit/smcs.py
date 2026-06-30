@@ -89,9 +89,9 @@ class SingleMatrixCommitmentScheme:
 
         Extension-field matrices are not yet supported (SP1 commits each EF row as
         ``width * degree`` base-field elements, a reinterpretation not wired through
-        zorch's blocks yet — the FFI byte-match slice, fractalyze/zorch#37). No
-        explicit guard: the permutation's field check raises ``TypeError`` on an EF
-        matrix ("state dtype ... must match the permutation field ...").
+        zorch's blocks yet — the FFI byte-match slice, fractalyze/zorch#37). The
+        leaf hash's field guard raises ``TypeError`` on an EF matrix ("input dtype
+        ... must match the sponge field ...").
         """
         tree = self._tree_column_major if column_major else self._tree
         raw_root, digest_layers = tree.commit(matrix)
