@@ -64,6 +64,35 @@ class ChallengeMathTest(absltest.TestCase):
         self.assertEqual([int(c) for c in challenge_vector(u)], [1, 3, 2, 6])
 
 
+class TranscriptChallengerPytreeTest(absltest.TestCase):
+    """`TranscriptChallenger` is a registered pytree so the prover fold carries it
+    through its `lax.scan` (`_open_one`): the wrapped transcript's `DuplexState`
+    buffers are the leaves, `dtype` is static meta."""
+
+    def test_flatten_roundtrip(self) -> None:
+        ch = TranscriptChallenger(cheap_transcript(SF), SF)
+        leaves, treedef = jax.tree_util.tree_flatten(ch)
+        self.assertEqual(len(leaves), 5)  # DuplexState's 5 buffers; dtype is not a leaf
+        back = jax.tree_util.tree_unflatten(treedef, leaves)
+        self.assertIs(back.dtype, ch.dtype)  # the static meta survives unflatten
+
+    def test_two_instances_share_one_treedef(self) -> None:
+        # `dtype` is an object-typed meta field, so independently built challengers
+        # must share one treedef — else the fold's scan zone re-traces every call
+        # (conventions.md / issue #163).
+        a = TranscriptChallenger(cheap_transcript(SF), SF)
+        b = TranscriptChallenger(cheap_transcript(SF), SF)
+        self.assertEqual(
+            jax.tree_util.tree_structure(a), jax.tree_util.tree_structure(b)
+        )
+
+    def test_threads_through_jit_as_argument(self) -> None:
+        ch = TranscriptChallenger(cheap_transcript(SF), SF)
+        lhs, rhs = jnp.array(3, SF), jnp.array(5, SF)
+        got = jax.jit(lambda c: c.challenge(lhs, rhs)[1])(ch)
+        self.assertTrue(bool(got == ch.challenge(lhs, rhs)[1]))
+
+
 # --- full commit -> open -> verify (GPU: lax.msm is GPU-only) -------------------
 #
 # The fold / MSM path is curve-generic — only the bases' dtype changes — so run it
@@ -83,6 +112,15 @@ _CURVES = (
 # also runs over Vesta (bn254 + Pallas already cover the curve-generic fold for the
 # transparent tests).
 _ZK_CURVES = (*_CURVES, ("vesta", zk_dtypes.vesta_sf_mont, curves.VESTA))
+
+# Sizes that exercise the fold's `lax.scan` at several round counts k = log₂ n
+# (one binary per n; n=2 is the single-round edge), the recompile-free-compile
+# property zorch#344 lands the scan for.
+_CURVE_SIZES = tuple(
+    (f"{name}_n{n}", sf, curve, n)
+    for (name, sf, curve) in _CURVES
+    for n in (2, 4, 8, 16)
+)
 
 
 def _transcript(sf: type) -> DuplexTranscript:
@@ -111,6 +149,21 @@ class IpaRoundTripTest(parameterized.TestCase):
     def test_open_verifies(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         ok, _ = verifier.verify(commitment, [x], values, proof, _transcript(sf))
+        self.assertTrue(bool(ok))
+
+    @parameterized.named_parameters(*_CURVE_SIZES)
+    def test_open_verifies_across_sizes(
+        self, sf: type, curve: curves.Curve, n: int
+    ) -> None:
+        # The fold's `lax.scan` runs k = log₂ n rounds; verify the commit -> open ->
+        # verify round trip closes at each size (and the single-round n=2 edge), so
+        # the scan fold byte-matches the shrinking fold it replaced (zorch#344).
+        key = basis.toy_key(curve, n=n)
+        coeffs = jnp.arange(1, n + 1, dtype=sf)
+        x = jnp.array(7, dtype=sf)
+        commitment, data = IpaProver(key).commit([coeffs])
+        values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
+        ok, _ = IpaVerifier(key).verify(commitment, [x], values, proof, _transcript(sf))
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)

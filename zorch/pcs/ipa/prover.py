@@ -26,9 +26,15 @@ term is one `lax.msm` (the `h'` term folded in as one extra (scalar, point) pair
 so the only raw EC arithmetic is the basis fold `G_lo + G_hi·u` — vectorized
 scalar-mul and point-add, with the result converted back to affine each round to
 keep the point representation (and thus the next round's `lax.msm` input) stable.
-The fold is a Python `for` over the static round count, so each round lowers to
-one fused kernel (the same shape as the FRI prover's fold loop), not a `lax.scan`
-carry.
+The fold is a `lax.scan` over the round count, not a Python unroll: the unroll's
+static-slice fold fuses cleanly but recompiles per size (compile grows linearly in
+`k = log₂ n`), while the scan compiles in O(1). The scan's fixed-shape carry keeps
+a/b/G at full size n and reads the collapsing half with a masked `dynamic_slice`,
+byte-identical to the shrinking fold (`0·P = identity`) — trading the unroll's
+static-slice fusion for the `dynamic_slice`/scatter fusion boundaries the scan
+needs (a compile-time-for-fusion trade, not a claim of one fused kernel). Warm
+runtime is unchanged at tested sizes (FS-permute-bound); the `valid_count` msm
+operand removes the resulting k·n mask padding (see `_open_one`, zorch#344).
 
 Scope: one base-field polynomial per opening, power-of-two length. `open` is
 transparent (no blinding); the hiding/zk `_open_one_zk` below blinds the witness
@@ -153,11 +159,16 @@ def _open_one(
 ) -> tuple[_Ch, Array, IpaProof]:
     """Fold one (poly, point) to a proof, deriving challenges through the injected
     `fs`. Returns `(challenger, value, proof)`. Challenger-generic so an
-    accumulation consumer can drive it with an arkworks-faithful `IpaChallenger`."""
+    accumulation consumer can drive it with an arkworks-faithful `IpaChallenger`
+    — which, like `TranscriptChallenger`, must be a JAX pytree (the fold carries it
+    through the `lax.scan` below)."""
     n = coeffs.shape[0]
     k = log2_strict_usize(n)
+    hn = n // 2
     affine = key.basis.dtype  # the point representation msm consumes
     one = jnp.ones((), dtype=coeffs.dtype)
+    fq0 = jnp.zeros((), dtype=coeffs.dtype)  # scalar fill for the masked halves
+    idx = jnp.arange(hn)  # active-half mask base (loop-invariant, hoisted)
 
     a = coeffs
     b = powers(x, n)
@@ -169,28 +180,49 @@ def _open_one(
     # factor (one extra (scalar, point) pair `(⟨·,·⟩·ξ₀, U)`) rather than forming
     # h' as its own point.
     fs, xi0 = fs.seed(commitment, x, value)
-    ls, rs = [], []
-    for _ in range(k):
-        m = a.shape[0] // 2
-        a_lo, a_hi = a[:m], a[m:]
-        b_lo, b_hi = b[:m], b[m:]
-        g_lo, g_hi = g[:m], g[m:]
+
+    # The fold is a `lax.scan` over the round count, not a Python unroll: the unroll
+    # recompiles per size and its compile time grows ~linearly in k (zorch#344
+    # measured ≈23 s/round for an on-device-FS open, so a 2²⁰ open extrapolates to
+    # minutes), whereas the scan compiles in O(1). A scan needs a fixed-shape carry,
+    # so the half-collapsing a/b/G stay full size n; round j reads the active half at
+    # [half_j : half_j+hn] (half_j = n>>(j+1)) with a `dynamic_slice` and masks the
+    # inactive tail (idx ≥ half_j) of the msm scalars to 0 — byte-identical to the
+    # shrinking unroll (0·P = identity), and the folded carry's tail is never read
+    # again (round j+1 reads only [0:half_j/2]). The L/R cross terms ride the carry as
+    # `.at[j].set` buffers — `lax.scan` cannot auto-stack G1-affine outputs (no
+    # zero-affine constant to init the accumulator); each slot is seeded from a real
+    # point (commitment) and overwritten.
+    lr0 = jnp.broadcast_to(commitment, (k,))
+
+    def _round(
+        carry: tuple[Array, Array, Array, _Ch, Array, Array], j: Array
+    ) -> tuple[tuple[Array, Array, Array, _Ch, Array, Array], None]:
+        a, b, g, fs, ls, rs = carry
+        half = lax.shift_right_logical(jnp.int32(n), j + 1)
+        active = idx < half
+        a_lo, b_lo, g_lo = a[:hn], b[:hn], g[:hn]
+        a_hi = lax.dynamic_slice(a, (half,), (hn,))
+        b_hi = lax.dynamic_slice(b, (half,), (hn,))
+        g_hi = lax.dynamic_slice(g, (half,), (hn,))
+        a_lo_m = jnp.where(active, a_lo, fq0)
+        a_hi_m = jnp.where(active, a_hi, fq0)
 
         # arkworks L/R: L pairs a_hi with G_lo, R pairs a_lo with G_hi; the
-        # inner-product cross term rides h' = U·ξ₀ (the ·ξ₀ on the U scalar).
+        # inner-product cross term rides h' = U·ξ₀ (the ·ξ₀ on the U scalar). Only the
+        # a-side scalars need masking — `a_*_m` is already 0 past half, so its product
+        # with the unmasked b half is too.
         lj = lax.msm(
-            jnp.concatenate([a_hi, (jnp.sum(a_hi * b_lo) * xi0)[None]]),
+            jnp.concatenate([a_hi_m, (jnp.sum(a_hi_m * b_lo) * xi0)[None]]),
             jnp.concatenate([g_lo, key.u[None]]),
         )
         rj = lax.msm(
-            jnp.concatenate([a_lo, (jnp.sum(a_lo * b_hi) * xi0)[None]]),
+            jnp.concatenate([a_lo_m, (jnp.sum(a_lo_m * b_hi) * xi0)[None]]),
             jnp.concatenate([g_hi, key.u[None]]),
         )
         fs, uj = fs.challenge(lj, rj)
         uj_inv = one / uj
 
-        a = a_lo + a_hi * uj_inv
-        b = b_lo + b_hi * uj
         # Basis fold G_lo + u·G_hi: scalar-mul widens the high half to the jacobian
         # accumulator, so lift the unscaled low half into that same representation
         # before the point-add, then narrow back to affine for the next round's msm
@@ -198,13 +230,19 @@ def _open_one(
         # scalar-mul by one is folded away under `@jit`, leaving the low half affine
         # and the point-add a representation mismatch (affine + jacobian).
         g_hi_scaled = g_hi * uj
-        g = lax.convert_element_type(
-            lax.convert_element_type(g_lo, g_hi_scaled.dtype) + g_hi_scaled, affine
+        a = a.at[:hn].set(a_lo + a_hi * uj_inv)
+        b = b.at[:hn].set(b_lo + b_hi * uj)
+        g = g.at[:hn].set(
+            lax.convert_element_type(
+                lax.convert_element_type(g_lo, g_hi_scaled.dtype) + g_hi_scaled, affine
+            )
         )
-        ls.append(lj)
-        rs.append(rj)
+        return (a, b, g, fs, ls.at[j].set(lj), rs.at[j].set(rj)), None
 
-    return fs, value, IpaProof(jnp.stack(ls), jnp.stack(rs), a[0])
+    (a, _, _, fs, ls, rs), _ = lax.scan(
+        _round, (a, b, g, fs, lr0, lr0), jnp.arange(k, dtype=jnp.int32)
+    )
+    return fs, value, IpaProof(ls, rs, a[0])
 
 
 def _open_one_zk(
