@@ -122,7 +122,7 @@ class SpongeTest(absltest.TestCase):
             )
 
     def test_hash_many_blocks_matches_stepwise_replay(self) -> None:
-        # n=28/32 drive the scan through 2-3 iterations (carry across blocks)
+        # n=28/32 drive the absorb through 2-3 blocks (carry across blocks)
         # with and without a partial tail — regimes the fixed vectors above
         # never reach.
         perm = koalabear16_perm()
