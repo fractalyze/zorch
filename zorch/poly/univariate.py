@@ -11,6 +11,25 @@ import zk_dtypes
 from jax import Array
 
 
+def powers(x: Array, n: int) -> Array:
+    """``(1, x, x², …, x^{n-1})`` ascending, length ``n`` (``n`` static).
+
+    Built by log-doubling (``powers[m:2m] = powers[:m]·xᵐ``) so the traced graph
+    is O(log n), not ``n`` unrolled multiplies — a linear power chain makes the
+    fused kernel's operand count scale with ``n`` and past a few thousand entries
+    overruns the GPU's kernel-parameter space (the same cliff ``eval_coeffs``
+    avoids). The monomial-basis evaluation vector: ``⟨coeffs, powers(x, n)⟩ =
+    Σ cᵢ xⁱ``."""
+    if n < 1:
+        raise ValueError(f"powers needs n >= 1, got {n}")
+    out = jnp.ones((1,), dtype=x.dtype)
+    step = x
+    while out.shape[0] < n:
+        out = jnp.concatenate([out, out * step])
+        step = step * step
+    return out[:n]
+
+
 def eval_univariate(evals: Array, x: Array) -> Array:
     """Evaluate a univariate given by its values on ``[0, 1, ..., len-1]`` at
     ``x``, by Lagrange interpolation over that integer domain.
