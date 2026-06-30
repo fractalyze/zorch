@@ -22,12 +22,12 @@ _LENGTHS = (0, 1, 55, 56, 63, 64, 119, 120)
 
 class Sha256Test(parameterized.TestCase):
     @parameterized.parameters(*_LENGTHS)
-    def test_matches_hashlib(self, length: int):
+    def test_matches_hashlib(self, length: int) -> None:
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
         got = bytes(np.asarray(sha256.digest(msg[None, :]))[0])
         self.assertEqual(got, hashlib.sha256(bytes(msg)).digest())
 
-    def test_batched_equals_per_row(self):
+    def test_batched_equals_per_row(self) -> None:
         # One data-parallel call over a stack of equal-length messages must equal
         # the per-message hashlib digests, in order.
         length = 64

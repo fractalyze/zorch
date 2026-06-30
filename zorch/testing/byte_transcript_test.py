@@ -56,7 +56,7 @@ def _ref_sample_slice(buf: bytes, count: int, width: int) -> tuple[bytes, bytes]
 
 class ByteTranscriptTest(absltest.TestCase):
     # ---- self-anchored golden against an independent hashlib reference ----
-    def test_matches_independent_reference(self):
+    def test_matches_independent_reference(self) -> None:
         t = Sha256Transcript.new(b"agnostic-domain")
         ref = _ref_new(b"agnostic-domain")
 
@@ -79,45 +79,45 @@ class ByteTranscriptTest(absltest.TestCase):
         self.assertEqual(t.buffer, ref)
 
     # ---- domain separation / divergence ----
-    def test_different_domains_diverge(self):
+    def test_different_domains_diverge(self) -> None:
         a = Sha256Transcript.new(b"dom-a").sample_scalar(16)[1]
         b = Sha256Transcript.new(b"dom-b").sample_scalar(16)[1]
         self.assertNotEqual(a, b)
 
-    def test_label_changes_output(self):
+    def test_label_changes_output(self) -> None:
         base = Sha256Transcript.new(b"d")
         a = base.observe_label(b"L").sample_scalar(16)[1]
         b = base.sample_scalar(16)[1]
         self.assertNotEqual(a, b)
 
-    def test_different_observations_diverge(self):
+    def test_different_observations_diverge(self) -> None:
         base = Sha256Transcript.new(b"d")
         a = base.observe_scalar(b"A" * 16).sample_scalar(16)[1]
         b = base.observe_scalar(b"B" * 16).sample_scalar(16)[1]
         self.assertNotEqual(a, b)
 
     # ---- non-collision (the op/kind tags + length prefixes do their job) ----
-    def test_scalar_vs_slice_of_one_dont_collide(self):
+    def test_scalar_vs_slice_of_one_dont_collide(self) -> None:
         v = b"X" * 16
         base = Sha256Transcript.new(b"d")
         a = base.observe_scalar(v).sample_scalar(16)[1]
         b = base.observe_slice(v, 1).sample_scalar(16)[1]
         self.assertNotEqual(a, b)
 
-    def test_two_scalars_vs_one_slice_of_two_dont_collide(self):
+    def test_two_scalars_vs_one_slice_of_two_dont_collide(self) -> None:
         x, y = b"1" * 16, b"2" * 16
         base = Sha256Transcript.new(b"d")
         a = base.observe_scalar(x).observe_scalar(y).sample_scalar(16)[1]
         b = base.observe_slice(x + y, 2).sample_scalar(16)[1]
         self.assertNotEqual(a, b)
 
-    def test_sample_scalar_vs_slice_of_one_differ(self):
+    def test_sample_scalar_vs_slice_of_one_differ(self) -> None:
         base = Sha256Transcript.new(b"d")
         a = base.sample_scalar(16)[1]
         b = base.sample_slice(1, 16)[1]
         self.assertNotEqual(a, b)
 
-    def test_sample_advances_state(self):
+    def test_sample_advances_state(self) -> None:
         # A sample then an observe must diverge from the no-sample path — pins the
         # re-absorb of squeezed bytes.
         base = Sha256Transcript.new(b"d")
@@ -126,7 +126,7 @@ class ByteTranscriptTest(absltest.TestCase):
         self.assertNotEqual(a, b)
 
     # ---- proof-of-work ----
-    def test_pow_roundtrip(self):
+    def test_pow_roundtrip(self) -> None:
         for bits in (0, 5, 10, 14):
             p = Sha256Transcript.new(b"pow").observe_bytes(b"root")
             p, nonce = p.grind_pow(bits)
@@ -136,14 +136,14 @@ class ByteTranscriptTest(absltest.TestCase):
             # Subsequent challenges agree on both sides.
             self.assertEqual(p.sample_scalar(16)[1], v.sample_scalar(16)[1])
 
-    def test_pow_rejects_wrong_nonce(self):
+    def test_pow_rejects_wrong_nonce(self) -> None:
         p = Sha256Transcript.new(b"pow").observe_bytes(b"root")
         _, nonce = p.grind_pow(10)
         v = Sha256Transcript.new(b"pow").observe_bytes(b"root")
         _, ok = v.verify_pow(nonce + 1, 10)
         self.assertFalse(ok)
 
-    def test_pow_zero_bits_requires_canonical_nonce(self):
+    def test_pow_zero_bits_requires_canonical_nonce(self) -> None:
         mk = lambda: Sha256Transcript.new(b"pow").observe_bytes(b"root")
         self.assertEqual(mk().grind_pow(0)[1], 0)
         self.assertTrue(mk().verify_pow(0, 0)[1])
