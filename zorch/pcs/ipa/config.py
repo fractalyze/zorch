@@ -38,3 +38,28 @@ class IpaProof:
     l: Array  # G1 affine [k] — L_j per round
     r: Array  # G1 affine [k] — R_j per round
     a: Array  # scalar field — collapsed coefficient after k folds
+
+
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=["l", "r", "a", "hiding_comm", "rand"],
+    meta_fields=[],
+)
+@dataclass(frozen=True)
+class IpaZkProof:
+    """One polynomial's *hiding* opening proof — the no-zk `IpaProof` plus the two
+    elements blinding adds.
+
+    `l`, `r`, `a` are the fold's cross terms and collapsed scalar exactly as in
+    `IpaProof`: the zk fold runs the *same* recurrence, only on a blinded
+    `(commitment, coeffs)`. `hiding_comm` is the Pedersen commitment to the blinding
+    polynomial (`⟨hiding_poly, G⟩ + s·hiding_rand`) and `rand` the accumulated
+    commitment randomness; the verifier re-folds both into the statement before
+    replaying the fold (see `prover.open_zk` / `verifier.reduce_opening_zk`). A
+    registered pytree so it crosses the `open`/`verify` `@jit` boundary."""
+
+    l: Array  # G1 affine [k] — L_j per round
+    r: Array  # G1 affine [k] — R_j per round
+    a: Array  # scalar field — collapsed coefficient after k folds
+    hiding_comm: Array  # G1 affine — Pedersen commitment of the blinding poly
+    rand: Array  # scalar field — accumulated commitment randomness
