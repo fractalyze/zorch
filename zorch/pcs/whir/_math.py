@@ -16,6 +16,7 @@ from jax.typing import DTypeLike
 
 from zorch.coding.reed_solomon import ReedSolomon, fri_fold_values
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.poly.univariate import powers
 from zorch.transcript import Transcript
 
 
@@ -95,13 +96,11 @@ def pow2_powers(z: Array, n: int) -> list[Array]:
 
 def query_gamma_powers(gamma: Array, count: int) -> Array:
     """`[γ², γ³, …, γ^{count+1}]` — the per-query batching weights (the OOD term
-    takes `γ¹`, so queries start at `γ²`). One stacked vector so a round's query
-    contributions reduce in a single `(weights · terms).sum()`, not a Python
-    accumulation loop. `count` (the query repetitions) is static."""
-    out = [gamma * gamma]
-    for _ in range(count - 1):
-        out.append(out[-1] * gamma)
-    return jnp.stack(out)
+    takes `γ¹`, so queries start at `γ²`), one stacked vector so a round's query
+    contributions reduce in a single `(weights · terms).sum()`. `count` (the
+    query repetitions) is static and `>= 1`; drop the `[1, γ]` prefix of the
+    ascending power vector."""
+    return powers(gamma, count + 2)[2:]
 
 
 def eq_table(point: list[Array]) -> Array:

@@ -30,7 +30,7 @@ import numpy as np
 import zk_dtypes
 from jax import Array, lax
 
-from zorch.poly.univariate import compute_lagrange_basis
+from zorch.poly.univariate import compute_lagrange_basis, powers
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 
 if TYPE_CHECKING:
@@ -111,18 +111,12 @@ class ReedSolomon:
         self.fold_factor = fold_factor
         self._log2_fold_factor = log2_strict_usize(fold_factor)
         # Coset eval scales coeffs by [1, h, h^2, ..., h^{n-1}]; precompute it
-        # once since h and n are fixed. Built by log-doubling — powers[m:2m] =
-        # powers[:m] * h^m — because `jnp.arange` raises on extension dtypes
-        # (iota unsupported) and a sequential `jnp.cumprod` is one
-        # O(n)-depth kernel, paid eagerly at construction.
+        # once since h and n are fixed (paid eagerly at construction). `powers`
+        # log-doubles rather than `jnp.cumprod`/`jnp.arange` (iota raises on
+        # extension dtypes).
         self._coset_powers = None
         if coset_shift is not None:
-            powers = jnp.ones((1,), dtype)
-            step = jnp.asarray(coset_shift, dtype)
-            while powers.shape[0] < self.block_len:
-                powers = jnp.concatenate([powers, powers * step])
-                step = step * step
-            self._coset_powers = powers
+            self._coset_powers = powers(jnp.asarray(coset_shift, dtype), self.block_len)
         self._key: tuple | None = None
 
     # Value equality/hash for static jit-zone keys — the LinearCode seam
