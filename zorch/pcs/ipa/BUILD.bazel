@@ -1,0 +1,24 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "ipa",
+    srcs = [
+        "__init__.py",
+        "challenger.py",
+        "config.py",
+        "math.py",
+        "prover.py",
+        "setup.py",
+        "verifier.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
+        "//zorch/poly",
+        "//zorch/utils:bits",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)

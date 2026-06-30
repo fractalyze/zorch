@@ -11,9 +11,24 @@ from zorch.poly.univariate import (
     compute_lagrange_basis,
     eval_coeffs,
     eval_univariate,
+    powers,
 )
 
 KB = zk_dtypes.koalabear_mont
+
+
+class PowersTest(absltest.TestCase):
+    def test_ascending_powers(self) -> None:
+        self.assertEqual([int(v) for v in powers(jnp.array(3, KB), 4)], [1, 3, 9, 27])
+
+    def test_non_power_of_two_length_truncates(self) -> None:
+        # Log-doubling overshoots to the next power of two, then truncates.
+        self.assertEqual(
+            [int(v) for v in powers(jnp.array(2, KB), 5)], [1, 2, 4, 8, 16]
+        )
+
+    def test_length_one_is_just_one(self) -> None:
+        self.assertEqual([int(v) for v in powers(jnp.array(9, KB), 1)], [1])
 
 
 class EvalUnivariateTest(absltest.TestCase):
