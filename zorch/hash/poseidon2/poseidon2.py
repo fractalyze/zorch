@@ -201,29 +201,31 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     )
 
 
+def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
+    """The base M4 flattened row-major as a numpy int64 `(16,)`. A numpy value
+    (not a Python list) so it lowers to a `dense<[..]> : tensor<16xi64>` the zkx
+    recognizer can parse (a plain list lowers to an unparsed ArrayAttr). Caller
+    guards on `has_dedicated_fusion`."""
+    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
+    return np.array(perm._external_m4, dtype=np.int64).flatten()
+
+
 def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
-    """The dedicated marker's `composite.attributes` + version. On the dedicated
-    marker the permutation shape rides as attributes — the zkx recognizer's
-    contract: the four shape ints (it maps `alpha` to its s-box degree) plus
-    `external_m4`, the 4×4 base M4 flattened row-major, which the emitter applies
-    per 4-block (so the external layer is no longer hardcoded). The body ignores
-    them (metadata only); the generic marker stays attrs-free."""
+    """The dedicated marker's `composite.attributes` + version. The permutation
+    shape rides as attributes — the zkx recognizer's contract: the four shape ints
+    (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4 base M4. The
+    recognizer rewrites only the M4 its kernel implements (the canonical
+    `circ(2,3,1,1)`) and leaves any other matrix to inline its real body, so the
+    attr is what identifies the matrix. The body ignores these attrs (metadata
+    only); the generic marker stays attrs-free."""
     if not perm.has_dedicated_fusion:
         return {}, 0
-    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
     attrs: dict[str, object] = {
         "width": perm.width,
         "external_rounds": perm._p.external_rounds,
         "internal_rounds": perm._p.internal_rounds,
         "alpha": perm._p.alpha,
-        # A numpy value (not a Python list) so it lowers to a
-        # `dense<[..]> : tensor<16xi64>` attribute the zkx recognizer parses with
-        # GetCompositeAttrIntArray (a plain list lowers to an unparsed ArrayAttr).
-        # Row-major 4×4.
-        "external_m4": np.array(
-            [perm._external_m4[r][c] for r in range(4) for c in range(4)],
-            dtype=np.int64,
-        ),
+        "external_m4": _external_m4_attr(perm),
     }
     return attrs, POSEIDON2_MARKER_VERSION
 
@@ -301,13 +303,17 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
     if not perm.has_dedicated_fusion:
         return sponge(*operands)
     p = perm._p
-    marker_attrs: dict[str, int] = {
+    # external_m4 rides here too (like the permute marker) so the recognizer can
+    # gate the sponge kernel on the M4 it implements — the canonical circ(2,3,1,1)
+    # rewrites, any other M4 inlines its real body.
+    marker_attrs: dict[str, object] = {
         "width": w,
         "rate": rate,
         "digest_elems": out,
         "external_rounds": p.external_rounds,
         "internal_rounds": p.internal_rounds,
         "alpha": p.alpha,
+        "external_m4": _external_m4_attr(perm),
     }
     return fused_region(
         sponge,
