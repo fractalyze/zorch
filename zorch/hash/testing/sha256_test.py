@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
@@ -36,6 +38,25 @@ class Sha256Test(parameterized.TestCase):
         got = np.asarray(sha256.digest(batch))
         for i in range(batch.shape[0]):
             self.assertEqual(bytes(got[i]), hashlib.sha256(bytes(batch[i])).digest())
+
+    @parameterized.parameters(*_LENGTHS)
+    def test_marked_equals_inline(self, length: int) -> None:
+        # The zorch.sha256 marker only tags the region; with no dedicated emitter
+        # wired it inlines its decomposition, so the marked digest must byte-equal
+        # the unmarked compression at every padding boundary.
+        msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
+        blocks = jnp.asarray(sha256._pad(msg[None, :]))
+        marked = np.asarray(sha256._digest_words_marked(blocks))
+        inline = np.asarray(sha256._digest_words(blocks))
+        np.testing.assert_array_equal(marked, inline)
+
+    def test_emits_single_composite_marker(self) -> None:
+        # digest lowers to exactly one stablehlo.composite, name-routed to the
+        # dedicated zorch.sha256 emitter (parallel to zorch.poseidon2).
+        blocks = jnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
+        txt = jax.jit(sha256._digest_words_marked).lower(blocks).as_text()
+        self.assertIn(sha256.SHA256_MARKER, txt)
+        self.assertEqual(txt.count("stablehlo.composite"), 1)
 
 
 if __name__ == "__main__":

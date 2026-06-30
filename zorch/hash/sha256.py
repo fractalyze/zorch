@@ -16,12 +16,22 @@ host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
 """
 from __future__ import annotations
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
 
+from zorch.fusion import fused_region
+
 U32 = jnp.uint32
+
+SHA256_MARKER = "zorch.sha256"
+# Marker revision riding as `composite.version`. zkx recognizes the marker by
+# name + attributes and deliberately does not gate on the version; it lets a
+# future contract change be staged without renaming the marker (cf. POSEIDON2).
+SHA256_MARKER_VERSION = 1
 
 # Round constants (first 32 bits of the fractional parts of the cube roots of the
 # first 64 primes) and initial hash state (sqrt of first 8 primes).
@@ -193,11 +203,42 @@ def _digest_words(blocks: Array) -> Array:
     return out.reshape(b, 32)
 
 
+# Module-level jit zone: `lax.composite` re-traces its decomposition on every
+# emission, and one PCS open emits the leaf + every internal level of a Merkle
+# commit plus each transcript squeeze — so the uncached re-trace of the 64-round
+# body would dominate the first-trace floor (cf. poseidon2._permute_body, #216).
+# `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
+# module (one composite marker per digest) is unchanged.
+@partial(jax.jit, inline=True)
+def _digest_words_marked(blocks: Array) -> Array:
+    """`_digest_words`, wrapped in the name-routed `zorch.sha256` composite.
+
+    blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32]. SHA-256 is Merkle-Damgard —
+    a 64-round compression over a `fori_loop`, not straight-line — so it takes the
+    *name-routed* marker (exempt from the generic single-kernel rule, the way
+    `zorch.poseidon2` is) and routes to a dedicated zkx Sha256Fusion emitter. With
+    no emitter wired the marker inlines its decomposition, so the bytes are
+    unchanged. The emitter reads the block count from the operand's shape.
+    """
+
+    def decomposition(b: Array, **_attrs: object) -> Array:
+        return _digest_words(b)
+
+    return fused_region(
+        decomposition,
+        blocks,
+        name=SHA256_MARKER,
+        version=SHA256_MARKER_VERSION,
+    )
+
+
 def digest(msg: Array) -> jnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
-    Byte-identical to the FIPS 180-4 standard per message.
+    Byte-identical to the FIPS 180-4 standard per message. The device compression
+    is emitted as the name-routed `zorch.sha256` marker (host padding stays out of
+    the region, since it is static and data-independent).
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
-    return _digest_words(blocks)
+    return _digest_words_marked(blocks)
