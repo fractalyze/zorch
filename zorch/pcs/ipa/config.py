@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """IPA wire types on the `pcs` seam.
 
-The commitment is a bare array — a batch of bn254 G1 points, one Pedersen
+The commitment is a bare array — a batch of G1 points, one Pedersen
 commitment `P = ⟨a, G⟩` per polynomial — so it is a named alias like KZG's. The
 proof carries structure (the per-round cross terms plus the collapsed scalar) and
 crosses the open/verify `@jit` boundary, so it is a registered-pytree dataclass
@@ -16,7 +16,7 @@ from typing import TypeAlias
 import jax
 from jax import Array
 
-IpaCommitment: TypeAlias = Array  # bn254 G1 affine [K] — one P = ⟨a, G⟩ per poly
+IpaCommitment: TypeAlias = Array  # G1 affine [K] — one P = ⟨a, G⟩ per poly
 
 
 @partial(
@@ -28,7 +28,7 @@ IpaCommitment: TypeAlias = Array  # bn254 G1 affine [K] — one P = ⟨a, G⟩ p
 class IpaProof:
     """One polynomial's opening proof.
 
-    `l`, `r` are the round cross terms `L_j`, `R_j` (bn254 G1 affine, `[k]` each
+    `l`, `r` are the round cross terms `L_j`, `R_j` (G1 affine, `[k]` each
     for `k = log₂ n` rounds); `a` is the single field scalar the coefficient
     vector collapses to after the last fold. The verifier needs no folded `b`
     scalar in the proof — it recomputes `b = h(x)` from the round challenges in

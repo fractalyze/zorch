@@ -11,6 +11,7 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [
         "//zorch/pcs/ipa",
+        "//zorch/pcs/testing:curves",
         requirement("jax"),
         requirement("zk_dtypes"),
     ],
@@ -24,6 +25,8 @@ py_test(
         ":basis",
         "//zorch:transcript",
         "//zorch/pcs/ipa",
+        "//zorch/pcs/testing:curves",
+        "//zorch/poly",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),

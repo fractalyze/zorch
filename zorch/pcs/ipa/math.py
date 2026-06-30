@@ -1,13 +1,13 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Field-only kernels behind the IPA fold — no EC point, no MSM.
+"""Check-polynomial kernels behind the IPA fold — no EC point, no MSM.
 
-These are the pieces a verifier (and an accumulation consumer) needs that touch
-*only* the scalar field, factored out of `verifier.py` so they run and test on a
-CPU-friendly base field independent of the bn254 `lax.msm` path (the same split
-KZG draws between `_quotient_and_eval` and its MSMs). Three things live here:
+The pieces a verifier (and an accumulation consumer) needs that touch *only* the
+scalar field, factored out of `verifier.py` so they run and test on the scalar
+field independent of the curve's `lax.msm` path (the same split KZG draws between
+`_quotient_and_eval` and its MSMs). The generic monomial-basis vector
+`b = (1, x, …, x^{n-1})` lives in `zorch.poly.univariate.powers`; the two kernels
+here are IPA-specific:
 
-- `inner_powers` — the evaluation vector `b = (1, x, …, x^{n-1})` IPA proves the
-  inner product against (`⟨a, b⟩ = p(x)`).
 - `challenge_vector` — the size-`n` vector `s` with `G_final = ⟨s, G⟩` (the one
   expensive MSM the verifier/decider owes). The dense coefficients of the check
   polynomial `h` below, built by the *exact* inverse of the prover's basis fold,
@@ -16,14 +16,18 @@ KZG draws between `_quotient_and_eval` and its MSMs). Three things live here:
 - `eval_challenge_poly` — `h(x) = ∏_j (1 + u_j · x^{2^{k-1-j}})`, the O(log n)
   evaluation of the check polynomial whose coefficients are `s`. This is the
   folded scalar `b` *without* materializing `s`, and the reason an accumulation
-  step stays succinct: `h` is pinned by the `k = log n` challenges alone. The
-  no-inverse form (`1 + u_j·X^…`, not `u_j⁻¹ + u_j·X^…`) is arkworks `ipa_pc`'s
-  `SuccinctCheckPolynomial` convention, so the decider's final-key MSM can
-  byte-match that oracle (zorch#339 W3; see docs/pcs.md).
+  step stays succinct: `h` is pinned by the `k = log n` challenges alone.
+
+Both use the no-inverse form (`1 + u_j·X^…`, not `u_j⁻¹ + u_j·X^…`). That formula
+IS the contract; it matches arkworks' check polynomial (the `poly-commit` crate's
+`ipa_pc` succinct check, `compute_coeffs` / `evaluate`), pinned against that
+oracle at zorch#339 W3 (see docs/pcs.md) so the decider's final-key MSM
+byte-matches it — treat the arkworks symbol names as a pointer that may move, the
+formula as the spec.
 
 `challenge_vector` and `eval_challenge_poly` are two readings of the *same* object
-— `eval_challenge_poly(u, x) == ⟨challenge_vector(u), inner_powers(x, n)⟩` — and a
-test pins that identity so the succinct path and the explicit path cannot drift.
+— `eval_challenge_poly(u, x) == ⟨challenge_vector(u), powers(x, n)⟩` — and a test
+pins that identity so the succinct path and the explicit path cannot drift.
 """
 
 from __future__ import annotations
@@ -32,32 +36,10 @@ import jax.numpy as jnp
 from jax import Array
 
 
-def _check_pow2(n: int) -> int:
-    """Return `k` with `n == 2^k`, or raise. IPA folds in half each round, so a
-    non-power-of-two length has no last round that collapses to a scalar."""
-    if n < 1 or (n & (n - 1)) != 0:
-        raise ValueError(f"IPA needs a power-of-two length, got {n}")
-    return n.bit_length() - 1
-
-
-def inner_powers(x: Array, n: int) -> Array:
-    """`b = (1, x, x², …, x^{n-1})` as an ascending array. The vector IPA opens
-    the inner product against: `⟨a, b⟩ = Σ aᵢ xⁱ = p(x)`. The power chain is
-    unrolled at trace time (`n` static) rather than a `jnp.cumprod`: the repo
-    keeps field reductions on `lax`/unrolled forms, not the `jnp` reduce wrappers
-    (zorch/fusion.py), and the same idiom drives KZG's `_quotient_and_eval`."""
-    _check_pow2(n)
-    powers = [jnp.ones((), dtype=x.dtype)]
-    for _ in range(n - 1):
-        powers.append(powers[-1] * x)
-    return jnp.stack(powers)
-
-
 def challenge_vector(u: Array) -> Array:
     """The size-`n` combiner `s` with `G_final = ⟨s, G⟩` and `b_final = ⟨s, b⟩`,
     where `u[j]` is round `j`'s challenge (`n = 2^k`, `k = len(u)`). These are the
-    dense coefficients of the check polynomial `h` (arkworks
-    `SuccinctCheckPolynomial::compute_coeffs`).
+    dense coefficients of the check polynomial `h`.
 
     Derived as the exact inverse of the prover's basis fold
     `G^{(j+1)}_t = G^{(j)}_t + u_j·G^{(j)}_{t+m}`: a coefficient `c` on a folded
@@ -76,9 +58,8 @@ def challenge_vector(u: Array) -> Array:
 def eval_challenge_poly(u: Array, x: Array) -> Array:
     """`h(x) = ∏_{j=0}^{k-1} (1 + u_j · x^{2^{k-1-j}})` in O(k) — the folded scalar
     `b_final` without materializing the size-`n` `s` (the succinct read of
-    `challenge_vector`). The no-inverse form is arkworks `ipa_pc`'s
-    `SuccinctCheckPolynomial::evaluate`. `x^{2^m}` comes from repeated squaring, so
-    no field `pow` by a large exponent is needed."""
+    `challenge_vector`). `x^{2^m}` comes from repeated squaring, so no field `pow`
+    by a large exponent is needed."""
     k = u.shape[0]
     one = jnp.ones((), dtype=x.dtype)
     # squares[m] = x^{2^m}, m = 0 .. k-1

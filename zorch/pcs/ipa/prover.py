@@ -46,9 +46,10 @@ from jax import Array, lax
 
 from zorch.pcs.ipa.challenger import IpaChallenger, TranscriptChallenger
 from zorch.pcs.ipa.config import IpaCommitment, IpaProof
-from zorch.pcs.ipa.math import _check_pow2, inner_powers
 from zorch.pcs.ipa.setup import IpaKey
+from zorch.poly.univariate import powers
 from zorch.transcript import Transcript
+from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
@@ -114,12 +115,12 @@ def _open_one(
     `fs`. Returns `(challenger, value, proof)`. Challenger-generic so an
     accumulation consumer can drive it with an arkworks-faithful `IpaChallenger`."""
     n = coeffs.shape[0]
-    k = _check_pow2(n)
+    k = log2_strict_usize(n)
     affine = key.basis.dtype  # the point representation msm consumes
     one = jnp.ones((), dtype=coeffs.dtype)
 
     a = coeffs
-    b = inner_powers(x, n)
+    b = powers(x, n)
     g = key.basis[:n]
     value = jnp.sum(a * b)  # ⟨a, b⟩ = p(x)
 

@@ -9,49 +9,38 @@ from jax import Array
 
 from zorch.pcs.ipa.challenger import TranscriptChallenger
 from zorch.pcs.ipa.config import IpaProof
-from zorch.pcs.ipa.math import (
-    _check_pow2,
-    challenge_vector,
-    eval_challenge_poly,
-    inner_powers,
-)
+from zorch.pcs.ipa.math import challenge_vector, eval_challenge_poly
 from zorch.pcs.ipa.prover import IpaProver, IpaProverData
 from zorch.pcs.ipa.testing import basis
 from zorch.pcs.ipa.verifier import IpaVerifier, reduce_opening, settle
+from zorch.pcs.testing import curves
+from zorch.poly.univariate import powers
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
-# The fold/challenge math is field-agnostic; exercise it over a small base field
-# (CPU-friendly), independent of bn254 and the GPU msm path — the split KZG draws
-# with `_quotient_and_eval`.
-KB = zk_dtypes.koalabear_mont
+# The check-poly math touches only the scalar field, so exercise it over the
+# curve's scalar field — Pallas Fr, the field the IPA fold actually runs in and
+# the one #339 byte-matches arkworks over — not the curve's EC / GPU msm path
+# (the same field-only / msm split KZG draws with `_quotient_and_eval`).
+SF = zk_dtypes.pallas_sf_mont
 
 
 class ChallengeMathTest(absltest.TestCase):
-    def test_inner_powers(self) -> None:
-        x = jnp.array(3, dtype=KB)
-        self.assertEqual([int(v) for v in inner_powers(x, 4)], [1, 3, 9, 27])
-
-    def test_check_pow2_rejects_non_power_of_two(self) -> None:
-        for bad in (0, 3, 6, 12):
-            with self.assertRaises(ValueError):
-                _check_pow2(bad)
-
     def test_challenge_poly_matches_explicit_s(self) -> None:
         # eval_challenge_poly(u, x) is the succinct read of ⟨challenge_vector, b⟩.
-        u = jnp.array([2, 3, 5], dtype=KB)  # k = 3 → n = 8
-        x = jnp.array(7, dtype=KB)
+        u = jnp.array([2, 3, 5], dtype=SF)  # k = 3 → n = 8
+        x = jnp.array(7, dtype=SF)
         s = challenge_vector(u)
         self.assertEqual(s.shape, (8,))
-        explicit = jnp.sum(s * inner_powers(x, 8))
+        explicit = jnp.sum(s * powers(x, 8))
         self.assertEqual(int(eval_challenge_poly(u, x)), int(explicit))
 
     def test_challenge_vector_is_the_fold_inverse(self) -> None:
         # Folding any vector by the prover's basis recurrence
         # (V ← V_lo + V_hi·u) collapses to ⟨s, V⟩ — the property that makes
         # G_final = ⟨s, G⟩ reproduce the prover's folded basis.
-        u = jnp.array([2, 3, 5], dtype=KB)
-        v = jnp.arange(1, 9, dtype=KB)
+        u = jnp.array([2, 3, 5], dtype=SF)
+        v = jnp.arange(1, 9, dtype=SF)
         folded = v
         for j in range(3):
             m = folded.shape[0] // 2
@@ -60,11 +49,12 @@ class ChallengeMathTest(absltest.TestCase):
         self.assertEqual(int(folded[0]), int(jnp.sum(challenge_vector(u) * v)))
 
     def test_challenge_vector_matches_arkworks_h_coeffs(self) -> None:
-        # The dense coeffs are arkworks' SuccinctCheckPolynomial::compute_coeffs of
-        # h(X) = ∏(1 + u_j·X^{2^{k-1-j}}) (no inverses) — the descending-block layout
-        # the decider's final-key MSM byte-matches (zorch#339 W4). For k=2,
+        # The dense coeffs are the check polynomial's coeffs:
+        # h(X) = ∏(1 + u_j·X^{2^{k-1-j}}) (no inverses) — the descending-block
+        # layout the decider's final-key MSM byte-matches arkworks ipa_pc over
+        # (zorch#339 W4; the formula is the contract). For k=2,
         # h(X) = (1 + u0·X²)(1 + u1·X) → [1, u1, u0, u0·u1].
-        u = jnp.array([2, 3], dtype=KB)
+        u = jnp.array([2, 3], dtype=SF)
         self.assertEqual([int(c) for c in challenge_vector(u)], [1, 3, 2, 6])
 
 
@@ -79,8 +69,8 @@ _GPU = jax.default_backend() == "gpu"
 
 # (subtest name, Montgomery scalar field, standard-domain toy curve)
 _CURVES = (
-    ("bn254", zk_dtypes.bn254_sf_mont, basis.BN254),
-    ("pallas", zk_dtypes.pallas_sf_mont, basis.PALLAS),
+    ("bn254", zk_dtypes.bn254_sf_mont, curves.BN254),
+    ("pallas", zk_dtypes.pallas_sf_mont, curves.PALLAS),
 )
 
 
@@ -91,7 +81,7 @@ def _transcript(sf: type) -> DuplexTranscript:
 @absltest.skipUnless(_GPU, "IPA commit/open/verify use lax.msm, a GPU-only kernel")
 class IpaRoundTripTest(parameterized.TestCase):
     def _commit_open(
-        self, sf: type, curve: basis.ToyCurve
+        self, sf: type, curve: curves.Curve
     ) -> tuple[IpaVerifier, Array, Array, Array, list[IpaProof]]:
         key = basis.toy_key(curve, n=4)
         coeffs = jnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
@@ -101,28 +91,26 @@ class IpaRoundTripTest(parameterized.TestCase):
         return IpaVerifier(key), x, commitment, values, proof
 
     @parameterized.named_parameters(*_CURVES)
-    def test_value_is_evaluation(self, sf: type, curve: basis.ToyCurve) -> None:
+    def test_value_is_evaluation(self, sf: type, curve: curves.Curve) -> None:
         # p(7) = 3 + 7 + 4·49 + 343 = 549.
         _, _, _, values, _ = self._commit_open(sf, curve)
         self.assertEqual(int(values[0]), 549)
 
     @parameterized.named_parameters(*_CURVES)
-    def test_open_verifies(self, sf: type, curve: basis.ToyCurve) -> None:
+    def test_open_verifies(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         ok, _ = verifier.verify(commitment, [x], values, proof, _transcript(sf))
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)
-    def test_wrong_value_rejected(self, sf: type, curve: basis.ToyCurve) -> None:
+    def test_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         bad = values + jnp.array(1, dtype=sf)
         ok, _ = verifier.verify(commitment, [x], bad, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)
-    def test_reduced_claim_defers_the_msm(
-        self, sf: type, curve: basis.ToyCurve
-    ) -> None:
+    def test_reduced_claim_defers_the_msm(self, sf: type, curve: curves.Curve) -> None:
         # reduce_opening, driven by an injected IpaChallenger, reaches the same
         # accept verdict as verify once its deferred claim is settled — the
         # accumulation reuse contract (an arkworks consumer swaps in its own
@@ -139,7 +127,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         self.assertTrue(bool(settle(verifier.key, claim)))
 
     @parameterized.named_parameters(*_CURVES)
-    def test_wrong_commitment_rejected(self, sf: type, curve: basis.ToyCurve) -> None:
+    def test_wrong_commitment_rejected(self, sf: type, curve: curves.Curve) -> None:
         # The Fiat-Shamir now binds the commitment: verifying against a different
         # one rejects (statement binding the bare fold lacked).
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
@@ -152,11 +140,11 @@ class IpaBatchValidationTest(absltest.TestCase):
     # The batch-length guards fire before any MSM, so these need no GPU.
     def test_open_rejects_batch_mismatch(self) -> None:
         sf = zk_dtypes.bn254_sf_mont
-        key = basis.toy_key(basis.BN254, n=4)
+        key = basis.toy_key(curves.BN254, n=4)
         coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
         x = jnp.array(7, dtype=sf)
         # commitments is never read — open raises on the length check first.
-        dummy = jnp.zeros((1,), dtype=basis.BN254.g1)
+        dummy = jnp.zeros((1,), dtype=curves.BN254.g1)
         with self.assertRaises(ValueError):
             IpaProver(key).open(
                 IpaProverData((coeffs,), dummy), [x, x], _transcript(sf)
