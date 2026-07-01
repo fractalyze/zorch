@@ -223,20 +223,20 @@ def _open_one(
         fs, uj = fs.challenge(lj, rj)
         uj_inv = one / uj
 
-        # Basis fold G_lo + u·G_hi: scalar-mul widens the high half to the jacobian
-        # accumulator, so lift the unscaled low half into that same representation
-        # before the point-add, then narrow back to affine for the next round's msm
-        # input. Convert explicitly to `g_hi·uj`'s dtype rather than via `· one`: a
-        # scalar-mul by one is folded away under `@jit`, leaving the low half affine
-        # and the point-add a representation mismatch (affine + jacobian).
-        g_hi_scaled = g_hi * uj
+        # Basis fold G_lo + u·G_hi. A point·scalar widens affine → jacobian, so
+        # scale BOTH halves — the low half by one — to land the sum in jacobian,
+        # then narrow to affine for the next round's msm input. The affine →
+        # jacobian convert is the one representation op the default CPU XLA backend
+        # cannot legalize; scalar-mul, the jacobian point-add, and the jacobian →
+        # affine narrow all lower on it, so writing the fold this way keeps it one
+        # fused kernel on GPU while also running on the CPU backend — required so
+        # the CPU byte-match consumers can drive this prover (zorch#355). The
+        # narrowed affine point is canonical, so the jacobian path taken to reach it
+        # does not change the bytes: identical to the msm-collapsed basis the
+        # verifier settles against.
         a = a.at[:hn].set(a_lo + a_hi * uj_inv)
         b = b.at[:hn].set(b_lo + b_hi * uj)
-        g = g.at[:hn].set(
-            lax.convert_element_type(
-                lax.convert_element_type(g_lo, g_hi_scaled.dtype) + g_hi_scaled, affine
-            )
-        )
+        g = g.at[:hn].set(lax.convert_element_type((g_lo * one) + (g_hi * uj), affine))
         return (a, b, g, fs, ls.at[j].set(lj), rs.at[j].set(rj)), None
 
     (a, _, _, fs, ls, rs), _ = lax.scan(
