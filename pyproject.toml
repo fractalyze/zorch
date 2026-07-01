@@ -1,5 +1,46 @@
-# Python tooling config. zorch builds via Bazel (MODULE.bazel); this file only
-# configures pytest, which runs the `*_test.py` module tests (the bazel side
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zorch"
+dynamic = ["version"]
+description = "zorch — scheme- and zkVM-agnostic JAX-native ZK proving blocks (hashing, Merkle commitment, sumcheck, PCS, LogUp-GKR)."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "The Zorch Authors" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+]
+# The jax fork stack (jax / jaxlib / jax-cuda12-* / zk-dtypes) is deliberately
+# NOT pinned here. It is a GPU-correctness-sensitive, continuously-bumped build
+# (see requirements.in + jax-update.yml) that the *consuming* workspace pins
+# exactly; declaring it in the wheel would only force resolver conflicts there.
+# Same convention as the riscv-witness wheel. Only the light, upstream-PyPI deps
+# that never conflict are declared.
+dependencies = [
+    "absl-py",
+    "numpy",
+]
+
+[project.urls]
+Repository = "https://github.com/fractalyze/zorch"
+
+[tool.setuptools.dynamic]
+version = { attr = "zorch.__version__" }
+
+# Package the runtime tree only. Test-support packages (`*/testing`) are dropped;
+# the `testkit` package itself stays (sp1-zorch imports zorch.testkit.transcript).
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["zorch*"]
+exclude = ["zorch.testing", "zorch.testing.*", "zorch.*.testing", "zorch.*.testing.*"]
+
+# Python tooling config. zorch builds via Bazel (MODULE.bazel); the tables below
+# configure pytest, which runs the `*_test.py` module tests (the bazel side
 # covers the toolchain smoke test + the requirements-lock check).
 [tool.pytest.ini_options]
 testpaths = ["zorch"]
