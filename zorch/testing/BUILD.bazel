@@ -13,6 +13,17 @@ py_test(
 )
 
 py_test(
+    name = "device_byte_transcript_test",
+    size = "small",
+    srcs = ["device_byte_transcript_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch:device_byte_transcript",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
     name = "_composite_test",
     size = "small",
     srcs = ["_composite_test.py"],
