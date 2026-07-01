@@ -79,6 +79,11 @@ _CURVES = (
     ("pallas", zk_dtypes.pallas_sf_mont, curves.PALLAS),
 )
 
+# The zk/hiding path makes the both-Pasta byte-exactness claim, so its round-trip
+# also runs over Vesta (bn254 + Pallas already cover the curve-generic fold for the
+# transparent tests).
+_ZK_CURVES = (*_CURVES, ("vesta", zk_dtypes.vesta_sf_mont, curves.VESTA))
+
 
 def _transcript(sf: type) -> DuplexTranscript:
     return cheap_transcript(sf)
@@ -157,7 +162,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         hiding = jnp.array([2, 9, 1, 8], dtype=sf)  # blinding polynomial
         hiding_rand = jnp.array(5, dtype=sf)
         commitment_randomness = jnp.array(11, dtype=sf)
-        # The zk path opens a *hiding* commitment ⟨coeffs,G⟩ + cr·s (open_zk
+        # The zk path opens a *hiding* commitment ⟨coeffs,G⟩ + cr·s (the open
         # removes all randomness inside the fold).
         commitment, _ = IpaProver(key).commit_zk([coeffs], [commitment_randomness])
         fs = TranscriptChallenger(_transcript(sf), sf)
@@ -173,13 +178,13 @@ class IpaRoundTripTest(parameterized.TestCase):
         )
         return key, x, commitment, value, proof
 
-    @parameterized.named_parameters(*_CURVES)
+    @parameterized.named_parameters(*_ZK_CURVES)
     def test_zk_value_is_evaluation(self, sf: type, curve: curves.Curve) -> None:
         # Blinding preserves the value: p(7) = 549 despite the random blinding poly.
         _, _, _, value, _ = self._commit_open_zk(sf, curve)
         self.assertEqual(int(value), 549)
 
-    @parameterized.named_parameters(*_CURVES)
+    @parameterized.named_parameters(*_ZK_CURVES)
     def test_zk_open_verifies(self, sf: type, curve: curves.Curve) -> None:
         key, x, commitment, value, proof = self._commit_open_zk(sf, curve)
         _, claim = reduce_opening_zk(
@@ -192,7 +197,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         )
         self.assertTrue(bool(settle(key, claim)))
 
-    @parameterized.named_parameters(*_CURVES)
+    @parameterized.named_parameters(*_ZK_CURVES)
     def test_zk_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
         key, x, commitment, value, proof = self._commit_open_zk(sf, curve)
         bad = value + jnp.array(1, dtype=sf)

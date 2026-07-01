@@ -30,9 +30,10 @@ The fold is a Python `for` over the static round count, so each round lowers to
 one fused kernel (the same shape as the FRI prover's fold loop), not a `lax.scan`
 carry.
 
-Scope: one base-field polynomial per opening, power-of-two length, no hiding
-(`U`-blinding omitted, matching the study note). A demonstration of the seam, not
-a hardened prover.
+Scope: one base-field polynomial per opening, power-of-two length. `open` is
+transparent (no blinding); the hiding/zk `_open_one_zk` below blinds the witness
+and opens an `s`-randomized commitment. A demonstration of the seam, not a
+hardened prover.
 """
 
 from __future__ import annotations
@@ -60,6 +61,16 @@ if TYPE_CHECKING:
 
 _Ch = TypeVar("_Ch", bound=IpaChallenger)
 _ZkCh = TypeVar("_ZkCh", bound=ZkIpaChallenger)
+
+
+def _hiding_commit(v: Array, r: Array, basis: Array, s: Array) -> Array:
+    """Hiding Pedersen commit `⟨v, G⟩ + r·s` — the blinding generator `s` rides the
+    MSM as one extra `(r, s)` pair, so the commitment (or the blinding polynomial's)
+    randomness is folded in with no separate point-add."""
+    return lax.msm(
+        jnp.concatenate([v, r[None]]),
+        jnp.concatenate([basis[: v.shape[0]], s[None]]),
+    )
 
 
 @dataclass(frozen=True)
@@ -97,12 +108,14 @@ class IpaProver:
         s = self.key.s
         if s is None:
             raise ValueError("zk commit requires the blinding generator key.s")
+        if len(polys) != len(randomnesses):
+            raise ValueError(
+                f"batch mismatch: {len(polys)} polys vs "
+                f"{len(randomnesses)} randomnesses"
+            )
         commitments = jnp.stack(
             [
-                lax.msm(
-                    jnp.concatenate([c, r[None]]),
-                    jnp.concatenate([self.key.basis[: c.shape[0]], s[None]]),
-                )
+                _hiding_commit(c, r, self.key.basis, s)
                 for c, r in zip(polys, randomnesses)
             ]
         )
@@ -220,12 +233,12 @@ def _open_one_zk(
     value = jnp.sum(coeffs * b)  # p(x); the blinding below preserves it
 
     # Shift the blinding poly to vanish at x (keeps the value), Pedersen-commit it
-    # under the blinding generator s, and squeeze the one hiding challenge hc.
-    hiding_poly = hiding_poly.at[0].add(-jnp.sum(hiding_poly * b))
-    hiding_comm = lax.msm(
-        jnp.concatenate([hiding_poly, hiding_rand[None]]),
-        jnp.concatenate([key.basis[:n], s[None]]),
-    )
+    # under the blinding generator s, and squeeze the one hiding challenge hc. The
+    # shift is an elementwise select on the constant term (not a scatter) so the
+    # open stays one fused kernel.
+    raw_eval = jnp.sum(hiding_poly * b)
+    hiding_poly = jnp.where(jnp.arange(n) == 0, hiding_poly - raw_eval, hiding_poly)
+    hiding_comm = _hiding_commit(hiding_poly, hiding_rand, key.basis, s)
     fs, hc = fs.hiding_challenge(commitment, hiding_comm, x, value)
 
     # Fold the blinding into the statement: the blinded coefficients, the
