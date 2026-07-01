@@ -32,7 +32,11 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
-from zorch.hash.sponge import _absorb_symbolic
+from zorch.hash.sponge import (
+    SPONGE_HASH_MARKER,
+    SPONGE_HASH_MARKER_VERSION,
+    _absorb_symbolic,
+)
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -42,14 +46,6 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON2_MARKER_VERSION = 1
-
-# Whole-sponge marker: absorb + squeeze as ONE region the vendor expands into the
-# fused `poseidon2_sponge_hash` kernel (state register-resident vs a per-block
-# permute chain through DRAM). Same 6-operand ABI as the permute marker; the
-# kernel reads the absorb length at runtime, so one cubin serves every leaf width
-# and a symbolic width exports.
-SPONGE_HASH_MARKER = "zorch.poseidon2_sponge_hash"
-SPONGE_HASH_MARKER_VERSION = 1
 
 
 class Poseidon2:
@@ -110,7 +106,7 @@ class Poseidon2:
         return _permute_body(self, state)
 
     def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` and squeeze `out` lanes as ONE `poseidon2_sponge_hash`
+        """Absorb `input` and squeeze `out` lanes as ONE `sponge_hash`
         region (fused kernel, state register-resident) — byte-identical to
         `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
         generic permutation runs the inline absorb. Lowers under symbolic
@@ -201,29 +197,31 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     )
 
 
+def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
+    """The base M4 flattened row-major as a numpy int64 `(16,)`. A numpy value
+    (not a Python list) so it lowers to a `dense<[..]> : tensor<16xi64>` the zkx
+    recognizer can parse (a plain list lowers to an unparsed ArrayAttr). Caller
+    guards on `has_dedicated_fusion`."""
+    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
+    return np.array(perm._external_m4, dtype=np.int64).flatten()
+
+
 def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
-    """The dedicated marker's `composite.attributes` + version. On the dedicated
-    marker the permutation shape rides as attributes — the zkx recognizer's
-    contract: the four shape ints (it maps `alpha` to its s-box degree) plus
-    `external_m4`, the 4×4 base M4 flattened row-major, which the emitter applies
-    per 4-block (so the external layer is no longer hardcoded). The body ignores
-    them (metadata only); the generic marker stays attrs-free."""
+    """The dedicated marker's `composite.attributes` + version. The permutation
+    shape rides as attributes — the zkx recognizer's contract: the four shape ints
+    (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4 base M4. The
+    recognizer rewrites only the M4 its kernel implements (the canonical
+    `circ(2,3,1,1)`) and leaves any other matrix to inline its real body, so the
+    attr is what identifies the matrix. The body ignores these attrs (metadata
+    only); the generic marker stays attrs-free."""
     if not perm.has_dedicated_fusion:
         return {}, 0
-    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
     attrs: dict[str, object] = {
         "width": perm.width,
         "external_rounds": perm._p.external_rounds,
         "internal_rounds": perm._p.internal_rounds,
         "alpha": perm._p.alpha,
-        # A numpy value (not a Python list) so it lowers to a
-        # `dense<[..]> : tensor<16xi64>` attribute the zkx recognizer parses with
-        # GetCompositeAttrIntArray (a plain list lowers to an unparsed ArrayAttr).
-        # Row-major 4×4.
-        "external_m4": np.array(
-            [perm._external_m4[r][c] for r in range(4) for c in range(4)],
-            dtype=np.int64,
-        ),
+        "external_m4": _external_m4_attr(perm),
     }
     return attrs, POSEIDON2_MARKER_VERSION
 
@@ -266,7 +264,7 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
 
 
 def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
-    """Emit the `poseidon2_sponge_hash` marker (dedicated path) or run the
+    """Emit the `sponge_hash` marker (dedicated path) or run the
     `while_loop` absorb (generic). The decomposition is byte-identical to
     `Sponge.hash` so the region's fallback HLO matches the kernel. The 6-operand
     region carries
@@ -301,13 +299,18 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
     if not perm.has_dedicated_fusion:
         return sponge(*operands)
     p = perm._p
-    marker_attrs: dict[str, int] = {
+    # external_m4 rides here too (like the permute marker) so the recognizer can
+    # gate the sponge kernel on the M4 it implements — the canonical circ(2,3,1,1)
+    # rewrites, any other M4 inlines its real body.
+    marker_attrs: dict[str, object] = {
+        "permutation": "poseidon2",
         "width": w,
         "rate": rate,
         "digest_elems": out,
         "external_rounds": p.external_rounds,
         "internal_rounds": p.internal_rounds,
         "alpha": p.alpha,
+        "external_m4": _external_m4_attr(perm),
     }
     return fused_region(
         sponge,

@@ -133,7 +133,7 @@ def main() -> None:
     encode = jax.jit(code.encode)
 
     # Commit as ONE jit (encode + transpose + leaf hash + tree compress).
-    # NOTE: the xla_fork poseidon2_sponge_hash *supports* a column-major leaf
+    # NOTE: the xla_fork sponge_hash *supports* a column-major leaf
     # layout (leaf_stride=1) so the ``.T`` could stay a view, but zorch's
     # smcs.commit currently passes row-major strides (leaf_stride=absorb_len),
     # so XLA materializes the ``.T`` (a wrapped_transpose kernel) and the hash

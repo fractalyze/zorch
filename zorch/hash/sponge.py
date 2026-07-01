@@ -8,7 +8,7 @@ This is the Merkle leaf hasher (Plonky3 PaddingFreeSponge).
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
 `SpongeParams` (capacity = width - rate), like `Poseidon2Params`. A permutation
 exposing a dedicated `sponge_hash` (the poseidon2 fusion path) absorbs the whole
-input as one `zorch.poseidon2_sponge_hash` region the vendor expands into a single
+input as one `zorch.sponge_hash` region the vendor expands into a single
 register-resident kernel; a generic permutation runs the `while_loop` absorb. Both
 read the absorb length at runtime, so a concrete and a symbolic (shape-poly
 export) `n` lower the same way — one path, no static-`n` special case.
@@ -24,6 +24,15 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from zorch.hash.permutation import Permutation
+
+# Permutation-agnostic sponge-hash marker: absorb + squeeze as ONE region the
+# vendor expands into the fused `sponge_hash` kernel (state register-resident vs
+# a per-block permute chain through DRAM). Each permutation family carries its own
+# attrs plus a required `permutation` discriminator; the kernel reads the absorb
+# length at runtime, so one cubin serves every leaf width and a symbolic width
+# exports.
+SPONGE_HASH_MARKER = "zorch.sponge_hash"
+SPONGE_HASH_MARKER_VERSION = 1
 
 
 def _absorb_symbolic(
@@ -133,7 +142,7 @@ class Sponge:
         """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,).
 
         A permutation that exposes a dedicated `sponge_hash` (the poseidon2
-        fusion path) absorbs the whole input as one `zorch.poseidon2_sponge_hash`
+        fusion path) absorbs the whole input as one `zorch.sponge_hash`
         region the vendor expands into a single register-resident kernel; a
         generic permutation runs the `while_loop` absorb. Both read the absorb
         length at runtime, so a symbolic `n` (shape-poly export) lowers exactly
