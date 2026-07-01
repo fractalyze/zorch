@@ -20,10 +20,12 @@ free functions (`reduce_opening`, the prover's `_open_one`).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Protocol, Self
 
 import jax.numpy as jnp
 from jax import Array
+from jax.tree_util import register_dataclass
 
 from zorch.transcript import Transcript, sample_challenge
 
@@ -34,7 +36,11 @@ class IpaChallenger(Protocol):
     ξ₀, which scales the inner-product generator into `h' = U·ξ₀` (arkworks
     `ipa_pc`'s `h_prime = svk.h·ξ₀`); `challenge` absorbs a round's cross terms
     `l`, `r` and returns the fold challenge. Both also return the advanced
-    challenger (threaded functionally, like `Transcript`)."""
+    challenger (threaded functionally, like `Transcript`).
+
+    An implementation must be a registered JAX pytree — its device-resident
+    Fiat-Shamir state the data leaves, its config the static meta — because the
+    prover's fold (`_open_one`) carries the challenger through a `lax.scan`."""
 
     def seed(
         self, commitment: Array, point: Array, value: Array
@@ -57,6 +63,7 @@ class ZkIpaChallenger(IpaChallenger, Protocol):
     ) -> tuple[Self, Array]: ...
 
 
+@partial(register_dataclass, data_fields=["transcript"], meta_fields=["dtype"])
 @dataclass(frozen=True)
 class TranscriptChallenger:
     """The default `IpaChallenger`: zorch's own running `DuplexTranscript`. `seed`
@@ -65,7 +72,10 @@ class TranscriptChallenger:
     observes the round's cross terms and squeezes one `dtype` challenge;
     `hiding_challenge` squeezes the zk opening's pre-fold blinding challenge. This is
     the zorch-native FS, NOT arkworks-byte-exact, and serves as the default
-    `ZkIpaChallenger` as well as `IpaChallenger`."""
+    `ZkIpaChallenger` as well as `IpaChallenger`.
+
+    A JAX pytree (`transcript` is the data leaf — itself a pytree; `dtype` is
+    static) so the prover's fold carries it through its `lax.scan` (`_open_one`)."""
 
     transcript: Transcript
     dtype: Any  # the challenge field (a zk_dtypes scalar-field dtype)
