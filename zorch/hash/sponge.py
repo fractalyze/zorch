@@ -25,6 +25,15 @@ from jax import Array, lax
 
 from zorch.hash.permutation import Permutation
 
+# Permutation-agnostic sponge-hash marker: absorb + squeeze as ONE region the
+# vendor expands into the fused `sponge_hash` kernel (state register-resident vs
+# a per-block permute chain through DRAM). Each permutation family carries its own
+# attrs plus a required `permutation` discriminator; the kernel reads the absorb
+# length at runtime, so one cubin serves every leaf width and a symbolic width
+# exports.
+SPONGE_HASH_MARKER = "zorch.sponge_hash"
+SPONGE_HASH_MARKER_VERSION = 1
+
 
 def _absorb_symbolic(
     input: Array,

@@ -30,6 +30,11 @@ from jax import Array
 from zorch.fusion import fused_region
 from zorch.hash.poseidon.linear import apply_dense_mds
 from zorch.hash.poseidon.params import PoseidonParams
+from zorch.hash.sponge import (
+    SPONGE_HASH_MARKER,
+    SPONGE_HASH_MARKER_VERSION,
+    _absorb_symbolic,
+)
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -81,6 +86,51 @@ class Poseidon:
             )
         return _permute_body(self, state)
 
+    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Absorb `input` and squeeze `out` lanes as ONE `zorch.sponge_hash`
+        region (fused kernel, state register-resident) — byte-identical to
+        `Sponge.hash`. Lowers under symbolic `len(input)` for export."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        return _sponge_hash_body(self, input, rate, out)
+
+
+# The classic Poseidon permute on `s` given round constants flattened row-major
+# (the marked region's ABI operand). Shared by the permute marker and the
+# sponge-hash marker so the two carry one round schedule. full/partial/full
+# rounds, each ARC -> S-box -> dense MDS; the MDS rides as integer literals.
+def _permute_from_rc(perm: "Poseidon", s: Array, rc_flat: Array) -> Array:
+    p = perm._p
+    alpha = p.alpha
+    w = perm.width
+    half_full = p.full_rounds // 2
+    partial = p.partial_rounds
+    mds_rows = perm._mds_rows
+
+    def full_round(st: Array, rc: Array) -> Array:
+        return apply_dense_mds(mds_rows, jnp.power(st + rc, alpha))
+
+    def partial_round(st: Array, rc: Array) -> Array:
+        st = st + rc
+        last = jnp.power(st[w - 1], alpha)
+        # concatenate, not a static-index set: the latter lowers to scatter,
+        # which would split the fused kernel.
+        st = jnp.concatenate([st[: w - 1], last[None]])
+        return apply_dense_mds(mds_rows, st)
+
+    rc = rc_flat.reshape(2 * half_full + partial, w)
+    r = 0
+    for _ in range(half_full):
+        s = full_round(s, rc[r])
+        r += 1
+    for _ in range(partial):
+        s = partial_round(s, rc[r])
+        r += 1
+    for _ in range(half_full):
+        s = full_round(s, rc[r])
+        r += 1
+    return s
+
 
 # Module-level jit zone so the permutation body traces once per (params, state
 # aval) process-wide: `lax.composite` re-traces its decomposition on every
@@ -93,77 +143,72 @@ class Poseidon:
 @partial(jax.jit, static_argnames=("perm",), inline=True)
 def _permute_body(perm: Poseidon, state: Array) -> Array:
     p = perm._p
-    alpha = p.alpha
     w = perm.width
-    half_full = p.full_rounds // 2
-    partial = p.partial_rounds
-    mds_rows = perm._mds_rows
 
-    # +rc -> sbox(all lanes) -> MDS. ARC is elementwise add and the S-box is
-    # jnp.power, so neither splits the kernel; the MDS rides as integer literals.
-    def full_round(s: Array, rc: Array) -> Array:
-        return apply_dense_mds(mds_rows, jnp.power(s + rc, alpha))
-
-    # +rc -> sbox(last lane only) -> MDS.
-    def partial_round(s: Array, rc: Array) -> Array:
-        s = s + rc
-        last = jnp.power(s[w - 1], alpha)
-        # concatenate, not s.at[w-1].set: a static-index set lowers to scatter,
-        # which would split the fused kernel.
-        s = jnp.concatenate([s[: w - 1], last[None]])
-        return apply_dense_mds(mds_rows, s)
-
-    # The decomposition takes the Poseidon ABI operands explicitly so the marked
-    # region carries them in order: state, then round constants flattened
-    # row-major over all rounds.
-    def permutation(
-        s: Array,
-        rc_flat: Array,
-        **_attrs: object,
-    ) -> Array:
-        # `_attrs` is marker metadata passed through on both the composite and
-        # inline paths — the decomposition itself does not read it.
-        total_rounds = 2 * half_full + partial
-        rc = rc_flat.reshape(total_rounds, w)
-        r = 0
-        for _ in range(half_full):
-            s = full_round(s, rc[r])
-            r += 1
-        for _ in range(partial):
-            s = partial_round(s, rc[r])
-            r += 1
-        for _ in range(half_full):
-            s = full_round(s, rc[r])
-            r += 1
-        return s
+    def permutation(s: Array, rc_flat: Array, **_attrs: object) -> Array:
+        # `_attrs` is marker metadata (name + attrs); the body ignores it.
+        return _permute_from_rc(perm, s, rc_flat)
 
     # ABI operands [state, round_constants flattened row-major].
     operands = (state, p.round_constants.reshape(-1))
-
-    # The permutation shape rides as `composite.attributes` — the zkx
-    # recognizer's contract: the four shape ints (it maps `alpha` to its s-box
-    # degree) plus `mds`, the width*width MDS flattened row-major, which the
-    # emitter applies as the dense linear layer (so the layer is params-driven,
-    # not hardcoded). The body ignores them (metadata only).
-    #
-    # `mds` is a numpy int64 value (not a Python list/tuple) so it lowers to a
-    # `dense<[..]> : tensor<N*Nxi64>` DenseElementsAttr the zkx recognizer parses
-    # with GetCompositeAttrIntArray; a plain Python list/tuple lowers to an
-    # unparsed ArrayAttr (`[..]`). Row-major width*width.
-    marker_attrs: dict[str, object] = {
-        "width": w,
-        "full_rounds": p.full_rounds,
-        "partial_rounds": partial,
-        "alpha": alpha,
-        "mds": np.array(
-            [mds_rows[i][j] for i in range(w) for j in range(w)], dtype=np.int64
-        ),
-    }
+    # `mds` is a numpy int64 value (not a Python list) so it lowers to a
+    # `dense<[..]>:tensor<N*Nxi64>` the recognizer parses with
+    # GetCompositeAttrIntArray; a plain list lowers to an unparsed ArrayAttr.
+    marker_attrs: dict[str, object] = _poseidon_marker_attrs(perm)
     return fused_region(
         permutation,
         *operands,
         name=POSEIDON_MARKER,
         version=POSEIDON_MARKER_VERSION,
+        **marker_attrs,
+    )
+
+
+# The permute shape as `composite.attributes` (the recognizer's contract: shape
+# ints — alpha is its s-box degree — plus `mds`, the width*width MDS flattened
+# row-major, applied as the dense linear layer). Shared with the sponge marker.
+def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
+    p = perm._p
+    w = perm.width
+    return {
+        "width": w,
+        "full_rounds": p.full_rounds,
+        "partial_rounds": p.partial_rounds,
+        "alpha": p.alpha,
+        "mds": np.array(perm._mds_rows, dtype=np.int64).flatten(),
+    }
+
+
+def _sponge_hash_body(perm: "Poseidon", input: Array, rate: int, out: int) -> Array:
+    """Classic-Poseidon sponge: absorb+squeeze as ONE `zorch.sponge_hash` region.
+
+    Byte-identical to `Sponge.hash`. The region carries the ABI operands
+    [input, round_constants] explicitly (a `lax.composite` would lift the
+    closed-over constants and break the operand ABI the recognizer expects). The
+    `mds` rides as a marker attribute; `permutation="poseidon"` is the required
+    discriminator that routes the recognizer to the classic-permute config arm.
+    """
+    p = perm._p
+    w = perm.width
+
+    def sponge(inp: Array, rc_flat: Array, **_attrs: object) -> Array:
+        state = jnp.zeros(w, dtype=inp.dtype)
+        return _absorb_symbolic(
+            inp, state, rate, out, lambda s: _permute_from_rc(perm, s, rc_flat)
+        )
+
+    operands = (input, p.round_constants.reshape(-1))
+    marker_attrs: dict[str, object] = {
+        "permutation": "poseidon",
+        "rate": rate,
+        "digest_elems": out,
+        **_poseidon_marker_attrs(perm),
+    }
+    return fused_region(
+        sponge,
+        *operands,
+        name=SPONGE_HASH_MARKER,
+        version=SPONGE_HASH_MARKER_VERSION,
         **marker_attrs,
     )
 

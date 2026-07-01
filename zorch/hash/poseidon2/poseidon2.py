@@ -32,7 +32,11 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
-from zorch.hash.sponge import _absorb_symbolic
+from zorch.hash.sponge import (
+    SPONGE_HASH_MARKER,
+    SPONGE_HASH_MARKER_VERSION,
+    _absorb_symbolic,
+)
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -42,14 +46,6 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON2_MARKER_VERSION = 1
-
-# Whole-sponge marker: absorb + squeeze as ONE region the vendor expands into the
-# fused `sponge_hash` kernel (state register-resident vs a per-block
-# permute chain through DRAM). Same 6-operand ABI as the permute marker; the
-# kernel reads the absorb length at runtime, so one cubin serves every leaf width
-# and a symbolic width exports.
-SPONGE_HASH_MARKER = "zorch.sponge_hash"
-SPONGE_HASH_MARKER_VERSION = 1
 
 
 class Poseidon2:
@@ -307,6 +303,7 @@ def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Arr
     # gate the sponge kernel on the M4 it implements — the canonical circ(2,3,1,1)
     # rewrites, any other M4 inlines its real body.
     marker_attrs: dict[str, object] = {
+        "permutation": "poseidon2",
         "width": w,
         "rate": rate,
         "digest_elems": out,
