@@ -48,7 +48,7 @@ class ZkIpaChallenger(IpaChallenger, Protocol):
     opening: the one extra challenge squeezed from the statement and the blinding
     commitment `(commitment, hiding_comm, point, value)` before the rounds. It is
     what the prover/verifier fold the blinding into `(commitment, coeffs)` with
-    (arkworks `ipa_pc`'s hiding fold), and is squeezed once — it does not enter the
+    (the arkworks hiding fold), and is squeezed once — it does not enter the
     per-round challenge list. Separate from `IpaChallenger` so the transparent
     path's challengers need not implement it."""
 

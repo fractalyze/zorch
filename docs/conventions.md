@@ -208,6 +208,13 @@ tests and goes stale the first time the API moves — so we don't write one.
   session/spec labels (`Q1:A`, `Approach D`), no references to uncommitted files,
   no home/scratch paths. Link rationale in a tracked file by its repo-relative
   path.
+- **No bare external symbol names.** A symbol from another project (a crate's
+  `ck.s`/`svk.s`, `h_prime`, `ipa_pc::open`) rots silently when that project
+  renames it — the reader can't grep it here to notice. Name the durable *concept*
+  ("the blinding generator", "the hiding fold") and, when the exact source matters,
+  a **permalink to the pinned line**, never the bare identifier. The project name
+  alone ("byte-exact with arkworks") is fine — it's the moving symbol that rots.
+  Same rule for the spec: cite the formula, not the function that computes it.
 - **A `docs/` page is design notes**, not an API tour — the *why* behind the
   shape, the principles, the non-obvious gotchas. [`sumcheck.md`](sumcheck.md) is
   the intended shape.

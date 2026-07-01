@@ -55,7 +55,7 @@ class IpaZkProof:
     `(commitment, coeffs)`. `hiding_comm` is the Pedersen commitment to the blinding
     polynomial (`⟨hiding_poly, G⟩ + s·hiding_rand`) and `rand` the accumulated
     commitment randomness; the verifier re-folds both into the statement before
-    replaying the fold (see `prover.open_zk` / `verifier.reduce_opening_zk`). A
+    replaying the fold (see `prover._open_one_zk` / `verifier.reduce_opening_zk`). A
     registered pytree so it crosses the `open`/`verify` `@jit` boundary."""
 
     l: Array  # G1 affine [k] — L_j per round

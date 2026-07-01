@@ -31,9 +31,9 @@ class IpaKey:
     `basis` element. A commitment binds polynomials of length up to `N`.
 
     `s` is the hiding/blinding generator — a further independent G1 point the
-    zk/hiding opening commits the blinding polynomial's randomness against
-    (arkworks `ipa_pc`'s `ck.s`/`svk.s`). It is `None` on the transparent (no-zk)
-    path, which never blinds; `open_zk`/`reduce_opening_zk` require it."""
+    zk/hiding opening commits the blinding polynomial's randomness against. It is
+    `None` on the transparent (no-zk) path, which never blinds;
+    `_open_one_zk`/`reduce_opening_zk` require it."""
 
     basis: Array  # bn254 G1 affine [N] — Pedersen basis G
     u: Array  # bn254 G1 affine — inner-product generator U
