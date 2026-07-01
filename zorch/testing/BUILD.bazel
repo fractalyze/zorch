@@ -19,7 +19,10 @@ py_test(
     deps = [
         "//zorch:byte_transcript",
         "//zorch:device_byte_transcript",
+        "//zorch/sumcheck",
         requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
     ],
 )
 

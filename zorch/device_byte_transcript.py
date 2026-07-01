@@ -23,12 +23,14 @@ surface + PoW grind.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import Array
+from jax import Array, lax
 from jax.tree_util import register_dataclass
 
 from zorch.byte_transcript import (
@@ -338,3 +340,88 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     h1 = device_sha256.compress(h, device_sha256.block_to_words(region[:, 0:_BLOCK]))
     h2 = device_sha256.compress(h1, device_sha256.block_to_words(region[:, _BLOCK:128]))
     return device_sha256.serialize_digest(jnp.where(two_blocks, h2, h1))
+
+
+# ---------------------------------------------------------------------------
+# Field-element surface: zorch's `transcript.Transcript` over the streaming core.
+#
+# `zorch.sumcheck.prove` threads a transcript through a `lax.scan` via
+# `observe(Array)` / `sample(n)` / `observe_and_sample`. `Sha256FieldTranscript`
+# implements that protocol on the fixed-shape `Sha256State`, in pure JAX, so it is
+# a valid scan carry — the device SHA-256 sibling of `transcript.DuplexTranscript`.
+# It keeps the same Merlin slice framing as the byte transcript (op tag, u64-LE
+# count, `SHA256(buffer ‖ ctr)` counter-squeeze, re-absorb), so a slice observe /
+# sample is byte-identical to `DeviceSha256Transcript.observe_slice` /
+# `sample_slice` — but now scan-threadable.
+#
+# Scheme-agnostic: `dtype` is the challenge element's (scalar) type. `observe`
+# bitcasts values to bytes and `sample` reinterprets squeezed bytes back, so the
+# element width is `dtype.itemsize`. flock's binary-field F128 (a `uint64[2]` pair,
+# not a scalar dtype) rides zorch's sumcheck only once the GHASH FieldOps seam
+# lands (flock-zorch#9); its Fiat-Shamir challenger uses the byte surface above.
+# ---------------------------------------------------------------------------
+
+
+def _const_u8(data: bytes) -> Array:
+    """A compile-time-constant byte payload as a device uint8 array."""
+    return jnp.asarray(np.frombuffer(data, dtype=np.uint8))
+
+
+@partial(register_dataclass, data_fields=["state"], meta_fields=["dtype"])
+@dataclass(frozen=True)
+class Sha256FieldTranscript:
+    """Device SHA-256 transcript satisfying `transcript.Transcript`, threadable
+    through `zorch.sumcheck.prove` under `@jit`. State is the streaming
+    `Sha256State` pytree; `dtype` (static) is the challenge element type."""
+
+    state: Sha256State
+    dtype: Any
+
+    @property
+    def has_dedicated_fusion(self) -> bool:
+        # The SHA-256 chain lowers to a GPU kernel via the zorch.sha256 marker.
+        return True
+
+    @classmethod
+    def new(cls, domain: bytes, dtype: Any) -> Sha256FieldTranscript:
+        seed = _const_u8(bytes([OP_DOMAIN]) + _len8(len(domain)) + bytes(domain))
+        return cls(sha256_stream_absorb(sha256_stream_init(), seed), np.dtype(dtype))
+
+    def _item_bytes(self) -> int:
+        return int(np.dtype(self.dtype).itemsize)
+
+    def _absorb(self, payload: Array) -> Sha256FieldTranscript:
+        return replace(self, state=sha256_stream_absorb(self.state, payload))
+
+    def _squeeze_bytes(self, nbytes: int) -> Array:
+        """`nbytes` counter-squeeze bytes from the CURRENT state (no mutation) —
+        `SHA256(buffer ‖ ctr_le8)` for ctr=0,1,…, one batched finalize."""
+        nblocks = (nbytes + 31) // 32
+        extras = _const_u8(b"".join(_len8(ctr) for ctr in range(nblocks))).reshape(
+            nblocks, 8
+        )
+        digs = sha256_stream_finalize(self.state, extras)  # [nblocks, 32]
+        return digs.reshape(-1)[:nbytes]
+
+    def observe(self, values: Array) -> Sha256FieldTranscript:
+        """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
+        len8(count) || lo‖hi-serialized bytes`. Byte-identical to the byte
+        transcript's `observe_slice` of the same serialized bytes."""
+        vals_u8 = lax.bitcast_convert_type(values, jnp.uint8).reshape(-1)
+        count = int(vals_u8.shape[0]) // self._item_bytes()
+        framing = _const_u8(bytes([OP_OBSERVE, KIND_SLICE]) + _len8(count))
+        return self._absorb(jnp.concatenate([framing, vals_u8]))
+
+    def sample(self, n: int = 1) -> tuple[Sha256FieldTranscript, Array]:
+        """Squeeze `n` challenge elements: absorb `[OP_SQUEEZE, KIND_SLICE] ||
+        len8(n)`, counter-squeeze `n * itemsize` bytes, re-absorb them, and
+        reinterpret to `n` elements of `dtype`."""
+        t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(n)))
+        squeezed = t._squeeze_bytes(n * self._item_bytes())
+        t = t._absorb(squeezed)
+        return t, squeezed.view(self.dtype)
+
+    def observe_and_sample(
+        self, values: Array, n: int = 1
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        return self.observe(values).sample(n)
