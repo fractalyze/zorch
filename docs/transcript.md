@@ -12,17 +12,16 @@ carries **three** kinds, by construction-and-substrate, not by scheme:
 | `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker) | **`False`** | **`True`** (the SHA-256 chain lowers via the `zorch.sha256` marker) |
 | Seam | `Transcript` / `GrindingTranscript` (field-element, canonical-bit PoW) | `ByteTranscript` / `ByteGrindingTranscript` (byte, leading-zero-bit nonce PoW) | byte surface: `ByteTranscript` (+ byte/nonce PoW); field surface: `Transcript` |
 
-The third is the **device sibling of the host byte transcript** (flock-zorch#6): the
-identical Merlin-over-SHA-256 framing, but the compression runs on device via the
+The third is the **device sibling of the host byte transcript**: the identical
+Merlin-over-SHA-256 framing, but the compression runs on device via the
 `zorch.sha256` marker instead of host `hashlib`, so — unlike the host byte
 transcript — it *does* lower to a GPU kernel (`has_dedicated_fusion = True`). Its
 streaming midstate keeps the state a fixed-shape pytree, so the field-element
 surface (`Sha256FieldTranscript`) threads `zorch.sumcheck.prove`'s `lax.scan`,
 collapsing a byte-Fiat-Shamir round loop into one device program — the reason the
 host byte transcript's "host orchestrator" exemption below does **not** apply to
-it. Both surfaces are byte-identical to the host byte transcript (and hence to
-flock-core's `FsChallenger`); the byte surface backs flock's host challenger, the
-field surface backs an on-device round loop.
+it. Both surfaces are byte-identical to the host byte transcript; the byte surface
+backs a host byte challenger, the field surface backs an on-device round loop.
 
 ## Why the *host* byte transcript is exempt from the device-fusion clause
 
@@ -63,7 +62,7 @@ whose verifier rests on a single SHA-256). **Flagged for ratification on epic
 `byte_transcript.py` + `device_byte_transcript.py` + `hash/sha256.py` move to the
 consumer with ~no rework (they have no zorch-internal dependencies).
 
-The **device** byte transcript (`device_byte_transcript.py`) was added by
-flock-zorch#6 to move flock's Fiat-Shamir on-device; it depends only on
-`hash/sha256.py` (the marker) and the host byte transcript's framing constants, so
-it travels with them under the same ratification.
+The **device** byte transcript (`device_byte_transcript.py`) moves a byte
+Fiat-Shamir chain on-device; it depends only on `hash/sha256.py` (the marker) and
+the host byte transcript's framing constants, so it travels with them under the
+same ratification.

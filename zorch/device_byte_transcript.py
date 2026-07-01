@@ -4,22 +4,19 @@
 Same Merlin-over-SHA-256 byte framing (op tags, u64-LE length prefixes,
 `SHA256(buffer ‖ ctr)` counter-squeeze, re-absorb of the squeezed bytes), but the
 SHA-256 compression runs ON DEVICE via the name-routed `zorch.sha256` marker
-(`zorch.hash.sha256.digest`) instead of host `hashlib`. This is the first step of
-moving flock's Fiat-Shamir on-device (fractalyze/flock-zorch#6): the marker lowers
-the byte-hash chain to a GPU kernel, unlike the host `Sha256Transcript`, so this
-transcript reports `has_dedicated_fusion = True` (the device-byte row of the
+(`zorch.hash.sha256.digest`) instead of host `hashlib` — a byte Fiat-Shamir chain
+that lowers to a GPU kernel, unlike the host `Sha256Transcript`. It therefore
+reports `has_dedicated_fusion = True` (the device-byte row of the
 `docs/transcript.md` taxonomy).
 
 Byte-identical to the host transcript by construction — the absorbed-byte stream
-is built with the identical framing, and `zorch.hash.sha256.digest` is
-byte-identical to `hashlib.sha256` (pinned by `hash/testing/sha256_test.py`).
+uses the identical framing, and `zorch.hash.sha256.digest` is byte-identical to
+`hashlib.sha256` (pinned by `hash/testing/sha256_test.py`).
 
-Slice status (#6): this keeps the host's growing-`bytes` buffer and re-hashes it
-per squeeze, so the transcript is *device-hashed* but not yet a fixed-shape
-`lax.scan` carry. A later slice replaces the buffer with a streaming
-Merkle–Damgård midstate (`h[8]` + `<64 B` pending + length) so the state threads
-`@jit`/`lax.scan`, and adds the `Transcript`/`GrindingTranscript` field-element
-surface + PoW grind.
+This class keeps the host's growing-`bytes` buffer and re-hashes it per squeeze:
+device-hashed, but not a fixed-shape `lax.scan` carry. The streaming `Sha256State`
+below (`h[8]` + `<64 B` pending + length) is the fixed-shape core
+`Sha256FieldTranscript` uses to thread `@jit` / `lax.scan`.
 """
 from __future__ import annotations
 
@@ -211,9 +208,9 @@ class DeviceSha256Transcript:
 # byte length. All shapes are fixed, so `Sha256State` threads `@jit` / a scan
 # carry. A squeeze `SHA256(buffer ‖ ctr)` is `finalize(state, ctr_le8)` — a
 # non-mutating copy that pads at the current length — reproducing the class's
-# bytes exactly, incrementally. A later slice builds the field-element
-# `Transcript` / `GrindingTranscript` surface on this so flock's Fiat-Shamir round
-# loop collapses into one device program (flock-zorch#6).
+# bytes exactly, incrementally. `Sha256FieldTranscript` builds the field-element
+# `Transcript` surface on this, so a byte Fiat-Shamir round loop folds through one
+# device program.
 # ---------------------------------------------------------------------------
 
 _BLOCK = 64  # SHA-256 block size in bytes
@@ -356,9 +353,9 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 #
 # Scheme-agnostic: `dtype` is the challenge element's (scalar) type. `observe`
 # bitcasts values to bytes and `sample` reinterprets squeezed bytes back, so the
-# element width is `dtype.itemsize`. flock's binary-field F128 (a `uint64[2]` pair,
-# not a scalar dtype) rides zorch's sumcheck only once the GHASH FieldOps seam
-# lands (flock-zorch#9); its Fiat-Shamir challenger uses the byte surface above.
+# element width is `dtype.itemsize`. A binary-field element wider than a scalar
+# dtype (e.g. a `uint64[2]` pair) rides the sumcheck only through a field-ops seam
+# the consumer supplies; a byte-framed challenger can use the byte surface above.
 # ---------------------------------------------------------------------------
 
 

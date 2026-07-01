@@ -64,7 +64,7 @@ py_library(
 
 # Device sibling of `byte_transcript`: identical Merlin-over-SHA-256 framing, but
 # the SHA-256 compression runs on-device via the `zorch.sha256` marker instead of
-# host hashlib (flock-zorch#6 — moving flock's Fiat-Shamir on-device).
+# host hashlib (a byte Fiat-Shamir chain that lowers to a GPU kernel).
 py_library(
     name = "device_byte_transcript",
     srcs = [
