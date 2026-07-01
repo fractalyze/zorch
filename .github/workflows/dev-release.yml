@@ -1,0 +1,137 @@
+# Copyright 2026 The Zorch Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Publishes a timestamped dev wheel of zorch on every green CI run of main (and
+# on manual dispatch), mirroring riscv-witness's dev-release. zorch is pure
+# Python, so there is no Bazel / native build step: stamp the version, build the
+# wheel, attach it to a GitHub prerelease, then poke fractalyze/pypi to remirror
+# and regenerate its PEP 503 index. The wheel is built from main HEAD, so the
+# jax fork stack it runs against is whatever the consuming workspace pins.
+
+name: Dev Release
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: dev-release
+  cancel-in-progress: false
+
+jobs:
+  timestamp:
+    name: Generate version
+    # workflow_run fires on every CI completion (including failures); only build
+    # a release when CI was green. workflow_dispatch always proceeds.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.ts.outputs.timestamp }}
+      tag: ${{ steps.ts.outputs.tag }}
+    steps:
+      - name: Generate timestamp
+        id: ts
+        run: |
+          TS=$(date -u +%Y%m%d%H%M%S)
+          echo "timestamp=$TS" >> "$GITHUB_OUTPUT"
+          echo "tag=dev-$TS" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build wheel
+    needs: [timestamp]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the exact commit CI validated (workflow_run), or the dispatch
+          # ref for a manual run.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Stamp dev version
+        run: |
+          DEV_VERSION="0.1.0.dev${{ needs.timestamp.outputs.value }}"
+          sed -i "s/^__version__ = .*/__version__ = \"${DEV_VERSION}\"/" zorch/__init__.py
+
+      - name: Build wheel
+        run: python -m build -w
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-zorch
+          path: dist/*.whl
+          retention-days: 1
+
+  publish-dev-release:
+    name: Publish dev release
+    needs: [timestamp, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download wheel
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: wheel-*
+          merge-multiple: true
+
+      - name: Create GitHub prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.timestamp.outputs.tag }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "Dev $TAG" \
+            --notes "Automated dev prerelease from ${{ github.event.workflow_run.head_sha || github.sha }}" \
+            --prerelease \
+            dist/*.whl
+
+      - name: Cleanup old dev prereleases
+        # The github release mirror is the pypi index's enumeration source; keep
+        # it from growing without bound by pruning dev prereleases older than 30
+        # days (their wheels stay mirrored on fractalyze/pypi).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CUTOFF=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+          gh release list \
+            --repo "${{ github.repository }}" \
+            --json tagName,isPrerelease,createdAt \
+            --jq ".[] | select(.isPrerelease) | select(.tagName | startswith(\"dev-\")) | select(.createdAt < \"${CUTOFF}\") | .tagName" \
+          | while read -r tag; do
+              echo "Deleting old dev prerelease: $tag"
+              gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag
+            done
+
+      - name: Trigger PyPI index rebuild
+        # PYPI_REPO_TOKEN is an org secret with dispatch access to fractalyze/pypi
+        # (same token riscv-witness's dev-release uses).
+        env:
+          GH_TOKEN: ${{ secrets.PYPI_REPO_TOKEN }}
+        run: |
+          gh api repos/fractalyze/pypi/dispatches \
+            -f event_type=rebuild-index
