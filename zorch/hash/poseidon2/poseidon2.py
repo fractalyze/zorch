@@ -43,12 +43,12 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # a future contract change can be staged without renaming the marker.
 POSEIDON2_MARKER_VERSION = 1
 
-# Whole-sponge marker: absorb + squeeze as ONE region the vendor expands into the
-# fused `poseidon2_sponge_hash` kernel (state register-resident vs a per-block
-# permute chain through DRAM). Same 6-operand ABI as the permute marker; the
-# kernel reads the absorb length at runtime, so one cubin serves every leaf width
-# and a symbolic width exports.
-SPONGE_HASH_MARKER = "zorch.poseidon2_sponge_hash"
+# Whole-sponge leaf marker: absorb + squeeze as ONE region the vendor expands
+# into the fused `poseidon2_sponge_leaf` kernel (state register-resident vs a
+# per-block permute chain through DRAM). Same 6-operand ABI as the permute
+# marker; the kernel reads the absorb length at runtime, so one cubin serves
+# every leaf width and a symbolic width exports.
+SPONGE_HASH_MARKER = "zorch.poseidon2_sponge_leaf"
 SPONGE_HASH_MARKER_VERSION = 1
 
 
@@ -110,7 +110,7 @@ class Poseidon2:
         return _permute_body(self, state)
 
     def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` and squeeze `out` lanes as ONE `poseidon2_sponge_hash`
+        """Absorb `input` and squeeze `out` lanes as ONE `poseidon2_sponge_leaf`
         region (fused kernel, state register-resident) — byte-identical to
         `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
         generic permutation runs the inline absorb. Lowers under symbolic
@@ -268,7 +268,7 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
 
 
 def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
-    """Emit the `poseidon2_sponge_hash` marker (dedicated path) or run the
+    """Emit the `poseidon2_sponge_leaf` marker (dedicated path) or run the
     `while_loop` absorb (generic). The decomposition is byte-identical to
     `Sponge.hash` so the region's fallback HLO matches the kernel. The 6-operand
     region carries

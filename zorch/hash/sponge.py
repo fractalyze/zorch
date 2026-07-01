@@ -8,7 +8,7 @@ This is the Merkle leaf hasher (Plonky3 PaddingFreeSponge).
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
 `SpongeParams` (capacity = width - rate), like `Poseidon2Params`. A permutation
 exposing a dedicated `sponge_hash` (the poseidon2 fusion path) absorbs the whole
-input as one `zorch.poseidon2_sponge_hash` region the vendor expands into a single
+input as one `zorch.poseidon2_sponge_leaf` region the vendor expands into a single
 register-resident kernel; a generic permutation runs the `while_loop` absorb. Both
 read the absorb length at runtime, so a concrete and a symbolic (shape-poly
 export) `n` lower the same way — one path, no static-`n` special case.
@@ -133,7 +133,7 @@ class Sponge:
         """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,).
 
         A permutation that exposes a dedicated `sponge_hash` (the poseidon2
-        fusion path) absorbs the whole input as one `zorch.poseidon2_sponge_hash`
+        fusion path) absorbs the whole input as one `zorch.poseidon2_sponge_leaf`
         region the vendor expands into a single register-resident kernel; a
         generic permutation runs the `while_loop` absorb. Both read the absorb
         length at runtime, so a symbolic `n` (shape-poly export) lowers exactly
