@@ -16,14 +16,20 @@ host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
 """
 from __future__ import annotations
 
+import hashlib
 from functools import partial
+from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from jax.typing import ArrayLike
 
 from zorch.fusion import fused_region
+
+if TYPE_CHECKING:
+    from zorch.hash.byte_hash import ByteHash
 
 U32 = jnp.uint32
 
@@ -269,7 +275,7 @@ def _digest_words_marked(blocks: Array) -> Array:
     )
 
 
-def digest(msg: Array) -> jnp.ndarray:
+def digest(msg: ArrayLike) -> jnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
     Byte-identical to the FIPS 180-4 standard per message. The device compression
@@ -279,3 +285,57 @@ def digest(msg: Array) -> jnp.ndarray:
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
     return _digest_words_marked(blocks)
+
+
+# ---------------------------------------------------------------------------
+# ByteHash seam implementations (SHA-256). Both hash to the identical FIPS 180-4
+# bytes and differ only in substrate — `has_dedicated_fusion` is the type-level
+# signal. Param-free, so value identity is by type (no jit re-trace, issue #163).
+# ---------------------------------------------------------------------------
+class Sha256:
+    """`ByteHash` for device SHA-256 — `digest` runs the batch on the
+    `zorch.sha256` marker (data-parallel, lowers to a GPU kernel), so
+    `has_dedicated_fusion = True`."""
+
+    digest_size = 32
+    has_dedicated_fusion = True
+
+    def digest(self, msg: ArrayLike) -> Array:
+        return digest(msg)  # the module-level marker digest above
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, Sha256)
+
+    def __hash__(self) -> int:
+        return hash(Sha256)
+
+
+class HashlibSha256:
+    """`ByteHash` for host SHA-256 — `digest` loops `hashlib` per message on the
+    host (eager, no device kernel), so `has_dedicated_fusion = False`. The fast
+    path for a strictly-sequential byte challenger: `hashlib` on a small buffer
+    beats a device dispatch per squeeze."""
+
+    digest_size = 32
+    has_dedicated_fusion = False
+
+    def digest(self, msg: ArrayLike) -> np.ndarray:
+        rows = np.ascontiguousarray(np.asarray(msg, dtype=np.uint8))  # [B, L]
+        out = np.empty((rows.shape[0], 32), dtype=np.uint8)
+        for i, row in enumerate(rows):
+            out[i] = np.frombuffer(
+                hashlib.sha256(row.tobytes()).digest(), dtype=np.uint8
+            )
+        return out
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, HashlibSha256)
+
+    def __hash__(self) -> int:
+        return hash(HashlibSha256)
+
+
+if TYPE_CHECKING:
+    # Seam-conformance pins (docs/conventions.md).
+    _bh_marker: type[ByteHash] = Sha256
+    _bh_host: type[ByteHash] = HashlibSha256
