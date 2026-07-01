@@ -70,6 +70,46 @@ def _device_squeeze(buffer: bytes, n: int) -> bytes:
     return digs.reshape(-1).tobytes()[:n]
 
 
+# Proof-of-work grind: the candidate window each device batch tests at once. A
+# `bits`-hit lands in the first window for any practical `pow_bits`, so the search
+# is normally one marker call; larger `pow_bits` just tile more windows (never a
+# silent cap — the search keeps going, matching the host transcript).
+_GRIND_WINDOW = 1 << 16
+
+
+def _leading_zero_bits_ok(digests: np.ndarray, bits: int) -> np.ndarray:
+    """Whether each digest in `digests` (uint8 [B, 32]) has ≥ `bits` leading zero
+    bits, big-endian (digest[0] most significant) — the proof-of-work predicate,
+    vectorized over the batch."""
+    full, extra = divmod(bits, 8)
+    ok = np.all(digests[:, :full] == 0, axis=1)
+    if extra:
+        ok &= (digests[:, full] >> np.uint8(8 - extra)) == 0
+    return ok
+
+
+def _grind_search(state_digest: bytes, bits: int, window: int) -> int:
+    """Lowest u64 nonce with `SHA256(state_digest ‖ nonce_le8)` having `bits`
+    leading zero bits. Tests a whole `window` of nonces per device digest call and
+    returns the first hit; tiles windows until one lands (unbounded, like the host
+    — never returns an unchecked nonce)."""
+    prefix = np.frombuffer(state_digest, dtype=np.uint8)  # [32]
+    base = 0
+    while True:
+        nonces = np.arange(base, base + window, dtype="<u8")
+        nonce_bytes = nonces.view(np.uint8).reshape(
+            window, 8
+        )  # le8, little-endian host
+        msgs = np.concatenate(
+            [np.broadcast_to(prefix, (window, prefix.shape[0])), nonce_bytes], axis=1
+        )  # [window, 40]
+        digs = np.asarray(device_sha256.digest(msgs))  # [window, 32]
+        hits = np.flatnonzero(_leading_zero_bits_ok(digs, bits))
+        if hits.size:
+            return int(base + hits[0])
+        base += window
+
+
 @dataclass(frozen=True)
 class DeviceSha256Transcript:
     """Merlin-style byte duplex over the device SHA-256 marker. Functional: every op
@@ -129,6 +169,34 @@ class DeviceSha256Transcript:
         t = self._absorb(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(count))
         buf = t._squeeze(count * width)
         return t._absorb(buf), buf
+
+    # ---- proof-of-work (byte/nonce PoW, identical predicate to the host) ----
+    def grind_pow(
+        self, bits: int, *, window: int = _GRIND_WINDOW
+    ) -> tuple[DeviceSha256Transcript, int]:
+        """Lowest u64 nonce with `SHA256(state_digest ‖ nonce_le8)` having `bits`
+        leading zero bits (0 if bits==0), then absorb the nonce via `observe_bytes`
+        so subsequent challenges bind to it. The search is device-batched (one
+        marker call per `window` candidates) but returns the same lowest nonce the
+        host finds — byte-identical."""
+        if bits == 0:
+            return self.observe_bytes(_len8(0)), 0
+        nonce = _grind_search(self._digest(), bits, window)
+        return self.observe_bytes(_len8(nonce)), nonce
+
+    def verify_pow(self, nonce: int, bits: int) -> tuple[DeviceSha256Transcript, bool]:
+        """Verifier mirror: check the PoW (bits==0 requires the canonical nonce 0),
+        then absorb the nonce REGARDLESS so the transcript stays in lockstep."""
+        if bits == 0:
+            ok = nonce == 0
+        else:
+            dig = _device_digest(self._digest() + _len8(nonce))
+            ok = bool(
+                _leading_zero_bits_ok(
+                    np.frombuffer(dig, dtype=np.uint8)[None, :], bits
+                )[0]
+            )
+        return self.observe_bytes(_len8(nonce)), ok
 
 
 # ---------------------------------------------------------------------------

@@ -72,6 +72,52 @@ class DeviceByteTranscriptTest(absltest.TestCase):
         )
         self.assertEqual(d.sample_scalar(16)[1], h.sample_scalar(16)[1])
 
+    def test_pow_matches_host(self) -> None:
+        # The device grind finds the SAME lowest nonce as the host, and the
+        # post-PoW transcripts squeeze identically.
+        for bits in (0, 5, 10, 14):
+            hp, hn = Sha256Transcript.new(b"pow").observe_bytes(b"root").grind_pow(bits)
+            dp, dn = (
+                DeviceSha256Transcript.new(b"pow")
+                .observe_bytes(b"root")
+                .grind_pow(bits)
+            )
+            self.assertEqual(dn, hn, f"nonce differs at bits={bits}")
+            self.assertEqual(dp.sample_scalar(16)[1], hp.sample_scalar(16)[1])
+
+    def test_pow_roundtrip(self) -> None:
+        for bits in (0, 5, 10, 14):
+            p, nonce = (
+                DeviceSha256Transcript.new(b"pow")
+                .observe_bytes(b"root")
+                .grind_pow(bits)
+            )
+            v, ok = (
+                DeviceSha256Transcript.new(b"pow")
+                .observe_bytes(b"root")
+                .verify_pow(nonce, bits)
+            )
+            self.assertTrue(ok, f"verify failed at bits={bits}")
+            self.assertEqual(p.sample_scalar(16)[1], v.sample_scalar(16)[1])
+
+    def test_pow_rejects_wrong_nonce(self) -> None:
+        _, nonce = (
+            DeviceSha256Transcript.new(b"pow").observe_bytes(b"root").grind_pow(10)
+        )
+        _, ok = (
+            DeviceSha256Transcript.new(b"pow")
+            .observe_bytes(b"root")
+            .verify_pow(nonce + 1, 10)
+        )
+        self.assertFalse(ok)
+
+    def test_pow_zero_bits_requires_canonical_nonce(self) -> None:
+        mk = lambda: DeviceSha256Transcript.new(b"pow").observe_bytes(b"root")
+        self.assertEqual(mk().grind_pow(0)[1], 0)
+        self.assertTrue(mk().verify_pow(0, 0)[1])
+        for bad in (1, 42, 2**64 - 1):
+            self.assertFalse(mk().verify_pow(bad, 0)[1])
+
 
 def _u8(data: bytes) -> jnp.ndarray:
     return jnp.asarray(np.frombuffer(data, dtype=np.uint8))
