@@ -182,13 +182,43 @@ def _compress(state: Array, w16: Array) -> Array:
     return state + jnp.stack([a, b, c, d, e, f, g, h], axis=1)
 
 
-def _digest_words(blocks: Array) -> Array:
-    """blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32] big-endian digest."""
-    b, nblocks, _ = blocks.shape
-    state = jnp.broadcast_to(jnp.asarray(_H0), (b, 8))
+# The SHA-256 initial hash state (sqrt of the first 8 primes) as a device array —
+# the standard start for a full digest, and the resume point a streaming hash
+# broadcasts from.
+INITIAL_STATE = jnp.asarray(_H0)  # uint32 [8]
+
+
+def block_to_words(blocks: Array) -> Array:
+    """uint8 [B, nblocks*64] -> uint32 [B, nblocks, 16] big-endian message words.
+
+    The on-device sibling of `_pad`'s host word-packing, for callers that build
+    their own already-padded blocks (an incremental / streaming hash), rather than
+    padding a whole message once on host.
+    """
+    b = blocks.shape[0]
+    nblocks = blocks.shape[1] // 64
+    w = blocks.reshape(b, nblocks, 16, 4).astype(U32)
+    return (
+        (w[..., 0] << U32(24))
+        | (w[..., 1] << U32(16))
+        | (w[..., 2] << U32(8))
+        | w[..., 3]
+    )
+
+
+def compress(state: Array, blocks_words: Array) -> Array:
+    """Fold `blocks_words` (uint32 [B, nblocks, 16] big-endian) into the SHA-256
+    midstate `state` (uint32 [B, 8]), block by block. `INITIAL_STATE` broadcast is
+    the standard start; a streaming hash resumes from a prior midstate."""
+    nblocks = blocks_words.shape[1]
     for i in range(nblocks):  # nblocks is static and small
-        state = _compress(state, blocks[:, i])
-    # Serialize 8 u32 words big-endian -> 32 bytes.
+        state = _compress(state, blocks_words[:, i])
+    return state
+
+
+def serialize_digest(state: Array) -> Array:
+    """SHA-256 midstate uint32 [B, 8] -> uint8 [B, 32] big-endian digest."""
+    b = state.shape[0]
     out = jnp.stack(
         [
             (state >> U32(24)) & U32(0xFF),
@@ -201,6 +231,13 @@ def _digest_words(blocks: Array) -> Array:
         jnp.uint8
     )  # [B, 8, 4]
     return out.reshape(b, 32)
+
+
+def _digest_words(blocks: Array) -> Array:
+    """blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32] big-endian digest."""
+    b = blocks.shape[0]
+    state = jnp.broadcast_to(INITIAL_STATE, (b, 8))
+    return serialize_digest(compress(state, blocks))
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
