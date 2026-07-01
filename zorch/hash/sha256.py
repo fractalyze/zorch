@@ -17,6 +17,7 @@ host. Requires no x64; all arithmetic is uint32 (wraps mod 2^32 in XLA).
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from jax import Array
+from jax.tree_util import register_dataclass
 from jax.typing import ArrayLike
 
 from zorch.fusion import fused_region
@@ -285,6 +287,144 @@ def digest(msg: ArrayLike) -> jnp.ndarray:
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
     return _digest_words_marked(blocks)
+
+
+# ---------------------------------------------------------------------------
+# Streaming Merkle–Damgård midstate (the fixed-shape, scan-threadable core).
+#
+# `digest` above pads a whole message once on host; this keeps SHA-256's
+# incremental state so a byte Fiat-Shamir transcript can thread `@jit` / a
+# `lax.scan` carry (`Sha256FieldTranscript`, `sha256_field_transcript.py`). The
+# midstate is over every COMPLETE 64-byte block, plus the (<64 B) trailing partial
+# block and the running byte length — all fixed shapes. A squeeze
+# `SHA256(buffer ‖ ctr)` is `finalize(state, ctr_le8)`: a non-mutating copy that
+# pads at the current length, reproducing `digest`'s bytes incrementally.
+# ---------------------------------------------------------------------------
+
+_BLOCK = 64  # SHA-256 block size in bytes
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class Sha256State:
+    """Incremental SHA-256 state as a JAX pytree. Fixed shapes → scan-threadable."""
+
+    h: Array  # uint32[8] — midstate over all complete 64-byte blocks so far
+    pending: Array  # uint8[64] — trailing partial block, valid prefix [:pending_len]
+    pending_len: Array  # int32 — 0..63
+    total_len: Array  # int32 — total bytes absorbed
+
+
+def sha256_stream_init() -> Sha256State:
+    """A fresh incremental hash (no bytes absorbed)."""
+    return Sha256State(
+        h=INITIAL_STATE,
+        pending=jnp.zeros(_BLOCK, dtype=jnp.uint8),
+        pending_len=jnp.int32(0),
+        total_len=jnp.int32(0),
+    )
+
+
+def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
+    """Absorb `data` (uint8 [L], L static) into the incremental hash: fold every
+    newly-complete 64-byte block into the midstate, keep the `<64 B` remainder as
+    the new pending block. The block loop is a Python-unrolled, active-count-masked
+    schedule over STATIC slices (never a traced-index gather / scan-carry scatter)
+    — the fractalyze/zkx#500 CPU-safe pattern `transcript.DuplexTranscript` uses."""
+    length = data.shape[0]
+    pl = state.pending_len
+    combined_src = jnp.concatenate([state.pending, data.astype(jnp.uint8)])  # [64+L]
+    new_len = pl + jnp.int32(length)
+    active_blocks = new_len // _BLOCK
+    max_blocks = (_BLOCK - 1 + length) // _BLOCK  # static upper bound
+
+    # Drop the pending buffer's invalid gap [pending_len:64] from the stream: for
+    # stream position j, source index is j while j < pending_len, else shifted to
+    # skip past the gap.
+    total_slots = (max_blocks + 1) * _BLOCK
+    pos = jnp.arange(total_slots, dtype=jnp.int32)
+    src_idx = pos + jnp.where(pos < pl, jnp.int32(0), _BLOCK - pl)
+    src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+    combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
+
+    h = state.h.reshape(1, 8)
+    for k in range(max_blocks):
+        block = combined[k * _BLOCK : (k + 1) * _BLOCK]  # static slice [64]
+        words = block_to_words(block.reshape(1, _BLOCK))
+        h_new = compress(h, words)
+        # Blocks past the live count are padding-only: leave the midstate untouched.
+        h = jnp.where(jnp.int32(k) < active_blocks, h_new, h)
+
+    tail_len = new_len - active_blocks * _BLOCK
+    tail = jax.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
+    slot = jnp.arange(_BLOCK, dtype=jnp.int32)
+    pending = jnp.where(slot < tail_len, tail, jnp.uint8(0))
+    return Sha256State(
+        h.reshape(8), pending, tail_len, state.total_len + jnp.int32(length)
+    )
+
+
+def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
+    """`SHA256(absorbed ‖ extras[b])` for each row of `extras` (uint8 [B, E], E
+    static) — a non-mutating copy of the hash finished at the current length. One
+    call finishes a whole batch of counter blocks (the transcript's counter-mode
+    squeeze) sharing the base state. Returns uint8 [B, 32] big-endian digests.
+
+    The trailing content is `pending[:pending_len] ‖ extras[b]` (≤ 63 + E bytes),
+    so with the `0x80` byte and the 8-byte length it spans at most two blocks; the
+    second block is compressed unconditionally and selected away when one suffices.
+    """
+    batch, e = extras.shape
+    pl = state.pending_len
+    content_len = pl + jnp.int32(e)
+    msg_bytes = state.total_len + jnp.int32(e)
+    # SHA-256's 64-bit length field; the high 32 bits are zero for any message
+    # below 2**32 bits (512 MiB) — so the length is a uint32 and no x64 is needed.
+    bitlen = msg_bytes.astype(jnp.uint32) * jnp.uint32(8)
+    len_bytes = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
+    len_bytes = jnp.concatenate(
+        [
+            len_bytes,
+            jnp.stack(
+                [
+                    ((bitlen >> jnp.uint32(24)) & jnp.uint32(0xFF)).astype(jnp.uint8),
+                    ((bitlen >> jnp.uint32(16)) & jnp.uint32(0xFF)).astype(jnp.uint8),
+                    ((bitlen >> jnp.uint32(8)) & jnp.uint32(0xFF)).astype(jnp.uint8),
+                    (bitlen & jnp.uint32(0xFF)).astype(jnp.uint8),
+                ]
+            ),
+        ]
+    )  # [8] big-endian
+
+    two_blocks = content_len > jnp.int32(55)  # need a 2nd block for pad + length?
+    active_bytes = jnp.where(two_blocks, jnp.int32(128), jnp.int32(64))
+
+    pos = jnp.arange(128, dtype=jnp.int32)
+    # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:64].
+    combined_src = jnp.concatenate(
+        [jnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(jnp.uint8)],
+        axis=1,
+    )  # [B, 64+E]
+    src_idx = jnp.clip(
+        pos + jnp.where(pos < pl, jnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
+    )
+    content = combined_src[:, src_idx]  # [B, 128]
+
+    is_content = (pos < content_len)[None, :]
+    is_pad80 = (pos == content_len)[None, :]
+    len_start = active_bytes - jnp.int32(8)
+    is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
+    len_val = len_bytes[jnp.clip(pos - len_start, 0, 7)][None, :]
+    region = jnp.where(
+        is_content,
+        content,
+        jnp.where(is_pad80, jnp.uint8(0x80), jnp.where(is_len, len_val, jnp.uint8(0))),
+    )  # [B, 128]
+
+    h = jnp.broadcast_to(state.h, (batch, 8))
+    h1 = compress(h, block_to_words(region[:, 0:_BLOCK]))
+    h2 = compress(h1, block_to_words(region[:, _BLOCK:128]))
+    return serialize_digest(jnp.where(two_blocks, h2, h1))
 
 
 # ---------------------------------------------------------------------------

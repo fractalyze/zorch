@@ -65,3 +65,28 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "byte_hash_test",
+    size = "small",
+    srcs = ["byte_hash_test.py"],
+    deps = [
+        "//zorch/hash:byte_hash",
+        "//zorch/hash:sha256",
+        requirement("absl_py"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "sha256_stream_test",
+    # Compile-heavy: the unrolled streaming absorb compiles per input length.
+    size = "medium",
+    srcs = ["sha256_stream_test.py"],
+    deps = [
+        "//zorch/hash:sha256",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

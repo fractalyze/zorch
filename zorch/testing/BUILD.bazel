@@ -8,17 +8,20 @@ py_test(
     srcs = ["byte_transcript_test.py"],
     deps = [
         "//zorch:byte_transcript",
+        "//zorch/hash:byte_hash",
+        "//zorch/hash:sha256",
         requirement("absl_py"),
     ],
 )
 
 py_test(
-    name = "device_byte_transcript_test",
+    name = "sha256_field_transcript_test",
     size = "small",
-    srcs = ["device_byte_transcript_test.py"],
+    srcs = ["sha256_field_transcript_test.py"],
     deps = [
         "//zorch:byte_transcript",
-        "//zorch:device_byte_transcript",
+        "//zorch:sha256_field_transcript",
+        "//zorch/hash:sha256",
         "//zorch/sumcheck",
         requirement("absl_py"),
         requirement("jax"),
