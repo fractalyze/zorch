@@ -75,6 +75,7 @@ py_library(
     deps = [
         ":byte_transcript",
         "//zorch/hash:sha256",
+        requirement("jax"),
         requirement("numpy"),
     ],
 )
