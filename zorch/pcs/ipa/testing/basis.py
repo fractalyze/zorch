@@ -22,14 +22,17 @@ from zorch.pcs.testing.curves import Curve, generator
 
 
 def toy_key(curve: Curve, n: int, seed: int = 1) -> IpaKey:
-    """An `n`-element basis `G` and generator `U` from known scalars (`G_i =
-    (seed + i + 1)·g1`, `U = (seed + n + 1)·g1`) over `curve`. Insecure by
-    construction — the discrete logs are known — but enough to exercise the
-    commit/open/verify round trip."""
+    """An `n`-element basis `G`, inner-product generator `U`, and blinding generator
+    `S` from known scalars (`G_i = (seed + i + 1)·g1`, `U = (seed + n + 1)·g1`,
+    `S = (seed + n + 2)·g1`) over `curve`. Insecure by construction — the discrete
+    logs are known — but enough to exercise the commit/open/verify round trip,
+    including the hiding/zk path (which blinds against `S`). The transparent path
+    never reads `S`."""
     g1: Array = generator(curve.g1)
     basis = [
         lax.convert_element_type(jnp.array(seed + i + 1, curve.sf) * g1, curve.g1)
         for i in range(n)
     ]
     u = lax.convert_element_type(jnp.array(seed + n + 1, curve.sf) * g1, curve.g1)
-    return setup(jnp.stack(basis), u)
+    s = lax.convert_element_type(jnp.array(seed + n + 2, curve.sf) * g1, curve.g1)
+    return setup(jnp.stack(basis), u, s)

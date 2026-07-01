@@ -31,8 +31,12 @@ from typing import TYPE_CHECKING, TypeVar
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.pcs.ipa.challenger import IpaChallenger, TranscriptChallenger
-from zorch.pcs.ipa.config import IpaCommitment, IpaProof
+from zorch.pcs.ipa.challenger import (
+    IpaChallenger,
+    TranscriptChallenger,
+    ZkIpaChallenger,
+)
+from zorch.pcs.ipa.config import IpaCommitment, IpaProof, IpaZkProof
 from zorch.pcs.ipa.math import challenge_vector, eval_challenge_poly
 from zorch.pcs.ipa.setup import IpaKey
 from zorch.transcript import Transcript
@@ -41,6 +45,7 @@ if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
 
 _Ch = TypeVar("_Ch", bound=IpaChallenger)
+_ZkCh = TypeVar("_ZkCh", bound=ZkIpaChallenger)
 
 
 @dataclass(frozen=True)
@@ -103,6 +108,34 @@ def reduce_opening(
 
     b = eval_challenge_poly(u, point)
     return fs, IpaReducedClaim(combined, u, xi0, proof.a, b)
+
+
+def reduce_opening_zk(
+    key: IpaKey,
+    commitment: Array,
+    point: Array,
+    value: Array,
+    proof: IpaZkProof,
+    fs: _ZkCh,
+) -> tuple[_ZkCh, IpaReducedClaim]:
+    """The zk/hiding mirror of `reduce_opening`: re-derive the one hiding challenge
+    `hc`, fold the blinding commitment and randomness back into the statement to
+    recover the blinded commitment the prover opened
+    (`commitment + hc·hiding_comm − s·rand`), then run the *same* reduction. The
+    resulting `IpaReducedClaim` and `settle` are identical to the transparent path —
+    the blinding is gone once the statement is recovered. Requires `key.s`."""
+    s = key.s
+    if s is None:
+        raise ValueError("zk verification requires the blinding generator key.s")
+    one = jnp.ones((), dtype=value.dtype)
+    fs, hc = fs.hiding_challenge(commitment, proof.hiding_comm, point, value)
+    mod_commitment = lax.msm(
+        jnp.stack([one, hc, -proof.rand]),
+        jnp.stack([commitment, proof.hiding_comm, s]),
+    )
+    return reduce_opening(
+        key, mod_commitment, point, value, IpaProof(proof.l, proof.r, proof.a), fs
+    )
 
 
 def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:

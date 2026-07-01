@@ -28,6 +28,7 @@ class Curve(NamedTuple):
 
 BN254 = Curve(zk_dtypes.bn254_sf, zk_dtypes.bn254_g1_affine)
 PALLAS = Curve(zk_dtypes.pallas_sf, zk_dtypes.pallas_g1_affine)
+VESTA = Curve(zk_dtypes.vesta_sf, zk_dtypes.vesta_g1_affine)
 
 
 def generator(g1: type) -> Array:

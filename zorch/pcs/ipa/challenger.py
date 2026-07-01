@@ -43,13 +43,29 @@ class IpaChallenger(Protocol):
     def challenge(self, l: Array, r: Array) -> tuple[Self, Array]: ...
 
 
+class ZkIpaChallenger(IpaChallenger, Protocol):
+    """An `IpaChallenger` that also derives the *hiding challenge* of the zk/hiding
+    opening: the one extra challenge squeezed from the statement and the blinding
+    commitment `(commitment, hiding_comm, point, value)` before the rounds. It is
+    what the prover/verifier fold the blinding into `(commitment, coeffs)` with
+    (the arkworks hiding fold), and is squeezed once — it does not enter the
+    per-round challenge list. Separate from `IpaChallenger` so the transparent
+    path's challengers need not implement it."""
+
+    def hiding_challenge(
+        self, commitment: Array, hiding_comm: Array, point: Array, value: Array
+    ) -> tuple[Self, Array]: ...
+
+
 @dataclass(frozen=True)
 class TranscriptChallenger:
     """The default `IpaChallenger`: zorch's own running `DuplexTranscript`. `seed`
     binds the statement `(commitment, point, value)` and squeezes the seed
     challenge ξ₀ (the inner-product generator scale `h' = U·ξ₀`); `challenge`
-    observes the round's cross terms and squeezes one `dtype` challenge. This is
-    the zorch-native FS, NOT arkworks-byte-exact."""
+    observes the round's cross terms and squeezes one `dtype` challenge;
+    `hiding_challenge` squeezes the zk opening's pre-fold blinding challenge. This is
+    the zorch-native FS, NOT arkworks-byte-exact, and serves as the default
+    `ZkIpaChallenger` as well as `IpaChallenger`."""
 
     transcript: Transcript
     dtype: Any  # the challenge field (a zk_dtypes scalar-field dtype)
@@ -64,3 +80,15 @@ class TranscriptChallenger:
     def challenge(self, l: Array, r: Array) -> tuple[TranscriptChallenger, Array]:
         t, u = sample_challenge(self.transcript.observe(jnp.stack([l, r])), self.dtype)
         return TranscriptChallenger(t, self.dtype), u
+
+    def hiding_challenge(
+        self, commitment: Array, hiding_comm: Array, point: Array, value: Array
+    ) -> tuple[TranscriptChallenger, Array]:
+        """Squeeze the hiding challenge over `(commitment, hiding_comm, point,
+        value)` — the zorch-native (NOT arkworks-byte-exact) read; the byte-exact
+        version lives in the accumulation consumer's challenger."""
+        t = self.transcript.observe(jnp.stack([commitment, hiding_comm])).observe(
+            jnp.stack([point, value])
+        )
+        t, hc = sample_challenge(t, self.dtype)
+        return TranscriptChallenger(t, self.dtype), hc
