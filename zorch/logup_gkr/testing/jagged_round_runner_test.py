@@ -1,8 +1,10 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """`_run_jagged_rounds` (the host loop threading one compute + FS hop per round,
 traced into the whole-layer jit) is byte-identical to the unrolled
-`_run_jagged_rounds_reference` oracle, on every row/interaction/edge layout. The
-oracle is kept in-tree precisely for this gate."""
+`_run_jagged_rounds_reference` oracle, on every row/interaction/edge layout --
+and so is its `export_dispatch=True` decoupled path (one cached `jax.export`
+binary host-relaunched at the halving size). The oracle is kept in-tree
+precisely for this gate."""
 from __future__ import annotations
 
 import jax
@@ -90,6 +92,15 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             cheap_transcript(KB)
         )
         self._assert_matches_reference(ref, got, "jit")
+        # The export-dispatch path (one cached `jax.export` binary host-relaunched
+        # at the halving size, run decoupled from any outer jit) must also
+        # byte-match the reference: called eagerly here the operands are concrete
+        # arrays, so `_dispatch_*` actually exports and calls the symbolic binary
+        # rather than falling back to the eager kernel under a tracer.
+        got_export = _run_jagged_rounds(
+            state, sched, cheap_transcript(KB), export_dispatch=True
+        )
+        self._assert_matches_reference(ref, got_export, "export")
 
     def _assert_matches_reference(
         self,
