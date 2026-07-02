@@ -71,21 +71,6 @@ py_test(
 )
 
 py_test(
-    name = "jagged_round_symk_export_test",
-    size = "medium",
-    srcs = ["jagged_round_symk_export_test.py"],
-    deps = [
-        ":testing",
-        "//zorch/logup_gkr",
-        "//zorch/poly",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
     name = "jagged_verifier_test",
     size = "medium",
     srcs = ["jagged_verifier_test.py"],
