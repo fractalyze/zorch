@@ -382,7 +382,17 @@ def _prove_jagged_layer_from_meta(
     sched = _JaggedSchedule(
         meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
     )
-    out = _run_jagged_rounds(state, sched, transcript)
+    # The host round loop runs one fold-then-compute kernel per round, the FS hop
+    # + reduce dispatching between them. `export_dispatch=True` selects the cached
+    # per-round `jax.export` binary, but it only fires when this layer runs OUTSIDE
+    # an outer jit (`JaggedGkrLayerRound(jit=False)`): the operands are then concrete
+    # arrays, so each round host-dispatches and releases its buffers, bounding peak
+    # host RAM on wide shards. Under the production outer jit
+    # (`JaggedGkrLayerRound(jit=True)`) the dispatch sees tracers and falls back to
+    # the eager kernel, tracing the whole loop into one program (the whole-scan
+    # `zorch.sumcheck` megakernel was retired -- it never compiled at real sizes,
+    # mirroring #332's drop of the dense megakernel).
+    out = _run_jagged_rounds(state, sched, transcript, export_dispatch=True)
     bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
     proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
     return bound_point, advanced, proof
