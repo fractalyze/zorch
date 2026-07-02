@@ -58,3 +58,16 @@ string, so a shared directory replays the *other* build's executables
 
 `bazel test` strips the variable (hermetic), so caching only applies to the
 venv loop.
+
+## Exported round-binary cache (`ZORCH_EXPORT_CACHE_DIR`)
+
+The jagged LogUp-GKR round loop dispatches shape-polymorphic `jax.export`
+binaries (`zorch/logup_gkr/round_export.py`). Their symbolic StableHLO build
+re-runs every process and is NOT covered by the XLA compile cache; setting
+`ZORCH_EXPORT_CACHE_DIR` persists the serialized binaries across processes.
+The directory is namespaced by jax version plus a hash of the whole `zorch`
+source tree, so any source edit invalidates it — never prune it by hand to
+"save a rebuild". The two caches compose: `ZORCH_EXPORT_CACHE_DIR` skips the
+export build, `JAX_COMPILATION_CACHE_DIR` skips the per-concrete-shape XLA
+codegen that `exported.call` re-runs; a deep pyramid needs both to warm across
+proves.

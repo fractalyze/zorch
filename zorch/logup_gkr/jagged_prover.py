@@ -43,8 +43,9 @@ from typing import TYPE_CHECKING, Any
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import Array
+from jax import Array, export
 
+from zorch.logup_gkr import round_export
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _pad_neutral,
@@ -322,6 +323,11 @@ class _RoundScalars:
     lam: Array
 
 
+# Operand pytrees cross the jax.export boundary; registering their (empty)
+# auxdata lets `Exported.serialize` round-trip them for the on-disk cache.
+round_export.register_operand_pytrees(_Planes, _RoundScalars)
+
+
 @dataclass(frozen=True)
 class _InterpConsts:
     """The Lagrange interpolation constants (the `{0..DEGREE}` natural domain and
@@ -551,6 +557,7 @@ def _fold_scalars(
     return eval_coeffs(poly, r), pad_adj * (z * r + (one - z) * (one - r))
 
 
+@partial(jax.jit, static_argnums=(7,))
 def _reinterpret_and_reduce(
     raw: Array,
     poly: Array,
@@ -562,10 +569,12 @@ def _reinterpret_and_reduce(
     dtype: Any,
 ) -> tuple[Array, Array, Array, Array, Array]:
     """Reinterpret the squeezed challenge, fold the round scalars, and slice the
-    next round's eval-point coordinate. Grouped into one helper so the round loop
-    reads as three named steps the outer jit fuses: the challenge reshape/bitcast,
-    the scalar fold, and the per-round `eval_point` slice (a plain `jnp.take` would
-    be a real ~22us dispatch, NOT a buffer view). `pos` indexes this
+    next round's eval-point coordinate -- one jitted dispatch between round
+    kernels (the relaunch loop is dispatch-bound, so each eager hop folded out
+    is a direct win; under the traced zone the jit inlines): the challenge
+    reshape/bitcast, the scalar fold, and the per-round `eval_point` slice (a
+    plain `jnp.take` would be a real ~22us dispatch, NOT a buffer view). `pos`
+    indexes this
     round's coordinate; the next is `pos - 1`, threaded device-resident so no
     per-round index round-trips the host. Returns the round challenge `r`, the next
     `claim`, `pad_adj`, the next round's `z_cur`, and the decremented `pos`."""
@@ -588,6 +597,272 @@ def _finalize_layer(
     return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
 
 
+# ===== export-dispatch round engine =====
+# How the relaunch loop runs its rounds: each round kind exports ONCE as a
+# shape-polymorphic binary (symbolic over the halving state bracket) and the
+# host loop dispatches it at every concrete round size, layer, and shard — an
+# O(1) compile surface in round count and shard count, where tracing per layer
+# shape pays a fresh trace + XLA compile per layer of every distinct shard
+# height profile. Under a jit trace the wrappers fall back to the plain
+# kernels, so the traced-zone program carries no export machinery. Cache
+# mechanics and the two-cache split (export build vs per-concrete-shape XLA
+# codegen) live in `round_export`.
+#
+# The symbolic bound only needs to *contain* every round size, but it MUST
+# exceed the largest dispatched state: a row input is `2*pp` and an interaction
+# input `4*g`, so the bound caps the provable layer at `2*_ROUND_SYM_MAX` /
+# `4*_ROUND_SYM_MAX` elements. Hold it well above any trace's 2^(log rows) so
+# no real shard overflows.
+_ROUND_SYM_MAX = 1 << 30
+
+_SCALAR_FIELDS = ("eq_adj", "pad_adj", "z_cur", "claim", "lam")
+
+
+def _abst_scalars(scalars: _RoundScalars) -> _RoundScalars:
+    return _RoundScalars(
+        *(jax.ShapeDtypeStruct((), getattr(scalars, f).dtype) for f in _SCALAR_FIELDS)
+    )
+
+
+def _dispatch_fix_and_sum_int(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes, Array]:
+    """Dispatch the dense interaction round through one cached binary symbolic
+    over the halving state size. The round folds (`m -> m/2`) then `_paired_sums`
+    slices stride-2 again (`m/2 -> m/4`), two halvings with no re-pad between, so
+    the state is `4*g` to keep both decidable; `eq_int` halves with it.
+
+    `exported.call` is a host dispatch; under a `jax.jit` trace the operands are
+    tracers, so fall back to the eager kernel -- the jit compiles the round
+    itself, the per-round export being its alternative."""
+    if isinstance(planes.n0, jax.core.Tracer):
+        return _fix_and_sum_int(planes, eq_int, alpha, scalars, consts)
+    operands = (planes, eq_int, alpha, scalars)
+    # Per-operand dtypes (a LogUp numerator is base-field, its denominator
+    # extension-field, and the state promotes base->extension across rounds), so
+    # each (round-shape, dtype-mix) gets its own binary; `consts` is baked in.
+    key = (
+        "int",
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        consts.naturals.shape[0],
+        consts.naturals.dtype,
+    )
+
+    def build() -> export.Exported:
+        (g,) = export.symbolic_shape(
+            "g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"]
+        )
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct((4 * g,), getattr(planes, f).dtype)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct((4 * g,), eq_int.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            _abst_scalars(scalars),
+        )
+        fn = lambda p, e, al, sc: _fix_and_sum_int(p, e, al, sc, consts)  # noqa: E731
+        return export.export(jax.jit(fn))(*abst)
+
+    return round_export.dispatch(key, operands, build)
+
+
+def _dispatch_fix_and_sum_boundary(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes, Array]:
+    """Dispatch the row->interaction handoff (bind the last row challenge `alpha`,
+    then sum the first interaction round over the still-unfolded `eq_int`) through
+    one cached binary. Mirrors `_dispatch_fix_and_sum_int` without the `eq_int`
+    bind: the bind halves the state (`4*g -> 2*g`) and `eq_int` rides unfolded at
+    `2*g` (= the post-bind state), so one dispatched kernel replaces the eager one.
+    """
+    if isinstance(planes.n0, jax.core.Tracer):
+        return _fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
+    operands = (planes, eq_int, alpha, scalars)
+    key = (
+        "boundary",
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        consts.naturals.shape[0],
+        consts.naturals.dtype,
+    )
+
+    def build() -> export.Exported:
+        (g,) = export.symbolic_shape(
+            "g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"]
+        )
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct((4 * g,), getattr(planes, f).dtype)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct((2 * g,), eq_int.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            _abst_scalars(scalars),
+        )
+        fn = lambda p, e, al, sc: _fix_and_sum_boundary(
+            p, e, al, sc, consts
+        )  # noqa: E731
+        return export.export(jax.jit(fn))(*abst)
+
+    return round_export.dispatch(key, operands, build)
+
+
+def _dispatch_sum_as_poly_row(
+    planes: _Planes,
+    gather: Array | None,
+    col_index: Array,
+    pair_index: Array,
+    eq_row: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes]:
+    """Dispatch the round-0 sum (no fold, no challenge) through one cached binary
+    symbolic over the RAW layer height (`h`), the re-pad layout (`2*p` gather / `p`
+    schedule), and `eq_row` (`2*rr`); `eq_int` rides fixed. Mirrors
+    `_dispatch_fix_and_sum_row` without the bind -- one dispatched kernel replaces
+    the eager entry kernel. A round needing no re-pad (`gather` None) gets an
+    identity gather over the full height (no `//2` fold) so it hits the same
+    binary."""
+    if isinstance(planes.n0, jax.core.Tracer):
+        return _round_poly_row(
+            planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
+        )
+    if gather is None:
+        gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
+    operands = (planes, gather, col_index, pair_index, eq_row, eq_int, scalars)
+    key = (
+        "sum0",
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        eq_int.shape,
+        consts.naturals.shape[0],
+    )
+
+    def build() -> export.Exported:
+        h, p, rr = export.symbolic_shape(
+            "h, p, rr",
+            constraints=[
+                "h >= 1",
+                f"h <= {_ROUND_SYM_MAX}",
+                "p >= 1",
+                f"p <= {_ROUND_SYM_MAX}",
+                "rr >= 1",
+                f"rr <= {_ROUND_SYM_MAX}",
+            ],
+        )
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct((h,), getattr(planes, f).dtype)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct((2 * p,), gather.dtype),
+            jax.ShapeDtypeStruct((p,), col_index.dtype),
+            jax.ShapeDtypeStruct((p,), pair_index.dtype),
+            jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
+            jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
+            _abst_scalars(scalars),
+        )
+        fn = lambda pl, ga, ci, pi, er, ei, sc: _round_poly_row(  # noqa: E731
+            pl, ga, ci, pi, er, ei, sc, consts
+        )
+        return export.export(jax.jit(fn))(*abst)
+
+    return round_export.dispatch(key, operands, build)
+
+
+def _dispatch_fix_and_sum_row(
+    planes: _Planes,
+    eq_row: Array,
+    alpha: Array,
+    gather: Array | None,
+    col_index: Array,
+    pair_index: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes, Array]:
+    """Dispatch a jagged row round through one cached binary symbolic over the
+    input state (`2*pp`), the re-pad layout (`2*p` gather / `p` schedule), and the
+    halving `eq_row` (`2*rr`); `eq_int` rides at its fixed `2^niv` width. A round
+    that needs no re-pad (gather `None`) gets an identity gather so it hits the
+    same binary -- the identity pad is a no-op, so byte-identical."""
+    if isinstance(planes.n0, jax.core.Tracer):
+        return _fix_and_sum_row(
+            planes,
+            eq_row,
+            alpha,
+            gather,
+            col_index,
+            pair_index,
+            eq_int,
+            scalars,
+            consts,
+        )
+    if gather is None:
+        gather = jnp.arange(planes.n0.shape[0] // 2, dtype=col_index.dtype)
+    operands = (planes, eq_row, alpha, gather, col_index, pair_index, eq_int, scalars)
+    key = (
+        "row",
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        eq_int.shape,
+        consts.naturals.shape[0],
+    )
+
+    def build() -> export.Exported:
+        pp, p, rr = export.symbolic_shape(
+            "pp, p, rr",
+            constraints=[
+                "pp >= 1",
+                f"pp <= {_ROUND_SYM_MAX}",
+                "p >= 1",
+                f"p <= {_ROUND_SYM_MAX}",
+                "rr >= 1",
+                f"rr <= {_ROUND_SYM_MAX}",
+            ],
+        )
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct((2 * pp,), getattr(planes, f).dtype)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            jax.ShapeDtypeStruct((2 * p,), gather.dtype),
+            jax.ShapeDtypeStruct((p,), col_index.dtype),
+            jax.ShapeDtypeStruct((p,), pair_index.dtype),
+            jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
+            _abst_scalars(scalars),
+        )
+        fn = lambda pl, er, al, ga, ci, pi, ei, sc: _fix_and_sum_row(  # noqa: E731
+            pl, er, al, ga, ci, pi, ei, sc, consts
+        )
+        return export.export(jax.jit(fn))(*abst)
+
+    return round_export.dispatch(key, operands, build)
+
+
+# Jitted so the relaunch loop's tail (final fold + two stacks, ~2*(nrv+niv)
+# element ops) costs one dispatch instead of one per stacked element; a jit
+# under the traced zone inlines, so the zone's program is unchanged.
+_jit_finalize = jax.jit(_finalize_layer)
+
+
 def _run_jagged_rounds(
     state: _JaggedState,
     sched: _JaggedSchedule,
@@ -598,10 +873,13 @@ def _run_jagged_rounds(
     transcript between rounds. One `_round_poly_row` (round 0, no fold), one
     `_fix_and_sum_*` per subsequent round (row / boundary / interaction variant by
     round index), one `_fix_last`. Each kernel regroups the fold of round k with
-    the sum of round k+1 so it lowers to one fused kernel; under the production
-    outer jit (`JaggedGkrLayerRound(jit=True)`) the whole loop traces into one
-    program. Byte-matched against the inline reference oracle in the tests (same
-    math without the per-round kernel regrouping)."""
+    the sum of round k+1 so it lowers to one fused kernel. Run eagerly, every
+    round dispatches through its cached shape-polymorphic exported binary (the
+    `_dispatch_*` wrappers); under the production outer jit
+    (`JaggedGkrLayerRound(jit=True)`) the wrappers bail to the plain kernels and
+    the whole loop traces into one program. Byte-matched against the inline
+    reference oracle in the tests (same math without the per-round kernel
+    regrouping)."""
     eq_row, eq_int, eval_point, lam, claim = (
         state.eq_row,
         state.eq_int,
@@ -633,12 +911,12 @@ def _run_jagged_rounds(
         if rnd == 0:
             # Round 0 binds nothing yet, so its sum is the bare row poly (no fold).
             gather, col_index, pair_index = meta[0]
-            poly, planes = _round_poly_row(
+            poly, planes = _dispatch_sum_as_poly_row(
                 planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
             )
         elif rnd < nrv:
             gather, col_index, pair_index = meta[rnd]
-            poly, planes, eq_row = _fix_and_sum_row(
+            poly, planes, eq_row = _dispatch_fix_and_sum_row(
                 planes,
                 eq_row,
                 prev_r,
@@ -650,11 +928,11 @@ def _run_jagged_rounds(
                 consts,
             )
         elif rnd == nrv:
-            poly, planes, eq_int = _fix_and_sum_boundary(
+            poly, planes, eq_int = _dispatch_fix_and_sum_boundary(
                 planes, eq_int, prev_r, scalars, consts
             )
         else:
-            poly, planes, eq_int = _fix_and_sum_int(
+            poly, planes, eq_int = _dispatch_fix_and_sum_int(
                 planes, eq_int, prev_r, scalars, consts
             )
         transcript, raw = transcript.observe_and_sample(poly, challenge_limbs)
@@ -668,7 +946,7 @@ def _run_jagged_rounds(
             pad_adj = one
         prev_r = r
 
-    fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
+    fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _jit_finalize(
         planes, prev_r, challenges, polys
     )
     return (

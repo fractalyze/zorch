@@ -13,6 +13,7 @@ py_library(
         "jagged_prover.py",
         "jagged_verifier.py",
         "prover.py",
+        "round_export.py",
         "verifier.py",
     ],
     visibility = ["//visibility:public"],
@@ -23,6 +24,9 @@ py_library(
         "//zorch/poly",
         "//zorch/sumcheck",
         "//zorch/utils:bits",
+        # round_export's on-disk cache backend; the import is guarded, but
+        # without the wheel in runfiles ZORCH_EXPORT_CACHE_DIR is a no-op.
+        requirement("flatbuffers"),
         requirement("jax"),
         requirement("numpy"),
     ],
