@@ -86,6 +86,7 @@ class GrindingTranscript(Transcript, Protocol):
 TranscriptT = TypeVar("TranscriptT", bound=Transcript)
 
 
+@partial(jit, static_argnums=(1,))
 def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
     """Reinterpret consecutive transcript squeezes `raw` as one `dtype` challenge:
     the identity when `dtype` is the transcript's own field, else the extension
@@ -96,7 +97,15 @@ def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
     Fails loud on a packing mismatch: the squeezes are already consumed, so
     silently truncating to the first element would leave the stream advanced past
     a challenge nobody received.
-    """
+
+    Jitted: the `view` + bounds-check + index are three ops that, called eagerly
+    per FS squeeze (every layer-boundary `lam`/`r`, head sample), each launch a
+    separate kernel -- the dominant "loose single-op dispatch" cost on the warm
+    prove. As one jit they fuse to a single dispatch (and XLA elides the identity
+    bitcast when `dtype` is the transcript's own field). The shape check runs at
+    trace time (shapes are static), so the loud failure is preserved. Nested
+    inside an outer jit/export (the round FS, sumcheck scan) it inlines, leaving
+    those paths byte-identical. `dtype` rides static."""
     viewed = raw.view(dtype)
     if viewed.shape != (1,):
         raise ValueError(
@@ -570,37 +579,29 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
     combined = combined_src[src_idx]  # (total,) — valid prefix is [0:length]
 
-    # Unroll the rate-block absorb in Python (num_blocks is STATIC) rather than
-    # `lax.scan`: a scan whose array carry evolves under a per-step scatter
-    # (`sponge.at[:rate].set`) and a `dynamic_slice` of the closed-over `combined`
-    # is the fractalyze/zkx#500 CPU-backend miscompile, which silently corrupts
-    # the CPU Fiat-Shamir transcript (the byte-identity tests are GPU-pinned, so
-    # it slipped through). num_blocks = ceil((rate-1+M)/rate) is small and
-    # CONSTANT for the fixed-size messages the rolled prove observes per round, so
-    # the per-call graph stays O(1) across rounds; a one-time large observe pays a
-    # small static unroll. `concatenate` (not `sponge.at[:rate].set`) overwrites
-    # the rate lanes, byte-identical to the per-element absorb, and the static
-    # `combined[k*rate:(k+1)*rate]` avoids the traced-index dynamic_slice.
-    sponge = st.sponge_state
-    if isinstance(num_blocks, int):
-        for k in range(num_blocks):
-            block = combined[k * rate : (k + 1) * rate]  # static slice
-            permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
-            # Blocks past the live count are padding-only: leave the sponge alone.
-            sponge = jnp.where(jnp.int32(k) < active_blocks, permuted, sponge)
-    else:
-        # Symbolic M (shape-poly export): num_blocks is a symbolic dim, so the
-        # Python unroll is unavailable — loop the rate-blocks with a `fori_loop`.
-        # Export targets the GPU sponge plugin, not the CPU backend whose zkx#500
-        # scan miscompile the unroll protects against; the body is byte-identical
-        # (overwrite the rate lanes via concatenate, permute, mask blocks past the
-        # live count), so a concrete refinement reproduces the unrolled bytes.
-        def absorb_block(k: Array, sponge: Array) -> Array:
-            block = lax.dynamic_slice_in_dim(combined, k * rate, rate)
-            permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
-            return jnp.where(k < active_blocks, permuted, sponge)
+    # Absorb the rate-blocks with a `lax.scan`: ONE permute body regardless of
+    # message length, so the HLO module (and its compile) is O(1) in M. A Python
+    # unroll instead emits `num_blocks` block-permute instructions + glue -- fine
+    # for the tiny per-round observes, but a ~15 MB module / minutes of XLA passes
+    # for a one-shot large observe like the shard preamble (num_blocks ~hundreds).
+    # reuse_key dedups the permute cubin either way; it is the O(num_blocks) HLO
+    # graph, not the cubin, that the roll collapses.
+    #
+    # Blocks ride as a leading-axis `xs` and the carry evolves by `concatenate` (no
+    # in-place scatter, no traced dynamic_slice), which keeps the absorb
+    # byte-identical on GPU and CPU. `k` rides the carry so the live-count mask
+    # needs no `arange`, one path for concrete and symbolic `num_blocks` (export).
+    blocks = combined[: num_blocks * rate].reshape(num_blocks, rate)
 
-        sponge = lax.fori_loop(0, num_blocks, absorb_block, sponge)
+    def _absorb(
+        carry: tuple[Array, Array], block: Array
+    ) -> tuple[tuple[Array, Array], None]:
+        sponge, k = carry
+        permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
+        # Blocks past the live count are padding-only: leave the sponge alone.
+        return (jnp.where(k < active_blocks, permuted, sponge), k + jnp.int32(1)), None
+
+    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, jnp.int32(0)), blocks)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode
