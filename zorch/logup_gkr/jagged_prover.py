@@ -264,28 +264,61 @@ def prove_jagged_layer(
     challenges reversed), the advanced transcript, and the proof.
     """
     niv = layer.num_interaction_variables
-    nrv = eval_point.shape[0] - niv
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    meta = _round_metadata(layer.row_counts, nrv)
+    planes = _Planes(
+        layer.numerator_0,
+        layer.numerator_1,
+        layer.denominator_0,
+        layer.denominator_1,
+    )
+    return _prove_jagged_layer_from_meta(
+        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs
+    )
+
+
+def _check_row_space(row_counts: tuple[int, ...], num_vars: int, niv: int) -> int:
+    """Validate the layer fits the virtual row space and return `nrv`. Host-side
+    (Python-int) checks, kept out of the trace so the whole-layer jit never keys
+    on `row_counts`."""
+    nrv = num_vars - niv
     if nrv < 1:
         raise ValueError(
             f"eval_point must carry at least one row variable: got "
-            f"{eval_point.shape[0]} coordinates for {niv} interaction variables"
+            f"{num_vars} coordinates for {niv} interaction variables"
         )
-    if max(layer.row_counts) > 1 << nrv:
+    if max(row_counts) > 1 << nrv:
         raise ValueError(
-            f"row count {max(layer.row_counts)} exceeds the virtual row space "
+            f"row count {max(row_counts)} exceeds the virtual row space "
             f"2^{nrv}; the row-eq lookup would run out of bounds"
         )
+    return nrv
 
+
+def _prove_jagged_layer_from_meta(
+    planes: _Planes,
+    niv: int,
+    meta: list[tuple[Array | None, Array, Array]],
+    lam: Array,
+    claim: Array,
+    eval_point: Array,
+    transcript: Transcript,
+    challenge_limbs: int,
+) -> tuple[Array, Transcript, JaggedLayerProof]:
+    """One jagged layer's sumcheck from a PREBUILT round schedule `meta`.
+
+    `meta` is the per-round gather/index metadata, built host-side by
+    `_round_metadata` and passed in as a traced operand rather than closed over the
+    trace: its gathers span the layer height (hundreds of MB of int32 at shard
+    scale), and baking them in as HLO constants is what made the whole-layer jit
+    recompile from scratch per shard. As operands they leave the HLO tiny, so the
+    compile is cheap and `row_counts` never enters the jit key."""
+    nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
-    n0, n1 = layer.numerator_0, layer.numerator_1
-    d0, d1 = layer.denominator_0, layer.denominator_1
-    meta = _round_metadata(layer.row_counts, nrv)
     naturals, inv_vand = _round_interp_constants(eval_point.dtype)
 
-    state = _JaggedState(
-        _Planes(n0, n1, d0, d1), eq_row, eq_int, eval_point, lam, claim
-    )
+    state = _JaggedState(planes, eq_row, eq_int, eval_point, lam, claim)
     sched = _JaggedSchedule(
         meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
     )
@@ -851,7 +884,9 @@ def _observe_openings_and_fold(
 
 
 def _prove_jagged_layer_round(
-    layer: JaggedGkrLayer,
+    planes: _Planes,
+    niv: int,
+    meta: list[tuple[Array | None, Array, Array]],
     challenge_limbs: int,
     carry: Carry,
     transcript: Transcript,
@@ -859,12 +894,11 @@ def _prove_jagged_layer_round(
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
 
-    A module-level function (not a method) so it carries no implicit `self`:
-    `JaggedGkrLayerRound` holds only its layer and `jit=True` routes through the
-    shared `_jagged_round_zone` below, so the chain can drop a round -- and free
-    its layer -- the moment it builds the next (the one-live-layer release
-    `ChainedJaggedProveTest` pins; a `self`-closure or a per-instance jit would
-    defer it)."""
+    Takes the planes + interaction count + prebuilt `meta` (not a `JaggedGkrLayer`)
+    so the whole-layer jit never keys on `row_counts` and never bakes the schedule
+    into the trace. A module-level function (no implicit `self`) so the chain can
+    drop a round -- and free its layer -- the moment it builds the next (the
+    one-live-layer release `ChainedJaggedProveTest` pins)."""
     num_eval, den_eval, eval_point = carry
     dtype = num_eval.dtype
     transcript = cast(DuplexTranscript, transcript)
@@ -874,8 +908,8 @@ def _prove_jagged_layer_round(
     transcript, lam, claim = _sample_lam_and_claim(
         transcript, num_eval, den_eval, challenge_limbs, dtype
     )
-    point, transcript, proof = prove_jagged_layer(
-        layer, lam, claim, eval_point, transcript, challenge_limbs=challenge_limbs
+    point, transcript, proof = _prove_jagged_layer_from_meta(
+        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
     d0, d1 = proof.denominator_0, proof.denominator_1
@@ -892,34 +926,36 @@ def _prove_jagged_layer_round(
     return (num_eval, den_eval, eval_point), transcript, proof
 
 
-# Shared by every `JaggedGkrLayerRound(jit=True)`, keyed on the layer's static
-# schedule (`row_counts`, `challenge_limbs`) and the four planes' shapes. A
-# per-instance `jax.jit` gives each round a private trace cache, so a consumer
-# that rebuilds the chain every warm iteration -- the generator that keeps lazy
-# one-live-layer release -- would re-trace every layer of the pyramid on each
-# call. Routing through one module-level zone lets freshly built same-shape
-# rounds reuse a single trace. `row_counts` rides as a static arg (a small int
-# tuple, hashed host-side); the planes ride as traced args -- shape-keyed, with
-# no per-dispatch device->host sync that value-keying large planes would cost
-# (cf. the #177 permutation fix). The layer is rebuilt inside from planes +
-# counts (its `__post_init__` is static shape checks), so the traced body --
-# and its output -- is identical to an un-jitted `_prove_jagged_layer_round` call;
-# only the trace-cache key changes.
-@partial(jax.jit, static_argnums=(4, 5))
+# Shared by every `JaggedGkrLayerRound`. The schedule (`meta`) rides as a TRACED
+# operand, not a static arg: its per-round gather/index arrays span the layer
+# height (hundreds of MB of int32 at shard scale), so closing them over the trace
+# baked them into the HLO as constants -- XLA then spent minutes folding those
+# constants, a per-shard from-scratch compile that scaled with the trace. As
+# operands the HLO carries no data, so the compile is small and height-independent
+# (~15s whether the layer is 2M rows or 77M) and `row_counts` values leave the jit
+# key: it keys only on the per-round operand SHAPES plus the static `niv` /
+# `challenge_limbs` (`nrv` is read from `eval_point`'s length inside). Two layers
+# still recompile when their shape sequence differs, but each compile is cheap and
+# persistent-cached. Routing through one module-level zone lets freshly built
+# same-shape rounds reuse a single trace, so a consumer rebuilding the chain each
+# warm iteration (the generator keeping lazy one-live-layer release) re-traces at
+# most per distinct shape sequence, not per iter.
+@partial(jax.jit, static_argnums=(5, 6))
 def _jagged_round_zone(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
-    row_counts: tuple[int, ...],
+    meta: list[tuple[Array | None, Array, Array]],
+    niv: int,
     challenge_limbs: int,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    layer = JaggedGkrLayer(
-        numerator_0, numerator_1, denominator_0, denominator_1, row_counts
+    planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
+    return _prove_jagged_layer_round(
+        planes, niv, meta, challenge_limbs, carry, transcript
     )
-    return _prove_jagged_layer_round(layer, challenge_limbs, carry, transcript)
 
 
 def _jagged_round_via_zone(
@@ -928,15 +964,21 @@ def _jagged_round_via_zone(
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    """Split the (non-pytree) layer into `_jagged_round_zone`'s traced planes +
-    static `row_counts`. Signature mirrors `_prove_jagged_layer_round` so
-    `JaggedGkrLayerRound` partials over either with one code path."""
+    """Build the round schedule host-side and dispatch through `_jagged_round_zone`
+    with the planes + `meta` as traced operands. Splitting `meta` out of the trace
+    (rather than the layer's static `row_counts`) is what keeps the whole-layer
+    compile shard-independent."""
+    niv = layer.num_interaction_variables
+    eval_point = carry[2]
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    meta = _round_metadata(layer.row_counts, nrv)
     return _jagged_round_zone(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
-        layer.row_counts,
+        meta,
+        niv,
         challenge_limbs,
         carry,
         transcript,
@@ -954,15 +996,15 @@ class JaggedGkrLayerRound(Round):
     when `challenge_limbs == 1`; a consumer squeezing multi-limb challenges
     owns its binding glue.
 
-    The per-layer prove dispatches through the module-level `_jagged_round_zone`,
-    which traces once per layer *shape* and reuses that trace across every
-    same-shape round -- so a consumer that rebuilds the chain each warm iter (the
-    generator giving lazy one-live-layer release) pays the per-layer trace +
-    composite build once across all iters, not once per iter. The round holds only
-    its layer (no per-instance jit, no self-closure), so the chain's release bound
-    is untouched. The pyramid stays a host-orchestrated Python loop of these (one
-    trace per layer, never one `jit` over the whole pyramid -- it does not fit at
-    scale; see `prover.LogupSumcheckRound`).
+    The per-layer prove dispatches through the module-level `_jagged_round_zone`
+    with the round schedule as a traced operand, so it keys on `(niv, plane
+    shapes)` and never on `row_counts` -- the trace (and its compiled kernel) is
+    reused across every same-shape round, and shards differing only in row counts
+    share one compile. The round holds only its layer (no per-instance jit, no
+    self-closure), so the chain's release bound is untouched. The pyramid stays a
+    host-orchestrated Python loop of these (one trace per layer shape, never one
+    `jit` over the whole pyramid -- it does not fit at scale; see
+    `prover.LogupSumcheckRound`).
     """
 
     def __init__(self, layer: JaggedGkrLayer, challenge_limbs: int = 1) -> None:
