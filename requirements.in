@@ -11,11 +11,15 @@
 # only exists from zk_dtypes 0.0.6, so the two must move together.
 absl-py
 numpy
-jax==0.10.0.dev20260702023625
-jaxlib==0.10.0.dev20260702023625
-jax-cuda12-pjrt==0.10.0.dev20260702023625
-jax-cuda12-plugin==0.10.0.dev20260702023625
+jax==0.10.0.dev20260702143130
+jaxlib==0.10.0.dev20260702143130
+jax-cuda12-pjrt==0.10.0.dev20260702143130
+jax-cuda12-plugin==0.10.0.dev20260702143130
 zk-dtypes==0.0.7
+
+# `Exported.serialize`'s backend, for the opt-in on-disk exported-round-binary
+# cache (ZORCH_EXPORT_CACHE_DIR); without it the cache stays in-memory only.
+flatbuffers
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
