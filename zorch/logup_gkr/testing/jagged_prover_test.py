@@ -419,76 +419,28 @@ class ChainedJaggedProveTest(absltest.TestCase):
         self.assertEqual([ref() for ref in yielded], [None] * len(yielded))
 
 
-class JaggedGkrLayerRoundJitTest(absltest.TestCase):
-    """`JaggedGkrLayerRound(layer, jit=True)` compiles the per-layer prove once
-    and dispatches the cached executable on later calls -- the lever that turns
-    the ~20-layer pyramid's per-call composite re-trace into a single trace per
-    layer. The jit boundary must be a pure dispatch change: carry, proof, and
-    advanced transcript byte-identical to the eager round, on both the plain
-    (cheap transcript) and the marked-composite (poseidon) paths the consumer
-    drives.
+class JaggedGkrLayerRoundZoneTest(absltest.TestCase):
+    """`JaggedGkrLayerRound` dispatches every layer through the module-level
+    `_jagged_round_zone`, which keys on layer *shape*. A consumer that rebuilds the
+    chain each warm iter (the generator giving lazy one-live-layer release) builds a
+    fresh round per layer per iter, so those same-shape rounds must reuse one trace --
+    a per-instance jit would re-trace every pyramid layer on every iteration.
 
-    A small base-field layer over the cheap permutation keeps this fast: jit
-    forces XLA to *compile* the round, and compiling the marked path's
-    `zorch.sumcheck` composite -- whose body runs the poseidon2 Fiat-Shamir
-    permutation -- is a multi-minute XLA CPU-backend compile regardless of
-    layer size, so the marked path is not unit-testable here. It does not need
-    to be: jit wraps `_run` identically on both paths (a pure dispatch-time
-    change), so `jit(marked) == eager(marked)` follows from this test
-    (`jit == eager` on the loop) composed with `ProveJaggedMarkedTest`
-    (`marked == eager plain`); the full-scale jitted marked prove is validated
-    on GPU by the consumer prover's byte-match anchors."""
+    (Byte-equality of the jitted round loop vs the unrolled eager oracle is the
+    round-runner gate's job -- see `jagged_round_runner_test`.)"""
 
     # niv = 1 (two interactions), nrv = 2: an odd segment (3) and a saturated
     # one (1), both row and interaction rounds, in a few-element layer.
     ROW_COUNTS = (3, 1)
     NRV = 2
 
-    def _run(
-        self, *, jit: bool, transcript: Transcript
-    ) -> tuple[tuple[Array, Array, Array], Transcript, JaggedLayerProof]:
-        layer = random_jagged_layer(7, self.ROW_COUNTS)
-        carry = (
-            rand_field(111, (), KB),
-            rand_field(112, (), KB),
-            rand_field(113, (self.NRV + 1,), KB),  # niv = 1 for two interactions
-        )
-        round_ = JaggedGkrLayerRound(layer, jit=jit)
-        return round_(carry, transcript)
-
-    def test_jit_matches_eager_plain_path(self) -> None:
-        # Cheap transcript -> unmarked loop, jitted; byte-identical to eager.
-        (gnum, gden, gpt), gt, gproof = self._run(
-            jit=True, transcript=cheap_transcript(KB)
-        )
-        (wnum, wden, wpt), wt, wproof = self._run(
-            jit=False, transcript=cheap_transcript(KB)
-        )
-        self.assertTrue(bool(jnp.all(gnum == wnum)))
-        self.assertTrue(bool(jnp.all(gden == wden)))
-        self.assertTrue(bool(jnp.all(gpt == wpt)))
-        for f in fields(JaggedLayerProof):
-            self.assertTrue(
-                bool(jnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
-                f"proof.{f.name} diverged under jit",
-            )
-        if not isinstance(gt, DuplexTranscript) or not isinstance(wt, DuplexTranscript):
-            raise AssertionError("both paths must thread the DuplexTranscript back")
-        gs, ws = gt.state, wt.state
-        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
-        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
-        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
-        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
-        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
-
     def test_fresh_rounds_over_one_shape_share_a_single_trace(self) -> None:
-        # The consumer that motivates jit=True rebuilds the chain every warm
-        # prove iteration (the generator giving lazy one-live-layer release),
-        # so it builds a fresh round per layer per iter. The module-level zone
-        # keys on layer shape, not instance, so those same-shape rounds reuse
-        # one trace; a per-instance jit would re-trace every pyramid layer on
-        # every iteration. Distinct seeds (different values, one shape) pin
-        # shape-keying, not value- or identity-keying.
+        # The consumer's warm loop rebuilds the chain every prove iteration (the
+        # generator giving lazy one-live-layer release), so it builds a fresh round
+        # per layer per iter. The module-level zone keys on layer shape, not
+        # instance, so those same-shape rounds reuse one trace; a per-instance jit
+        # would re-trace every pyramid layer on every iteration. Distinct seeds
+        # (different values, one shape) pin shape-keying, not value/identity-keying.
         carry = (
             rand_field(111, (), KB),
             rand_field(112, (), KB),
@@ -498,7 +450,7 @@ class JaggedGkrLayerRoundJitTest(absltest.TestCase):
         def make_call(seed: int) -> Callable[[], None]:
             def _call() -> None:
                 layer = random_jagged_layer(seed, self.ROW_COUNTS)
-                JaggedGkrLayerRound(layer, jit=True)(carry, cheap_transcript(KB))
+                JaggedGkrLayerRound(layer)(carry, cheap_transcript(KB))
 
             return _call
 

@@ -1,30 +1,26 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""`_run_jagged_rounds` (the host loop running one fold-then-compute kernel per
-round) is byte-identical to the unrolled `_run_jagged_rounds_reference` oracle
-below, on every row/interaction/edge layout. The oracle -- the same sumcheck
-math written inline, one helper call per step -- lives here as the differential
-gate; the production driver regroups those calls (fold of round k + sum of round
-k+1 per kernel) and must reproduce it byte-for-byte."""
+"""`_run_jagged_rounds` (the host loop threading one compute + FS hop per round,
+traced into the whole-layer jit) is byte-identical to the unrolled
+`_run_jagged_rounds_reference` oracle, on every row/interaction/edge layout. The
+oracle is kept in-tree precisely for this gate."""
 from __future__ import annotations
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 from jax import Array
 
-from zorch.logup_gkr.circuit import JaggedGkrLayer, _pad_neutral
+from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
-    _bind_lsb,
-    _fold_scalars,
     _InterpConsts,
     _JaggedSchedule,
     _JaggedState,
-    _paired_sums,
     _Planes,
-    _round_coeffs,
     _round_metadata,
     _run_jagged_rounds,
+    _run_jagged_rounds_reference,
 )
 from zorch.logup_gkr.prover import logup_combine
 from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
@@ -32,98 +28,14 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_inv_vandermonde
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
+from zorch.transcript import DuplexTranscript, Transcript
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 
 
-def _run_jagged_rounds_reference(
-    state: _JaggedState,
-    sched: _JaggedSchedule,
-    transcript: Transcript,
-) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
-    """The per-round jagged sumcheck written inline -- one `_paired_sums` /
-    `_round_coeffs` / bind per round, no kernel regrouping. The readable oracle the
-    production `_run_jagged_rounds` is byte-matched against. Returns the bound point
-    (challenges reversed), the advanced transcript, the stacked round polynomials,
-    and the four folded pair openings."""
-    n0, n1, d0, d1 = state.planes.n0, state.planes.n1, state.planes.d0, state.planes.d1
-    eq_row, eq_int, eval_point, lam, claim = (
-        state.eq_row,
-        state.eq_int,
-        state.eval_point,
-        state.lam,
-        state.claim,
-    )
-    meta, nrv, niv = sched.meta, sched.nrv, sched.niv
-    naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
-    challenge_limbs = sched.challenge_limbs
-    one = jnp.ones((), eval_point.dtype)
-    eq_adj = one
-    pad_adj = one
-    point = eval_point
-    polys: list[Array] = []
-    challenges: list[Array] = []
-    for rnd in range(nrv + niv):
-        in_rows = rnd < nrv
-        if in_rows:
-            gather, col_index, pair_index = meta[rnd]
-            n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
-            w = eq_int[col_index]
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0,
-                n1,
-                d0,
-                d1,
-                eq_row[pair_index * 2] * w,
-                eq_row[pair_index * 2 + 1] * w,
-                lam,
-            )
-        else:
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0, n1, d0, d1, eq_int[0::2], eq_int[1::2], lam
-            )
-        poly = _round_coeffs(
-            eval_zero,
-            eval_half,
-            eq_sum,
-            eq_adj,
-            pad_adj,
-            point[-1],
-            claim,
-            naturals,
-            inv_vand,
-        )
-        transcript = transcript.observe(poly)
-        transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
-        polys.append(poly)
-        challenges.append(r)
-
-        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1], one)
-        n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
-        if in_rows:
-            eq_row = _bind_lsb(eq_row, r)
-            if rnd == nrv - 1:
-                eq_adj = pad_adj
-                pad_adj = one
-        else:
-            eq_int = _bind_lsb(eq_int, r)
-        point = point[:-1]
-
-    return (
-        jnp.stack(challenges[::-1]),
-        transcript,
-        jnp.stack(polys),
-        n0[0],
-        n1[0],
-        d0[0],
-        d1[0],
-    )
-
-
 class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
-    """`_run_jagged_rounds` — the host loop running one fold-then-compute kernel
+    """`_run_jagged_rounds` — the host loop dispatching one fold-then-compute kernel
     per round — is byte-identical to the unrolled `_run_jagged_rounds_reference`. Same
     arithmetic regrouped across the host Fiat-Shamir boundary, so the bound point,
     round polys, pair openings, AND the advanced transcript state must all match, on
@@ -171,29 +83,39 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
         )
         ref = _run_jagged_rounds_reference(state, sched, cheap_transcript(KB))
-        got = _run_jagged_rounds(state, sched, cheap_transcript(KB))
-        self._assert_matches_reference(ref, got)
+        # `_run_jagged_rounds` runs under the consumer's whole-layer jit (its FS hop
+        # traces into the layer kernel); under jit it must reproduce the unrolled
+        # eager reference byte-for-byte.
+        got = jax.jit(lambda tr: _run_jagged_rounds(state, sched, tr))(
+            cheap_transcript(KB)
+        )
+        self._assert_matches_reference(ref, got, "jit")
 
     def _assert_matches_reference(
         self,
         a: tuple[Array, Transcript, Array, Array, Array, Array, Array],
         b: tuple[Array, Transcript, Array, Array, Array, Array, Array],
+        label: str,
     ) -> None:
         ach, at, apolys, *aopen = a
         bch, bt, bpolys, *bopen = b
-        self.assertTrue(bool(jnp.all(ach == bch)), "challenges diverged")
-        self.assertTrue(bool(jnp.all(apolys == bpolys)), "round polys diverged")
+        self.assertTrue(bool(jnp.all(ach == bch)), f"challenges diverged ({label})")
+        self.assertTrue(
+            bool(jnp.all(apolys == bpolys)), f"round polys diverged ({label})"
+        )
         for i, (x, y) in enumerate(zip(aopen, bopen, strict=True)):
-            self.assertTrue(bool(jnp.all(x == y)), f"pair opening {i} diverged")
+            self.assertTrue(
+                bool(jnp.all(x == y)), f"pair opening {i} diverged ({label})"
+            )
         if not isinstance(at, DuplexTranscript) or not isinstance(bt, DuplexTranscript):
             raise AssertionError("both paths must thread the DuplexTranscript back")
         for f in ("input_buffer", "output_buffer", "sponge_state"):
             self.assertTrue(
                 bool(jnp.all(getattr(at.state, f) == getattr(bt.state, f))),
-                f"transcript {f} diverged",
+                f"transcript {f} diverged ({label})",
             )
-        self.assertEqual(int(at.state.in_pos), int(bt.state.in_pos))
-        self.assertEqual(int(at.state.out_pos), int(bt.state.out_pos))
+        self.assertEqual(int(at.state.in_pos), int(bt.state.in_pos), label)
+        self.assertEqual(int(at.state.out_pos), int(bt.state.out_pos), label)
 
     @parameterized.named_parameters(
         # Row + interaction phases, odd/saturated/even segments, the nrv==1 and

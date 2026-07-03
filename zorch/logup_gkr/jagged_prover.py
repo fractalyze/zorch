@@ -35,10 +35,9 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cache, partial
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -61,7 +60,9 @@ from zorch.poly.univariate import (
 from zorch.round import Round
 from zorch.sumcheck.prover import fold_pair
 from zorch.transcript import (
+    DuplexTranscript,
     Transcript,
+    observe_and_sample_marked,
     reinterpret_challenge,
     sample_challenge,
 )
@@ -112,10 +113,17 @@ class JaggedLayerProof:
     denominator_1: Array
 
 
+@cache
 def _round_metadata(
     row_counts: tuple[int, ...], num_row_vars: int
 ) -> list[tuple[Array | None, Array, Array]]:
     """Per-round `(gather, col_index, pair_index)` for the row-variable phase.
+
+    Memoized on the (static) layout: the schedule is a pure function of the
+    Python-int row counts, so a cold trace reuses the device-resident index arrays
+    across same-shape layers instead of rebuilding them (host numpy + a batched
+    device_put). The arrays are tiny and immutable, so caching costs negligible
+    device memory and cannot alias across the one-live-layer plane release.
 
     Round k folds the layout round k-1 left behind: odd segments pre-pad to
     even (`gather`; None when already even), then the stride-2 fold halves
@@ -126,9 +134,8 @@ def _round_metadata(
     interaction weight. All static, derived from the Python-int row counts.
     """
     # Build the whole schedule on the host, then commit it in ONE batched
-    # device_put: every index array is tiny and static, so a per-round transfer
-    # is pure dispatch overhead (~3 per round x every layer). The None gathers
-    # (no re-pad) ride through device_put as empty pytree nodes.
+    # device_put (not per round): every index array is tiny and static. The None
+    # gathers (no re-pad) ride through device_put as empty pytree nodes.
     host_meta: list[tuple[np.ndarray | None, np.ndarray, np.ndarray]] = []
     counts = row_counts
     for _ in range(num_row_vars):
@@ -139,7 +146,13 @@ def _round_metadata(
         pair_index = np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
         host_meta.append((_segment_gather_np(counts, padded), col_index, pair_index))
         counts = pairs
-    return jax.device_put(host_meta)
+    # `ensure_compile_time_eval` forces the device_put to materialize a CONCRETE
+    # committed array: this memoized builder is hit inside the round-zone trace, and
+    # without it the cached value is a trace-scoped `device_put` tracer that escapes
+    # when a later call reuses the cache (UnexpectedTracerError). Concrete -> the jit
+    # bakes it as a constant.
+    with jax.ensure_compile_time_eval():
+        return jax.device_put(host_meta)
 
 
 def _bind_lsb(arr: Array, r: Array) -> Array:
@@ -224,6 +237,14 @@ def _paired_sums(
     return eval_zero, eval_half, jnp.sum(eq_h)
 
 
+def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
+    """`expand_eq_to_hypercube` over the row (`eval_point[niv:]`) or interaction
+    (`eval_point[:niv]`) coordinate block, traced into the whole-layer jit. `niv`
+    (and hence the slice bounds + output length) rides static."""
+    coords = eval_point[niv:] if row else eval_point[:niv]
+    return expand_eq_to_hypercube(coords, jnp.ones((), eval_point.dtype))
+
+
 def prove_jagged_layer(
     layer: JaggedGkrLayer,
     lam: Array,
@@ -243,47 +264,160 @@ def prove_jagged_layer(
     challenges reversed), the advanced transcript, and the proof.
     """
     niv = layer.num_interaction_variables
-    nrv = eval_point.shape[0] - niv
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    meta = _round_metadata(layer.row_counts, nrv)
+    planes = _Planes(
+        layer.numerator_0,
+        layer.numerator_1,
+        layer.denominator_0,
+        layer.denominator_1,
+    )
+    return _prove_jagged_layer_from_meta(
+        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs
+    )
+
+
+def _check_row_space(row_counts: tuple[int, ...], num_vars: int, niv: int) -> int:
+    """Validate the layer fits the virtual row space and return `nrv`. Host-side
+    (Python-int) checks, kept out of the trace so the whole-layer jit never keys
+    on `row_counts`."""
+    nrv = num_vars - niv
     if nrv < 1:
         raise ValueError(
             f"eval_point must carry at least one row variable: got "
-            f"{eval_point.shape[0]} coordinates for {niv} interaction variables"
+            f"{num_vars} coordinates for {niv} interaction variables"
         )
-    if max(layer.row_counts) > 1 << nrv:
+    if max(row_counts) > 1 << nrv:
         raise ValueError(
-            f"row count {max(layer.row_counts)} exceeds the virtual row space "
+            f"row count {max(row_counts)} exceeds the virtual row space "
             f"2^{nrv}; the row-eq lookup would run out of bounds"
         )
+    return nrv
 
-    one = jnp.ones((), eval_point.dtype)
-    eq_row = expand_eq_to_hypercube(eval_point[niv:], one)
-    eq_int = expand_eq_to_hypercube(eval_point[:niv], one)
-    n0, n1 = layer.numerator_0, layer.numerator_1
-    d0, d1 = layer.denominator_0, layer.denominator_1
-    meta = _round_metadata(layer.row_counts, nrv)
+
+def _prove_jagged_layer_from_meta(
+    planes: _Planes,
+    niv: int,
+    meta: list[tuple[Array | None, Array, Array]],
+    lam: Array,
+    claim: Array,
+    eval_point: Array,
+    transcript: Transcript,
+    challenge_limbs: int,
+) -> tuple[Array, Transcript, JaggedLayerProof]:
+    """One jagged layer's sumcheck from a PREBUILT round schedule `meta`.
+
+    `meta` is the per-round gather/index metadata, built host-side by
+    `_round_metadata` and passed in as a traced operand rather than closed over the
+    trace: its gathers span the layer height (hundreds of MB of int32 at shard
+    scale), and baking them in as HLO constants is what made the whole-layer jit
+    recompile from scratch per shard. As operands they leave the HLO tiny, so the
+    compile is cheap and `row_counts` never enters the jit key."""
+    nrv = eval_point.shape[0] - niv
+    eq_row = _expand_eq_slice(eval_point, niv, row=True)
+    eq_int = _expand_eq_slice(eval_point, niv, row=False)
     naturals, inv_vand = _round_interp_constants(eval_point.dtype)
 
-    state = _JaggedState(
-        _Planes(n0, n1, d0, d1), eq_row, eq_int, eval_point, lam, claim
-    )
+    state = _JaggedState(planes, eq_row, eq_int, eval_point, lam, claim)
     sched = _JaggedSchedule(
         meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
     )
-    # The host round loop runs one fold-then-compute kernel per round, Fiat-Shamir
-    # through the transcript between them. Under the production outer jit
-    # (`JaggedGkrLayerRound(jit=True)`) the whole loop traces into one program; the
-    # whole-scan `zorch.sumcheck` megakernel was retired -- it never compiled at
-    # real sizes (mirrors #332's drop of the dense megakernel).
     out = _run_jagged_rounds(state, sched, transcript)
     bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
     proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
     return bound_point, advanced, proof
 
 
+def _run_jagged_rounds_reference(
+    state: _JaggedState,
+    sched: _JaggedSchedule,
+    transcript: Transcript,
+) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
+    """The unrolled oracle for `_run_jagged_rounds`: the per-round jagged sumcheck
+    written out with an explicit observe/sample per round. Returns the bound point
+    (challenges reversed), the advanced transcript, the stacked round polynomials,
+    and the four folded pair openings. The round runner must match this byte-for-byte.
+    """
+    n0, n1, d0, d1 = state.planes.n0, state.planes.n1, state.planes.d0, state.planes.d1
+    eq_row, eq_int, eval_point, lam, claim = (
+        state.eq_row,
+        state.eq_int,
+        state.eval_point,
+        state.lam,
+        state.claim,
+    )
+    meta, nrv, niv = sched.meta, sched.nrv, sched.niv
+    naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
+    challenge_limbs = sched.challenge_limbs
+    one = jnp.ones((), eval_point.dtype)
+    eq_adj = one
+    pad_adj = one
+    point = eval_point
+    polys: list[Array] = []
+    challenges: list[Array] = []
+    for rnd in range(nrv + niv):
+        in_rows = rnd < nrv
+        if in_rows:
+            gather, col_index, pair_index = meta[rnd]
+            n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
+            w = eq_int[col_index]
+            eval_zero, eval_half, eq_sum = _paired_sums(
+                n0,
+                n1,
+                d0,
+                d1,
+                eq_row[pair_index * 2] * w,
+                eq_row[pair_index * 2 + 1] * w,
+                lam,
+            )
+        else:
+            eval_zero, eval_half, eq_sum = _paired_sums(
+                n0, n1, d0, d1, eq_int[0::2], eq_int[1::2], lam
+            )
+        poly = _round_coeffs(
+            eval_zero,
+            eval_half,
+            eq_sum,
+            eq_adj,
+            pad_adj,
+            point[-1],
+            claim,
+            naturals,
+            inv_vand,
+        )
+        transcript = transcript.observe(poly)
+        transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
+        polys.append(poly)
+        challenges.append(r)
+
+        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1], one)
+        n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
+        if in_rows:
+            eq_row = _bind_lsb(eq_row, r)
+            if rnd == nrv - 1:
+                # Rows exhausted: the accumulated row-eq product becomes the
+                # scalar factor of every interaction round; pad_adj restarts
+                # to track the interaction variables' own bound mass.
+                eq_adj = pad_adj
+                pad_adj = one
+        else:
+            eq_int = _bind_lsb(eq_int, r)
+        point = point[:-1]
+
+    return (
+        jnp.stack(challenges[::-1]),
+        transcript,
+        jnp.stack(polys),
+        n0[0],
+        n1[0],
+        d0[0],
+        d1[0],
+    )
+
+
 # ===== per-round jagged sumcheck engine =====
-# The per-round fold-then-compute kernels + the host loop running one per round;
-# FS runs through the transcript between rounds. Under the production outer jit the
-# whole loop traces into one program.
+# The per-round compute kernels + the host loop that threads them; each round's
+# compute + device Fiat-Shamir hop traces into the whole-layer jit.
 
 
 @partial(
@@ -295,7 +429,7 @@ def prove_jagged_layer(
 class _Planes:
     """The four LogUp MLE planes (numerator_0/1, denominator_0/1) as one pytree --
     they travel and bind together through every round. A registered pytree so it
-    crosses the per-layer jit boundary as a single structured operand."""
+    crosses the whole-layer jit boundary as a single structured operand."""
 
     n0: Array
     n1: Array
@@ -312,8 +446,8 @@ class _Planes:
 class _RoundScalars:
     """The per-round scalar inputs to the round univariate: the eq/pad bound-mass
     corrections (`eq_adj`/`pad_adj`), the current point coordinate `z_cur`, the
-    running `claim`, and the LogUp RLC coefficient `lam`. Bundled as one pytree so
-    the round kernels take a single scalar operand."""
+    running `claim`, and the LogUp RLC coefficient `lam`. Scalar operands of the
+    exported round kernel (a registered pytree)."""
 
     eq_adj: Array
     pad_adj: Array
@@ -325,9 +459,8 @@ class _RoundScalars:
 @dataclass(frozen=True)
 class _InterpConsts:
     """The Lagrange interpolation constants (the `{0..DEGREE}` natural domain and
-    the inverse Vandermonde). They depend only on dtype, so the round kernels take
-    them as a plain closure-constant bundle (not a traced operand, so not a
-    pytree)."""
+    the inverse Vandermonde). They depend only on dtype, so the round kernels bake
+    them in as closure constants -- NOT export operands, so not a pytree."""
 
     naturals: Array
     inv_vand: Array
@@ -381,9 +514,9 @@ def _round_poly_int(
     univariate from the current state, no fold (the entry kernel of a
     round loop, before any challenge is bound).
 
-    Fiat-Shamir-less by construction — the host observes the returned poly and
-    samples the challenge between rounds — so the body is pure field arithmetic.
-    `eq_int` is sliced stride-2 once inside `_paired_sums`, over an even state."""
+    Fiat-Shamir-less by construction — the FS hop lives in `_fs_reduce`, appended
+    after the round compute — so the body is pure field arithmetic. `eq_int` is
+    sliced stride-2 once inside `_paired_sums`."""
     eval_zero, eval_half, eq_sum = _paired_sums(
         planes.n0,
         planes.n1,
@@ -415,10 +548,9 @@ def _fix_and_sum_int(
 ) -> tuple[Array, _Planes, Array]:
     """The `fix_and_sum` step for the dense interaction phase: bind the previous
     round's challenge `alpha` (state size `m -> m/2`) **then** compute the next
-    round's univariate, one round's bind + sum in one traced step at the halved
-    size. Returns `(poly, planes, eq_int)` so the loop threads the folded state
-    into the next round and only the scalar poly crosses back up. The fold and the
-    inner `_paired_sums` each slice stride-2, so the state halves twice per round."""
+    round's univariate at the halved size. Returns `(poly, planes, eq_int)` so the
+    loop threads the folded state into the next round. The fold and the inner
+    `_paired_sums` slice stride-2 twice."""
     planes = _bind_planes(planes, alpha)
     eq_int = _bind_lsb(eq_int, alpha)
     poly = _round_poly_int(planes, eq_int, scalars, consts)
@@ -441,9 +573,8 @@ def _round_poly_row(
     segment-local `eq_row` pairs. Returns `(poly, planes)` — the padded state the
     caller binds next round.
 
-    The schedule (`gather`, `col_index`, `pair_index`) is a host-built operand,
-    resolved with runtime indexing. The post-pad state is `gather`'s length, even
-    so the `_paired_sums` stride-2 fold stays aligned."""
+    The schedule (`gather`, `col_index`, `pair_index`) is host-built; the post-pad
+    state is `gather`'s length (even), so the `_paired_sums` stride-2 stays valid."""
     n0, n1, d0, d1 = _pad_neutral(planes.n0, planes.n1, planes.d0, planes.d1, gather)
     w = eq_int[col_index]
     eval_zero, eval_half, eq_sum = _paired_sums(
@@ -486,8 +617,8 @@ def _fix_and_sum_row(
     Returns `(poly, planes, eq_row)`.
 
     `eq_row` folds inside the kernel because the loop binds it at each round's
-    end. The input state and `eq_row` enter even, the `_pad_neutral` output even
-    too, so every stride-2 halving stays aligned."""
+    end. The input state and `eq_row` enter even, and the `_pad_neutral` output is
+    even, so all halvings stay valid."""
     planes = _bind_planes(planes, alpha)
     eq_row = _bind_lsb(eq_row, alpha)
     poly, planes = _round_poly_row(
@@ -503,10 +634,10 @@ def _fix_and_sum_boundary(
     scalars: _RoundScalars,
     consts: _InterpConsts,
 ) -> tuple[Array, _Planes, Array]:
-    """The row->interaction handoff in one traced step: bind the last row
-    variable's challenge `alpha` (the padded row state collapses to the dense
-    interaction state) **then** compute the first interaction round's univariate
-    over the still-unfolded `eq_int`.
+    """The row->interaction handoff in one launch: bind the last row variable's
+    challenge `alpha` (the padded row state collapses to the dense interaction
+    state) **then** compute the first interaction round's univariate over the
+    still-unfolded `eq_int`.
 
     This is the one round whose fold is row-shaped (no `eq_int` bind) while its
     sum is interaction-shaped. `eq_int` rides through unchanged; the interaction
@@ -518,9 +649,9 @@ def _fix_and_sum_boundary(
 
 def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array]:
     """The `fix_last` step: bind the final challenge and read off the four pair
-    openings (the fully-folded length-1 state's single element). The round-loop tail
-    groups this via `_finalize_layer` -- a fold step lowering to one kernel is the
-    fusion-by-construction rule under the outer jit, not just a speedup."""
+    openings (the fully-folded length-1 state's single element). `_finalize_layer`
+    fuses this into the whole-layer kernel -- a fold step lowering to one kernel is
+    the fusion-by-construction rule, not just a speedup."""
     p = _bind_planes(planes, alpha)
     return p.n0[0], p.n1[0], p.d0[0], p.d1[0]
 
@@ -529,9 +660,8 @@ def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array
 def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
     """Lagrange `naturals` ({0..DEGREE}) and the inverse-Vandermonde, hoisted once
     per dtype. Both depend only on `_DEGREE`, so rebuilding them inside every
-    `prove_jagged_layer` is pure redundant host work -- `compute_inv_vandermonde`
-    is an O(DEGREE^2) numpy coefficient build, and the per-GKR-layer recompute
-    dominated the eager host glue around the round loop."""
+    `prove_jagged_layer` trace is pure redundant host work -- `compute_inv_vandermonde`
+    is an O(DEGREE^2) numpy coefficient build, redone per GKR layer without the memo."""
     # Force concrete eval: `@cache` memoizes the result, so building it inside a
     # jit trace (the jit=True round zone) would cache a tracer that then escapes the
     # trace (UnexpectedTracerError). The constants are trace-independent anyway.
@@ -545,13 +675,13 @@ def _fold_scalars(
     poly: Array, r: Array, pad_adj: Array, z: Array, one: Array
 ) -> tuple[Array, Array]:
     """The per-round scalar fold: the next claim (round poly evaluated at `r`) and the
-    updated pad-mass `pad_adj`. One source for both the round loop's
-    `_reinterpret_and_reduce` and the inline reference oracle in the tests, so the
-    two cannot drift out of byte-equality."""
+    updated pad-mass `pad_adj`. One source for both the oracle
+    `_run_jagged_rounds_reference` (which inlines it) and the round loop's
+    `_reduce_body`, so the two cannot drift out of byte-equality."""
     return eval_coeffs(poly, r), pad_adj * (z * r + (one - z) * (one - r))
 
 
-def _reinterpret_and_reduce(
+def _reduce_body(
     raw: Array,
     poly: Array,
     pad_adj: Array,
@@ -561,14 +691,15 @@ def _reinterpret_and_reduce(
     pos: Array,
     dtype: Any,
 ) -> tuple[Array, Array, Array, Array, Array]:
-    """Reinterpret the squeezed challenge, fold the round scalars, and slice the
-    next round's eval-point coordinate. Grouped into one helper so the round loop
-    reads as three named steps the outer jit fuses: the challenge reshape/bitcast,
-    the scalar fold, and the per-round `eval_point` slice (a plain `jnp.take` would
-    be a real ~22us dispatch, NOT a buffer view). `pos` indexes this
+    """Reinterpret the squeezed challenge, fold the round scalars, AND slice the
+    next round's eval-point coordinate. Three hops collapse here: the challenge
+    reshape/bitcast, the scalar fold, and the per-round `eval_point` gather (a
+    `jnp.take` is a real ~22us dispatch, NOT a buffer view). `pos` indexes this
     round's coordinate; the next is `pos - 1`, threaded device-resident so no
     per-round index round-trips the host. Returns the round challenge `r`, the next
-    `claim`, `pad_adj`, the next round's `z_cur`, and the decremented `pos`."""
+    `claim`, `pad_adj`, the next round's `z_cur`, and the decremented `pos`. Plain
+    (un-jitted) so it fuses into whichever kernel owns it -- the round loop's
+    `_fs_reduce`, which prepends the Fiat-Shamir hop."""
     r = reinterpret_challenge(raw, dtype)
     claim, pad_adj = _fold_scalars(poly, r, pad_adj, z_cur, one)
     # The last round's `pos_next` is -1 (a dead output -- no round consumes it);
@@ -579,8 +710,39 @@ def _reinterpret_and_reduce(
     return r, claim, pad_adj, z_next, pos_next
 
 
+def _fs_reduce(
+    poly: Array,
+    transcript: DuplexTranscript,
+    pad_adj: Array,
+    z_cur: Array,
+    eval_point: Array,
+    pos: Array,
+    n: int,
+    dtype: Any,
+) -> tuple[DuplexTranscript, Array, Array, Array, Array, Array]:
+    """The per-round FS hop + reduce: observe `poly`, squeeze the challenge, then
+    `_reduce_body`. Returns the advanced transcript and `(r, claim, pad_adj, z_next,
+    pos_next)`. No jit of its own -- it fuses into the round's compute under the
+    whole-layer jit. `one` is baked.
+
+    The device FS hop rides the `zorch.duplex_fs` composite
+    (`observe_and_sample_marked`) so the whole absorb+squeeze lowers to ONE
+    register-resident kernel. Without the marker the duplex glue (rate-block merge,
+    position select, output extract) decomposes into ~6k loop-fused ops/hop,
+    dominating the layer compile; the generic fused_region path is declined by the
+    vendor (exponential LoopFusion), so the dedicated `zorch.duplex_fs` emitter is
+    what fuses it."""
+    transcript, raw = observe_and_sample_marked(transcript, poly, n)
+    one = jnp.ones((), dtype)
+    r, claim, pad_adj, z_next, pos_next = _reduce_body(
+        raw, poly, pad_adj, z_cur, one, eval_point, pos, dtype
+    )
+    return transcript, r, claim, pad_adj, z_next, pos_next
+
+
 # The layer tail: the final fold (`_fix_last`) plus stacking the per-round
-# challenge/poly lists. Grouped so the tail is one named step the outer jit fuses.
+# challenge/poly lists. Folding `_fix_last` in here keeps the final fold in the
+# whole-layer kernel without decorating the bare helper.
 def _finalize_layer(
     planes: _Planes, alpha: Array, chal: list[Array], poly: list[Array]
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
@@ -593,15 +755,14 @@ def _run_jagged_rounds(
     sched: _JaggedSchedule,
     transcript: Transcript,
 ) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
-    """The per-layer jagged sumcheck as a host loop: one fold-then-compute kernel
-    per round at the round's real (halving) state size, Fiat-Shamir through the
-    transcript between rounds. One `_round_poly_row` (round 0, no fold), one
-    `_fix_and_sum_*` per subsequent round (row / boundary / interaction variant by
-    round index), one `_fix_last`. Each kernel regroups the fold of round k with
-    the sum of round k+1 so it lowers to one fused kernel; under the production
-    outer jit (`JaggedGkrLayerRound(jit=True)`) the whole loop traces into one
-    program. Byte-matched against the inline reference oracle in the tests (same
-    math without the per-round kernel regrouping)."""
+    """The per-layer device-FS sumcheck host loop: one fold-then-compute per round
+    at the round's real (halving) state size, the Fiat-Shamir hop + reduce folded in
+    per round. One `sum_as_poly` (round 0, no fold), one `fix_and_sum` per subsequent
+    round (row / boundary / interaction variant by round index), one `fix_last`.
+
+    Runs under the consumer's whole-layer `jax.jit`: every round's compute + FS hop
+    traces into one fused layer kernel (the per-round host dispatches collapse to one
+    per layer)."""
     eq_row, eq_int, eval_point, lam, claim = (
         state.eq_row,
         state.eq_int,
@@ -616,13 +777,15 @@ def _run_jagged_rounds(
     pad_adj = one
     planes = state.planes
     consts = sched.consts
+    transcript = cast(DuplexTranscript, transcript)
+
     polys: list[Array] = []
     challenges: list[Array] = []
     prev_r = one  # unused until the first fold (round 1)
     # z_cur is eval_point's coordinate for round k (== eval_point[-(k+1)]). Rather
     # than a standalone `jnp.take` every round (a real ~22us gather dispatch, not a
     # free buffer view), the coordinate is threaded device-resident: round 0 reads
-    # the last coordinate and each `_reinterpret_and_reduce` slices the next via a
+    # the last coordinate and each `_reduce_body` slices the next via a
     # decremented `pos`, riding the fold's dispatch instead of its own. The fold stays
     # on the compute device (a host CPU reduce forces the carry to round-trip back to
     # GPU before each bind, which serializes the bind pipeline -- net slower).
@@ -630,6 +793,7 @@ def _run_jagged_rounds(
     z_cur = jnp.take(eval_point, -1)
     for rnd in range(nrv + niv):
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
+        dtype = claim.dtype
         if rnd == 0:
             # Round 0 binds nothing yet, so its sum is the bare row poly (no fold).
             gather, col_index, pair_index = meta[0]
@@ -657,9 +821,11 @@ def _run_jagged_rounds(
             poly, planes, eq_int = _fix_and_sum_int(
                 planes, eq_int, prev_r, scalars, consts
             )
-        transcript, raw = transcript.observe_and_sample(poly, challenge_limbs)
-        r, claim, pad_adj, z_cur, pos = _reinterpret_and_reduce(
-            raw, poly, pad_adj, z_cur, one, eval_point, pos, claim.dtype
+        # Device FS hop + reduce, traced into the whole-layer jit -- one fused region
+        # per round. Slices the next z_cur via the decremented `pos`, riding the fold's
+        # dispatch instead of a standalone gather.
+        transcript, r, claim, pad_adj, z_cur, pos = _fs_reduce(
+            poly, transcript, pad_adj, z_cur, eval_point, pos, challenge_limbs, dtype
         )
         polys.append(poly)
         challenges.append(r)
@@ -682,8 +848,49 @@ def _run_jagged_rounds(
     )
 
 
+# The inter-layer carry: sample `lam` + the batched claim before the round loop,
+# absorb the openings + sample + fold the child selector after. Pure device math
+# bracketing the layer's FS samples; traces into the whole-layer round zone.
+def _sample_lam_and_claim(
+    transcript: DuplexTranscript,
+    num_eval: Array,
+    den_eval: Array,
+    n: int,
+    dtype: Any,
+) -> tuple[DuplexTranscript, Array, Array]:
+    """The layer pre-carry: squeeze the batching `lam`, reinterpret it, and form the
+    claim `lam*num_eval + den_eval`. All device math, traced into the whole-layer
+    zone."""
+    transcript, raw = transcript.sample(n)
+    lam = reinterpret_challenge(raw, dtype)
+    return transcript, lam, lam * num_eval + den_eval
+
+
+def _observe_openings_and_fold(
+    transcript: DuplexTranscript,
+    n0: Array,
+    n1: Array,
+    d0: Array,
+    d1: Array,
+    point: Array,
+    n: int,
+    dtype: Any,
+) -> tuple[DuplexTranscript, Array, Array, Array]:
+    """Device-FS layer post-carry: absorb the four openings, squeeze the child
+    selector `r`, and fold the carry. The openings stack, `observe`, `sample`,
+    reinterpret, and `fold_carry` are all device math that trace into the whole-layer
+    zone -- the layer-boundary sibling of the per-round FS hop. `observe_and_sample`
+    fuses the absorb + squeeze exactly as the round FS does, so the transcript stream
+    is byte-identical to the split form."""
+    transcript, raw = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), n)
+    r = reinterpret_challenge(raw, dtype)
+    return transcript, *fold_carry(n0, n1, d0, d1, point, r)
+
+
 def _prove_jagged_layer_round(
-    layer: JaggedGkrLayer,
+    planes: _Planes,
+    niv: int,
+    meta: list[tuple[Array | None, Array, Array]],
     challenge_limbs: int,
     carry: Carry,
     transcript: Transcript,
@@ -691,53 +898,68 @@ def _prove_jagged_layer_round(
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
 
-    A module-level function (not a method) so it carries no implicit `self`:
-    `JaggedGkrLayerRound` holds only its layer and `jit=True` routes through the
-    shared `_jagged_round_zone` below, so the chain can drop a round -- and free
-    its layer -- the moment it builds the next (the one-live-layer release
-    `ChainedJaggedProveTest` pins; a `self`-closure or a per-instance jit would
-    defer it)."""
+    Takes the planes + interaction count + prebuilt `meta` (not a `JaggedGkrLayer`)
+    so the whole-layer jit never keys on `row_counts` and never bakes the schedule
+    into the trace. A module-level function (no implicit `self`) so the chain can
+    drop a round -- and free its layer -- the moment it builds the next (the
+    one-live-layer release `ChainedJaggedProveTest` pins)."""
     num_eval, den_eval, eval_point = carry
-    transcript, lam = sample_challenge(transcript, num_eval.dtype, challenge_limbs)
-    claim = lam * num_eval + den_eval
-    point, transcript, proof = prove_jagged_layer(
-        layer, lam, claim, eval_point, transcript, challenge_limbs=challenge_limbs
+    dtype = num_eval.dtype
+    transcript = cast(DuplexTranscript, transcript)
+    # The per-layer carry brackets the round loop: sample lam + the batched claim
+    # before, absorb the openings + sample + fold the child selector after. All
+    # device math, traced into the whole-layer jit.
+    transcript, lam, claim = _sample_lam_and_claim(
+        transcript, num_eval, den_eval, challenge_limbs, dtype
+    )
+    point, transcript, proof = _prove_jagged_layer_from_meta(
+        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
     d0, d1 = proof.denominator_0, proof.denominator_1
-    transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
-    transcript, r = sample_challenge(transcript, num_eval.dtype, challenge_limbs)
-    num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
+    transcript, num_eval, den_eval, eval_point = _observe_openings_and_fold(
+        cast(DuplexTranscript, transcript),
+        n0,
+        n1,
+        d0,
+        d1,
+        point,
+        challenge_limbs,
+        dtype,
+    )
     return (num_eval, den_eval, eval_point), transcript, proof
 
 
-# Shared by every `JaggedGkrLayerRound(jit=True)`, keyed on the layer's static
-# schedule (`row_counts`, `challenge_limbs`) and the four planes' shapes. A
-# per-instance `jax.jit` gives each round a private trace cache, so a consumer
-# that rebuilds the chain every warm iteration -- the generator that keeps lazy
-# one-live-layer release -- would re-trace every layer of the pyramid on each
-# call. Routing through one module-level zone lets freshly built same-shape
-# rounds reuse a single trace. `row_counts` rides as a static arg (a small int
-# tuple, hashed host-side); the planes ride as traced args -- shape-keyed, with
-# no per-dispatch device->host sync that value-keying large planes would cost
-# (cf. the #177 permutation fix). The layer is rebuilt inside from planes +
-# counts (its `__post_init__` is static shape checks), so the traced body --
-# and its output -- is identical to the eager round; only the cache key changes.
-@partial(jax.jit, static_argnums=(4, 5))
+# Shared by every `JaggedGkrLayerRound`. The schedule (`meta`) rides as a TRACED
+# operand, not a static arg: its per-round gather/index arrays span the layer
+# height (hundreds of MB of int32 at shard scale), so closing them over the trace
+# baked them into the HLO as constants -- XLA then spent minutes folding those
+# constants, a per-shard from-scratch compile that scaled with the trace. As
+# operands the HLO carries no data, so the compile is small and height-independent
+# (~15s whether the layer is 2M rows or 77M) and `row_counts` values leave the jit
+# key: it keys only on the per-round operand SHAPES plus the static `niv` /
+# `challenge_limbs` (`nrv` is read from `eval_point`'s length inside). Two layers
+# still recompile when their shape sequence differs, but each compile is cheap and
+# persistent-cached. Routing through one module-level zone lets freshly built
+# same-shape rounds reuse a single trace, so a consumer rebuilding the chain each
+# warm iteration (the generator keeping lazy one-live-layer release) re-traces at
+# most per distinct shape sequence, not per iter.
+@partial(jax.jit, static_argnums=(5, 6))
 def _jagged_round_zone(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
-    row_counts: tuple[int, ...],
+    meta: list[tuple[Array | None, Array, Array]],
+    niv: int,
     challenge_limbs: int,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    layer = JaggedGkrLayer(
-        numerator_0, numerator_1, denominator_0, denominator_1, row_counts
+    planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
+    return _prove_jagged_layer_round(
+        planes, niv, meta, challenge_limbs, carry, transcript
     )
-    return _prove_jagged_layer_round(layer, challenge_limbs, carry, transcript)
 
 
 def _jagged_round_via_zone(
@@ -746,15 +968,21 @@ def _jagged_round_via_zone(
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    """Split the (non-pytree) layer into `_jagged_round_zone`'s traced planes +
-    static `row_counts`. Signature mirrors `_prove_jagged_layer_round` so
-    `JaggedGkrLayerRound` partials over either with one code path."""
+    """Build the round schedule host-side and dispatch through `_jagged_round_zone`
+    with the planes + `meta` as traced operands. Splitting `meta` out of the trace
+    (rather than the layer's static `row_counts`) is what keeps the whole-layer
+    compile shard-independent."""
+    niv = layer.num_interaction_variables
+    eval_point = carry[2]
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    meta = _round_metadata(layer.row_counts, nrv)
     return _jagged_round_zone(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
-        layer.row_counts,
+        meta,
+        niv,
         challenge_limbs,
         carry,
         transcript,
@@ -772,52 +1000,26 @@ class JaggedGkrLayerRound(Round):
     when `challenge_limbs == 1`; a consumer squeezing multi-limb challenges
     owns its binding glue.
 
-    With `jit=True` the per-layer prove dispatches through the module-level
-    `_jagged_round_zone`, which traces once per layer *shape* and reuses that
-    trace across every same-shape round -- so a consumer that rebuilds the
-    chain each warm iter (the generator giving lazy one-live-layer release)
-    pays the per-layer trace + composite build once across all iters, not once
-    per iter. The round itself holds only its layer (no per-instance jit, no
-    self-closure), so the chain's release bound is untouched. The pyramid stays
-    a host-orchestrated Python loop of these (one trace per layer, never one
+    The per-layer prove dispatches through the module-level `_jagged_round_zone`
+    with the round schedule as a traced operand, so it keys on `(niv, plane
+    shapes)` and never on `row_counts` -- the trace (and its compiled kernel) is
+    reused across every same-shape round, and shards differing only in row counts
+    share one compile. The round holds only its layer (no per-instance jit, no
+    self-closure), so the chain's release bound is untouched. The pyramid stays a
+    host-orchestrated Python loop of these (one trace per layer shape, never one
     `jit` over the whole pyramid -- it does not fit at scale; see
     `prover.LogupSumcheckRound`).
     """
 
-    def __init__(
-        self, layer: JaggedGkrLayer, challenge_limbs: int = 1, *, jit: bool = False
-    ) -> None:
-        # `partial` closes over (layer, challenge_limbs), not `self`, so the
-        # chain frees the round -- and its layer -- the moment it builds the
-        # next. `jit=True` dispatches through the shared module-level zone, so
-        # same-shape rounds reuse one trace instead of re-compiling per call.
-        body = _jagged_round_via_zone if jit else _prove_jagged_layer_round
-        self._call = partial(body, layer, challenge_limbs)
+    def __init__(self, layer: JaggedGkrLayer, challenge_limbs: int = 1) -> None:
+        # `partial` closes over (layer, challenge_limbs), not `self`, so the chain
+        # frees the round -- and its layer -- the moment it builds the next.
+        self._call = partial(_jagged_round_via_zone, layer, challenge_limbs)
 
     def __call__(
         self, carry: Carry, transcript: Transcript
     ) -> tuple[Carry, Transcript, JaggedLayerProof]:
         return self._call(carry, transcript)
-
-
-def prove_jagged_pyramid(
-    layers: Sequence[JaggedGkrLayer],
-    carry: Carry,
-    transcript: Transcript,
-    *,
-    challenge_limbs: int = 1,
-) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
-    """Retired: the device-side Fiat-Shamir jagged pyramid (one `lax.scan` over the
-    floor-outward layer chain) is the abandoned device-FS path -- its on-chip
-    FS-reuse peel chain only existed to keep an on-device sponge scan-invariant, and
-    Fiat-Shamir now runs on the host between kernel launches. Prove via the unrolled
-    `ProveChain(JaggedGkrLayerRound(l) for l in layers)` on a host-FS transcript
-    (`fs_on_host=True`) -- byte-identical, and the production path."""
-    raise NotImplementedError(
-        "prove_jagged_pyramid (the device-FS rolled pyramid) is retired; prove via "
-        "the unrolled JaggedGkrLayerRound chain on a host-FS transcript "
-        "(fs_on_host=True)"
-    )
 
 
 if TYPE_CHECKING:

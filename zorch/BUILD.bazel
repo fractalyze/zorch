@@ -43,6 +43,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        ":fusion",
         "//zorch/hash:permutation",
         requirement("jax"),
         requirement("zk_dtypes"),
