@@ -62,7 +62,7 @@ from zorch.sumcheck.prover import fold_pair
 from zorch.transcript import (
     DuplexTranscript,
     Transcript,
-    _observe_and_sample_body,
+    observe_and_sample_marked,
     reinterpret_challenge,
     sample_challenge,
 )
@@ -725,10 +725,14 @@ def _fs_reduce(
     pos_next)`. No jit of its own -- it fuses into the round's compute under the
     whole-layer jit. `one` is baked.
 
-    The device FS hop is the un-marked sponge (`_observe_and_sample_body`): under the
-    whole-layer jit it fuses into the layer kernel, and its poseidon2 permute already
-    lowers to a fused kernel via its own composite."""
-    transcript, raw = _observe_and_sample_body(transcript, poly, n)
+    The device FS hop rides the `zorch.duplex_fs` composite
+    (`observe_and_sample_marked`) so the whole absorb+squeeze lowers to ONE
+    register-resident kernel. Without the marker the duplex glue (rate-block merge,
+    position select, output extract) decomposes into ~6k loop-fused ops/hop,
+    dominating the layer compile; the generic fused_region path is declined by the
+    vendor (exponential LoopFusion), so the dedicated `zorch.duplex_fs` emitter is
+    what fuses it."""
+    transcript, raw = observe_and_sample_marked(transcript, poly, n)
     one = jnp.ones((), dtype)
     r, claim, pad_adj, z_next, pos_next = _reduce_body(
         raw, poly, pad_adj, z_cur, one, eval_point, pos, dtype

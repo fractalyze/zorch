@@ -16,6 +16,7 @@ from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import (
+    DUPLEX_FS_MARKER,
     DuplexState,
     DuplexTranscript,
     GrindError,
@@ -24,6 +25,7 @@ from zorch.transcript import (
     _observe_and_sample_body,
     _observe_body,
     _sample_body,
+    observe_and_sample_marked,
     sample_challenge,
 )
 
@@ -101,6 +103,52 @@ class DuplexTranscriptTest(absltest.TestCase):
         got = jax.jit(lambda t, x: t.observe_and_sample(x, 2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
         self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_duplex_fs_marker_byte_matches_plain(self) -> None:
+        # The `zorch.duplex_fs` fusion marker is a byte-identical drop-in for the
+        # plain hop (an un-emitted marker inlines to the same computation) at both a
+        # fresh entry and a mid-stream one (non-zero duplex positions ride as
+        # operands, so one kernel serves any phase). It also appears by construction
+        # in the lowered HLO for a vendor to fuse.
+        v = rand_field(9, (5,), F)
+        for advance in (0, 1):  # fresh, then non-zero (in_pos, out_pos)
+            t = self._new()
+            for _ in range(advance):
+                t, _ = _observe_and_sample_body(t, rand_field(2, (5,), F), 3)
+            t_ref, ref = _observe_and_sample_body(t, v, 4)
+            t_mk, mk = observe_and_sample_marked(t, v, 4)
+            self.assertTrue(bool(jnp.all(ref == mk)))
+            for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_mk)):
+                self.assertTrue(bool(jnp.all(a == b)))
+        hlo = (
+            jax.jit(lambda t, x: observe_and_sample_marked(t, x, 4))
+            .lower(self._new(), v)
+            .as_text()
+        )
+        self.assertIn(DUPLEX_FS_MARKER, hlo)
+
+    def test_duplex_fs_marker_state_survives_squeeze_consumer(self) -> None:
+        # Regression: consuming the marked hop's squeezed challenge INSIDE the same
+        # jit must leave the returned transcript's squeeze residue
+        # (`output_buffer`/`out_pos`) byte-identical to the plain hop. The
+        # `zorch.duplex_fs` composite is multi-output; an in-graph consumer of the
+        # challenge forces explicit get-tuple-elements, and a dummy fusion body whose
+        # equal-shaped result leaves shared one constant once let XLA collapse
+        # out_buf->in_buf and out_pos->in_pos (only the challenge itself stayed
+        # exact). The eager marker check above returns the challenge directly (no
+        # in-graph consumer), so it never exercised this -- the jagged prover's
+        # `_fs_and_reduce` does. Only the GPU custom-fusion emitter expands the
+        # composite; elsewhere it inlines to the plain hop and this trivially holds.
+        v = rand_field(11, (5,), F)
+
+        def consume(t: DuplexTranscript, x: Array) -> tuple[DuplexTranscript, Array]:
+            t2, s = observe_and_sample_marked(t, x, 4)
+            return t2, s * s  # give the squeeze an in-graph consumer, then discard
+
+        t_ref, _ = _observe_and_sample_body(self._new(), v, 4)
+        t_mk, _ = jax.jit(consume)(self._new(), v)
+        for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_mk)):
+            self.assertTrue(bool(jnp.all(a == b)))
 
     def test_is_pytree(self) -> None:
         # 5 state buffers are the leaves; permutation + rate are static.

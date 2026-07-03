@@ -19,6 +19,7 @@ from jax import Array, jit, lax, vmap
 from jax.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
 
+from zorch.fusion import fused_region
 from zorch.hash.permutation import Permutation
 
 # Candidate window for the grind search: each `lax.while_loop` step tests this
@@ -198,7 +199,7 @@ class _DeviceFs:
     def observe_and_sample(
         self, t: DuplexTranscript, values: Array, n: int
     ) -> tuple[DuplexTranscript, Array]:
-        return _observe_and_sample_body(t, values, n)
+        return observe_and_sample_marked(t, values, n)
 
     def check_witness(
         self, t: DuplexTranscript, witness: Array, pow_bits: int
@@ -631,6 +632,87 @@ def _observe_and_sample_body(
     t: DuplexTranscript, values: Array, n: int
 ) -> tuple[DuplexTranscript, Array]:
     return _sample_body(_observe_body(t, values), n)
+
+
+# ============================================================================
+# Device-FS Fiat-Shamir fusion marker (`zorch.duplex_fs`)
+#
+# One absorb+squeeze hop otherwise scatters ~9 GPU kernels: two `zorch.poseidon2`
+# permute composites plus ~7 unfused loop/input fusions for the duplex buffer glue
+# (rate-block merge, position select, output extraction). This marker wraps the
+# whole hop so a vendor fuses it into one register-resident kernel -- fusion by
+# construction, the CLAUDE.md non-negotiable.
+#
+# The decomposition is the plain `_observe_and_sample_body`, so a marker no vendor
+# emits inlines byte-identically. Duplex `(in_pos, out_pos)` ride as runtime
+# OPERANDS (inside the threaded state), not compile-time attrs: they are scalars
+# shared by every thread, so the permute-firing test (`in_pos == rate`,
+# `out_pos == 0`) is a uniform branch -- zero warp divergence -- and one kernel
+# serves every round's phase. Only the message length and sample count `n` are
+# static (the absorb/squeeze loop bounds), so the binary is recompile-free per
+# shape, like the round-compute kernels. No host schedule mirror.
+# ============================================================================
+DUPLEX_FS_MARKER = "zorch.duplex_fs"
+DUPLEX_FS_MARKER_VERSION = 1
+
+
+def _duplex_fs_region(
+    in_buf: Array,
+    out_buf: Array,
+    sponge: Array,
+    in_pos: Array,
+    out_pos: Array,
+    values: Array,
+    *,
+    perm: Permutation,
+    rate: int,
+    n: int,
+    **_attrs: object,
+) -> tuple[Array, Array, Array, Array, Array, Array]:
+    """The `zorch.duplex_fs` decomposition: the plain device hop, entered at the
+    runtime duplex positions carried in the state. `rate`/`width`/`n` ride as attrs
+    (the emitter's static loop bounds); the positions stay operands so one kernel
+    serves every round phase (`_attrs` swallows the pass-through `width`)."""
+    state = DuplexState(in_buf, out_buf, sponge, in_pos, out_pos)
+    advanced, r = _observe_and_sample_body(
+        DuplexTranscript(perm, rate, state), values, n
+    )
+    return (*_state_leaves(advanced.state), r)
+
+
+@partial(jit, static_argnames=("n",), inline=True)
+def _duplex_fs_zone(
+    t: DuplexTranscript, values: Array, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """The marked hop as one compiled dispatch carrying the `zorch.duplex_fs`
+    composite, so the eager host loop fires a single fused FS kernel (mirrors the
+    module-level `_observe_body`/`_sample_body` jit zones). `inline=True` keeps a
+    call site already inside an outer jit byte-identical."""
+    ib, ob, sp, ip, op, r = fused_region(
+        partial(_duplex_fs_region, perm=t.permutation),
+        *_state_leaves(t.state),
+        values,
+        name=DUPLEX_FS_MARKER,
+        version=DUPLEX_FS_MARKER_VERSION,
+        rate=t.rate,
+        width=t.permutation.width,
+        n=n,
+    )
+    return t._with_state(DuplexState(ib, ob, sp, ip, op)), r
+
+
+def observe_and_sample_marked(
+    t: DuplexTranscript, values: Array, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """`observe_and_sample` under a `zorch.duplex_fs` fusion marker so a vendor
+    fuses the ~9-kernel hop (two permutes + duplex glue) into one register-resident
+    kernel. Positions ride as runtime operands, so one recompile-free kernel serves
+    every round. A marker no vendor emits inlines to the plain hop (byte-identical);
+    only a dedicated-fusion permutation is marked (a test `CheapPermutation` keeps
+    the plain path)."""
+    if not t.has_dedicated_fusion:
+        return _observe_and_sample_body(t, values, n)
+    return _duplex_fs_zone(t, values, n)
 
 
 @partial(jit, static_argnames=("pow_bits",), inline=True)
