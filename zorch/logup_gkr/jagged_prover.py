@@ -809,6 +809,83 @@ def _composite_fix_and_sum_dense(
     )
 
 
+def _round_composite_row_decomp(
+    planes: _Planes,
+    eq_row: Array,
+    alpha: Array,
+    gather: Array,
+    col_index: Array,
+    pair_index: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    naturals: Array,
+    inv_vand: Array,
+    **_attrs: object,
+) -> tuple[Array, _Planes, Array]:
+    """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `mid` phase
+    -- the byte-exact fallback a recognizing emitter replaces. `_attrs` (phase /
+    variant / degree / poly_form) are composite metadata the emitter parses; the
+    decomposition needs only the operands. The runtime jagged schedule (`gather` /
+    `col_index` / `pair_index`) and the interp constants (`naturals` / `inv_vand`)
+    ride as operands. `gather` is always concrete here (the caller resolves the
+    no-re-pad `None` case to an identity gather), so the marker carries a fixed
+    operand set."""
+    return _fix_and_sum_row(
+        planes,
+        eq_row,
+        alpha,
+        gather,
+        col_index,
+        pair_index,
+        eq_int,
+        scalars,
+        _InterpConsts(naturals, inv_vand),
+    )
+
+
+def _composite_fix_and_sum_row(
+    planes: _Planes,
+    eq_row: Array,
+    alpha: Array,
+    gather: Array | None,
+    col_index: Array,
+    pair_index: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes, Array]:
+    """Emit the FS-less `zorch.sumcheck.round` (phase=mid, variant=jagged) marker
+    around the row-variable fold+sum -- the segment-based jagged round (the
+    hardcoded LogUp combine over the runtime `gather`/`col_index`/`pair_index`
+    schedule and the segment-local `eq_row`, not a plain product). The signature
+    mirrors `_fix_and_sum_row` so the round loop can select it in place. A round
+    that needs no re-pad (`gather` None) gets an identity gather -- a no-op pad --
+    so the marker always carries the operand and stays byte-identical, exactly as
+    `_dispatch_fix_and_sum_row` does. Byte-identical to `_fix_and_sum_row`
+    whenever the marker is unclaimed (`lax.composite` runs the decomposition)."""
+    if gather is None:
+        gather = jnp.arange(planes.n0.shape[0] // 2, dtype=col_index.dtype)
+    return composite(
+        _round_composite_row_decomp,
+        planes,
+        eq_row,
+        alpha,
+        gather,
+        col_index,
+        pair_index,
+        eq_int,
+        scalars,
+        consts.naturals,
+        consts.inv_vand,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        phase="mid",
+        variant="jagged",
+        degree=_DEGREE,
+        poly_form="coefficient",
+    )
+
+
 # Exported per-round kernels, keyed by the operand signature so one binary
 # serves every round size in its bracket and is reused across rounds, layers, and
 # shards (the recompile-free dispatch). Only the per-round-REPEATED variants are
