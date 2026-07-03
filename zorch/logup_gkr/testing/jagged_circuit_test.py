@@ -13,12 +13,15 @@ from zorch.logup_gkr.circuit import (
     GkrLayer,
     JaggedGkrLayer,
     _jagged_transition_core,
+    build_jagged_pyramid,
     extract_jagged_outputs,
     jagged_layer_transition,
     layer_transition,
-    scan_build_jagged_pyramid,
 )
-from zorch.logup_gkr.testing import build_jagged_pyramid, mixed_field_jagged_layer
+from zorch.logup_gkr.testing import (
+    build_jagged_pyramid as eager_jagged_pyramid,
+)
+from zorch.logup_gkr.testing import mixed_field_jagged_layer
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
@@ -280,10 +283,10 @@ class JaggedEndToEndTest(absltest.TestCase):
         self.assertTrue(bool(total == jnp.sum(out.numerator / out.denominator)))
 
 
-class ScanBuildJaggedPyramidTest(absltest.TestCase):
-    """`scan_build_jagged_pyramid` fuses the eager `jagged_layer_transition`
-    chain into one `lax.scan`; every generated layer must be byte-identical to
-    the eager `build_jagged_pyramid` (sp1-zorch#55)."""
+class BuildJaggedPyramidTest(absltest.TestCase):
+    """`build_jagged_pyramid` folds the `jagged_layer_transition` chain into one
+    unrolled traced region; every generated layer must be byte-identical to the
+    eager reference (`eager_jagged_pyramid`, sp1-zorch#55)."""
 
     def _assert_layers_equal(
         self, got: list[JaggedGkrLayer], want: list[JaggedGkrLayer]
@@ -301,9 +304,9 @@ class ScanBuildJaggedPyramidTest(absltest.TestCase):
 
     def _assert_matches_eager(self, row_counts: tuple[int, ...]) -> None:
         first = _random_jagged_layer(7, row_counts)
-        eager = build_jagged_pyramid(first)
+        eager = eager_jagged_pyramid(first)
         schedules = [layer.row_counts for layer in eager[1:]]
-        self._assert_layers_equal(scan_build_jagged_pyramid(first, schedules), eager)
+        self._assert_layers_equal(build_jagged_pyramid(first, schedules), eager)
 
     def test_matches_eager_small(self) -> None:
         self._assert_matches_eager((3, 1, 5, 2))
@@ -312,11 +315,10 @@ class ScanBuildJaggedPyramidTest(absltest.TestCase):
         self._assert_matches_eager((7, 3, 5, 2, 6, 1, 4, 8))
 
     def test_matches_eager_base_field_first_layer(self) -> None:
-        # zkx#681: a base-field first-layer numerator under EF denominators. A
-        # base scan `init` can't ride `lax.scan` -- step 0's fold promotes it to
-        # EF, so carry-out dtype != carry-in. The rolled build must carve the
-        # first transition out and stay byte-identical to the eager build, whose
-        # first transition does the same base->EF promotion.
+        # zkx#681: a base-field first-layer numerator under EF denominators.
+        # Transition 0's fold promotes it to EF; the unrolled build handles the
+        # dtype change inline (a `lax.scan` could not -- carry-out dtype would
+        # differ from carry-in) and stays byte-identical to the eager build.
         row_counts = (3, 1, 5, 2)
         height = sum(row_counts)
         first = JaggedGkrLayer(
@@ -326,14 +328,12 @@ class ScanBuildJaggedPyramidTest(absltest.TestCase):
             denominator_1=rand_ext_field(10, (height,), KB, EF),
             row_counts=row_counts,
         )
-        eager = build_jagged_pyramid(first)
-        scanned = scan_build_jagged_pyramid(
-            first, [layer.row_counts for layer in eager[1:]]
-        )
+        eager = eager_jagged_pyramid(first)
+        built = build_jagged_pyramid(first, [layer.row_counts for layer in eager[1:]])
         # The first layer keeps base-field numerators; the promoted remainder is EF.
-        self.assertEqual(scanned[0].numerator_0.dtype, KB)
-        self.assertEqual(scanned[1].numerator_0.dtype, EF)
-        self._assert_layers_equal(scanned, eager)
+        self.assertEqual(built[0].numerator_0.dtype, KB)
+        self.assertEqual(built[1].numerator_0.dtype, EF)
+        self._assert_layers_equal(built, eager)
 
 
 if __name__ == "__main__":
