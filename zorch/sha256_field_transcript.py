@@ -28,7 +28,13 @@ import numpy as np
 from jax import Array, lax
 from jax.tree_util import register_dataclass
 
-from zorch.byte_transcript import KIND_SLICE, OP_DOMAIN, OP_OBSERVE, OP_SQUEEZE
+from zorch.byte_transcript import (
+    KIND_SCALAR,
+    KIND_SLICE,
+    OP_DOMAIN,
+    OP_OBSERVE,
+    OP_SQUEEZE,
+)
 from zorch.hash.sha256 import (
     Sha256State,
     sha256_stream_absorb,
@@ -99,6 +105,29 @@ class Sha256FieldTranscript:
         reinterpret to `n` elements of `dtype`."""
         t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(n)))
         squeezed = t._squeeze_bytes(n * self._item_bytes())
+        t = t._absorb(squeezed)
+        return t, squeezed.view(self.dtype)
+
+    def observe_scalar(self, value: Array) -> Sha256FieldTranscript:
+        """Absorb one element under scalar framing: `[OP_OBSERVE, KIND_SCALAR] ||
+        lo‖hi bytes` — no length prefix (a scalar's width is implicit in the
+        consumer). Byte-identical to `ByteHashTranscript.observe_scalar`; the
+        per-element framing a byte challenger (flock's `observe_f128`) uses,
+        where `observe`'s count-prefixed slice framing would not match."""
+        vals_u8 = lax.bitcast_convert_type(value, jnp.uint8).reshape(-1)
+        framing = _const_u8(bytes([OP_OBSERVE, KIND_SCALAR]))
+        return self._absorb(jnp.concatenate([framing, vals_u8]))
+
+    def sample_scalar(
+        self, nbytes: int | None = None
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """Squeeze one challenge under scalar framing: absorb `[OP_SQUEEZE,
+        KIND_SCALAR]` (no count), counter-squeeze `nbytes` (default one `dtype`
+        element), re-absorb, reinterpret to `dtype`. Byte-identical to
+        `ByteHashTranscript.sample_scalar` — the framing `sample_f128` uses."""
+        nbytes = self._item_bytes() if nbytes is None else nbytes
+        t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])))
+        squeezed = t._squeeze_bytes(nbytes)
         t = t._absorb(squeezed)
         return t, squeezed.view(self.dtype)
 

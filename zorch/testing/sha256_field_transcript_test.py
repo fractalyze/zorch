@@ -41,6 +41,27 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         f, f2 = f.sample(4)
         self.assertEqual(np.asarray(f2).astype("<u4").tobytes(), b2)
 
+    def test_scalar_framing_matches_byte_transcript(self) -> None:
+        # observe_scalar/sample_scalar use KIND_SCALAR framing (no count prefix),
+        # byte-identical to the byte transcript's observe_scalar/sample_scalar —
+        # the per-element framing a byte challenger's F128 observe/sample uses
+        # (flock-zorch#9), where the count-prefixed slice path would not match.
+        v = np.uint32(0xDEADBEEF)
+        vbytes = v.astype("<u4").tobytes()
+
+        b = ByteHashTranscript.new(b"dom", Sha256()).observe_scalar(vbytes)
+        b, b_sq = b.sample_scalar(4)
+
+        f = Sha256FieldTranscript.new(b"dom", np.uint32)
+        f = f.observe_scalar(jnp.asarray(v))
+        f, f_el = f.sample_scalar()
+        self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
+
+        # A second scalar squeeze pins the re-absorb of the first.
+        b, b2 = b.sample_scalar(4)
+        f, f2 = f.sample_scalar()
+        self.assertEqual(np.asarray(f2).astype("<u4").tobytes(), b2)
+
     def test_threads_under_jit(self) -> None:
         vals = np.arange(6, dtype=np.uint32)
 
