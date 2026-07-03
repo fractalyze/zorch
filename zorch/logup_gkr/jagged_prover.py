@@ -48,6 +48,7 @@ import numpy as np
 from jax import Array, export
 from jax._src.export._export import call_exported_p as _call_exported_p
 
+from zorch._composite import composite
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _pad_neutral,
@@ -63,7 +64,11 @@ from zorch.poly.univariate import (
     eval_coeffs,
 )
 from zorch.round import Round
-from zorch.sumcheck.prover import fold_pair
+from zorch.sumcheck.prover import (
+    SUMCHECK_ROUND_MARKER,
+    SUMCHECK_ROUND_MARKER_VERSION,
+    fold_pair,
+)
 from zorch.transcript import (
     DuplexTranscript,
     Transcript,
@@ -739,6 +744,69 @@ def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
         naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
         inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
     return naturals, inv_vand
+
+
+# --- zorch#327 (Z1 prototype): FS-less compute-only round composite ---------
+# The host loop wraps each round's fold+sum in a `zorch.sumcheck.round` marker;
+# Fiat-Shamir stays the separate `zorch.poseidon2` composite the transcript emits
+# between rounds. When no emitter claims the marker (CPU, or a pre-#327 pin), the
+# `lax.composite` decomposition runs inline, so the marked path is byte-identical
+# to the eager body. Only the dense-interaction `mid` phase is wired here; the
+# row / boundary / first / final phases follow (issue #327 plan, task Z3).
+
+
+def _round_composite_dense_decomp(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    naturals: Array,
+    inv_vand: Array,
+    **_attrs: object,
+) -> tuple[Array, _Planes, Array]:
+    """The `zorch.sumcheck.round` decomposition for the `dense` (interaction) `mid`
+    phase -- the byte-exact fallback a recognizing emitter replaces. `_attrs`
+    (phase / variant / degree / poly_form) are composite metadata the emitter
+    parses; the decomposition needs only the operands. The interp constants ride
+    as operands (`naturals` / `inv_vand`) rather than a lifted closure -- the
+    emitter may instead rebuild them from `degree` + `poly_form` and drop the two
+    trailing operands."""
+    return _fix_and_sum_int(
+        planes, eq_int, alpha, scalars, _InterpConsts(naturals, inv_vand)
+    )
+
+
+def _composite_fix_and_sum_dense(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes, Array]:
+    """Emit the FS-less `zorch.sumcheck.round` (phase=mid, variant=dense) marker
+    around the uniform interaction fold+sum -- a batched LogUp-GKR round (the
+    hardcoded LogUp combine + the eq_adj/pad_adj virtual-mass correction, not a
+    plain product). The signature mirrors `_fix_and_sum_int` (interp consts
+    threaded as operands) so the round loop can select it in place. No
+    `challenge_limbs`: the fold challenge `alpha` arrives pre-recomposed as one
+    operand whose dtype carries base vs extension. Byte-identical to
+    `_fix_and_sum_int` whenever the marker is unclaimed (`lax.composite` runs the
+    decomposition)."""
+    return composite(
+        _round_composite_dense_decomp,
+        planes,
+        eq_int,
+        alpha,
+        scalars,
+        consts.naturals,
+        consts.inv_vand,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        phase="mid",
+        variant="dense",
+        degree=_DEGREE,
+        poly_form="coefficient",
+    )
 
 
 # Exported per-round kernels, keyed by the operand signature so one binary
