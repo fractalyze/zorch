@@ -11,6 +11,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr.prover import LogupSumcheckRound
 from zorch.sumcheck import prover
 from zorch.sumcheck.prover import (
+    INF,
     SUMCHECK_COMBINE_MARKER,
     SUMCHECK_MARKER,
     SUMCHECK_MARKER_VERSION,
@@ -120,6 +121,16 @@ class ProveMarkedTest(absltest.TestCase):
             prover.SumcheckRound(degree=2), [a, b], eval_start=1
         )
 
+    def test_marked_equals_scan_inf_domain_base(self) -> None:
+        # A round-owned (1, INF) domain — the ∞-trick, sending (s(1), leading coeff)
+        # instead of the natural (s(0), s(1), s(2)) — rides the marker and
+        # decomposes to the identical custom-domain scan. Base field, every backend.
+        a = rand_field(48, (1 << 4,), KB)
+        b = rand_field(49, (1 << 4,), KB)
+        self._assert_marked_equals_scan(
+            prover.SumcheckRound(degree=2, domain=(1, INF)), [a, b]
+        )
+
     @absltest.skipIf(
         _GPU_BACKEND,
         "cuda-pjrt aborts compiling koalabearx4 EF reductions; "
@@ -212,6 +223,32 @@ class ProveMarkedTest(absltest.TestCase):
         # the challenge dtype downstream).
         self.assertEqual(int(attrs["degree"]), 2)
         self.assertNotIn("challenge_limbs", attrs)
+
+    def test_inf_domain_round_carries_eval_domain_attr(self) -> None:
+        # A round-owned domain rides the marker as an `eval_domain` attr (finite
+        # points as themselves, INF = -1), so a vendor codegens the custom message
+        # form; revision stays 1 (the recognizer keys off the attr). A default
+        # natural-domain round carries no such attr.
+        a = rand_field(40, (1 << 4,), KB)
+        b = rand_field(41, (1 << 4,), KB)
+        t0 = self._poseidon_transcript()
+        jaxpr = jax.make_jaxpr(
+            lambda x, y: prove(
+                prover.SumcheckRound(degree=2, domain=(1, INF)), [x, y], t0
+            )
+        )(a, b).jaxpr
+        eqn = next(e for e in jaxpr.eqns if e.primitive.name == "composite")
+        self.assertEqual(eqn.params["version"], SUMCHECK_MARKER_VERSION)
+        raw = {k: leaves for k, leaves, _ in eqn.params["attributes"]}
+        self.assertEqual([int(v) for v in raw["eval_domain"]], [1, -1])
+        self.assertEqual(eqn.outvars[-2].aval.shape, (4, 2))  # 4 rounds × (s(1), s(∞))
+
+        t1 = self._poseidon_transcript()
+        jaxpr0 = jax.make_jaxpr(
+            lambda x, y: prove(prover.SumcheckRound(degree=2), [x, y], t1)
+        )(a, b).jaxpr
+        eqn0 = next(e for e in jaxpr0.eqns if e.primitive.name == "composite")
+        self.assertNotIn("eval_domain", {k for k, _, _ in eqn0.params["attributes"]})
 
     def test_extension_challenge_round_carries_no_attr(self) -> None:
         # An EF fold challenge (eval_start=0, full domain) adds no marker attr: a

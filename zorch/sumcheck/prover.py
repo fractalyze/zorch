@@ -359,14 +359,6 @@ def prove(
     # isinstance narrows the type for `_prove_marked` (the merkle.py
     # `has_dedicated_fusion` gate).
     if isinstance(transcript, DuplexTranscript) and transcript.has_dedicated_fusion:
-        if getattr(round, "domain", None) is not None:
-            # The dedicated-fusion marker carries the round-poly domain as a
-            # composite attribute (like eval_start); a custom/∞ domain needs that
-            # attribute wired into the recognizer before it can ride the marker.
-            raise NotImplementedError(
-                "round-owned domain is not yet supported on the dedicated-fusion "
-                "marked path; run with a non-marked transcript for now"
-            )
         return _prove_marked(
             round,
             state,
@@ -546,9 +538,18 @@ def _prove_marked(
     # tail; `eval_start` declares the truncated round-poly domain. Both are read
     # off the attribute. The extension fold challenge rides no attr — a vendor
     # infers it from the challenge dtype.
-    opt_attrs = {} if num_real is None else {"num_real": num_real}
+    opt_attrs: dict[str, object] = {} if num_real is None else {"num_real": num_real}
     if eval_start != 0:
         opt_attrs["eval_start"] = eval_start
+    domain = getattr(round, "domain", None)
+    if domain is not None:
+        # The round-owned eval domain rides as an attribute the recognizer keys off
+        # (like eval_start): finite points as themselves, INF (the leading coeff) as
+        # -1 (domain points are non-negative). Metadata only — the body already
+        # computed on this domain, so the decomposition stays byte-identical.
+        opt_attrs["eval_domain"] = tuple(
+            -1 if isinstance(pt, _Inf) else int(pt) for pt in domain
+        )
     folded, out_leaves, msgs = fused_region(
         body,
         *state,
