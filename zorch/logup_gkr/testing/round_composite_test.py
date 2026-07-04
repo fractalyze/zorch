@@ -16,10 +16,12 @@ from zorch.logup_gkr.jagged_prover import (
     _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
     _composite_fix_and_sum_row,
+    _composite_fix_last,
     _composite_sum_as_poly_row,
     _fix_and_sum_boundary,
     _fix_and_sum_int,
     _fix_and_sum_row,
+    _fix_last,
     _InterpConsts,
     _Planes,
     _round_interp_constants,
@@ -270,6 +272,29 @@ class FirstRoundCompositeTest(absltest.TestCase):
         # The phase/variant attributes are the recognizer's routing key.
         self.assertIn("first", text)
         self.assertIn("jagged", text)
+
+
+class FinalRoundCompositeTest(absltest.TestCase):
+    def test_byte_identical_to_eager(self) -> None:
+        planes = _Planes(*(rand_field(s, (2,), KB) for s in range(4)))
+        alpha = rand_field(11, (), KB)
+        want = _fix_last(planes, alpha)
+        got = _composite_fix_last(planes, alpha)
+        self.assertEqual(len(got), len(want))
+        for g, w in zip(got, want):
+            self.assertTrue(
+                bool(jnp.all(g == w)), "marked final round diverged from eager"
+            )
+
+    def test_emits_marker_with_abi(self) -> None:
+        planes = _Planes(*(rand_field(s, (2,), KB) for s in range(4)))
+        alpha = rand_field(11, (), KB)
+        jaxpr = jax.make_jaxpr(_composite_fix_last)(planes, alpha)
+        text = jaxpr.pretty_print()
+        self.assertIn(SUMCHECK_ROUND_MARKER, text)
+        # The phase/variant attributes are the recognizer's routing key.
+        self.assertIn("final", text)
+        self.assertIn("dense", text)
 
 
 if __name__ == "__main__":

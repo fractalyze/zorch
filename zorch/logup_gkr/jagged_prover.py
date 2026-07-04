@@ -886,6 +886,41 @@ def _composite_fix_and_sum_row(
     )
 
 
+def _round_composite_final_decomp(
+    planes: _Planes,
+    alpha: Array,
+    **_attrs: object,
+) -> tuple[Array, Array, Array, Array]:
+    """The `zorch.sumcheck.round` decomposition for the `final` phase -- the
+    byte-exact fallback a recognizing emitter replaces. Fold only: bind the
+    final challenge and read off the four pair openings. No round poly, no eq,
+    no interp constants -- nothing sums, so the marker carries just the
+    length-2 planes and `alpha`."""
+    return _fix_last(planes, alpha)
+
+
+def _composite_fix_last(
+    planes: _Planes, alpha: Array
+) -> tuple[Array, Array, Array, Array]:
+    """Emit the FS-less `zorch.sumcheck.round` (phase=final, variant=dense)
+    marker around the layer tail's final fold (`_fix_last`): bind the last
+    challenge and emit the four scalar pair openings. The signature mirrors
+    `_fix_last` so `_finalize_layer` can select it in place. Byte-identical to
+    `_fix_last` whenever the marker is unclaimed (`lax.composite` runs the
+    decomposition)."""
+    return composite(
+        _round_composite_final_decomp,
+        planes,
+        alpha,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        phase="final",
+        variant="dense",
+        degree=_DEGREE,
+        poly_form="coefficient",
+    )
+
+
 def _round_composite_boundary_decomp(
     planes: _Planes,
     eq_int: Array,
