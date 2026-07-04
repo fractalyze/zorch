@@ -394,7 +394,7 @@ def _prove_jagged_layer_from_meta(
     # arrays, so each round host-dispatches and releases its buffers, bounding peak
     # host RAM on wide shards. Under the production outer jit
     # (`JaggedGkrLayerRound(jit=True)`) the dispatch sees tracers and falls back to
-    # the eager kernel, tracing the whole loop into one program (the whole-scan
+    # the marked kernel, tracing the whole loop into one program (the whole-scan
     # `zorch.sumcheck` megakernel was retired -- it never compiled at real sizes,
     # mirroring #332's drop of the dense megakernel).
     out = _run_jagged_rounds(state, sched, transcript, export_dispatch=True)
@@ -746,13 +746,15 @@ def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
     return naturals, inv_vand
 
 
-# --- zorch#327 (Z1 prototype): FS-less compute-only round composite ---------
+# --- zorch#327: FS-less compute-only round composites ------------------------
 # The host loop wraps each round's fold+sum in a `zorch.sumcheck.round` marker;
 # Fiat-Shamir stays the separate `zorch.poseidon2` composite the transcript emits
 # between rounds. When no emitter claims the marker (CPU, or a pre-#327 pin), the
 # `lax.composite` decomposition runs inline, so the marked path is byte-identical
-# to the eager body. Only the dense-interaction `mid` phase is wired here; the
-# row / boundary / first / final phases follow (issue #327 plan, task Z3).
+# to the eager body. All five round bodies are marked: first (round 0, jagged),
+# mid row (jagged), boundary (the row->interaction handoff), mid interaction
+# (dense), and final (the `_fix_last` fold) -- selected by `_run_jagged_rounds`
+# / `_finalize_layer` on both the traced and export-dispatch routes.
 
 
 def _round_composite_dense_decomp(
@@ -1205,7 +1207,7 @@ def _dispatch_fix_and_sum_int(
     tracers, so fall back to the eager kernel -- the jit compiles the round
     itself, the per-round export being its alternative."""
     if isinstance(planes.n0, jax.core.Tracer):
-        return _fix_and_sum_int(planes, eq_int, alpha, scalars, consts)
+        return _composite_fix_and_sum_dense(planes, eq_int, alpha, scalars, consts)
     operands = (planes, eq_int, alpha, scalars)
     # Per-operand dtypes (a LogUp numerator is base-field, its denominator
     # extension-field, and the state promotes base->extension across rounds), so
@@ -1232,7 +1234,9 @@ def _dispatch_fix_and_sum_int(
             jax.ShapeDtypeStruct((), alpha.dtype),
             _abst_scalars(scalars),
         )
-        fn = lambda p, e, al, sc: _fix_and_sum_int(p, e, al, sc, consts)  # noqa: E731
+        fn = lambda p, e, al, sc: _composite_fix_and_sum_dense(  # noqa: E731
+            p, e, al, sc, consts
+        )
         return export.export(jax.jit(fn))(*abst)
 
     return _round_dispatch(key, operands, build)
@@ -1252,7 +1256,7 @@ def _dispatch_fix_and_sum_boundary(
     `2*g` (= the post-bind state), so one dispatched kernel replaces the eager one.
     """
     if isinstance(planes.n0, jax.core.Tracer):
-        return _fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
+        return _composite_fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
     operands = (planes, eq_int, alpha, scalars)
     key = (
         "boundary",
@@ -1276,9 +1280,9 @@ def _dispatch_fix_and_sum_boundary(
             jax.ShapeDtypeStruct((), alpha.dtype),
             _abst_scalars(scalars),
         )
-        fn = lambda p, e, al, sc: _fix_and_sum_boundary(
+        fn = lambda p, e, al, sc: _composite_fix_and_sum_boundary(  # noqa: E731
             p, e, al, sc, consts
-        )  # noqa: E731
+        )
         return export.export(jax.jit(fn))(*abst)
 
     return _round_dispatch(key, operands, build)
@@ -1301,7 +1305,7 @@ def _dispatch_sum_as_poly_row(
     eager entry kernel. A round needing no re-pad (`gather` None) gets an identity
     gather over the full height (no `//2` fold) so it hits the same binary."""
     if isinstance(planes.n0, jax.core.Tracer):
-        return _round_poly_row(
+        return _composite_sum_as_poly_row(
             planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
         )
     if gather is None:
@@ -1340,8 +1344,10 @@ def _dispatch_sum_as_poly_row(
             jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
             _abst_scalars(scalars),
         )
-        fn = lambda pl, ga, ci, pi, er, ei, sc: _round_poly_row(  # noqa: E731
-            pl, ga, ci, pi, er, ei, sc, consts
+        fn = (
+            lambda pl, ga, ci, pi, er, ei, sc: _composite_sum_as_poly_row(  # noqa: E731
+                pl, ga, ci, pi, er, ei, sc, consts
+            )
         )
         return export.export(jax.jit(fn))(*abst)
 
@@ -1365,7 +1371,7 @@ def _dispatch_fix_and_sum_row(
     that needs no re-pad (gather `None`) gets an identity gather so it hits the
     same binary -- the identity pad is a no-op, so byte-identical."""
     if isinstance(planes.n0, jax.core.Tracer):
-        return _fix_and_sum_row(
+        return _composite_fix_and_sum_row(
             planes,
             eq_row,
             alpha,
@@ -1413,8 +1419,10 @@ def _dispatch_fix_and_sum_row(
             jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
             _abst_scalars(scalars),
         )
-        fn = lambda pl, er, al, ga, ci, pi, ei, sc: _fix_and_sum_row(  # noqa: E731
-            pl, er, al, ga, ci, pi, ei, sc, consts
+        fn = (  # noqa: E731
+            lambda pl, er, al, ga, ci, pi, ei, sc: _composite_fix_and_sum_row(
+                pl, er, al, ga, ci, pi, ei, sc, consts
+            )
         )
         return export.export(jax.jit(fn))(*abst)
 
@@ -1496,7 +1504,7 @@ def _fs_reduce(
 def _finalize_layer(
     planes: _Planes, alpha: Array, chal: list[Array], poly: list[Array]
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
-    fn0, fn1, fd0, fd1 = _fix_last(planes, alpha)
+    fn0, fn1, fd0, fd1 = _composite_fix_last(planes, alpha)
     return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
 
 
@@ -1522,11 +1530,11 @@ def _run_jagged_rounds(
     `jax.jit` -- the operands are then concrete arrays, not tracers, so
     `exported.call` host-dispatches each round (the FS hop + reduce dispatching
     eagerly between rounds) and releases its buffers before the next, bounding
-    peak host RAM (the decoupled production path). Under the outer jit the
-    dispatch sees tracers and falls back to the eager kernel, tracing the whole
-    loop into one program. Both paths are byte-identical to the inline reference
-    oracle in the tests (same math; the export path only regroups it across
-    per-round host dispatches)."""
+    peak host RAM (the decoupled production path). Under the outer jit
+    (`JaggedGkrLayerRound(jit=True)`) the dispatch sees tracers and falls back
+    to the marked kernel, tracing the whole loop into one program. Both paths are
+    byte-identical to the inline reference oracle in the tests (same math; the
+    export path only regroups it across per-round host dispatches)."""
     eq_row, eq_int, eval_point, lam, claim = (
         state.eq_row,
         state.eq_int,
@@ -1543,14 +1551,23 @@ def _run_jagged_rounds(
     consts = sched.consts
     transcript = cast(DuplexTranscript, transcript)
 
-    # The dispatch and eager kernels share signatures, so select one per round.
-    fix_row = _dispatch_fix_and_sum_row if export_dispatch else _fix_and_sum_row
-    fix_int = _dispatch_fix_and_sum_int if export_dispatch else _fix_and_sum_int
+    # The dispatch and marked kernels share signatures, so select one per round.
+    # Both routes emit the `zorch.sumcheck.round` marker (the dispatch inside its
+    # exported binary): a recognizing emitter fuses each round, and an unclaimed
+    # marker decomposes inline, byte-identical to the eager body.
+    fix_row = (
+        _dispatch_fix_and_sum_row if export_dispatch else _composite_fix_and_sum_row
+    )
+    fix_int = (
+        _dispatch_fix_and_sum_int if export_dispatch else _composite_fix_and_sum_dense
+    )
     fix_boundary = (
-        _dispatch_fix_and_sum_boundary if export_dispatch else _fix_and_sum_boundary
+        _dispatch_fix_and_sum_boundary
+        if export_dispatch
+        else _composite_fix_and_sum_boundary
     )
     # Round 0 binds nothing yet, so its sum is the bare row poly (no fold).
-    sum0 = _dispatch_sum_as_poly_row if export_dispatch else _round_poly_row
+    sum0 = _dispatch_sum_as_poly_row if export_dispatch else _composite_sum_as_poly_row
     polys: list[Array] = []
     challenges: list[Array] = []
     prev_r = one  # unused until the first fold (round 1)
