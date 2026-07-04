@@ -886,6 +886,75 @@ def _composite_fix_and_sum_row(
     )
 
 
+def _round_composite_first_row_decomp(
+    planes: _Planes,
+    eq_row: Array,
+    gather: Array,
+    col_index: Array,
+    pair_index: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    naturals: Array,
+    inv_vand: Array,
+    **_attrs: object,
+) -> tuple[Array, _Planes]:
+    """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `first`
+    phase -- the byte-exact fallback a recognizing emitter replaces. The operand
+    order is the `mid` row ABI minus `alpha`: round 0 binds nothing, so there is
+    no previous challenge to fold by and the marker carries no `alpha` slot."""
+    return _round_poly_row(
+        planes,
+        gather,
+        col_index,
+        pair_index,
+        eq_row,
+        eq_int,
+        scalars,
+        _InterpConsts(naturals, inv_vand),
+    )
+
+
+def _composite_sum_as_poly_row(
+    planes: _Planes,
+    gather: Array | None,
+    col_index: Array,
+    pair_index: Array,
+    eq_row: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes]:
+    """Emit the FS-less `zorch.sumcheck.round` (phase=first, variant=jagged)
+    marker around the round-0 sum -- no fold, no challenge, just the row-shaped
+    round poly over the raw layer plus the re-padded state the caller binds next
+    round. The signature mirrors `_round_poly_row` so the round loop can select
+    it in the `sum0` slot. A round needing no re-pad (`gather` None) gets an
+    identity gather over the FULL height (no `//2`: nothing folds this round),
+    exactly as `_dispatch_sum_as_poly_row` does, so the marker always carries the
+    operand. Byte-identical to `_round_poly_row` whenever the marker is unclaimed
+    (`lax.composite` runs the decomposition)."""
+    if gather is None:
+        gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
+    return composite(
+        _round_composite_first_row_decomp,
+        planes,
+        eq_row,
+        gather,
+        col_index,
+        pair_index,
+        eq_int,
+        scalars,
+        consts.naturals,
+        consts.inv_vand,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        phase="first",
+        variant="jagged",
+        degree=_DEGREE,
+        poly_form="coefficient",
+    )
+
+
 # Exported per-round kernels, keyed by the operand signature so one binary
 # serves every round size in its bracket and is reused across rounds, layers, and
 # shards (the recompile-free dispatch). Only the per-round-REPEATED variants are
