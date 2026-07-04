@@ -886,6 +886,61 @@ def _composite_fix_and_sum_row(
     )
 
 
+def _round_composite_boundary_decomp(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    naturals: Array,
+    inv_vand: Array,
+    **_attrs: object,
+) -> tuple[Array, _Planes]:
+    """The `zorch.sumcheck.round` decomposition for the `boundary` (row ->
+    interaction handoff) phase -- the byte-exact fallback a recognizing emitter
+    replaces. The operand layout is the dense `mid` ABI, but `eq_int` enters at
+    2x the post-bind state width and is NOT folded: only the planes bind by
+    `alpha`. `eq_int` is dropped from the outputs -- it rides through the round
+    unchanged, so emitting it would copy a full tensor per boundary round; the
+    wrapper returns the caller's own `eq_int` instead."""
+    poly, planes, _ = _fix_and_sum_boundary(
+        planes, eq_int, alpha, scalars, _InterpConsts(naturals, inv_vand)
+    )
+    return poly, planes
+
+
+def _composite_fix_and_sum_boundary(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+) -> tuple[Array, _Planes, Array]:
+    """Emit the FS-less `zorch.sumcheck.round` (phase=boundary, variant=dense)
+    marker around the row->interaction handoff -- bind the last row variable's
+    challenge (row-shaped fold), then the first interaction round's univariate
+    over the still-unfolded `eq_int`. The signature mirrors
+    `_fix_and_sum_boundary` so the round loop can select it in place; the
+    unchanged `eq_int` is returned from outside the marker (not a composite
+    output). Byte-identical to `_fix_and_sum_boundary` whenever the marker is
+    unclaimed (`lax.composite` runs the decomposition)."""
+    poly, planes = composite(
+        _round_composite_boundary_decomp,
+        planes,
+        eq_int,
+        alpha,
+        scalars,
+        consts.naturals,
+        consts.inv_vand,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        phase="boundary",
+        variant="dense",
+        degree=_DEGREE,
+        poly_form="coefficient",
+    )
+    return poly, planes, eq_int
+
+
 def _round_composite_first_row_decomp(
     planes: _Planes,
     eq_row: Array,

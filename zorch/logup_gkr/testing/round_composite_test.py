@@ -13,9 +13,11 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.logup_gkr.jagged_prover import (
+    _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
     _composite_fix_and_sum_row,
     _composite_sum_as_poly_row,
+    _fix_and_sum_boundary,
     _fix_and_sum_int,
     _fix_and_sum_row,
     _InterpConsts,
@@ -175,6 +177,53 @@ class RowRoundCompositeTest(absltest.TestCase):
         # The phase/variant attributes are the recognizer's routing key.
         self.assertIn("mid", text)
         self.assertIn("jagged", text)
+
+
+def _boundary_inputs(
+    m: int = 8,
+) -> tuple[_Planes, jax.Array, jax.Array, _RoundScalars, _InterpConsts]:
+    """A random row->interaction handoff round: the planes enter at width `m`
+    (the last row round's padded state) while `eq_int` enters at the post-bind
+    width `m // 2` and is NOT folded this round."""
+    planes = _Planes(*(rand_field(s, (m,), KB) for s in range(4)))
+    eq_int = rand_field(10, (m // 2,), KB)
+    alpha = rand_field(11, (), KB)
+    scalars = _RoundScalars(
+        eq_adj=rand_field(12, (), KB),
+        pad_adj=rand_field(13, (), KB),
+        z_cur=rand_field(14, (), KB),
+        claim=rand_field(15, (), KB),
+        lam=rand_field(16, (), KB),
+    )
+    consts = _InterpConsts(*_round_interp_constants(KB))
+    return planes, eq_int, alpha, scalars, consts
+
+
+class BoundaryRoundCompositeTest(absltest.TestCase):
+    def test_byte_identical_to_eager(self) -> None:
+        planes, eq_int, alpha, scalars, consts = _boundary_inputs()
+        want = _fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
+        got = _composite_fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
+        got_leaves = jax.tree_util.tree_leaves(got)
+        want_leaves = jax.tree_util.tree_leaves(want)
+        self.assertEqual(len(got_leaves), len(want_leaves))
+        for g, w in zip(got_leaves, want_leaves):
+            self.assertTrue(
+                bool(jnp.all(g == w)), "marked boundary round diverged from eager"
+            )
+
+    def test_emits_marker_with_abi(self) -> None:
+        planes, eq_int, alpha, scalars, consts = _boundary_inputs()
+        # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
+        # it and trace only the array operands.
+        jaxpr = jax.make_jaxpr(
+            lambda p, e, a, s: _composite_fix_and_sum_boundary(p, e, a, s, consts)
+        )(planes, eq_int, alpha, scalars)
+        text = jaxpr.pretty_print()
+        self.assertIn(SUMCHECK_ROUND_MARKER, text)
+        # The phase/variant attributes are the recognizer's routing key.
+        self.assertIn("boundary", text)
+        self.assertIn("dense", text)
 
 
 class FirstRoundCompositeTest(absltest.TestCase):

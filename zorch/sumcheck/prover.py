@@ -207,8 +207,11 @@ SUMCHECK_MARKER_VERSION = 1
 # loop wraps each round's fold+sum (no Fiat-Shamir) in this composite, while the
 # separate `zorch.poseidon2` marker carries FS between rounds. The composite
 # attributes the recognizing emitter parses:
-#   phase   -- "first" (round 0, no fold), "mid" (fold-by-alpha then sum), or
-#              "final" (fold only); routes to the round kernel by position.
+#   phase   -- "first" (round 0, no fold), "mid" (fold-by-alpha then sum),
+#              "boundary" (the row->interaction handoff: fold-by-alpha then sum
+#              over the still-unfolded eq, which rides through un-bound), or
+#              "final" (fold only, emitting the four pair openings); routes to
+#              the round kernel by position.
 #   variant -- the round-kernel shape: "dense" (the uniform interaction round --
 #              a batched LogUp-GKR round-poly, folds densely) or "jagged" (the row
 #              phase -- segment-based, variable heights, runtime row_counts).
