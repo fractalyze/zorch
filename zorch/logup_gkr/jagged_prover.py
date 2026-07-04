@@ -48,6 +48,7 @@ from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _pad_neutral,
     _prepad_folded,
+    _segment_gather,
     _segment_gather_np,
 )
 from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
@@ -243,6 +244,47 @@ def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
     (and hence the slice bounds + output length) rides static."""
     coords = eval_point[niv:] if row else eval_point[:niv]
     return expand_eq_to_hypercube(coords, jnp.ones((), eval_point.dtype))
+
+
+def pad_layer_to_capacity(
+    layer: JaggedGkrLayer, capacities: tuple[int, ...]
+) -> JaggedGkrLayer:
+    """Re-store `layer` in a capacity layout: each segment extended to its
+    capacity with the fold-neutral fraction (n=0, d=1), and `row_counts`
+    becoming the capacity tuple.
+
+    The prove over the capacity layer is byte-identical to the exact layout:
+    the neutral fraction is a fixed point of the per-round fold (and of the
+    re-pad gathers a non-even capacity's schedule inserts), and its eq mass
+    moves from the closed-form virtual correction (`pad_adj - eq_sum`) into
+    the materialized sum -- the round polynomials, challenges, and openings do
+    not change. What changes is the compile-key surface: the whole-layer
+    program's plane and schedule shapes now derive from `capacities` alone, so
+    shards sharing a capacity tuple share every trace and executable, and the
+    true row counts ride only in this one gather's runtime data.
+
+    Any `capacities >= row_counts` works; the choice trades memory against
+    cache hits. A memory-tight consumer keeps capacities at a running
+    per-segment max over its shards (padding ~= the inter-shard spread); a
+    power-of-two capacity additionally makes every fold even (no per-round
+    re-pad gathers) at up to 2x padding."""
+    if len(capacities) != len(layer.row_counts):
+        raise ValueError(
+            f"capacities {capacities} must have one entry per segment "
+            f"({len(layer.row_counts)})"
+        )
+    for rc, cap in zip(layer.row_counts, capacities, strict=True):
+        if cap < rc:
+            raise ValueError(f"capacity {cap} < row count {rc}")
+    gather = _segment_gather(layer.row_counts, capacities)
+    n0, n1, d0, d1 = _pad_neutral(
+        layer.numerator_0,
+        layer.numerator_1,
+        layer.denominator_0,
+        layer.denominator_1,
+        gather,
+    )
+    return JaggedGkrLayer(n0, n1, d0, d1, capacities)
 
 
 def prove_jagged_layer(
