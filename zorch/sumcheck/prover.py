@@ -111,6 +111,34 @@ def lift_to_domain(p0: Array, p1: Array, degree: int, start: int = 0) -> Array:
     return p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0)
 
 
+class _Inf:
+    """Sentinel domain point ∞: a round poly's leading coefficient. A round that
+    owns a domain containing `INF` sends the top-degree coefficient in place of a
+    finite evaluation — the general ∞-eval sumcheck optimization (binius), letting
+    a round send fewer values (the running claim closes the missing constraint)."""
+
+    def __repr__(self) -> str:
+        return "INF"
+
+
+INF = _Inf()
+
+
+def lift_to_points(p0: Array, p1: Array, domain: Sequence[object]) -> Array:
+    """Lift one split pair to an arbitrary evaluation `domain` (finite ints and/or
+    `INF`), shape `(len(domain), *P0.shape)`. A finite `u` gives the linear factor
+    value `P0 + u*(P1 - P0)`; `INF` gives the factor's leading coefficient
+    `P1 - P0`, so `combine`ing the ∞-lifted factors yields the round poly's leading
+    coefficient (the product of the per-factor top coeffs). The round owns the
+    domain; the driver's split / fold / scan stay unchanged."""
+    slope = p1 - p0
+    rows = [
+        slope if isinstance(pt, _Inf) else p0 + jnp.array(pt, p0.dtype) * slope
+        for pt in domain
+    ]
+    return jnp.stack(rows)
+
+
 def fold(state: Sequence[Array], r: Array) -> list[Array]:
     """Fold each MLE at challenge `r`: P0 + r*(P1 - P0). Halves width."""
     return [fold_pair(p0, p1, r) for (p0, p1) in split_halves(state)]
@@ -122,16 +150,30 @@ def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
     return [lift_to_domain(p0, p1, degree) for (p0, p1) in split_halves(state)]
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@partial(
+    jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree", "domain"]
+)
 @dataclass(frozen=True)
 class SumcheckRound(Round):
-    """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry."""
+    """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry.
+
+    `domain` is the round-owned evaluation domain the driver sends the round poly
+    on: `None` (default) is the natural `[0..degree]` values; a tuple of finite
+    ints and/or `INF` lets the round pick its message form — e.g. `(1, INF)` sends
+    just `(s(1), leading coeff)`, the ∞-trick, and the verifier recovers the third
+    constraint from the running claim. Byte-identical to today when `None`."""
 
     degree: int
+    domain: tuple | None = None
 
     def __post_init__(self) -> None:
         if self.degree < 1:
             raise ValueError("degree must be >= 1")
+        if self.domain is not None and not 1 <= len(self.domain) <= self.degree + 1:
+            raise ValueError(
+                f"domain must hold 1..degree+1={self.degree + 1} points, "
+                f"got {len(self.domain)}"
+            )
 
     def combine_scalars(self) -> tuple[Array, ...]:
         """No loop-invariant scalars: the product summand reads only its factors."""
@@ -317,6 +359,14 @@ def prove(
     # isinstance narrows the type for `_prove_marked` (the merkle.py
     # `has_dedicated_fusion` gate).
     if isinstance(transcript, DuplexTranscript) and transcript.has_dedicated_fusion:
+        if getattr(round, "domain", None) is not None:
+            # The dedicated-fusion marker carries the round-poly domain as a
+            # composite attribute (like eval_start); a custom/∞ domain needs that
+            # attribute wired into the recognizer before it can ride the marker.
+            raise NotImplementedError(
+                "round-owned domain is not yet supported on the dedicated-fusion "
+                "marked path; run with a non-marked transcript for now"
+            )
         return _prove_marked(
             round,
             state,
@@ -370,6 +420,9 @@ def _prove_scan(
     half_max = width // 2
     n_factors = len(state)
     scalars = round.combine_scalars() if scalars is None else scalars
+    # A round-owned domain (incl. INF) overrides the natural [eval_start..degree]
+    # evaluation points; None keeps today's path byte-identical.
+    domain = getattr(round, "domain", None)
 
     def step(
         carry: tuple[list[Array], Transcript, Array], _: None
@@ -380,7 +433,10 @@ def _prove_scan(
             (buf[..., :half_max], lax.dynamic_slice_in_dim(buf, half, half_max, -1))
             for buf in state
         ]
-        lifted = [lift_to_domain(p0, p1, degree, eval_start) for p0, p1 in pairs]
+        if domain is None:
+            lifted = [lift_to_domain(p0, p1, degree, eval_start) for p0, p1 in pairs]
+        else:
+            lifted = [lift_to_points(p0, p1, domain) for p0, p1 in pairs]
         if mark_combine:
             # operands [lifted factors][scalars]; body reads passed scalars, so the
             # round (and its λ) is not captured — λ rides as an explicit operand.

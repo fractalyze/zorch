@@ -91,7 +91,42 @@ class CoeffsSumcheckRound(Round):
         return eval_coeffs(msg, r), transcript, r, ok
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@dataclass(frozen=True)
+class InfDomainSumcheckRound(Round):
+    """Verifier for a round that sends ``(s(1), s(∞))`` — the value at 1 and the
+    leading coefficient — the ∞-trick wire form paired with
+    ``prover.SumcheckRound(domain=(1, INF))``. The running claim closes the third
+    constraint: ``s(0) = claim − s(1)``, so the degree-2 poly reconstructs from
+    ``{0, 1, ∞}`` division-free (``c0 = s(0)``, ``c2 = s(∞)``,
+    ``c1 = s(1) − c0 − c2``). Like ``CoeffsSumcheckRound`` there is no independent
+    per-round identity — the claim closes the missing value, so soundness is the
+    end-to-end reduction. Degree 2 only (the product-of-two-MLEs round)."""
+
+    degree: int
+
+    def __post_init__(self) -> None:
+        if self.degree != 2:
+            raise ValueError("the (1, INF) ∞-trick wire form is degree 2")
+
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
+        if msg.shape[0] != 2:
+            raise ValueError(
+                f"(s(1), s(inf)) message must have 2 entries, got {msg.shape[0]}"
+            )
+        s1, s_inf = msg[0], msg[1]
+        s0 = claim - s1  # claim = s(0) + s(1)
+        c1 = s1 - s0 - s_inf
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        r0 = r[0]
+        reduced = s0 + c1 * r0 + s_inf * (r0 * r0)  # s(r0)
+        return reduced, transcript, r0, jnp.array(True)
+
+
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _eval_form: type[InnerVerifierRound] = SumcheckRound
     _coeffs_form: type[InnerVerifierRound] = CoeffsSumcheckRound
+    _inf_form: type[InnerVerifierRound] = InfDomainSumcheckRound
