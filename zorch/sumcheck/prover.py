@@ -49,7 +49,7 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, Protocol, Self, cast
 
 import jax
 import jax.numpy as jnp
@@ -150,8 +150,57 @@ def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
     return [lift_to_domain(p0, p1, degree) for (p0, p1) in split_halves(state)]
 
 
+class ScalarFramingTranscript(Transcript, Protocol):
+    """A `Transcript` that can also frame a single field element without a length
+    prefix -- the extra surface `observe_and_sample_msg`'s scalar path needs
+    (`Sha256FieldTranscript`). Split from the base seam because per-element scalar
+    framing is meaningful only for a byte/Merlin transcript (a duplex sponge has no
+    length prefix, so scalar and slice coincide there and it need not implement
+    these)."""
+
+    def observe_scalar(self, value: Array) -> Self: ...
+    def sample_scalar(self, nbytes: int | None = ...) -> tuple[Self, Array]: ...
+
+
+def observe_and_sample_msg(
+    transcript: Transcript,
+    msg: Array,
+    n: int,
+    *,
+    scalar_framing: bool = False,
+) -> tuple[Transcript, Array]:
+    """Absorb a round-poly `msg` and squeeze `n` fold-challenge samples under the
+    round-owned transcript framing; return (advanced transcript, raw squeezes).
+
+    `scalar_framing=False` (default) is the transcript's own count-prefixed slice
+    framing -- one `observe_and_sample`, byte-identical to a direct call, so every
+    existing round is unchanged. `True` absorbs each element of `msg` per-element
+    scalar (`observe_scalar`, no length prefix) and squeezes each challenge via
+    `sample_scalar` -- the element-at-a-time convention a byte challenger uses
+    (flock's `Challenger.observe_f128` / `sample_f128`), which the slice path's
+    length prefix would not reproduce. Scalar framing needs a
+    `ScalarFramingTranscript` (`Sha256FieldTranscript`); a plain sponge without
+    `observe_scalar` fails loud (the cast is a by-contract narrowing). `msg` is a
+    flat vector of field elements (a batched message has no per-element scalar
+    meaning). The seam is round-owned so a round picks its message wire framing,
+    and the prover driver and the verifier dual both route here, so their
+    Fiat-Shamir streams cannot drift."""
+    if not scalar_framing:
+        return transcript.observe_and_sample(msg, n)
+    t = cast(ScalarFramingTranscript, transcript)
+    for i in range(msg.shape[0]):
+        t = t.observe_scalar(msg[i])
+    samples = []
+    for _ in range(n):
+        t, s = t.sample_scalar()
+        samples.append(s)
+    return t, jnp.concatenate(samples)
+
+
 @partial(
-    jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree", "domain"]
+    jax.tree_util.register_dataclass,
+    data_fields=[],
+    meta_fields=["degree", "domain", "scalar_framing"],
 )
 @dataclass(frozen=True)
 class SumcheckRound(Round):
@@ -161,10 +210,17 @@ class SumcheckRound(Round):
     on: `None` (default) is the natural `[0..degree]` values; a tuple of finite
     ints and/or `INF` lets the round pick its message form — e.g. `(1, INF)` sends
     just `(s(1), leading coeff)`, the ∞-trick, and the verifier recovers the third
-    constraint from the running claim. Byte-identical to today when `None`."""
+    constraint from the running claim. Byte-identical to today when `None`.
+
+    `scalar_framing` is the round-owned message-observe framing: `False` (default)
+    absorbs the round poly under the transcript's count-prefixed slice framing;
+    `True` absorbs each element per-element scalar (no length prefix) and squeezes
+    the challenge scalar — a byte challenger's element-at-a-time convention (flock's
+    `Challenger.observe_f128`), which needs a scalar-capable transcript."""
 
     degree: int
     domain: tuple | None = None
+    scalar_framing: bool = False
 
     def __post_init__(self) -> None:
         if self.degree < 1:
@@ -203,7 +259,9 @@ class SumcheckRound(Round):
         self, state: Sequence[Array], transcript: Transcript
     ) -> tuple[list[Array], Transcript, Array]:
         msg = self._round_poly(state)
-        transcript, r = transcript.observe_and_sample(msg, 1)
+        transcript, r = observe_and_sample_msg(
+            transcript, msg, 1, scalar_framing=self.scalar_framing
+        )
         state = fold(state, r[0])
         return state, transcript, msg
 
@@ -415,6 +473,9 @@ def _prove_scan(
     # A round-owned domain (incl. INF) overrides the natural [eval_start..degree]
     # evaluation points; None keeps today's path byte-identical.
     domain = getattr(round, "domain", None)
+    # Round-owned message framing: scalar (per-element, no length prefix) vs the
+    # default count-prefixed slice; False keeps today's path byte-identical.
+    scalar_framing = getattr(round, "scalar_framing", False)
 
     def step(
         carry: tuple[list[Array], Transcript, Array], _: None
@@ -446,8 +507,11 @@ def _prove_scan(
         )
         # One round challenge: `challenge_limbs` squeezes reinterpreted as a single
         # `challenge_dtype` element (the `sample_challenge` packing) — the identity
-        # squeeze at the defaults, an extension-field challenge otherwise.
-        transcript, raw = transcript.observe_and_sample(msg, challenge_limbs)
+        # squeeze at the defaults, an extension-field challenge otherwise. The
+        # round-owned framing (scalar vs slice) rides through the shared helper.
+        transcript, raw = observe_and_sample_msg(
+            transcript, msg, challenge_limbs, scalar_framing=scalar_framing
+        )
         r = (
             raw[0]
             if challenge_dtype is None

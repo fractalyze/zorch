@@ -40,6 +40,21 @@ py_test(
 )
 
 py_test(
+    name = "prove_framing_test",
+    size = "small",
+    srcs = ["prove_framing_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:sha256_field_transcript",
+        "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "prove_marked_test",
     size = "medium",
     srcs = ["prove_marked_test.py"],

@@ -27,18 +27,28 @@ from jax import Array
 
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
+from zorch.sumcheck.prover import observe_and_sample_msg
 from zorch.transcript import Transcript, sample_challenge
 
 if TYPE_CHECKING:
     from zorch.round import InnerVerifierRound
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[],
+    meta_fields=["degree", "scalar_framing"],
+)
 @dataclass(frozen=True)
 class SumcheckRound(Round):
-    """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`."""
+    """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`.
+
+    `scalar_framing` must match the prover round's, so the two absorb the round
+    poly under the same transcript framing and their Fiat-Shamir streams stay in
+    sync (the shared `observe_and_sample_msg` is the one framing definition)."""
 
     degree: int
+    scalar_framing: bool = False
 
     def __post_init__(self) -> None:
         if self.degree < 1:
@@ -53,7 +63,9 @@ class SumcheckRound(Round):
                 f"got {msg.shape[0]}"
             )
         ok = claim == msg[0] + msg[1]
-        transcript, r = transcript.observe_and_sample(msg, 1)
+        transcript, r = observe_and_sample_msg(
+            transcript, msg, 1, scalar_framing=self.scalar_framing
+        )
         return eval_univariate(msg, r[0]), transcript, r[0], ok
 
 
@@ -91,7 +103,11 @@ class CoeffsSumcheckRound(Round):
         return eval_coeffs(msg, r), transcript, r, ok
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[],
+    meta_fields=["degree", "scalar_framing"],
+)
 @dataclass(frozen=True)
 class InfDomainSumcheckRound(Round):
     """Verifier for a round that sends ``(s(1), s(∞))`` — the value at 1 and the
@@ -101,9 +117,12 @@ class InfDomainSumcheckRound(Round):
     ``{0, 1, ∞}`` division-free (``c0 = s(0)``, ``c2 = s(∞)``,
     ``c1 = s(1) − c0 − c2``). Like ``CoeffsSumcheckRound`` there is no independent
     per-round identity — the claim closes the missing value, so soundness is the
-    end-to-end reduction. Degree 2 only (the product-of-two-MLEs round)."""
+    end-to-end reduction. Degree 2 only (the product-of-two-MLEs round).
+
+    `scalar_framing` must match the prover round's (see ``SumcheckRound``)."""
 
     degree: int
+    scalar_framing: bool = False
 
     def __post_init__(self) -> None:
         if self.degree != 2:
@@ -119,7 +138,9 @@ class InfDomainSumcheckRound(Round):
         s1, s_inf = msg[0], msg[1]
         s0 = claim - s1  # claim = s(0) + s(1)
         c1 = s1 - s0 - s_inf
-        transcript, r = transcript.observe_and_sample(msg, 1)
+        transcript, r = observe_and_sample_msg(
+            transcript, msg, 1, scalar_framing=self.scalar_framing
+        )
         r0 = r[0]
         reduced = s0 + c1 * r0 + s_inf * (r0 * r0)  # s(r0)
         return reduced, transcript, r0, jnp.array(True)
