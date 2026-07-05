@@ -27,6 +27,19 @@ py_test(
 )
 
 py_test(
+    name = "gruen_test",
+    size = "small",
+    srcs = ["gruen_test.py"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "prove_per_permute_test",
     size = "medium",
     srcs = ["prove_per_permute_test.py"],
