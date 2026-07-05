@@ -14,8 +14,9 @@ Round polynomials travel in coefficient form, interpolated through
 {0, 1, 1/2, b}: the summand carries the current variable's eq factor, whose
 root `b = (1-z)/(1-2z)` is known to both sides, so a degree-3 round needs
 only the materialized evaluations at {0, 1/2} plus `s(1) = claim - s(0)`
-(Gruen, https://eprint.iacr.org/2024/108). Value-form on the natural domain
-would need a third materialized evaluation per round.
+(Gruen, https://eprint.iacr.org/2024/108 -- the shared `zorch.sumcheck.gruen`
+assembly, instantiated here with the extra point 1/2). Value-form on the
+natural domain would need a third materialized evaluation per round.
 
 Variables bind LSB-first (consecutive-pair fold): a jagged layer is
 batch-major, so the row LSB is the in-segment pair dimension and the
@@ -52,14 +53,11 @@ from zorch.logup_gkr.circuit import (
     _segment_gather_np,
 )
 from zorch.logup_gkr.prover import Carry, LogupSummand, fold_carry
-from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.univariate import (
-    compute_inv_vandermonde,
-    compute_lagrange_basis,
-    eval_coeffs,
-)
+from zorch.poly.eq import eq_factor, expand_eq_to_hypercube
+from zorch.poly.univariate import eval_coeffs
 from zorch.round import Round
-from zorch.sumcheck.prover import fold_pair
+from zorch.sumcheck import gruen
+from zorch.sumcheck.prover import fold_lsb, split_pairs
 from zorch.transcript import (
     DuplexTranscript,
     Transcript,
@@ -70,9 +68,6 @@ from zorch.transcript import (
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
-
-# eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2), in coefficient form.
-_DEGREE = 3
 
 
 @partial(
@@ -106,7 +101,9 @@ class JaggedLayerProof:
 
     lam: Array
     claim: Array
-    round_polys: Array  # (num_variables, _DEGREE + 1), ascending coefficients
+    # (num_variables, 4): ascending coefficients — eq (deg 1) * the LogUp
+    # bracket lam*(n0*d1 + n1*d0) + d0*d1 (deg 2) makes every round degree 3.
+    round_polys: Array
     point: Array  # the bound point, MSB-first (the sampled challenges reversed)
     numerator_0: Array
     numerator_1: Array
@@ -156,14 +153,6 @@ def _round_metadata(
         return jax.device_put(host_meta)
 
 
-def _bind_lsb(arr: Array, r: Array) -> Array:
-    """Bind the LSB variable: stride-2 consecutive pairs fold via the shared
-    `sumcheck.prover.fold_pair` -- `e0 + r*(e1 - e0)`. (The split is LSB/stride-2,
-    distinct from `fold`/`split_halves`' contiguous MSB halves; only the scalar
-    fold is shared.)"""
-    return fold_pair(arr[0::2], arr[1::2], r)
-
-
 def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:
     """The virtual (non-materialized) mass a round adds back in closed form.
 
@@ -184,8 +173,6 @@ def _round_coeffs(
     pad_adj: Array,
     z_cur: Array,
     claim: Array,
-    naturals: Array,
-    inv_vand: Array,
 ) -> Array:
     """Round polynomial coefficients from the materialized {0, 1/2} sums.
 
@@ -197,11 +184,11 @@ def _round_coeffs(
     doubled products overcount s(1/2) by 8. `eq_adj` is the row-eq residual
     scalar once the row variables are exhausted (1 before that).
 
-    The interpolant through {0, 1, 1/2, b} crosses to coefficients via the
-    natural domain: Lagrange-evaluate it at `naturals` ({0..3}), then
-    `inv_vand` maps values to coefficients. Both are hoisted by the caller
-    -- they only depend on the degree.
-    """
+    The corrected sums then assemble through the shared Gruen machinery
+    (`gruen.round_coeffs`): the claim identity, the implicit zero at the
+    eq-factor root, and the natural-domain coefficient crossing all live
+    there; only the {0, 1/2} domain choice and the corrections above are
+    LogUp's."""
     dtype = claim.dtype
     one = jnp.ones((), dtype)
     correction = _virtual_mass_correction(pad_adj, eq_sum)
@@ -209,12 +196,8 @@ def _round_coeffs(
     s_half = (
         (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
     )
-    s_one = claim - s_zero
-    b_root = (one - z_cur) / (one - jnp.array(2, dtype) * z_cur)
-    xs = jnp.stack([jnp.zeros((), dtype), one, one / jnp.array(2, dtype), b_root])
-    ys = jnp.stack([s_zero, s_one, s_half, jnp.zeros((), dtype)])
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
-    return jnp.dot(inv_vand, jnp.dot(lagrange, ys))
+    half = one / jnp.array(2, dtype)
+    return gruen.round_coeffs(s_zero, claim, [half], [s_half], z_cur)
 
 
 def _paired_sums(
@@ -235,18 +218,18 @@ def _paired_sums(
     """
     summand = LogupSummand(lam)
     scalars = summand.combine_scalars()
-    eval_zero = jnp.sum(
-        summand.combine(scalars, eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
-    )
+    (n0_0, n0_1), (n1_0, n1_1) = split_pairs(n0), split_pairs(n1)
+    (d0_0, d0_1), (d1_0, d1_1) = split_pairs(d0), split_pairs(d1)
+    eval_zero = jnp.sum(summand.combine(scalars, eq_0, n0_0, d1_0, n1_0, d0_0))
     eq_h = eq_0 + eq_1
     eval_half = jnp.sum(
         summand.combine(
             scalars,
             eq_h,
-            n0[0::2] + n0[1::2],
-            d1[0::2] + d1[1::2],
-            n1[0::2] + n1[1::2],
-            d0[0::2] + d0[1::2],
+            n0_0 + n0_1,
+            d1_0 + d1_1,
+            n1_0 + n1_1,
+            d0_0 + d0_1,
         )
     )
     return eval_zero, eval_half, jnp.sum(eq_h)
@@ -372,12 +355,9 @@ def _prove_jagged_layer_from_meta(
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
-    naturals, inv_vand = _round_interp_constants(eval_point.dtype)
 
     state = _JaggedState(planes, eq_row, eq_int, eval_point, lam, claim)
-    sched = _JaggedSchedule(
-        meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
-    )
+    sched = _JaggedSchedule(meta, nrv, niv, challenge_limbs)
     out = _run_jagged_rounds(state, sched, transcript)
     bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
     proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
@@ -403,7 +383,6 @@ def _run_jagged_rounds_reference(
         state.claim,
     )
     meta, nrv, niv = sched.meta, sched.nrv, sched.niv
-    naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
     challenge_limbs = sched.challenge_limbs
     one = jnp.ones((), eval_point.dtype)
     eq_adj = one
@@ -428,28 +407,20 @@ def _run_jagged_rounds_reference(
             )
         else:
             eval_zero, eval_half, eq_sum = _paired_sums(
-                n0, n1, d0, d1, eq_int[0::2], eq_int[1::2], lam
+                n0, n1, d0, d1, *split_pairs(eq_int), lam
             )
         poly = _round_coeffs(
-            eval_zero,
-            eval_half,
-            eq_sum,
-            eq_adj,
-            pad_adj,
-            point[-1],
-            claim,
-            naturals,
-            inv_vand,
+            eval_zero, eval_half, eq_sum, eq_adj, pad_adj, point[-1], claim
         )
         transcript = transcript.observe(poly)
         transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
         polys.append(poly)
         challenges.append(r)
 
-        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1], one)
-        n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
+        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1])
+        n0, n1, d0, d1 = (fold_lsb(a, r) for a in (n0, n1, d0, d1))
         if in_rows:
-            eq_row = _bind_lsb(eq_row, r)
+            eq_row = fold_lsb(eq_row, r)
             if rnd == nrv - 1:
                 # Rows exhausted: the accumulated row-eq product becomes the
                 # scalar factor of every batch round; pad_adj restarts
@@ -457,7 +428,7 @@ def _run_jagged_rounds_reference(
                 eq_adj = pad_adj
                 pad_adj = one
         else:
-            eq_int = _bind_lsb(eq_int, r)
+            eq_int = fold_lsb(eq_int, r)
         point = point[:-1]
 
     return (
@@ -512,16 +483,6 @@ class _RoundScalars:
     lam: Array
 
 
-@dataclass(frozen=True)
-class _InterpConsts:
-    """The Lagrange interpolation constants (the `{0..DEGREE}` natural domain and
-    the inverse Vandermonde). They depend only on dtype, so the round kernels bake
-    them in as closure constants -- NOT export operands, so not a pytree."""
-
-    naturals: Array
-    inv_vand: Array
-
-
 @partial(
     jax.tree_util.register_dataclass,
     data_fields=["planes", "eq_row", "eq_int", "eval_point", "lam", "claim"],
@@ -545,13 +506,12 @@ class _JaggedState:
 
 @dataclass(frozen=True)
 class _JaggedSchedule:
-    """A jagged layer's static round schedule: the per-round gather/index metadata,
-    the interpolation constants, and the batch/row variable counts plus the
-    challenge limb count. Rides beside the state so the loop signatures stay
-    `(state, schedule, transcript)` rather than a 16-positional-arg bag."""
+    """A jagged layer's static round schedule: the per-round gather/index metadata
+    and the batch/row variable counts plus the challenge limb count. Rides beside
+    the state so the loop signatures stay `(state, schedule, transcript)` rather
+    than a positional-arg bag."""
 
     meta: list[tuple[Array | None, Array, Array]]
-    consts: _InterpConsts
     nrv: int
     niv: int
     challenge_limbs: int
@@ -559,27 +519,26 @@ class _JaggedSchedule:
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
     return _Planes(
-        *(_bind_lsb(a, alpha) for a in (planes.n0, planes.n1, planes.d0, planes.d1))
+        *(fold_lsb(a, alpha) for a in (planes.n0, planes.n1, planes.d0, planes.d1))
     )
 
 
-def _round_poly_int(
-    planes: _Planes, eq_int: Array, scalars: _RoundScalars, consts: _InterpConsts
-) -> Array:
+def _round_poly_int(planes: _Planes, eq_int: Array, scalars: _RoundScalars) -> Array:
     """The `sum_as_poly` step for the dense batch phase: the round
     univariate from the current state, no fold (the entry kernel of a
     round loop, before any challenge is bound).
 
     Fiat-Shamir-less by construction — the FS hop lives in `_fs_reduce`, appended
     after the round compute — so the body is pure field arithmetic. `eq_int` is
-    sliced stride-2 once inside `_paired_sums`."""
+    split stride-2 once here."""
+    eq_0, eq_1 = split_pairs(eq_int)
     eval_zero, eval_half, eq_sum = _paired_sums(
         planes.n0,
         planes.n1,
         planes.d0,
         planes.d1,
-        eq_int[0::2],
-        eq_int[1::2],
+        eq_0,
+        eq_1,
         scalars.lam,
     )
     return _round_coeffs(
@@ -590,8 +549,6 @@ def _round_poly_int(
         scalars.pad_adj,
         scalars.z_cur,
         scalars.claim,
-        consts.naturals,
-        consts.inv_vand,
     )
 
 
@@ -600,7 +557,6 @@ def _fix_and_sum_int(
     eq_int: Array,
     alpha: Array,
     scalars: _RoundScalars,
-    consts: _InterpConsts,
 ) -> tuple[Array, _Planes, Array]:
     """The `fix_and_sum` step for the dense batch phase: bind the previous
     round's challenge `alpha` (state size `m -> m/2`) **then** compute the next
@@ -608,8 +564,8 @@ def _fix_and_sum_int(
     loop threads the folded state into the next round. The fold and the inner
     `_paired_sums` slice stride-2 twice."""
     planes = _bind_planes(planes, alpha)
-    eq_int = _bind_lsb(eq_int, alpha)
-    poly = _round_poly_int(planes, eq_int, scalars, consts)
+    eq_int = fold_lsb(eq_int, alpha)
+    poly = _round_poly_int(planes, eq_int, scalars)
     return poly, planes, eq_int
 
 
@@ -621,7 +577,6 @@ def _round_poly_row(
     eq_row: Array,
     eq_int: Array,
     scalars: _RoundScalars,
-    consts: _InterpConsts,
 ) -> tuple[Array, _Planes]:
     """The row-variable round body shared by the row kernels: re-pad the four
     MLEs to the round's even layout (`gather`), look the per-pair batch eq
@@ -650,8 +605,6 @@ def _round_poly_row(
         scalars.pad_adj,
         scalars.z_cur,
         scalars.claim,
-        consts.naturals,
-        consts.inv_vand,
     )
     return poly, _Planes(n0, n1, d0, d1)
 
@@ -665,7 +618,6 @@ def _fix_and_sum_row(
     pair_index: Array,
     eq_int: Array,
     scalars: _RoundScalars,
-    consts: _InterpConsts,
 ) -> tuple[Array, _Planes, Array]:
     """The `fix_and_sum` step for the row-variable phase: bind the previous
     round's challenge `alpha` (state `2p_prev -> p_prev`, and `eq_row` halved in
@@ -676,9 +628,9 @@ def _fix_and_sum_row(
     end. The input state and `eq_row` enter even, and the `_pad_neutral` output is
     even, so all halvings stay valid."""
     planes = _bind_planes(planes, alpha)
-    eq_row = _bind_lsb(eq_row, alpha)
+    eq_row = fold_lsb(eq_row, alpha)
     poly, planes = _round_poly_row(
-        planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
+        planes, gather, col_index, pair_index, eq_row, eq_int, scalars
     )
     return poly, planes, eq_row
 
@@ -688,7 +640,6 @@ def _fix_and_sum_boundary(
     eq_int: Array,
     alpha: Array,
     scalars: _RoundScalars,
-    consts: _InterpConsts,
 ) -> tuple[Array, _Planes, Array]:
     """The row->batch handoff in one launch: bind the last row variable's
     challenge `alpha` (the padded row state collapses to the dense batch
@@ -699,7 +650,7 @@ def _fix_and_sum_boundary(
     sum is batch-shaped. `eq_int` rides through unchanged; the batch
     rounds bind it from the next round on."""
     planes = _bind_planes(planes, alpha)
-    poly = _round_poly_int(planes, eq_int, scalars, consts)
+    poly = _round_poly_int(planes, eq_int, scalars)
     return poly, planes, eq_int
 
 
@@ -712,29 +663,15 @@ def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array
     return p.n0[0], p.n1[0], p.d0[0], p.d1[0]
 
 
-@cache
-def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
-    """Lagrange `naturals` ({0..DEGREE}) and the inverse-Vandermonde, hoisted once
-    per dtype. Both depend only on `_DEGREE`, so rebuilding them inside every
-    `prove_jagged_layer` trace is pure redundant host work -- `compute_inv_vandermonde`
-    is an O(DEGREE^2) numpy coefficient build, redone per GKR layer without the memo."""
-    # Force concrete eval: `@cache` memoizes the result, so building it inside a
-    # jit trace (the jit=True round zone) would cache a tracer that then escapes the
-    # trace (UnexpectedTracerError). The constants are trace-independent anyway.
-    with jax.ensure_compile_time_eval():
-        naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
-        inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
-    return naturals, inv_vand
-
-
 def _fold_scalars(
-    poly: Array, r: Array, pad_adj: Array, z: Array, one: Array
+    poly: Array, r: Array, pad_adj: Array, z: Array
 ) -> tuple[Array, Array]:
-    """The per-round scalar fold: the next claim (round poly evaluated at `r`) and the
-    updated pad-mass `pad_adj`. One source for both the oracle
+    """The per-round scalar fold: the next claim (round poly evaluated at `r`) and
+    the pad-mass accumulation `pad_adj * eq_factor(r, z)` -- the bound variable's
+    eq factor joins the running product. One source for both the oracle
     `_run_jagged_rounds_reference` (which inlines it) and the round loop's
     `_reduce_body`, so the two cannot drift out of byte-equality."""
-    return eval_coeffs(poly, r), pad_adj * (z * r + (one - z) * (one - r))
+    return eval_coeffs(poly, r), pad_adj * eq_factor(r, z)
 
 
 def _reduce_body(
@@ -742,7 +679,6 @@ def _reduce_body(
     poly: Array,
     pad_adj: Array,
     z_cur: Array,
-    one: Array,
     eval_point: Array,
     pos: Array,
     dtype: Any,
@@ -757,7 +693,7 @@ def _reduce_body(
     (un-jitted) so it fuses into whichever kernel owns it -- the round loop's
     `_fs_reduce`, which prepends the Fiat-Shamir hop."""
     r = reinterpret_challenge(raw, dtype)
-    claim, pad_adj = _fold_scalars(poly, r, pad_adj, z_cur, one)
+    claim, pad_adj = _fold_scalars(poly, r, pad_adj, z_cur)
     # The last round's `pos_next` is -1 (a dead output -- no round consumes it);
     # clamp so the slice index is provably in-bounds rather than leaning on
     # `dynamic_slice`'s implicit index clamp. No-op for every live round (pos >= 1).
@@ -779,7 +715,7 @@ def _fs_reduce(
     """The per-round FS hop + reduce: observe `poly`, squeeze the challenge, then
     `_reduce_body`. Returns the advanced transcript and `(r, claim, pad_adj, z_next,
     pos_next)`. No jit of its own -- it fuses into the round's compute under the
-    whole-layer jit. `one` is baked.
+    whole-layer jit.
 
     The device FS hop rides the `zorch.duplex_fs` composite
     (`observe_and_sample_marked`) so the whole absorb+squeeze lowers to ONE
@@ -789,9 +725,8 @@ def _fs_reduce(
     vendor (exponential LoopFusion), so the dedicated `zorch.duplex_fs` emitter is
     what fuses it."""
     transcript, raw = observe_and_sample_marked(transcript, poly, n)
-    one = jnp.ones((), dtype)
     r, claim, pad_adj, z_next, pos_next = _reduce_body(
-        raw, poly, pad_adj, z_cur, one, eval_point, pos, dtype
+        raw, poly, pad_adj, z_cur, eval_point, pos, dtype
     )
     return transcript, r, claim, pad_adj, z_next, pos_next
 
@@ -832,7 +767,6 @@ def _run_jagged_rounds(
     eq_adj = one
     pad_adj = one
     planes = state.planes
-    consts = sched.consts
     transcript = cast(DuplexTranscript, transcript)
 
     polys: list[Array] = []
@@ -854,7 +788,7 @@ def _run_jagged_rounds(
             # Round 0 binds nothing yet, so its sum is the bare row poly (no fold).
             gather, col_index, pair_index = meta[0]
             poly, planes = _round_poly_row(
-                planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
+                planes, gather, col_index, pair_index, eq_row, eq_int, scalars
             )
         elif rnd < nrv:
             gather, col_index, pair_index = meta[rnd]
@@ -867,16 +801,13 @@ def _run_jagged_rounds(
                 pair_index,
                 eq_int,
                 scalars,
-                consts,
             )
         elif rnd == nrv:
             poly, planes, eq_int = _fix_and_sum_boundary(
-                planes, eq_int, prev_r, scalars, consts
+                planes, eq_int, prev_r, scalars
             )
         else:
-            poly, planes, eq_int = _fix_and_sum_int(
-                planes, eq_int, prev_r, scalars, consts
-            )
+            poly, planes, eq_int = _fix_and_sum_int(planes, eq_int, prev_r, scalars)
         # Device FS hop + reduce, traced into the whole-layer jit -- one fused region
         # per round. Slices the next z_cur via the decremented `pos`, riding the fold's
         # dispatch instead of a standalone gather.
