@@ -221,13 +221,15 @@ def _paired_sums(
     `_round_coeffs` rescales. Both go through the shared `LogupSummand` combine
     so the summand cannot drift from the verifier oracle's.
     """
+    summand = LogupSummand(lam)
+    scalars = summand.combine_scalars()
     eval_zero = jnp.sum(
-        LogupSummand(lam).combine((lam,), eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
+        summand.combine(scalars, eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
     )
     eq_h = eq_0 + eq_1
     eval_half = jnp.sum(
-        LogupSummand(lam).combine(
-            (lam,),
+        summand.combine(
+            scalars,
             eq_h,
             n0[0::2] + n0[1::2],
             d1[0::2] + d1[1::2],

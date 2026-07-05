@@ -18,7 +18,6 @@ from jax import Array, tree_util
 
 from zorch.logup_gkr.circuit import build_pyramid, extract_outputs
 from zorch.logup_gkr.prover import (
-    _DEGREE,
     GkrLayerRound,
     LogupSumcheckRound,
     LogupSummand,
@@ -223,7 +222,9 @@ class GkrProverTest(absltest.TestCase):
         layers, _, proofs, _ = prove_gkr(first)
         self.assertEqual(len(proofs), len(layers) - 1)
         for lp, layer in zip(proofs, reversed(layers[:-1]), strict=True):
-            self.assertEqual(lp.round_polys.shape, (layer.num_variables, _DEGREE + 1))
+            self.assertEqual(
+                lp.round_polys.shape, (layer.num_variables, LogupSummand.DEGREE + 1)
+            )
             openings = (
                 lp.numerator_0,
                 lp.numerator_1,

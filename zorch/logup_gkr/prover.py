@@ -96,11 +96,6 @@ class LogupSummand:
         return logup_combine(lam, *factors)
 
 
-# Aliased for callers that import the pre-extraction module constants directly.
-_DEGREE = LogupSummand.DEGREE
-_NUM_FACTORS = LogupSummand.NUM_FACTORS
-
-
 def fold_carry(
     n0: Array, n1: Array, d0: Array, d1: Array, point: Array, r: Array
 ) -> tuple[Array, Array, Array]:
@@ -132,13 +127,13 @@ class LogupSumcheckRound(Round):
 
     @property
     def degree(self) -> int:
-        return self._summand.degree
+        return LogupSummand.DEGREE
 
     def combine_scalars(self) -> tuple[Array, ...]:
         """The batching challenge λ, fixed across the layer's variable-rounds; the
         marked path threads it as a marker operand so a vendor feeds the inlined
         combine."""
-        return self._summand.combine_scalars()
+        return (self.lam,)
 
     def combine(self, scalars: Sequence[Array], *factors: Array) -> Array:
         """LogUp summand over [eq, n0, d1, n1, d0] (the scalar-explicit seam):
@@ -158,7 +153,7 @@ class LogupSumcheckRound(Round):
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """Round polynomial over [0..degree], shape (degree+1, *batch):
         s[u] = sum_x' combine(f_u for each factor). One batched reduction."""
-        return jnp.sum(self._combine(*factors_on_domain(state, _DEGREE)), axis=-1)
+        return jnp.sum(self._combine(*factors_on_domain(state, self.degree)), axis=-1)
 
     def __call__(
         self, state: Sequence[Array], transcript: Transcript
