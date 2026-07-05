@@ -18,9 +18,9 @@ from jax import Array, tree_util
 
 from zorch.logup_gkr.circuit import build_pyramid, extract_outputs
 from zorch.logup_gkr.prover import (
-    _DEGREE,
     GkrLayerRound,
     LogupSumcheckRound,
+    LogupSummand,
     bind_output,
     logup_combine,
 )
@@ -40,6 +40,27 @@ KB = zk_dtypes.koalabear_mont
 def _state(seed: int, width: int) -> list[Array]:
     """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
     return [rand_field(seed + i, (width,), KB) for i in range(5)]
+
+
+class LogupSummandTest(absltest.TestCase):
+    """`LogupSummand` is the seam shared by the dense round (here) and the
+    jagged round's `_paired_sums` (jagged_prover_test); pinning it directly
+    keeps both consumers honest against the same combine."""
+
+    def test_combine_matches_module_level_logup_combine(self) -> None:
+        lam = jnp.array(6, KB)
+        eq, n0, d1, n1, d0 = (jnp.array(v, KB) for v in (2, 3, 4, 5, 7))
+        got = LogupSummand(lam).combine((lam,), eq, n0, d1, n1, d0)
+        want = logup_combine(lam, eq, n0, d1, n1, d0)
+        self.assertTrue(bool(got == want))
+
+    def test_degree_is_three(self) -> None:
+        self.assertEqual(LogupSummand(jnp.array(1, KB)).degree, 3)
+
+    def test_combine_guards_factor_count(self) -> None:
+        lam = jnp.array(1, KB)
+        with self.assertRaises(ValueError):
+            LogupSummand(lam).combine((lam,), *_state(70, 8)[:4])
 
 
 class LogupSumcheckRoundTest(absltest.TestCase):
@@ -191,8 +212,8 @@ class BindOutputTest(absltest.TestCase):
         (num_eval, den_eval, point), _ = bind_output(output, cheap_transcript(KB))
         self.assertEqual(num_eval.shape, ())
         self.assertEqual(den_eval.shape, ())
-        # The output layer has num_interaction_variables + 1 variables.
-        self.assertEqual(point.shape, (first.num_interaction_variables + 1,))
+        # The output layer has num_batch_variables + 1 variables.
+        self.assertEqual(point.shape, (first.num_batch_variables + 1,))
 
 
 class GkrProverTest(absltest.TestCase):
@@ -201,7 +222,9 @@ class GkrProverTest(absltest.TestCase):
         layers, _, proofs, _ = prove_gkr(first)
         self.assertEqual(len(proofs), len(layers) - 1)
         for lp, layer in zip(proofs, reversed(layers[:-1]), strict=True):
-            self.assertEqual(lp.round_polys.shape, (layer.num_variables, _DEGREE + 1))
+            self.assertEqual(
+                lp.round_polys.shape, (layer.num_variables, LogupSummand.DEGREE + 1)
+            )
             openings = (
                 lp.numerator_0,
                 lp.numerator_1,
@@ -257,7 +280,7 @@ class GkrProverTest(absltest.TestCase):
             first.numerator_1,
             first.denominator_0,
             first.denominator_1,
-            first.num_interaction_variables,
+            first.num_batch_variables,
         )
         self.assertTrue(bool(jnp.all(eager == jitted)))
 

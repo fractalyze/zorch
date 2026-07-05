@@ -49,7 +49,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         int,
         int,
     ]:
-        niv = layer.num_interaction_variables
+        niv = layer.num_batch_variables
         nrv = z.shape[0] - niv
         one = jnp.ones((), z.dtype)
         eq_row = expand_eq_to_hypercube(z[niv:], one)

@@ -34,7 +34,7 @@ def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
     """Per-interaction sum of both children's fractions over the segment's rows."""
     starts = layer.start_indices
     sums = []
-    for i in range(layer.num_interactions):
+    for i in range(layer.num_batches):
         lo, hi = starts[i], starts[i + 1]
         sums.append(
             jnp.sum(layer.numerator_0[lo:hi] / layer.denominator_0[lo:hi])
@@ -46,8 +46,8 @@ def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
 class JaggedGkrLayerTest(absltest.TestCase):
     def test_derives_metadata_from_row_counts(self) -> None:
         layer = _random_jagged_layer(1, (3, 1, 2, 2))
-        self.assertEqual(layer.num_interactions, 4)
-        self.assertEqual(layer.num_interaction_variables, 2)
+        self.assertEqual(layer.num_batches, 4)
+        self.assertEqual(layer.num_batch_variables, 2)
         self.assertEqual(layer.height, 8)
         self.assertEqual(layer.start_indices, (0, 3, 4, 6, 8))
 
@@ -93,7 +93,7 @@ class JaggedTransitionTest(absltest.TestCase):
             numerator_1=jagged.numerator_1,
             denominator_0=jagged.denominator_0,
             denominator_1=jagged.denominator_1,
-            num_interaction_variables=2,
+            num_batch_variables=2,
         )
 
         out = jagged_layer_transition(jagged, (2, 2, 2, 2))

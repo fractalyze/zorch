@@ -35,7 +35,7 @@ class CircuitTest(absltest.TestCase):
                 numerator_1=jnp.ones((2,), KB),
                 denominator_0=jnp.ones((4,), KB),
                 denominator_1=jnp.ones((4,), KB),
-                num_interaction_variables=1,
+                num_batch_variables=1,
             )
 
     def test_rejects_interaction_variables_above_total(self) -> None:
@@ -45,7 +45,7 @@ class CircuitTest(absltest.TestCase):
                 numerator_1=jnp.ones((4,), KB),
                 denominator_0=jnp.ones((4,), KB),
                 denominator_1=jnp.ones((4,), KB),
-                num_interaction_variables=3,  # > num_variables (2)
+                num_batch_variables=3,  # > num_variables (2)
             )
 
     def test_layer_transition_folds_adjacent_pairs(self) -> None:
@@ -57,7 +57,7 @@ class CircuitTest(absltest.TestCase):
             numerator_1=jnp.array([5, 6, 7, 8], KB),
             denominator_0=ones,
             denominator_1=ones,
-            num_interaction_variables=1,
+            num_batch_variables=1,
         )
         out = layer_transition(layer)
         self.assertEqual(out.num_row_variables, 0)
@@ -96,7 +96,7 @@ class CircuitTest(absltest.TestCase):
         n1 = jnp.array([1, 6, 8, 10, 12, 14, 15, 17], KB)
         d0 = jnp.array([2, 3, 5, 7, 11, 13, 17, 19], KB)
         d1 = jnp.array([23, 29, 31, 37, 41, 43, 47, 53], KB)
-        first = GkrLayer(n0, n1, d0, d1, num_interaction_variables=1)
+        first = GkrLayer(n0, n1, d0, d1, num_batch_variables=1)
 
         leaf_sum = _rational_sum(jnp.concatenate([n0, n1]), jnp.concatenate([d0, d1]))
         out = extract_outputs(build_pyramid(first)[-1])

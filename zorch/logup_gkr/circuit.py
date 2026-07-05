@@ -47,17 +47,20 @@ from zorch.utils.bits import log2_strict_usize
 
 @dataclass(frozen=True)
 class GkrLayer:
-    """One dense fractional-sum layer over (interaction || row) variables.
+    """One dense fractional-sum layer over (batch || row) variables.
 
-    `num_interaction_variables` is the floor: folding stops once the row
-    variables are exhausted and only the interaction dimension remains.
+    `num_batch_variables` is the floor: folding stops once the row
+    variables are exhausted and only the batch dimension remains. Each
+    batch element is one independent LogUp instance -- a consumer may call
+    it a lookup *interaction* (the term used throughout this module's
+    circuit prose); zorch itself stays scheme-agnostic.
     """
 
     numerator_0: Array
     numerator_1: Array
     denominator_0: Array
     denominator_1: Array
-    num_interaction_variables: int
+    num_batch_variables: int
 
     def __post_init__(self) -> None:
         # Reject malformed layers at construction rather than at a later
@@ -70,10 +73,10 @@ class GkrLayer:
                     f"all MLEs must share a shape; {name} is "
                     f"{getattr(self, name).shape}, numerator_0 is {shape}"
                 )
-        if not 0 <= self.num_interaction_variables <= self.num_variables:
+        if not 0 <= self.num_batch_variables <= self.num_variables:
             raise ValueError(
-                f"num_interaction_variables must be in [0, {self.num_variables}], "
-                f"got {self.num_interaction_variables}"
+                f"num_batch_variables must be in [0, {self.num_variables}], "
+                f"got {self.num_batch_variables}"
             )
 
     @property
@@ -82,7 +85,7 @@ class GkrLayer:
 
     @property
     def num_row_variables(self) -> int:
-        return self.num_variables - self.num_interaction_variables
+        return self.num_variables - self.num_batch_variables
 
 
 @dataclass(frozen=True)
@@ -131,7 +134,7 @@ def layer_transition(layer: GkrLayer) -> GkrLayer:
         numerator_1=rn1,
         denominator_0=rd0,
         denominator_1=rd1,
-        num_interaction_variables=layer.num_interaction_variables,
+        num_batch_variables=layer.num_batch_variables,
     )
 
 
@@ -191,7 +194,7 @@ class JaggedGkrLayer:
     def __post_init__(self) -> None:
         if any(rc < 1 for rc in self.row_counts):
             raise ValueError(f"row counts must be >= 1, got {self.row_counts}")
-        log2_strict_usize(self.num_interactions)
+        log2_strict_usize(self.num_batches)
         height = self.height
         for name in (
             "numerator_0",
@@ -207,12 +210,12 @@ class JaggedGkrLayer:
                 )
 
     @property
-    def num_interactions(self) -> int:
+    def num_batches(self) -> int:
         return len(self.row_counts)
 
     @property
-    def num_interaction_variables(self) -> int:
-        return log2_strict_usize(self.num_interactions)
+    def num_batch_variables(self) -> int:
+        return log2_strict_usize(self.num_batches)
 
     @property
     def height(self) -> int:
@@ -356,9 +359,9 @@ def jagged_layer_transition(
     Host-side validation stays out of the `@jit`; the numeric fold rides
     `_jagged_transition_core`.
     """
-    if len(out_row_counts) != layer.num_interactions:
+    if len(out_row_counts) != layer.num_batches:
         raise ValueError(
-            f"schedule must cover all {layer.num_interactions} interactions, "
+            f"schedule must cover all {layer.num_batches} interactions, "
             f"got {len(out_row_counts)} entries"
         )
     _, folded_counts = _prepad_folded(layer.row_counts)
