@@ -164,6 +164,18 @@ def _bind_lsb(arr: Array, r: Array) -> Array:
     return fold_pair(arr[0::2], arr[1::2], r)
 
 
+def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:
+    """The virtual (non-materialized) mass a round adds back in closed form.
+
+    The sumcheck runs only over the materialized rows; every non-materialized
+    position holds the fold-neutral fraction (n=0, d=1), whose LogUp summand
+    collapses to just its eq weight. The eq weights of the full remaining
+    hypercube sum to `pad_adj`, so the virtual positions contribute exactly
+    `pad_adj - eq_sum` (the full mass minus the materialized `eq_sum`) -- added
+    back by `_round_coeffs` in closed form rather than iterated over."""
+    return pad_adj - eq_sum
+
+
 def _round_coeffs(
     eval_zero: Array,
     eval_half: Array,
@@ -192,7 +204,7 @@ def _round_coeffs(
     """
     dtype = claim.dtype
     one = jnp.ones((), dtype)
-    correction = pad_adj - eq_sum
+    correction = _virtual_mass_correction(pad_adj, eq_sum)
     s_zero = (eval_zero + correction * (one - z_cur)) * eq_adj
     s_half = (
         (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
