@@ -47,10 +47,13 @@ from zorch.utils.bits import log2_strict_usize
 
 @dataclass(frozen=True)
 class GkrLayer:
-    """One dense fractional-sum layer over (interaction || row) variables.
+    """One dense fractional-sum layer over (batch || row) variables.
 
     `num_batch_variables` is the floor: folding stops once the row
-    variables are exhausted and only the interaction dimension remains.
+    variables are exhausted and only the batch dimension remains. Each
+    batch element is one independent LogUp instance -- a consumer may call
+    it a lookup *interaction* (the term used throughout this module's
+    circuit prose); zorch itself stays scheme-agnostic.
     """
 
     numerator_0: Array
