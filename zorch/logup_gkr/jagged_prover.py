@@ -141,17 +141,20 @@ class RoundWidthCaps:
     interaction: int
 
 
-@cache
-def _round_metadata(
+def _round_metadata_impl(
     row_counts: tuple[int, ...], num_row_vars: int, width: int | None = None
 ) -> list[tuple[Array | None, Array, Array, Array]]:
     """Per-round `(gather, col_index, pair_index, live)` for the row phase.
 
-    Memoized on the (static) layout: the schedule is a pure function of the
-    Python-int row counts, so a cold trace reuses the device-resident index arrays
-    across same-shape layers instead of rebuilding them (host numpy + a batched
-    device_put). The arrays are tiny and immutable, so caching costs negligible
-    device memory and cannot alias across the one-live-layer plane release.
+    Memoized on the (static) layout for the EXACT (`width=None`) layout only:
+    the schedule is a pure function of the Python-int row counts, so a cold
+    trace reuses the device-resident index arrays across same-shape layers
+    instead of rebuilding them (host numpy + a batched device_put); those
+    arrays are tiny, so caching them costs negligible device memory. Capped
+    (`width` set) layouts are NOT memoized: their keys are the per-layer exact
+    row counts (no reuse within a shard's halving chain), and every index
+    array is laid out at the full `width` -- a never-evicting cache of those
+    is a device-memory leak that grows with the layer count.
 
     Round k folds the layout round k-1 left behind: odd segments pre-pad to
     even (`gather`; None when already even), then the stride-2 fold halves
@@ -209,6 +212,19 @@ def _round_metadata(
     # bakes it as a constant.
     with jax.ensure_compile_time_eval():
         return jax.device_put(host_meta)
+
+
+_round_metadata_cached = cache(_round_metadata_impl)
+
+
+def _round_metadata(
+    row_counts: tuple[int, ...], num_row_vars: int, width: int | None = None
+) -> list[tuple[Array | None, Array, Array, Array]]:
+    """The per-round row schedule: memoized for the exact layout, built fresh
+    for capped layouts (`_round_metadata_impl` has the full story)."""
+    if width is None:
+        return _round_metadata_cached(row_counts, num_row_vars)
+    return _round_metadata_impl(row_counts, num_row_vars, width)
 
 
 def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
