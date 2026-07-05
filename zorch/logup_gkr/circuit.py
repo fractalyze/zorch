@@ -8,9 +8,9 @@ transition folds each pair into one fraction --
     n0/d0 + n1/d1 = (n0*d1 + n1*d0) / (d0*d1)
 
 -- pairing LSB-adjacent nodes (stride 2), which halves every MLE and eliminates
-one (row) variable. Iterating to the interaction floor (`num_row_variables == 0`)
-leaves one fraction per interaction; `extract_outputs` interleaves the two
-children back into the output numerator/denominator MLEs over the interaction
+one (row) variable. Iterating to the batch floor (`num_row_variables == 0`)
+leaves one fraction per batch element; `extract_outputs` interleaves the two
+children back into the output numerator/denominator MLEs over the batch
 variables plus one.
 
 The four MLEs share a length, but the numerator pair and the denominator pair
@@ -20,12 +20,12 @@ consumer can keep a layer's numerator reads narrow until its first transition.
 zorch stays scheme-agnostic about why a consumer would; it only guarantees the
 promotion is byte-identical to folding an all-extension copy.
 
-Two layouts share that fold. Dense (`GkrLayer`): every interaction has one row
+Two layouts share that fold. Dense (`GkrLayer`): every batch element has one row
 count, so a layer is a flat power of two with no padding. Jagged
-(`JaggedGkrLayer`): the MLEs are stored interaction-major with per-interaction
+(`JaggedGkrLayer`): the MLEs are stored batch-major with per-batch-element
 row counts; a transition pre-pads odd segments and post-pads to a
 consumer-supplied schedule with the additive-identity fraction (n=0, d=1), so
-the flat stride-2 fold never pairs across an interaction boundary. Which
+the flat stride-2 fold never pairs across a batch boundary. Which
 heights the schedule pads to is the consumer's policy, and interaction
 fingerprinting likewise stays in the consumer -- zorch stays scheme-agnostic.
 """
@@ -139,7 +139,7 @@ def layer_transition(layer: GkrLayer) -> GkrLayer:
 
 
 def build_pyramid(first: GkrLayer) -> list[GkrLayer]:
-    """Eager fold from `first` (most row variables) down to the interaction floor.
+    """Eager fold from `first` (most row variables) down to the batch floor.
 
     Eager rather than one fused program: the full pyramid does not fit one
     `@jit` at scale, and each transition's output feeds the next layer's
@@ -159,13 +159,13 @@ def _interleave(child_0: Array, child_1: Array) -> Array:
 def extract_outputs(layer: GkrLayer) -> LogUpGkrOutput:
     """Interleave the two children of the floor layer into the output MLEs.
 
-    At `num_row_variables == 0` each index is one interaction's fraction with a
-    0-child and a 1-child; interleaving recovers the MLE over the interaction
+    At `num_row_variables == 0` each index is one batch element's fraction with a
+    0-child and a 1-child; interleaving recovers the MLE over the batch
     variables plus one.
     """
     if layer.num_row_variables != 0:
         raise ValueError(
-            f"extract_outputs expects the interaction floor (num_row_variables "
+            f"extract_outputs expects the batch floor (num_row_variables "
             f"== 0), got {layer.num_row_variables}"
         )
     return LogUpGkrOutput(
@@ -176,11 +176,11 @@ def extract_outputs(layer: GkrLayer) -> LogUpGkrOutput:
 
 @dataclass(frozen=True)
 class JaggedGkrLayer:
-    """One jagged fractional-sum layer, stored interaction-major.
+    """One jagged fractional-sum layer, stored batch-major.
 
-    The four MLEs are flat over `sum(row_counts)`: all rows of interaction 0,
-    then interaction 1, and so on, so each interaction carries its own row
-    count. The interaction count must be a power of two (the consumer pads its
+    The four MLEs are flat over `sum(row_counts)`: all rows of batch element 0,
+    then batch element 1, and so on, so each batch element carries its own row
+    count. The batch count must be a power of two (the consumer pads its
     interaction list). Row counts are static Python ints, so the transition's
     gather indices are built at trace time.
     """
@@ -297,8 +297,8 @@ def _prepad_folded(
 ) -> tuple[tuple[int, ...], tuple[int, ...]]:
     """One transition's even-prepad counts and the resulting folded counts.
 
-    Odd segments pad up to even so the stride-2 fold never pairs across an
-    interaction boundary; the fold then halves the padded count. One recurrence
+    Odd segments pad up to even so the stride-2 fold never pairs across a
+    batch boundary; the fold then halves the padded count. One recurrence
     so the wrapper's truncation guard validates exactly the schedule the core's
     gathers fold to.
     """
@@ -351,7 +351,7 @@ def jagged_layer_transition(
     """Fold one row variable per segment, then pad to the consumer's schedule.
 
     Odd segments are pre-padded with the additive-identity fraction (n=0, d=1)
-    so the flat stride-2 fold never pairs across an interaction boundary; the
+    so the flat stride-2 fold never pairs across a batch boundary; the
     folded segments are then padded out to `out_row_counts` with the same
     neutral rows. The schedule is the consumer's policy; this block only
     refuses to truncate, which would silently drop fractions from the sum.
@@ -361,14 +361,14 @@ def jagged_layer_transition(
     """
     if len(out_row_counts) != layer.num_batches:
         raise ValueError(
-            f"schedule must cover all {layer.num_batches} interactions, "
+            f"schedule must cover all {layer.num_batches} batches, "
             f"got {len(out_row_counts)} entries"
         )
     _, folded_counts = _prepad_folded(layer.row_counts)
     for i, (folded, out) in enumerate(zip(folded_counts, out_row_counts)):
         if out < folded:
             raise ValueError(
-                f"schedule truncates interaction {i}: folded row count "
+                f"schedule truncates batch element {i}: folded row count "
                 f"{folded} > target {out}"
             )
 
@@ -392,14 +392,14 @@ def jagged_layer_transition(
 def extract_jagged_outputs(layer: JaggedGkrLayer) -> LogUpGkrOutput:
     """Interleave the floor layer's children into the output MLEs.
 
-    The floor is row counts all 1 -- one fraction pair per interaction -- the
+    The floor is row counts all 1 -- one fraction pair per batch element -- the
     jagged dual of `extract_outputs`'s `num_row_variables == 0` precondition.
     A schedule that stops higher folds the rest down with
     `jagged_layer_transition` first; how far to fold is the consumer's call.
     """
     if any(rc != 1 for rc in layer.row_counts):
         raise ValueError(
-            f"extract_jagged_outputs expects the interaction floor (row "
+            f"extract_jagged_outputs expects the batch floor (row "
             f"counts all 1), got {layer.row_counts}"
         )
     return LogUpGkrOutput(
@@ -462,21 +462,21 @@ def build_jagged_pyramid(
         return [first]
 
     # Mirror `jagged_layer_transition`'s guards down the chain: a schedule that
-    # changes an interaction count or truncates an interaction's folded rows would
+    # changes a batch count or truncates a batch element's folded rows would
     # silently drop fractions from the sum (the gather copies only `min(src, dst)`
     # rows), so refuse it loudly here rather than mis-sum.
     cur = first.row_counts
     for out_row_counts in schedules:
         if len(out_row_counts) != len(cur):
             raise ValueError(
-                f"schedule must cover all {len(cur)} interactions, got "
+                f"schedule must cover all {len(cur)} batches, got "
                 f"{len(out_row_counts)} entries"
             )
         _, folded = _prepad_folded(cur)
         for i, (folded_rc, out_rc) in enumerate(zip(folded, out_row_counts)):
             if out_rc < folded_rc:
                 raise ValueError(
-                    f"schedule truncates interaction {i}: folded row count "
+                    f"schedule truncates batch element {i}: folded row count "
                     f"{folded_rc} > target {out_rc}"
                 )
         cur = out_row_counts
