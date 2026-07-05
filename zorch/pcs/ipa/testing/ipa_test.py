@@ -5,12 +5,12 @@ import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from jax import Array
+from jax import Array, lax
 
 from zorch.pcs.ipa.challenger import TranscriptChallenger
 from zorch.pcs.ipa.config import IpaProof, IpaZkProof
 from zorch.pcs.ipa.math import challenge_vector, eval_challenge_poly
-from zorch.pcs.ipa.prover import IpaProver, IpaProverData, _open_one_zk
+from zorch.pcs.ipa.prover import IpaProver, IpaProverData, _open_one, _open_one_zk
 from zorch.pcs.ipa.setup import IpaKey
 from zorch.pcs.ipa.testing import basis
 from zorch.pcs.ipa.verifier import (
@@ -191,6 +191,42 @@ class IpaRoundTripTest(parameterized.TestCase):
         self.assertTrue(bool(settle(verifier.key, claim)))
 
     @parameterized.named_parameters(*_CURVES)
+    def test_open_returns_settles_final_comm_key(
+        self, sf: type, curve: curves.Curve
+    ) -> None:
+        # #371: _open_one returns the fully-folded generator g[0]. It must equal the
+        # G_final = ⟨challenge_vector(u), G⟩ the verifier recomputes in `settle`, so an
+        # accumulation consumer reads it here instead of replaying the round
+        # challenges and paying a second size-n MSM.
+        key = basis.toy_key(curve, n=4)
+        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
+        x = jnp.array(7, dtype=sf)
+        commitment, _ = IpaProver(key).commit([coeffs])
+        _, value, proof, final_comm_key = _open_one(
+            key, commitment[0], coeffs, x, TranscriptChallenger(_transcript(sf), sf)
+        )
+        # The verifier's independent G_final, exactly as `settle` recomputes it.
+        _, claim = reduce_opening(
+            key,
+            commitment[0],
+            x,
+            value,
+            proof,
+            TranscriptChallenger(_transcript(sf), sf),
+        )
+        s = challenge_vector(claim.u)
+        g_final = lax.msm(s, key.basis[: s.shape[0]])
+        aff = key.basis.dtype
+        self.assertTrue(
+            bool(
+                jnp.all(
+                    lax.convert_element_type(final_comm_key, aff)
+                    == lax.convert_element_type(g_final, aff)
+                )
+            )
+        )
+
+    @parameterized.named_parameters(*_CURVES)
     def test_wrong_commitment_rejected(self, sf: type, curve: curves.Curve) -> None:
         # The Fiat-Shamir now binds the commitment: verifying against a different
         # one rejects (statement binding the bare fold lacked).
@@ -219,7 +255,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         # removes all randomness inside the fold).
         commitment, _ = IpaProver(key).commit_zk([coeffs], [commitment_randomness])
         fs = TranscriptChallenger(_transcript(sf), sf)
-        _, value, proof = _open_one_zk(
+        _, value, proof, _final_comm_key, _mod_commitment = _open_one_zk(
             key,
             commitment[0],
             coeffs,
@@ -263,6 +299,73 @@ class IpaRoundTripTest(parameterized.TestCase):
             TranscriptChallenger(_transcript(sf), sf),
         )
         self.assertFalse(bool(settle(key, claim)))
+
+    @parameterized.named_parameters(*_ZK_CURVES)
+    def test_zk_open_returns_final_comm_key_and_mod_commitment(
+        self, sf: type, curve: curves.Curve
+    ) -> None:
+        # #371 (zk): _open_one_zk returns the fold's final_comm_key (g[0]) plus the
+        # blinded commitment mod_commitment it actually opened. final_comm_key must
+        # equal settle's G_final; mod_commitment must equal the blinded commitment
+        # (commitment + hc·hiding_comm − s·rand) the verifier independently
+        # reconstructs in reduce_opening_zk.
+        key = basis.toy_key(curve, n=4)
+        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
+        x = jnp.array(7, dtype=sf)
+        hiding = jnp.array([2, 9, 1, 8], dtype=sf)
+        hiding_rand = jnp.array(5, dtype=sf)
+        commitment_randomness = jnp.array(11, dtype=sf)
+        commitment, _ = IpaProver(key).commit_zk([coeffs], [commitment_randomness])
+        _, value, proof, final_comm_key, mod_commitment = _open_one_zk(
+            key,
+            commitment[0],
+            coeffs,
+            x,
+            hiding,
+            hiding_rand,
+            commitment_randomness,
+            TranscriptChallenger(_transcript(sf), sf),
+        )
+        aff = key.basis.dtype
+
+        # final_comm_key == settle's G_final for the zk reduced claim.
+        _, claim = reduce_opening_zk(
+            key,
+            commitment[0],
+            x,
+            value,
+            proof,
+            TranscriptChallenger(_transcript(sf), sf),
+        )
+        s = challenge_vector(claim.u)
+        g_final = lax.msm(s, key.basis[: s.shape[0]])
+        self.assertTrue(
+            bool(
+                jnp.all(
+                    lax.convert_element_type(final_comm_key, aff)
+                    == lax.convert_element_type(g_final, aff)
+                )
+            )
+        )
+
+        # mod_commitment == the blinded commitment the verifier reconstructs from the
+        # re-squeezed hiding challenge hc (reduce_opening_zk's own formula).
+        one = jnp.ones((), dtype=sf)
+        _, hc = TranscriptChallenger(_transcript(sf), sf).hiding_challenge(
+            commitment[0], proof.hiding_comm, x, value
+        )
+        expected_mod = lax.msm(
+            jnp.stack([one, hc, -proof.rand]),
+            jnp.stack([commitment[0], proof.hiding_comm, key.s]),
+        )
+        self.assertTrue(
+            bool(
+                jnp.all(
+                    lax.convert_element_type(mod_commitment, aff)
+                    == lax.convert_element_type(expected_mod, aff)
+                )
+            )
+        )
 
 
 class IpaBatchValidationTest(absltest.TestCase):
