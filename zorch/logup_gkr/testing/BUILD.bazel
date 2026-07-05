@@ -93,6 +93,7 @@ py_test(
     size = "small",
     srcs = ["round_composite_test.py"],
     deps = [
+        ":testing",
         "//zorch/logup_gkr",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",
