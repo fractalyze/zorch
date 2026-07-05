@@ -178,7 +178,16 @@ def _round_metadata(
         )  # the circuit's own prepad/fold recurrence
         col_index = np.repeat(np.arange(len(pairs), dtype=np.int32), pairs)
         pair_index = np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
-        live = np.asarray([sum(pairs), (1 << num_row_vars) >> rnd], dtype=np.int32)
+        # live[1] = eq_row's live length ENTERING round `rnd`. Only the mid
+        # rounds (1..) fold eq_row -- round 0 (first) reads it un-bound -- so
+        # round k enters with 2^nrv halved k-1 times, not k. Only the claimed
+        # kernel consumes this bound (it sizes the folded-eq_row write); the
+        # decomposition folds the full width, so a wrong value here is
+        # invisible on the decompose-inline (CPU) route and surfaces as
+        # garbage eq_row reads a round later on the claimed one.
+        live = np.asarray(
+            [sum(pairs), (1 << num_row_vars) >> max(rnd - 1, 0)], dtype=np.int32
+        )
         if width is None:
             gather = _segment_gather_np(counts, padded)
         else:
