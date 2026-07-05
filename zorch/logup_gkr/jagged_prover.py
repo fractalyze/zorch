@@ -141,20 +141,11 @@ class RoundWidthCaps:
     interaction: int
 
 
-def _round_metadata_impl(
+def _round_metadata_host(
     row_counts: tuple[int, ...], num_row_vars: int, width: int | None = None
-) -> list[tuple[Array | None, Array, Array, Array]]:
-    """Per-round `(gather, col_index, pair_index, live)` for the row phase.
-
-    Memoized on the (static) layout for the EXACT (`width=None`) layout only:
-    the schedule is a pure function of the Python-int row counts, so a cold
-    trace reuses the device-resident index arrays across same-shape layers
-    instead of rebuilding them (host numpy + a batched device_put); those
-    arrays are tiny, so caching them costs negligible device memory. Capped
-    (`width` set) layouts are NOT memoized: their keys are the per-layer exact
-    row counts (no reuse within a shard's halving chain), and every index
-    array is laid out at the full `width` -- a never-evicting cache of those
-    is a device-memory leak that grows with the layer count.
+) -> list[tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray]]:
+    """Per-round host-side `(gather, col_index, pair_index, live)` for the row
+    phase -- the schedule math, no device commit.
 
     Round k folds the layout round k-1 left behind: odd segments pre-pad to
     even (`gather`; None when already even), then the stride-2 fold halves
@@ -170,9 +161,6 @@ def _round_metadata_impl(
     (sentinel-padded gather via `_fixed_width_gather`, zero-padded indices)
     and `live` marks the prefix that is real.
     """
-    # Build the whole schedule on the host, then commit it in ONE batched
-    # device_put (not per round): every index array is tiny and static. The None
-    # gathers (no re-pad) ride through device_put as empty pytree nodes.
     host_meta: list[tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray]] = []
     counts = row_counts
     for rnd in range(num_row_vars):
@@ -205,26 +193,92 @@ def _round_metadata_impl(
             pair_index = _zero_pad_index_np(pair_index, width // 2)
         host_meta.append((gather, col_index, pair_index, live))
         counts = pairs
+    return host_meta
+
+
+def _round_metadata_impl(
+    row_counts: tuple[int, ...], num_row_vars: int
+) -> list[tuple[Array | None, Array, Array, Array]]:
+    """The EXACT (`width=None`) layout's schedule, committed to device.
+
+    Memoized (below) on the static layout: the schedule is a pure function of
+    the Python-int row counts, so a cold trace reuses the device-resident index
+    arrays across same-shape layers instead of rebuilding them (host numpy + a
+    batched device_put); those arrays are tiny, so caching them costs
+    negligible device memory. Capped layouts are NOT memoized on device: their
+    keys are the per-layer exact row counts (no reuse within a shard's halving
+    chain), and every index array is laid out at the full `width` -- a
+    never-evicting cache of those is a device-memory leak that grows with the
+    layer count (and a host-RAM one if memoized there -- see
+    `_round_metadata`).
+    """
+    host_meta = _round_metadata_host(row_counts, num_row_vars)
     # `ensure_compile_time_eval` forces the device_put to materialize a CONCRETE
     # committed array: this memoized builder is hit inside the round-zone trace, and
     # without it the cached value is a trace-scoped `device_put` tracer that escapes
     # when a later call reuses the cache (UnexpectedTracerError). Concrete -> the jit
-    # bakes it as a constant.
+    # bakes it as a constant. The None gathers (no re-pad) ride through device_put
+    # as empty pytree nodes.
     with jax.ensure_compile_time_eval():
         return jax.device_put(host_meta)
 
 
 _round_metadata_cached = cache(_round_metadata_impl)
 
+# A capped layer's schedule packed as four stacked host arrays
+# (gathers[nrv, W], col_index[nrv, W/2], pair_index[nrv, W/2], live[nrv, 2]) --
+# the fixed width makes every round's row uniform, so the whole layer commits
+# in four large contiguous HtoD copies instead of ~4*nrv small ones.
+_PackedSchedule = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+
+def _pack_schedule_host(
+    host_meta: list[tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray]],
+) -> _PackedSchedule:
+    # Capped-only: `_fixed_width_gather` always materializes a gather, so the
+    # exact layout's `None` (no re-pad) never reaches a pack.
+    return (
+        np.stack([cast(np.ndarray, m[0]) for m in host_meta]),
+        np.stack([m[1] for m in host_meta]),
+        np.stack([m[2] for m in host_meta]),
+        np.stack([m[3] for m in host_meta]),
+    )
+
+
+def _commit_packed_schedule(
+    packed: _PackedSchedule,
+) -> list[tuple[Array, Array, Array, Array]]:
+    """Commit a packed capped schedule and hand back the per-round tuple view
+    the round loop consumes. The row slices are device-side copies whose packed
+    parents free right after, so the layer-scoped residency (upload, run the
+    rounds, release) is unchanged -- only the transfer is batched."""
+    with jax.ensure_compile_time_eval():
+        gathers, cols, pairs, lives = jax.device_put(packed)
+        return [
+            (gathers[i], cols[i], pairs[i], lives[i]) for i in range(gathers.shape[0])
+        ]
+
 
 def _round_metadata(
-    row_counts: tuple[int, ...], num_row_vars: int, width: int | None = None
+    row_counts: tuple[int, ...],
+    num_row_vars: int,
+    width: int | None = None,
 ) -> list[tuple[Array | None, Array, Array, Array]]:
-    """The per-round row schedule: memoized for the exact layout, built fresh
-    for capped layouts (`_round_metadata_impl` has the full story)."""
+    """The per-round row schedule: memoized for the exact layout; for capped
+    layouts, rebuilt + packed + committed per call ON PURPOSE. Every capped
+    layer lays out at the full cap width, so retaining the schedules -- on
+    device or in host numpy, module-level or per-proof -- grows as
+    layers x cap width and exhausts memory at real scale (host retention of
+    one wide pyramid's schedules was observed OOM-killing the prover). The
+    rebuild is the price of a bounded footprint; the batched commit keeps the
+    per-call transfer cheap."""
     if width is None:
         return _round_metadata_cached(row_counts, num_row_vars)
-    return _round_metadata_impl(row_counts, num_row_vars, width)
+    if num_row_vars == 0:
+        return []
+    return _commit_packed_schedule(
+        _pack_schedule_host(_round_metadata_host(row_counts, num_row_vars, width))
+    )
 
 
 def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
