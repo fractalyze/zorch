@@ -51,7 +51,7 @@ from zorch.logup_gkr.circuit import (
     _segment_gather,
     _segment_gather_np,
 )
-from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
+from zorch.logup_gkr.prover import Carry, LogupSummand, fold_carry
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import (
     compute_inv_vandermonde,
@@ -218,16 +218,16 @@ def _paired_sums(
 
     s(0) reads the even elements at their eq weight; the u=1/2 sum works on
     doubled values (`e0 + e1 = 2*e(1/2)` per factor, likewise eq), which
-    `_round_coeffs` rescales. Both go through the shared `logup_combine` so
-    the summand cannot drift from the verifier oracle's.
+    `_round_coeffs` rescales. Both go through the shared `LogupSummand` combine
+    so the summand cannot drift from the verifier oracle's.
     """
     eval_zero = jnp.sum(
-        logup_combine(lam, eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
+        LogupSummand(lam).combine((lam,), eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
     )
     eq_h = eq_0 + eq_1
     eval_half = jnp.sum(
-        logup_combine(
-            lam,
+        LogupSummand(lam).combine(
+            (lam,),
             eq_h,
             n0[0::2] + n0[1::2],
             d1[0::2] + d1[1::2],

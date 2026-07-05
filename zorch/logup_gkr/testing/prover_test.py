@@ -21,6 +21,7 @@ from zorch.logup_gkr.prover import (
     _DEGREE,
     GkrLayerRound,
     LogupSumcheckRound,
+    LogupSummand,
     bind_output,
     logup_combine,
 )
@@ -40,6 +41,27 @@ KB = zk_dtypes.koalabear_mont
 def _state(seed: int, width: int) -> list[Array]:
     """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
     return [rand_field(seed + i, (width,), KB) for i in range(5)]
+
+
+class LogupSummandTest(absltest.TestCase):
+    """`LogupSummand` is the seam shared by the dense round (here) and the
+    jagged round's `_paired_sums` (jagged_prover_test); pinning it directly
+    keeps both consumers honest against the same combine."""
+
+    def test_combine_matches_module_level_logup_combine(self) -> None:
+        lam = jnp.array(6, KB)
+        eq, n0, d1, n1, d0 = (jnp.array(v, KB) for v in (2, 3, 4, 5, 7))
+        got = LogupSummand(lam).combine((lam,), eq, n0, d1, n1, d0)
+        want = logup_combine(lam, eq, n0, d1, n1, d0)
+        self.assertTrue(bool(got == want))
+
+    def test_degree_is_three(self) -> None:
+        self.assertEqual(LogupSummand(jnp.array(1, KB)).degree, 3)
+
+    def test_combine_guards_factor_count(self) -> None:
+        lam = jnp.array(1, KB)
+        with self.assertRaises(ValueError):
+            LogupSummand(lam).combine((lam,), *_state(70, 8)[:4])
 
 
 class LogupSumcheckRoundTest(absltest.TestCase):
