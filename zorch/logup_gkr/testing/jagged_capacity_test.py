@@ -124,11 +124,11 @@ class CapacityKeyStabilityTest(absltest.TestCase):
 
         # Warm the whole-layer trace on the first layout.
         (layer0, carry0) = carries[0]
-        _jagged_round_via_zone(layer0, 1, carry0, cheap_transcript(KB))
+        _jagged_round_via_zone(layer0, 1, None, carry0, cheap_transcript(KB))
         zone_traces = _jagged_round_zone._cache_size()
 
         for layer, carry in carries[1:]:
-            _jagged_round_via_zone(layer, 1, carry, cheap_transcript(KB))
+            _jagged_round_via_zone(layer, 1, None, carry, cheap_transcript(KB))
         self.assertEqual(
             _jagged_round_zone._cache_size(),
             zone_traces,

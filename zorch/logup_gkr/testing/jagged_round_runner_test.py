@@ -16,6 +16,7 @@ from jax import Array
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
+    RoundWidthCaps,
     _InterpConsts,
     _JaggedSchedule,
     _JaggedState,
@@ -45,7 +46,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
 
     def _setup(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> tuple[
         _JaggedState,
-        list[tuple[Array | None, Array, Array]],
+        list[tuple[Array | None, Array, Array, Array]],
         Array,
         Array,
         int,
@@ -101,6 +102,49 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             state, sched, cheap_transcript(KB), export_dispatch=True
         )
         self._assert_matches_reference(ref, got_export, "export")
+        # The fixed-width route (xla#179 size-invariance): every round runs at
+        # the capped widths with the live prefix tracked by the `live` operand,
+        # so one kernel shape serves all rounds/layers/shards. Both a slack cap
+        # (real padding on every buffer) and the exact-fit cap (empty pads) must
+        # reproduce the reference bit-for-bit, on both routes.
+        for slack in (True, False):
+            caps = self._caps(layer, nrv, niv, slack=slack)
+            fixed_sched = _JaggedSchedule(
+                _round_metadata(layer.row_counts, nrv, width=caps.row),
+                _InterpConsts(naturals, inv_vand),
+                nrv,
+                niv,
+                challenge_limbs,
+                caps,
+            )
+            label = "fixed-slack" if slack else "fixed-tight"
+            got_fixed = _run_jagged_rounds(state, fixed_sched, cheap_transcript(KB))
+            self._assert_matches_reference(ref, got_fixed, label)
+            got_fixed_export = _run_jagged_rounds(
+                state, fixed_sched, cheap_transcript(KB), export_dispatch=True
+            )
+            self._assert_matches_reference(ref, got_fixed_export, label + "+export")
+
+    @staticmethod
+    def _caps(
+        layer: JaggedGkrLayer, nrv: int, niv: int, *, slack: bool
+    ) -> RoundWidthCaps:
+        """Width caps for the fixed-width legs: `slack` pads every buffer well
+        past its natural width (the cross-layer/shard reuse shape); the tight
+        variant pins the caps to the layer's own widths (rounded up only where
+        the ABI demands -- row to a multiple of 4, interaction to >= 4)."""
+        round0_width = sum(rc + rc % 2 for rc in layer.row_counts)
+        if not slack:
+            return RoundWidthCaps(
+                row=round0_width + (-round0_width % 4),
+                eq_row=1 << nrv,
+                interaction=max(4, 1 << niv),
+            )
+        return RoundWidthCaps(
+            row=2 * round0_width + 8,
+            eq_row=(1 << nrv) * 2,
+            interaction=max(4, (1 << niv) * 2),
+        )
 
     def _assert_matches_reference(
         self,

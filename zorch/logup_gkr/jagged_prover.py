@@ -36,7 +36,7 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 from __future__ import annotations
 
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import cache, partial
 from pathlib import Path
@@ -123,11 +123,29 @@ class JaggedLayerProof:
     denominator_1: Array
 
 
+@dataclass(frozen=True)
+class RoundWidthCaps:
+    """Fixed round-buffer widths for the size-invariant jagged sumcheck
+    (xla#179): with caps set, every round of a phase runs at one static
+    operand shape -- the live prefix tracked by the round's `live` operand --
+    so one compiled round kernel serves every round, layer, and shard under
+    the caps. Hashable (a jit static arg on the per-layer round zone).
+
+    `row` bounds the row-phase plane/gather width (>= the round-0 even-padded
+    layout, a multiple of 4); `eq_row` bounds the row-eq table (>= 2^nrv,
+    even); `interaction` bounds the dense-phase state and eq width (>= 2^niv,
+    a multiple of 4)."""
+
+    row: int
+    eq_row: int
+    interaction: int
+
+
 @cache
 def _round_metadata(
-    row_counts: tuple[int, ...], num_row_vars: int
-) -> list[tuple[Array | None, Array, Array]]:
-    """Per-round `(gather, col_index, pair_index)` for the row-variable phase.
+    row_counts: tuple[int, ...], num_row_vars: int, width: int | None = None
+) -> list[tuple[Array | None, Array, Array, Array]]:
+    """Per-round `(gather, col_index, pair_index, live)` for the row phase.
 
     Memoized on the (static) layout: the schedule is a pure function of the
     Python-int row counts, so a cold trace reuses the device-resident index arrays
@@ -142,19 +160,38 @@ def _round_metadata(
     segment-local because a jagged layer is batch-major, so the row-eq
     factor is indexed per segment while `eq_int[col_index]` carries the
     batch weight. All static, derived from the Python-int row counts.
+
+    `live` is the round's i32[2] `{live pairs, live eq_row}` operand -- on the
+    exact layout it just restates the schedule widths; with `width` set
+    (`RoundWidthCaps.row`) the schedule is laid into fixed-width buffers
+    (sentinel-padded gather via `_fixed_width_gather`, zero-padded indices)
+    and `live` marks the prefix that is real.
     """
     # Build the whole schedule on the host, then commit it in ONE batched
     # device_put (not per round): every index array is tiny and static. The None
     # gathers (no re-pad) ride through device_put as empty pytree nodes.
-    host_meta: list[tuple[np.ndarray | None, np.ndarray, np.ndarray]] = []
+    host_meta: list[tuple[np.ndarray | None, np.ndarray, np.ndarray, np.ndarray]] = []
     counts = row_counts
-    for _ in range(num_row_vars):
+    for rnd in range(num_row_vars):
         padded, pairs = _prepad_folded(
             counts
         )  # the circuit's own prepad/fold recurrence
         col_index = np.repeat(np.arange(len(pairs), dtype=np.int32), pairs)
         pair_index = np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
-        host_meta.append((_segment_gather_np(counts, padded), col_index, pair_index))
+        live = np.asarray([sum(pairs), (1 << num_row_vars) >> rnd], dtype=np.int32)
+        if width is None:
+            gather = _segment_gather_np(counts, padded)
+        else:
+            if width % 2 or width < sum(padded):
+                raise ValueError(
+                    f"round width cap {width} cannot hold the round-{rnd} "
+                    f"even-padded layout ({sum(padded)} slots; the cap must "
+                    "be even)"
+                )
+            gather = _fixed_width_gather(counts, padded, width)
+            col_index = _zero_pad_index_np(col_index, width // 2)
+            pair_index = _zero_pad_index_np(pair_index, width // 2)
+        host_meta.append((gather, col_index, pair_index, live))
         counts = pairs
     # `ensure_compile_time_eval` forces the device_put to materialize a CONCRETE
     # committed array: this memoized builder is hit inside the round-zone trace, and
@@ -163,6 +200,54 @@ def _round_metadata(
     # bakes it as a constant.
     with jax.ensure_compile_time_eval():
         return jax.device_put(host_meta)
+
+
+def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
+    """Extend `arr` to `width` with the fold-neutral fraction tail -- 0 for a
+    numerator, 1 for a denominator -- keeping the live prefix at the front. The
+    fixed-width round-buffer convention (xla#179), so every round of a phase
+    runs at one static shape."""
+    pad = width - arr.shape[0]
+    if pad == 0:
+        return arr
+    tail = jnp.zeros((pad,), arr.dtype) if neutral == 0 else jnp.ones((pad,), arr.dtype)
+    return jnp.concatenate([arr, tail])
+
+
+def _fixed_width_gather(
+    src_counts: tuple[int, ...], dst_counts: tuple[int, ...], width: int
+) -> np.ndarray:
+    """`_segment_gather` laid into a fixed `width` buffer. `_segment_gather`'s
+    intra-segment sentinel is `sum(src_counts)`: past the live rows in the
+    exactly-sized layout, but a live slot in the wider buffer, so remap it (and
+    any index past the live rows) to `width`, which the neutral-pad gather
+    resolves to the neutral pad rather than a stale slot. `None` (layouts
+    already agree) becomes the identity over the live prefix."""
+    live = sum(src_counts)
+    seg = _segment_gather_np(src_counts, dst_counts)
+    base = np.arange(live, dtype=np.int32) if seg is None else seg
+    base = np.where(base >= live, width, base)
+    row = np.full(width, width, dtype=np.int32)
+    row[: base.shape[0]] = base
+    return row
+
+
+def _zero_pad_index_np(arr: np.ndarray, width: int) -> np.ndarray:
+    """Lay a host index array into a fixed-width buffer, zero tail. Zero keeps
+    every pad slot in-bounds for its lookup; the reduce masks the tail dead by
+    the round's `live` operand."""
+    out = np.zeros(width, dtype=arr.dtype)
+    out[: arr.shape[0]] = arr
+    return out
+
+
+def _resize_zero(arr: Array, width: int) -> Array:
+    """Resize a fixed-width round buffer: slice the prefix down or zero-pad up.
+    Only correct when the live prefix fits in `width` -- the tail past it is
+    dead (masked by the rounds' `live` operand)."""
+    if arr.shape[0] >= width:
+        return arr[:width]
+    return _pad_to_width(arr, width, 0)
 
 
 def _bind_lsb(arr: Array, r: Array) -> Array:
@@ -234,6 +319,7 @@ def _paired_sums(
     eq_0: Array,
     eq_1: Array,
     lam: Array,
+    live_pairs: Array | None = None,
 ) -> tuple[Array, Array, Array]:
     """Materialized `(s(0), 8*s(1/2), eq mass)` over the stride-2 pairs.
 
@@ -241,24 +327,30 @@ def _paired_sums(
     doubled values (`e0 + e1 = 2*e(1/2)` per factor, likewise eq), which
     `_round_coeffs` rescales. Both go through the shared `LogupSummand` combine
     so the summand cannot drift from the verifier oracle's.
+
+    `live_pairs` masks the sums to the first `live_pairs` pairs -- the
+    fixed-width round buffers (xla#179) carry a dead tail past the live state,
+    and field addition is exact, so the masked full-width sum is bit-identical
+    to the exact-width sum. None sums every pair (the exact-width layout).
     """
     summand = LogupSummand(lam)
     scalars = summand.combine_scalars()
-    eval_zero = jnp.sum(
-        summand.combine(scalars, eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
-    )
+    terms_zero = summand.combine(scalars, eq_0, n0[0::2], d1[0::2], n1[0::2], d0[0::2])
     eq_h = eq_0 + eq_1
-    eval_half = jnp.sum(
-        summand.combine(
-            scalars,
-            eq_h,
-            n0[0::2] + n0[1::2],
-            d1[0::2] + d1[1::2],
-            n1[0::2] + n1[1::2],
-            d0[0::2] + d0[1::2],
-        )
+    terms_half = summand.combine(
+        scalars,
+        eq_h,
+        n0[0::2] + n0[1::2],
+        d1[0::2] + d1[1::2],
+        n1[0::2] + n1[1::2],
+        d0[0::2] + d0[1::2],
     )
-    return eval_zero, eval_half, jnp.sum(eq_h)
+    if live_pairs is not None:
+        mask = jnp.arange(terms_zero.shape[0]) < live_pairs
+        terms_zero = jnp.where(mask, terms_zero, jnp.zeros_like(terms_zero))
+        terms_half = jnp.where(mask, terms_half, jnp.zeros_like(terms_half))
+        eq_h = jnp.where(mask, eq_h, jnp.zeros_like(eq_h))
+    return jnp.sum(terms_zero), jnp.sum(terms_half), jnp.sum(eq_h)
 
 
 def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
@@ -318,6 +410,7 @@ def prove_jagged_layer(
     transcript: Transcript,
     *,
     challenge_limbs: int = 1,
+    caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """Run one jagged GKR layer's materialized sumcheck.
 
@@ -327,10 +420,18 @@ def prove_jagged_layer(
     saturated all-ones segments against re-padded neutral rows, exactly the
     virtual positions' values. Returns the bound point (MSB-first, i.e. the
     challenges reversed), the advanced transcript, and the proof.
+
+    `caps` selects the fixed-width round layout (xla#179 size-invariance):
+    every round then runs at one static operand shape per phase, live prefix
+    tracked by the rounds' `live` operand, so one compiled round kernel serves
+    every round -- and every layer and shard proved under the same caps.
+    Byte-identical to the exact layout.
     """
     niv = layer.num_batch_variables
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
-    meta = _round_metadata(layer.row_counts, nrv)
+    meta = _round_metadata(
+        layer.row_counts, nrv, width=None if caps is None else caps.row
+    )
     planes = _Planes(
         layer.numerator_0,
         layer.numerator_1,
@@ -338,7 +439,7 @@ def prove_jagged_layer(
         layer.denominator_1,
     )
     return _prove_jagged_layer_from_meta(
-        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs
+        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs, caps
     )
 
 
@@ -363,12 +464,13 @@ def _check_row_space(row_counts: tuple[int, ...], num_vars: int, niv: int) -> in
 def _prove_jagged_layer_from_meta(
     planes: _Planes,
     niv: int,
-    meta: list[tuple[Array | None, Array, Array]],
+    meta: list[tuple[Array | None, Array, Array, Array]],
     lam: Array,
     claim: Array,
     eval_point: Array,
     transcript: Transcript,
     challenge_limbs: int,
+    caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """One jagged layer's sumcheck from a PREBUILT round schedule `meta`.
 
@@ -377,7 +479,8 @@ def _prove_jagged_layer_from_meta(
     trace: its gathers span the layer height (hundreds of MB of int32 at shard
     scale), and baking them in as HLO constants is what made the whole-layer jit
     recompile from scratch per shard. As operands they leave the HLO tiny, so the
-    compile is cheap and `row_counts` never enters the jit key."""
+    compile is cheap and `row_counts` never enters the jit key. `caps` must be the
+    width set the meta was laid out with (`_round_metadata(width=caps.row)`)."""
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
@@ -385,7 +488,7 @@ def _prove_jagged_layer_from_meta(
 
     state = _JaggedState(planes, eq_row, eq_int, eval_point, lam, claim)
     sched = _JaggedSchedule(
-        meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
+        meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs, caps
     )
     # The host round loop runs one fold-then-compute kernel per round, the FS hop
     # + reduce dispatching between them. `export_dispatch=True` selects the cached
@@ -433,7 +536,9 @@ def _run_jagged_rounds_reference(
     for rnd in range(nrv + niv):
         in_rows = rnd < nrv
         if in_rows:
-            gather, col_index, pair_index = meta[rnd]
+            # The oracle runs the exact layout; the schedule's `live` operand
+            # (the fixed-width prefix marker) is the production loop's concern.
+            gather, col_index, pair_index, _live = meta[rnd]
             n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
             w = eq_int[col_index]
             eval_zero, eval_half, eq_sum = _paired_sums(
@@ -564,16 +669,20 @@ class _JaggedState:
 
 @dataclass(frozen=True)
 class _JaggedSchedule:
-    """A jagged layer's static round schedule: the per-round gather/index metadata,
-    the interpolation constants, and the batch/row variable counts plus the
-    challenge limb count. Rides beside the state so the loop signatures stay
-    `(state, schedule, transcript)` rather than a 16-positional-arg bag."""
+    """A jagged layer's static round schedule: the per-round gather/index/live
+    metadata, the interpolation constants, and the batch/row variable counts
+    plus the challenge limb count. Rides beside the state so the loop
+    signatures stay `(state, schedule, transcript)` rather than a
+    16-positional-arg bag. `caps` selects the fixed-width round layout (its
+    `row` must be the `width` the meta was built with); None runs the exact
+    (per-round-shape) layout."""
 
-    meta: list[tuple[Array | None, Array, Array]]
+    meta: list[tuple[Array | None, Array, Array, Array]]
     consts: _InterpConsts
     nrv: int
     niv: int
     challenge_limbs: int
+    caps: RoundWidthCaps | None = None
 
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
@@ -583,7 +692,11 @@ def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
 
 
 def _round_poly_int(
-    planes: _Planes, eq_int: Array, scalars: _RoundScalars, consts: _InterpConsts
+    planes: _Planes,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+    live_pairs: Array | None = None,
 ) -> Array:
     """The `sum_as_poly` step for the dense batch phase: the round
     univariate from the current state, no fold (the entry kernel of a
@@ -591,7 +704,8 @@ def _round_poly_int(
 
     Fiat-Shamir-less by construction — the FS hop lives in `_fs_reduce`, appended
     after the round compute — so the body is pure field arithmetic. `eq_int` is
-    sliced stride-2 once inside `_paired_sums`."""
+    sliced stride-2 once inside `_paired_sums`, over an even state. `live_pairs`
+    masks the sum to the live pairs of a fixed-width state (see `_paired_sums`)."""
     eval_zero, eval_half, eq_sum = _paired_sums(
         planes.n0,
         planes.n1,
@@ -600,6 +714,7 @@ def _round_poly_int(
         eq_int[0::2],
         eq_int[1::2],
         scalars.lam,
+        live_pairs=live_pairs,
     )
     return _round_coeffs(
         eval_zero,
@@ -641,6 +756,7 @@ def _round_poly_row(
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live_pairs: Array | None = None,
 ) -> tuple[Array, _Planes]:
     """The row-variable round body shared by the row kernels: re-pad the four
     MLEs to the round's even layout (`gather`), look the per-pair batch eq
@@ -649,7 +765,9 @@ def _round_poly_row(
     caller binds next round.
 
     The schedule (`gather`, `col_index`, `pair_index`) is host-built; the post-pad
-    state is `gather`'s length (even), so the `_paired_sums` stride-2 stays valid."""
+    state is `gather`'s length (even), so the `_paired_sums` stride-2 stays valid.
+    `live_pairs` masks the sum to the live pairs of a fixed-width schedule (see
+    `_paired_sums`)."""
     n0, n1, d0, d1 = _pad_neutral(planes.n0, planes.n1, planes.d0, planes.d1, gather)
     w = eq_int[col_index]
     eval_zero, eval_half, eq_sum = _paired_sums(
@@ -660,6 +778,7 @@ def _round_poly_row(
         eq_row[pair_index * 2] * w,
         eq_row[pair_index * 2 + 1] * w,
         scalars.lam,
+        live_pairs=live_pairs,
     )
     poly = _round_coeffs(
         eval_zero,
@@ -764,6 +883,7 @@ def _round_composite_dense_decomp(
     scalars: _RoundScalars,
     naturals: Array,
     inv_vand: Array,
+    live: Array,
     **_attrs: object,
 ) -> tuple[Array, _Planes, Array]:
     """The `zorch.sumcheck.round` decomposition for the `dense` (interaction) `mid`
@@ -772,10 +892,29 @@ def _round_composite_dense_decomp(
     parses; the decomposition needs only the operands. The interp constants ride
     as operands (`naturals` / `inv_vand`) rather than a lifted closure -- the
     emitter may instead rebuild them from `degree` + `poly_form` and drop the two
-    trailing operands."""
-    return _fix_and_sum_int(
-        planes, eq_int, alpha, scalars, _InterpConsts(naturals, inv_vand)
+    trailing operands.
+
+    Width-preserving (xla#179 size-invariance): the state enters live to
+    `4 * live[0]` elements (`live[0]` = the round's live reduce pairs) in
+    width-`m` buffers and leaves live to `2 * live[0]` in the SAME width -- the
+    fold's halved output zero-pads back to `m`, and the sum masks to the live
+    pairs. One operand/result shape therefore serves every round of the phase;
+    on the exact layout (`4 * live[0] == m`) the live prefix is the whole
+    buffer and the values match `_fix_and_sum_int` bit-for-bit."""
+    width = planes.n0.shape[0]
+    bound = _bind_planes(planes, alpha)
+    eq_bound = _bind_lsb(eq_int, alpha)
+    poly = _round_poly_int(
+        bound,
+        eq_bound,
+        scalars,
+        _InterpConsts(naturals, inv_vand),
+        live_pairs=live[0],
     )
+    out = _Planes(
+        *(_pad_to_width(a, width, 0) for a in (bound.n0, bound.n1, bound.d0, bound.d1))
+    )
+    return poly, out, _pad_to_width(eq_bound, width, 0)
 
 
 def _composite_fix_and_sum_dense(
@@ -784,15 +923,18 @@ def _composite_fix_and_sum_dense(
     alpha: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes, Array]:
     """Emit the FS-less `zorch.sumcheck.round` (phase=mid, variant=dense) marker
     around the uniform interaction fold+sum -- a batched LogUp-GKR round (the
     hardcoded LogUp combine + the eq_adj/pad_adj virtual-mass correction, not a
     plain product). The signature mirrors `_fix_and_sum_int` (interp consts
-    threaded as operands) so the round loop can select it in place. No
-    `challenge_limbs`: the fold challenge `alpha` arrives pre-recomposed as one
-    operand whose dtype carries base vs extension. Byte-identical to
-    `_fix_and_sum_int` whenever the marker is unclaimed (`lax.composite` runs the
+    threaded as operands, plus the trailing i32[2] `live` prefix marker) so the
+    round loop can select it in place. No `challenge_limbs`: the fold challenge
+    `alpha` arrives pre-recomposed as one operand whose dtype carries base vs
+    extension. Width-preserving: the folded state returns at the input width,
+    live to `2 * live[0]`. Byte-identical to `_fix_and_sum_int` on the live
+    prefix whenever the marker is unclaimed (`lax.composite` runs the
     decomposition)."""
     return composite(
         _round_composite_dense_decomp,
@@ -802,6 +944,7 @@ def _composite_fix_and_sum_dense(
         scalars,
         consts.naturals,
         consts.inv_vand,
+        live,
         name=SUMCHECK_ROUND_MARKER,
         version=SUMCHECK_ROUND_MARKER_VERSION,
         phase="mid",
@@ -822,6 +965,7 @@ def _round_composite_row_decomp(
     scalars: _RoundScalars,
     naturals: Array,
     inv_vand: Array,
+    live: Array,
     **_attrs: object,
 ) -> tuple[Array, _Planes, Array]:
     """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `mid` phase
@@ -831,18 +975,30 @@ def _round_composite_row_decomp(
     `col_index` / `pair_index`) and the interp constants (`naturals` / `inv_vand`)
     ride as operands. `gather` is always concrete here (the caller resolves the
     no-re-pad `None` case to an identity gather), so the marker carries a fixed
-    operand set."""
-    return _fix_and_sum_row(
-        planes,
-        eq_row,
-        alpha,
+    operand set.
+
+    Size-invariance (xla#179): the schedule may be laid into fixed-width
+    buffers -- the sum masks to the `live[0]` live pairs (the re-padded state's
+    live prefix is `2 * live[0]`, the rest of the gather is sentinel → neutral
+    pad), and the folded `eq_row` zero-pads back to its input width, live to
+    `live[1] // 2`. On the exact layout the live prefixes are the whole buffers
+    and the values match `_fix_and_sum_row` bit-for-bit (modulo the eq_row
+    width restore)."""
+    eq_width = eq_row.shape[0]
+    bound = _bind_planes(planes, alpha)
+    eq_bound = _bind_lsb(eq_row, alpha)
+    poly, padded = _round_poly_row(
+        bound,
         gather,
         col_index,
         pair_index,
+        eq_bound,
         eq_int,
         scalars,
         _InterpConsts(naturals, inv_vand),
+        live_pairs=live[0],
     )
+    return poly, padded, _pad_to_width(eq_bound, eq_width, 0)
 
 
 def _composite_fix_and_sum_row(
@@ -855,16 +1011,20 @@ def _composite_fix_and_sum_row(
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes, Array]:
     """Emit the FS-less `zorch.sumcheck.round` (phase=mid, variant=jagged) marker
     around the row-variable fold+sum -- the segment-based jagged round (the
     hardcoded LogUp combine over the runtime `gather`/`col_index`/`pair_index`
     schedule and the segment-local `eq_row`, not a plain product). The signature
-    mirrors `_fix_and_sum_row` so the round loop can select it in place. A round
-    that needs no re-pad (`gather` None) gets an identity gather -- a no-op pad --
-    so the marker always carries the operand and stays byte-identical, exactly as
-    `_dispatch_fix_and_sum_row` does. Byte-identical to `_fix_and_sum_row`
-    whenever the marker is unclaimed (`lax.composite` runs the decomposition)."""
+    mirrors `_fix_and_sum_row` (plus the trailing i32[2] `live` prefix marker)
+    so the round loop can select it in place. A round that needs no re-pad
+    (`gather` None) gets an identity gather -- a no-op pad -- so the marker
+    always carries the operand and stays byte-identical, exactly as
+    `_dispatch_fix_and_sum_row` does. `eq_row` returns width-preserved (folded
+    live prefix, zero tail). Byte-identical to `_fix_and_sum_row` on the live
+    prefixes whenever the marker is unclaimed (`lax.composite` runs the
+    decomposition)."""
     if gather is None:
         gather = jnp.arange(planes.n0.shape[0] // 2, dtype=col_index.dtype)
     return composite(
@@ -879,6 +1039,7 @@ def _composite_fix_and_sum_row(
         scalars,
         consts.naturals,
         consts.inv_vand,
+        live,
         name=SUMCHECK_ROUND_MARKER,
         version=SUMCHECK_ROUND_MARKER_VERSION,
         phase="mid",
@@ -930,6 +1091,7 @@ def _round_composite_boundary_decomp(
     scalars: _RoundScalars,
     naturals: Array,
     inv_vand: Array,
+    live: Array,
     **_attrs: object,
 ) -> tuple[Array, _Planes]:
     """The `zorch.sumcheck.round` decomposition for the `boundary` (row ->
@@ -938,11 +1100,22 @@ def _round_composite_boundary_decomp(
     2x the post-bind state width and is NOT folded: only the planes bind by
     `alpha`. `eq_int` is dropped from the outputs -- it rides through the round
     unchanged, so emitting it would copy a full tensor per boundary round; the
-    wrapper returns the caller's own `eq_int` instead."""
-    poly, planes, _ = _fix_and_sum_boundary(
-        planes, eq_int, alpha, scalars, _InterpConsts(naturals, inv_vand)
+    wrapper returns the caller's own `eq_int` instead.
+
+    Unlike the width-preserving dense `mid`, the boundary keeps its halving
+    output (planes leave at half the input width, live to `2 * live[0]`): it
+    fires once per layer, and the halved width is what keeps the plane/eq
+    widths equal through the dense phase on the exact layout. The fixed-width
+    route slices the output down to its interaction cap outside the marker."""
+    bound = _bind_planes(planes, alpha)
+    poly = _round_poly_int(
+        bound,
+        eq_int,
+        scalars,
+        _InterpConsts(naturals, inv_vand),
+        live_pairs=live[0],
     )
-    return poly, planes
+    return poly, bound
 
 
 def _composite_fix_and_sum_boundary(
@@ -951,15 +1124,17 @@ def _composite_fix_and_sum_boundary(
     alpha: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes, Array]:
     """Emit the FS-less `zorch.sumcheck.round` (phase=boundary, variant=dense)
     marker around the row->interaction handoff -- bind the last row variable's
     challenge (row-shaped fold), then the first interaction round's univariate
     over the still-unfolded `eq_int`. The signature mirrors
-    `_fix_and_sum_boundary` so the round loop can select it in place; the
-    unchanged `eq_int` is returned from outside the marker (not a composite
-    output). Byte-identical to `_fix_and_sum_boundary` whenever the marker is
-    unclaimed (`lax.composite` runs the decomposition)."""
+    `_fix_and_sum_boundary` (plus the trailing i32[2] `live` prefix marker) so
+    the round loop can select it in place; the unchanged `eq_int` is returned
+    from outside the marker (not a composite output). Byte-identical to
+    `_fix_and_sum_boundary` on the live prefix whenever the marker is unclaimed
+    (`lax.composite` runs the decomposition)."""
     poly, planes = composite(
         _round_composite_boundary_decomp,
         planes,
@@ -968,6 +1143,7 @@ def _composite_fix_and_sum_boundary(
         scalars,
         consts.naturals,
         consts.inv_vand,
+        live,
         name=SUMCHECK_ROUND_MARKER,
         version=SUMCHECK_ROUND_MARKER_VERSION,
         phase="boundary",
@@ -988,12 +1164,16 @@ def _round_composite_first_row_decomp(
     scalars: _RoundScalars,
     naturals: Array,
     inv_vand: Array,
+    live: Array,
     **_attrs: object,
 ) -> tuple[Array, _Planes]:
     """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `first`
     phase -- the byte-exact fallback a recognizing emitter replaces. The operand
     order is the `mid` row ABI minus `alpha`: round 0 binds nothing, so there is
-    no previous challenge to fold by and the marker carries no `alpha` slot."""
+    no previous challenge to fold by and the marker carries no `alpha` slot.
+    The sum masks to the `live[0]` live pairs of a fixed-width schedule (the
+    re-padded state's live prefix is `2 * live[0]`; see the row `mid`
+    decomposition)."""
     return _round_poly_row(
         planes,
         gather,
@@ -1003,6 +1183,7 @@ def _round_composite_first_row_decomp(
         eq_int,
         scalars,
         _InterpConsts(naturals, inv_vand),
+        live_pairs=live[0],
     )
 
 
@@ -1015,16 +1196,18 @@ def _composite_sum_as_poly_row(
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes]:
     """Emit the FS-less `zorch.sumcheck.round` (phase=first, variant=jagged)
     marker around the round-0 sum -- no fold, no challenge, just the row-shaped
     round poly over the raw layer plus the re-padded state the caller binds next
-    round. The signature mirrors `_round_poly_row` so the round loop can select
-    it in the `sum0` slot. A round needing no re-pad (`gather` None) gets an
-    identity gather over the FULL height (no `//2`: nothing folds this round),
-    exactly as `_dispatch_sum_as_poly_row` does, so the marker always carries the
-    operand. Byte-identical to `_round_poly_row` whenever the marker is unclaimed
-    (`lax.composite` runs the decomposition)."""
+    round. The signature mirrors `_round_poly_row` (plus the trailing i32[2]
+    `live` prefix marker) so the round loop can select it in the `sum0` slot. A
+    round needing no re-pad (`gather` None) gets an identity gather over the
+    FULL height (no `//2`: nothing folds this round), exactly as
+    `_dispatch_sum_as_poly_row` does, so the marker always carries the operand.
+    Byte-identical to `_round_poly_row` on the live prefixes whenever the
+    marker is unclaimed (`lax.composite` runs the decomposition)."""
     if gather is None:
         gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
     return composite(
@@ -1038,6 +1221,7 @@ def _composite_sum_as_poly_row(
         scalars,
         consts.naturals,
         consts.inv_vand,
+        live,
         name=SUMCHECK_ROUND_MARKER,
         version=SUMCHECK_ROUND_MARKER_VERSION,
         phase="first",
@@ -1197,18 +1381,22 @@ def _dispatch_fix_and_sum_int(
     alpha: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes, Array]:
     """Dispatch the dense interaction round through one cached binary symbolic
-    over the halving state size. The round folds (`m -> m/2`) then `_paired_sums`
-    slices stride-2 again (`m/2 -> m/4`), two halvings with no re-pad between, so
-    the state is `4*g` to keep both decidable; `eq_int` halves with it.
+    over the state size. The round is width-preserving (the folded state
+    zero-pads back to the input width, live tracked by `live`), so the state
+    and `eq_int` share one `4*g` symbol -- and under fixed caps (xla#179) `g`
+    only ever binds one concrete size, so the binary specializes exactly once.
 
     `exported.call` is a host dispatch; under a `jax.jit` trace the operands are
     tracers, so fall back to the eager kernel -- the jit compiles the round
     itself, the per-round export being its alternative."""
     if isinstance(planes.n0, jax.core.Tracer):
-        return _composite_fix_and_sum_dense(planes, eq_int, alpha, scalars, consts)
-    operands = (planes, eq_int, alpha, scalars)
+        return _composite_fix_and_sum_dense(
+            planes, eq_int, alpha, scalars, consts, live
+        )
+    operands = (planes, eq_int, alpha, scalars, live)
     # Per-operand dtypes (a LogUp numerator is base-field, its denominator
     # extension-field, and the state promotes base->extension across rounds), so
     # each (round-shape, dtype-mix) gets its own binary; `consts` is baked in.
@@ -1233,9 +1421,10 @@ def _dispatch_fix_and_sum_int(
             jax.ShapeDtypeStruct((4 * g,), eq_int.dtype),
             jax.ShapeDtypeStruct((), alpha.dtype),
             _abst_scalars(scalars),
+            jax.ShapeDtypeStruct((2,), live.dtype),
         )
-        fn = lambda p, e, al, sc: _composite_fix_and_sum_dense(  # noqa: E731
-            p, e, al, sc, consts
+        fn = lambda p, e, al, sc, lv: _composite_fix_and_sum_dense(  # noqa: E731
+            p, e, al, sc, consts, lv
         )
         return export.export(jax.jit(fn))(*abst)
 
@@ -1248,6 +1437,7 @@ def _dispatch_fix_and_sum_boundary(
     alpha: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes, Array]:
     """Dispatch the row->interaction handoff (bind the last row challenge `alpha`,
     then sum the first interaction round over the still-unfolded `eq_int`) through
@@ -1256,8 +1446,10 @@ def _dispatch_fix_and_sum_boundary(
     `2*g` (= the post-bind state), so one dispatched kernel replaces the eager one.
     """
     if isinstance(planes.n0, jax.core.Tracer):
-        return _composite_fix_and_sum_boundary(planes, eq_int, alpha, scalars, consts)
-    operands = (planes, eq_int, alpha, scalars)
+        return _composite_fix_and_sum_boundary(
+            planes, eq_int, alpha, scalars, consts, live
+        )
+    operands = (planes, eq_int, alpha, scalars, live)
     key = (
         "boundary",
         tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
@@ -1279,9 +1471,10 @@ def _dispatch_fix_and_sum_boundary(
             jax.ShapeDtypeStruct((2 * g,), eq_int.dtype),
             jax.ShapeDtypeStruct((), alpha.dtype),
             _abst_scalars(scalars),
+            jax.ShapeDtypeStruct((2,), live.dtype),
         )
-        fn = lambda p, e, al, sc: _composite_fix_and_sum_boundary(  # noqa: E731
-            p, e, al, sc, consts
+        fn = lambda p, e, al, sc, lv: _composite_fix_and_sum_boundary(  # noqa: E731
+            p, e, al, sc, consts, lv
         )
         return export.export(jax.jit(fn))(*abst)
 
@@ -1297,6 +1490,7 @@ def _dispatch_sum_as_poly_row(
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes]:
     """Dispatch the round-0 sum (no fold, no challenge) through one cached binary
     symbolic over the RAW layer height (`h`), the re-pad layout (`2*p` gather / `p`
@@ -1306,11 +1500,11 @@ def _dispatch_sum_as_poly_row(
     gather over the full height (no `//2` fold) so it hits the same binary."""
     if isinstance(planes.n0, jax.core.Tracer):
         return _composite_sum_as_poly_row(
-            planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
+            planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts, live
         )
     if gather is None:
         gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
-    operands = (planes, gather, col_index, pair_index, eq_row, eq_int, scalars)
+    operands = (planes, gather, col_index, pair_index, eq_row, eq_int, scalars, live)
     key = (
         "sum0",
         tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
@@ -1343,11 +1537,10 @@ def _dispatch_sum_as_poly_row(
             jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
             jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
             _abst_scalars(scalars),
+            jax.ShapeDtypeStruct((2,), live.dtype),
         )
-        fn = (
-            lambda pl, ga, ci, pi, er, ei, sc: _composite_sum_as_poly_row(  # noqa: E731
-                pl, ga, ci, pi, er, ei, sc, consts
-            )
+        fn = lambda pl, ga, ci, pi, er, ei, sc, lv: _composite_sum_as_poly_row(  # noqa: E731
+            pl, ga, ci, pi, er, ei, sc, consts, lv
         )
         return export.export(jax.jit(fn))(*abst)
 
@@ -1364,12 +1557,15 @@ def _dispatch_fix_and_sum_row(
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
+    live: Array,
 ) -> tuple[Array, _Planes, Array]:
     """Dispatch a jagged row round through one cached binary symbolic over the
-    input state (`2*pp`), the re-pad layout (`2*p` gather / `p` schedule), and the
-    halving `eq_row` (`2*rr`); `eq_int` rides at its fixed `2^niv` width. A round
-    that needs no re-pad (gather `None`) gets an identity gather so it hits the
-    same binary -- the identity pad is a no-op, so byte-identical."""
+    input state (`2*pp`), the re-pad layout (`2*p` gather / `p` schedule), and
+    the width-preserved `eq_row` (`2*rr`); `eq_int` rides at its fixed width. A
+    round that needs no re-pad (gather `None`) gets an identity gather so it
+    hits the same binary -- the identity pad is a no-op, so byte-identical.
+    Under fixed caps every symbol binds one concrete size, so the binary
+    specializes exactly once."""
     if isinstance(planes.n0, jax.core.Tracer):
         return _composite_fix_and_sum_row(
             planes,
@@ -1381,10 +1577,21 @@ def _dispatch_fix_and_sum_row(
             eq_int,
             scalars,
             consts,
+            live,
         )
     if gather is None:
         gather = jnp.arange(planes.n0.shape[0] // 2, dtype=col_index.dtype)
-    operands = (planes, eq_row, alpha, gather, col_index, pair_index, eq_int, scalars)
+    operands = (
+        planes,
+        eq_row,
+        alpha,
+        gather,
+        col_index,
+        pair_index,
+        eq_int,
+        scalars,
+        live,
+    )
     key = (
         "row",
         tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
@@ -1418,10 +1625,11 @@ def _dispatch_fix_and_sum_row(
             jax.ShapeDtypeStruct((p,), pair_index.dtype),
             jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
             _abst_scalars(scalars),
+            jax.ShapeDtypeStruct((2,), live.dtype),
         )
         fn = (  # noqa: E731
-            lambda pl, er, al, ga, ci, pi, ei, sc: _composite_fix_and_sum_row(
-                pl, er, al, ga, ci, pi, ei, sc, consts
+            lambda pl, er, al, ga, ci, pi, ei, sc, lv: _composite_fix_and_sum_row(
+                pl, er, al, ga, ci, pi, ei, sc, consts, lv
             )
         )
         return export.export(jax.jit(fn))(*abst)
@@ -1500,11 +1708,15 @@ def _fs_reduce(
 
 # The layer tail: the final fold (`_fix_last`) plus stacking the per-round
 # challenge/poly lists. Folding `_fix_last` in here keeps the final fold in the
-# whole-layer kernel without decorating the bare helper.
+# whole-layer kernel without decorating the bare helper. The width-preserving
+# round buffers leave the fully-folded state as the live length-2 prefix, so
+# the tail slices it down before the final marker -- the final ABI stays the
+# exact (2,) planes.
 def _finalize_layer(
     planes: _Planes, alpha: Array, chal: list[Array], poly: list[Array]
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
-    fn0, fn1, fd0, fd1 = _composite_fix_last(planes, alpha)
+    head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
+    fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
     return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
 
 
@@ -1551,6 +1763,43 @@ def _run_jagged_rounds(
     consts = sched.consts
     transcript = cast(DuplexTranscript, transcript)
 
+    # Fixed-width layout (xla#179): lay the state into the capped buffers once
+    # at layer entry; every round then runs at one static shape per phase with
+    # the live prefix riding the `live` operand, so one compiled round kernel
+    # serves every round/layer/shard under the caps. The dead tails are zeros
+    # here and never read (every consumer masks by `live`).
+    caps = sched.caps
+    if caps is not None:
+        if caps.row % 4:
+            raise ValueError(
+                f"row cap {caps.row} must be a multiple of 4 (the boundary "
+                "handoff binds then pairs the row-width state, two stride-2 "
+                "halvings)"
+            )
+        if caps.eq_row % 2 or caps.interaction % 4:
+            raise ValueError(
+                f"eq_row cap {caps.eq_row} must be even and interaction cap "
+                f"{caps.interaction} a multiple of 4 (each folds stride-2 "
+                "through its rounds)"
+            )
+        if caps.eq_row < eq_row.shape[0]:
+            raise ValueError(
+                f"eq_row cap {caps.eq_row} cannot hold the layer's row-eq "
+                f"table ({eq_row.shape[0]})"
+            )
+        if caps.interaction < eq_int.shape[0]:
+            raise ValueError(
+                f"interaction cap {caps.interaction} cannot hold the layer's "
+                f"interaction-eq table ({eq_int.shape[0]})"
+            )
+        planes = _Planes(
+            *(
+                _pad_to_width(a, caps.row, 0)
+                for a in (planes.n0, planes.n1, planes.d0, planes.d1)
+            )
+        )
+        eq_row = _pad_to_width(eq_row, caps.eq_row, 0)
+        eq_int = _pad_to_width(eq_int, caps.interaction, 0)
     # The dispatch and marked kernels share signatures, so select one per round.
     # Both routes emit the `zorch.sumcheck.round` marker (the dispatch inside its
     # exported binary): a recognizing emitter fuses each round, and an unclaimed
@@ -1584,12 +1833,20 @@ def _run_jagged_rounds(
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
         if rnd == 0:
-            gather, col_index, pair_index = meta[0]
+            gather, col_index, pair_index, live = meta[0]
             poly, planes = sum0(
-                planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
+                planes,
+                gather,
+                col_index,
+                pair_index,
+                eq_row,
+                eq_int,
+                scalars,
+                consts,
+                live,
             )
         elif rnd < nrv:
-            gather, col_index, pair_index = meta[rnd]
+            gather, col_index, pair_index, live = meta[rnd]
             poly, planes, eq_row = fix_row(
                 planes,
                 eq_row,
@@ -1600,11 +1857,42 @@ def _run_jagged_rounds(
                 eq_int,
                 scalars,
                 consts,
+                live,
             )
         elif rnd == nrv:
-            poly, planes, eq_int = fix_boundary(planes, eq_int, prev_r, scalars, consts)
+            # The handoff's live pairs: the row phase saturates every segment
+            # to one row by construction (row counts <= 2^nrv), so the last
+            # padded row layout is exactly two slots per interaction --
+            # 2^(niv+1) live elements, 2^(niv-1) post-bind pairs.
+            live = jnp.asarray([1 << (niv - 1), 0], jnp.int32)
+            # The boundary marker needs its eq operand at half its plane width
+            # (the post-bind state), so the capped route reads a resized copy
+            # -- the live 2^niv prefix always fits in row // 2 (the last row
+            # layout, 2^(niv+1) slots, fits in the row cap). `eq_int` itself
+            # rides through the handoff unchanged, at its own width, for the
+            # interaction rounds below.
+            eq_boundary = (
+                _resize_zero(eq_int, caps.row // 2) if caps is not None else eq_int
+            )
+            poly, planes, _ = fix_boundary(
+                planes, eq_boundary, prev_r, scalars, consts, live
+            )
+            if caps is not None:
+                # The handoff halves [row] -> [row // 2]; the dense phase runs
+                # at the interaction cap, so resize to it -- the live prefix
+                # (2^niv elements <= caps.interaction, validated above via the
+                # eq table) always survives.
+                planes = _Planes(
+                    *(
+                        _resize_zero(a, caps.interaction)
+                        for a in (planes.n0, planes.n1, planes.d0, planes.d1)
+                    )
+                )
         else:
-            poly, planes, eq_int = fix_int(planes, eq_int, prev_r, scalars, consts)
+            live = jnp.asarray([1 << (niv - 1 - (rnd - nrv)), 0], jnp.int32)
+            poly, planes, eq_int = fix_int(
+                planes, eq_int, prev_r, scalars, consts, live
+            )
         # Device FS hop + reduce -- traced into the whole-layer jit on the default
         # path (one fused region per round), dispatched eagerly between rounds on
         # the export path. Slices the next z_cur via the decremented `pos`, riding
@@ -1675,8 +1963,9 @@ def _observe_openings_and_fold(
 def _prove_jagged_layer_round(
     planes: _Planes,
     niv: int,
-    meta: list[tuple[Array | None, Array, Array]],
+    meta: list[tuple[Array | None, Array, Array, Array]],
     challenge_limbs: int,
+    caps: RoundWidthCaps | None,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
@@ -1698,7 +1987,7 @@ def _prove_jagged_layer_round(
         transcript, num_eval, den_eval, challenge_limbs, dtype
     )
     point, transcript, proof = _prove_jagged_layer_from_meta(
-        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs
+        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs, caps
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
     d0, d1 = proof.denominator_0, proof.denominator_1
@@ -1715,41 +2004,45 @@ def _prove_jagged_layer_round(
     return (num_eval, den_eval, eval_point), transcript, proof
 
 
-# Shared by every `JaggedGkrLayerRound`. The schedule (`meta`) rides as a TRACED
-# operand, not a static arg: its per-round gather/index arrays span the layer
-# height (hundreds of MB of int32 at shard scale), so closing them over the trace
-# baked them into the HLO as constants -- XLA then spent minutes folding those
-# constants, a per-shard from-scratch compile that scaled with the trace. As
+# Shared by every `JaggedGkrLayerRound(jit=True)`. The schedule (`meta`) rides as
+# a TRACED operand, not a static arg: its per-round gather/index arrays span the
+# layer height (hundreds of MB of int32 at shard scale), so closing them over the
+# trace baked them into the HLO as constants -- XLA then spent minutes folding
+# those constants, a per-shard from-scratch compile that scaled with the trace. As
 # operands the HLO carries no data, so the compile is small and height-independent
 # (~15s whether the layer is 2M rows or 77M) and `row_counts` values leave the jit
 # key: it keys only on the per-round operand SHAPES plus the static `niv` /
-# `challenge_limbs` (`nrv` is read from `eval_point`'s length inside). Two layers
-# still recompile when their shape sequence differs, but each compile is cheap and
-# persistent-cached. Routing through one module-level zone lets freshly built
-# same-shape rounds reuse a single trace, so a consumer rebuilding the chain each
-# warm iteration (the generator keeping lazy one-live-layer release) re-traces at
-# most per distinct shape sequence, not per iter.
-@partial(jax.jit, static_argnums=(5, 6))
+# `challenge_limbs` / `caps` (`nrv` is read from `eval_point`'s length inside).
+# Two layers still recompile when their shape sequence differs, but each compile
+# is cheap and persistent-cached -- and under `caps` every layer shares ONE shape
+# sequence, so the whole pyramid keys to a single trace. Routing through one
+# module-level zone lets freshly built same-shape rounds reuse a single trace, so
+# a consumer rebuilding the chain each warm iteration (the generator keeping lazy
+# one-live-layer release) re-traces at most per distinct shape sequence, not per
+# iter.
+@partial(jax.jit, static_argnums=(5, 6, 7))
 def _jagged_round_zone(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
-    meta: list[tuple[Array | None, Array, Array]],
+    meta: list[tuple[Array | None, Array, Array, Array]],
     niv: int,
     challenge_limbs: int,
+    caps: RoundWidthCaps | None,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
     planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
     return _prove_jagged_layer_round(
-        planes, niv, meta, challenge_limbs, carry, transcript
+        planes, niv, meta, challenge_limbs, caps, carry, transcript
     )
 
 
 def _jagged_round_via_zone(
     layer: JaggedGkrLayer,
     challenge_limbs: int,
+    caps: RoundWidthCaps | None,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
@@ -1760,7 +2053,9 @@ def _jagged_round_via_zone(
     niv = layer.num_batch_variables
     eval_point = carry[2]
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
-    meta = _round_metadata(layer.row_counts, nrv)
+    meta = _round_metadata(
+        layer.row_counts, nrv, width=None if caps is None else caps.row
+    )
     return _jagged_round_zone(
         layer.numerator_0,
         layer.numerator_1,
@@ -1769,8 +2064,37 @@ def _jagged_round_via_zone(
         meta,
         niv,
         challenge_limbs,
+        caps,
         carry,
         transcript,
+    )
+
+
+def _jagged_round_eager(
+    layer: JaggedGkrLayer,
+    challenge_limbs: int,
+    caps: RoundWidthCaps | None,
+    carry: Carry,
+    transcript: Transcript,
+) -> tuple[Carry, Transcript, JaggedLayerProof]:
+    """The `jit=False` body: build the schedule host-side and run the round loop
+    eagerly -- each round (and its FS hop) dispatches on its own, so the export
+    path can release every round's buffers before the next (the decoupled
+    wide-shard production path)."""
+    niv = layer.num_batch_variables
+    eval_point = carry[2]
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    meta = _round_metadata(
+        layer.row_counts, nrv, width=None if caps is None else caps.row
+    )
+    planes = _Planes(
+        layer.numerator_0,
+        layer.numerator_1,
+        layer.denominator_0,
+        layer.denominator_1,
+    )
+    return _prove_jagged_layer_round(
+        planes, niv, meta, challenge_limbs, caps, carry, transcript
     )
 
 
@@ -1785,21 +2109,35 @@ class JaggedGkrLayerRound(Round):
     when `challenge_limbs == 1`; a consumer squeezing multi-limb challenges
     owns its binding glue.
 
-    The per-layer prove dispatches through the module-level `_jagged_round_zone`
-    with the round schedule as a traced operand, so it keys on `(niv, plane
-    shapes)` and never on `row_counts` -- the trace (and its compiled kernel) is
-    reused across every same-shape round, and shards differing only in row counts
-    share one compile. The round holds only its layer (no per-instance jit, no
-    self-closure), so the chain's release bound is untouched. The pyramid stays a
-    host-orchestrated Python loop of these (one trace per layer shape, never one
-    `jit` over the whole pyramid -- it does not fit at scale; see
-    `prover.LogupSumcheckRound`).
+    With `jit=True` the per-layer prove dispatches through the module-level
+    `_jagged_round_zone` with the round schedule as a traced operand, so it keys
+    on `(niv, plane shapes)` and never on `row_counts` -- the trace (and its
+    compiled kernel) is reused across every same-shape round, and shards
+    differing only in row counts share one compile. With `jit=False` (default)
+    the round loop runs eagerly -- each round's marked kernel (and the export
+    dispatch, when it fires) releases its buffers before the next, bounding peak
+    host RAM on wide shards. The round holds only its layer (no per-instance
+    jit, no self-closure), so the chain's release bound is untouched. The
+    pyramid stays a host-orchestrated Python loop of these (one trace per layer
+    shape, never one `jit` over the whole pyramid -- it does not fit at scale;
+    see `prover.LogupSumcheckRound`).
     """
 
-    def __init__(self, layer: JaggedGkrLayer, challenge_limbs: int = 1) -> None:
-        # `partial` closes over (layer, challenge_limbs), not `self`, so the chain
-        # frees the round -- and its layer -- the moment it builds the next.
-        self._call = partial(_jagged_round_via_zone, layer, challenge_limbs)
+    def __init__(
+        self,
+        layer: JaggedGkrLayer,
+        challenge_limbs: int = 1,
+        *,
+        jit: bool = False,
+        caps: RoundWidthCaps | None = None,
+    ) -> None:
+        # `partial` closes over (layer, challenge_limbs, caps), not `self`, so
+        # the chain frees the round -- and its layer -- the moment it builds the
+        # next. `jit=True` dispatches through the shared module-level zone, so
+        # same-shape rounds reuse one trace instead of re-compiling per call.
+        # `caps` selects the fixed-width round layout (see `prove_jagged_layer`).
+        body = _jagged_round_via_zone if jit else _jagged_round_eager
+        self._call = partial(body, layer, challenge_limbs, caps)
 
     def __call__(
         self, carry: Carry, transcript: Transcript

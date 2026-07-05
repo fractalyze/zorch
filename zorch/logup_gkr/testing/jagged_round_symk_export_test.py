@@ -176,7 +176,7 @@ class JaggedRowExportTest(absltest.TestCase):
         # _sum_as_poly_row operands: planes, gather, col_index, pair_index, eq_row,
         # eq_int, scalars (consts baked).
         layer = random_jagged_layer(seed, counts)
-        gather, col_index, pair_index = _round_metadata(counts, self.NRV)[0]
+        gather, col_index, pair_index, _live = _round_metadata(counts, self.NRV)[0]
         self.assertIsNotNone(gather, "layout must need a round-0 re-pad")
         eq_row, eq_int = self._eqs(seed)
         planes = _Planes(
@@ -204,7 +204,7 @@ class JaggedRowExportTest(absltest.TestCase):
             planes0, g0, ci0, pi0, eq_row, eq_int, scal0, self.consts
         )
         alpha = self._scalars(seed + 7).eq_adj
-        gather, col_index, pair_index = _round_metadata(counts, self.NRV)[1]
+        gather, col_index, pair_index, _live = _round_metadata(counts, self.NRV)[1]
         self.assertIsNotNone(gather, "layout must need a round-1 re-pad")
         return (
             planes,
