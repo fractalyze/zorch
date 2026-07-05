@@ -199,6 +199,27 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             challenge_limbs=4,
         )
 
+    def test_matches_reference_mixed_plane_ef(self) -> None:
+        # The PRODUCTION plane mix: base-field numerators, extension-field
+        # denominators (x - alpha). The first round carries the planes through
+        # un-promoted, so its claimed kernel must handle per-plane fields
+        # (limb strides, pad neutrals) within one round -- the uniform-plane
+        # cases above cannot see a regression there.
+        base = random_jagged_layer(41, (3, 1, 5, 2))
+        layer = JaggedGkrLayer(
+            base.numerator_0,
+            base.numerator_1,
+            rand_ext_field(61, (base.height,), KB, EF),
+            rand_ext_field(62, (base.height,), KB, EF),
+            base.row_counts,
+        )
+        self._check_round_runner(
+            layer,
+            rand_ext_field(51, (), KB, EF),
+            rand_ext_field(52, (5,), KB, EF),
+            challenge_limbs=4,
+        )
+
 
 if __name__ == "__main__":
     absltest.main()
