@@ -191,8 +191,8 @@ class BindOutputTest(absltest.TestCase):
         (num_eval, den_eval, point), _ = bind_output(output, cheap_transcript(KB))
         self.assertEqual(num_eval.shape, ())
         self.assertEqual(den_eval.shape, ())
-        # The output layer has num_interaction_variables + 1 variables.
-        self.assertEqual(point.shape, (first.num_interaction_variables + 1,))
+        # The output layer has num_batch_variables + 1 variables.
+        self.assertEqual(point.shape, (first.num_batch_variables + 1,))
 
 
 class GkrProverTest(absltest.TestCase):
@@ -257,7 +257,7 @@ class GkrProverTest(absltest.TestCase):
             first.numerator_1,
             first.denominator_0,
             first.denominator_1,
-            first.num_interaction_variables,
+            first.num_batch_variables,
         )
         self.assertTrue(bool(jnp.all(eager == jitted)))
 

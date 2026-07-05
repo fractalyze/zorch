@@ -102,18 +102,18 @@ def build_jagged_pyramid(first: JaggedGkrLayer) -> list[JaggedGkrLayer]:
 
 
 def random_first_layer(
-    seed: int, num_interaction_variables: int, num_row_variables: int
+    seed: int, num_batch_variables: int, num_row_variables: int
 ) -> GkrLayer:
     """A random dense first GKR layer, 2^(int+row) wide per MLE. Montgomery field
     -- it matches the poseidon2 sponge and the prove's production field; the
     standard domain is too slow to be worth a second representation."""
-    width = 1 << (num_interaction_variables + num_row_variables)
+    width = 1 << (num_batch_variables + num_row_variables)
     return GkrLayer(
         numerator_0=rand_field(seed, (width,), _KB),
         numerator_1=rand_field(seed + 1, (width,), _KB),
         denominator_0=rand_field(seed + 2, (width,), _KB),
         denominator_1=rand_field(seed + 3, (width,), _KB),
-        num_interaction_variables=num_interaction_variables,
+        num_batch_variables=num_batch_variables,
     )
 
 
@@ -147,11 +147,11 @@ def prove_gkr_jitted(
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
-    num_interaction_variables: int,
+    num_batch_variables: int,
 ) -> Array:
     """`prove_gkr` traced into one fused program (whole pyramid + chain).
 
-    The four first-layer MLEs are the traced inputs; `num_interaction_variables`
+    The four first-layer MLEs are the traced inputs; `num_batch_variables`
     is static (it fixes the pyramid height, hence the unrolled layer count).
     Returns the last proved layer's round polynomials -- the tail of the
     sequential carry, so it transitively forces the whole prove. Drives the
@@ -162,7 +162,7 @@ def prove_gkr_jitted(
         numerator_1,
         denominator_0,
         denominator_1,
-        num_interaction_variables=num_interaction_variables,
+        num_batch_variables=num_batch_variables,
     )
     return prove_gkr(first)[2][-1].round_polys
 

@@ -305,7 +305,7 @@ def prove_jagged_layer(
     virtual positions' values. Returns the bound point (MSB-first, i.e. the
     challenges reversed), the advanced transcript, and the proof.
     """
-    niv = layer.num_interaction_variables
+    niv = layer.num_batch_variables
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
     meta = _round_metadata(layer.row_counts, nrv)
     planes = _Planes(
@@ -1014,7 +1014,7 @@ def _jagged_round_via_zone(
     with the planes + `meta` as traced operands. Splitting `meta` out of the trace
     (rather than the layer's static `row_counts`) is what keeps the whole-layer
     compile shard-independent."""
-    niv = layer.num_interaction_variables
+    niv = layer.num_batch_variables
     eval_point = carry[2]
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
     meta = _round_metadata(layer.row_counts, nrv)
