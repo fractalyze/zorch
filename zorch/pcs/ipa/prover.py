@@ -148,7 +148,7 @@ class IpaProver:
         for commitment, coeffs, x in zip(
             prover_data.commitments, prover_data.coeffs, points
         ):
-            fs, value, proof = _open_one(self.key, commitment, coeffs, x, fs)
+            fs, value, proof, _ = _open_one(self.key, commitment, coeffs, x, fs)
             values.append(value)
             proofs.append(proof)
         return jnp.stack(values), proofs, fs.transcript
@@ -156,12 +156,16 @@ class IpaProver:
 
 def _open_one(
     key: IpaKey, commitment: Array, coeffs: Array, x: Array, fs: _Ch
-) -> tuple[_Ch, Array, IpaProof]:
+) -> tuple[_Ch, Array, IpaProof, Array]:
     """Fold one (poly, point) to a proof, deriving challenges through the injected
-    `fs`. Returns `(challenger, value, proof)`. Challenger-generic so an
-    accumulation consumer can drive it with an arkworks-faithful `IpaChallenger`
-    — which, like `TranscriptChallenger`, must be a JAX pytree (the fold carries it
-    through the `lax.scan` below)."""
+    `fs`. Returns `(challenger, value, proof, final_comm_key)`, where
+    `final_comm_key` is the fully-folded committer generator `g[0]` — equal to the
+    `G_final = ⟨challenge_vector(u), G⟩` the verifier recomputes in `settle`, so an
+    accumulation consumer reads it here instead of replaying the round challenges and
+    paying a second size-`n` MSM (#371). Challenger-generic so an accumulation
+    consumer can drive it with an arkworks-faithful `IpaChallenger` — which, like
+    `TranscriptChallenger`, must be a JAX pytree (the fold carries it through the
+    `lax.scan` below)."""
     n = coeffs.shape[0]
     k = log2_strict_usize(n)
     hn = n // 2
@@ -239,10 +243,14 @@ def _open_one(
         )
         return (a, b, g, fs, ls.at[j].set(lj), rs.at[j].set(rj)), None
 
-    (a, _, _, fs, ls, rs), _ = lax.scan(
+    (a, _, g, fs, ls, rs), _ = lax.scan(
         _round, (a, b, g, fs, lr0, lr0), jnp.arange(k, dtype=jnp.int32)
     )
-    return fs, value, IpaProof(ls, rs, a[0])
+    # g[0] is the fully-folded committer generator: the scan folds g in place each
+    # round (G ← G_lo + u·G_hi), so the final carry's head equals verifier.settle's
+    # recomputed G_final = ⟨challenge_vector(u), G⟩ — returned here so a consumer
+    # skips the challenge replay + a second size-n MSM (#371).
+    return fs, value, IpaProof(ls, rs, a[0]), g[0]
 
 
 def _open_one_zk(
@@ -254,14 +262,20 @@ def _open_one_zk(
     hiding_rand: Array,
     commitment_randomness: Array,
     fs: _ZkCh,
-) -> tuple[_ZkCh, Array, IpaZkProof]:
+) -> tuple[_ZkCh, Array, IpaZkProof, Array, Array]:
     """Hiding/zk open of one (poly, point): commit a blinding polynomial, fold it
     into the statement under one extra challenge, then run the *same* fold as
     `_open_one` on the blinded `(commitment, coeffs)`. The blinding hides the
     witness while preserving the opened value — the blinding polynomial is shifted
     to vanish at `x`, so `mod_coeffs(x) = coeffs(x)`. Challenger-generic, like
     `_open_one`; the byte-exact arkworks variant lives in the consumer's
-    `ZkIpaChallenger`. Requires the key's blinding generator `key.s`."""
+    `ZkIpaChallenger`. Requires the key's blinding generator `key.s`.
+
+    Returns `(challenger, value, proof, final_comm_key, mod_commitment)`: the fold's
+    `final_comm_key` (`g[0]`, as in `_open_one`) plus the blinded commitment
+    `mod_commitment = commitment + hc·hiding_comm − s·rand` the fold actually opened.
+    Both are already in hand here, so a consumer drops its challenger replay, its
+    second size-`n` MSM, and its own `mod_commitment` recompute (#371)."""
     s = key.s
     if s is None:
         raise ValueError("zk opening requires the blinding generator key.s")
@@ -289,8 +303,14 @@ def _open_one_zk(
         jnp.stack([commitment, hiding_comm, s]),
     )
 
-    fs, _, proof = _open_one(key, mod_commitment, mod_coeffs, x, fs)
-    return fs, value, IpaZkProof(proof.l, proof.r, proof.a, hiding_comm, combined_rand)
+    fs, _, proof, final_comm_key = _open_one(key, mod_commitment, mod_coeffs, x, fs)
+    return (
+        fs,
+        value,
+        IpaZkProof(proof.l, proof.r, proof.a, hiding_comm, combined_rand),
+        final_comm_key,
+        mod_commitment,
+    )
 
 
 if TYPE_CHECKING:
