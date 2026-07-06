@@ -268,7 +268,7 @@ def inner_sumcheck_core(
     round loop is unrolled (``num_bits`` concrete), one fused ``zorch.duplex_fs``
     kernel per round. ``bp_num_vars = max(n_r, n_d)`` is the BP layer count.
     ``weights`` is the column-eq table ``col_eq[:L]`` the caller derives from
-    ``z_col`` (``z_col`` stays at the real ``n_c``, so SP1 byte-match is
+    ``z_col`` (``z_col`` stays at the real ``n_c``, so the reference byte-match is
     preserved)."""
     n_vars = 2 * num_bits
     bp_num_vars = jnp.maximum(z_row.shape[0], num_bits)
@@ -313,7 +313,7 @@ def inner_sumcheck_core(
         claim = eval_coeffs(coef, alpha)
         polys.append(coef)
         challenges.append(alpha)
-    return jnp.stack(polys), jnp.stack(challenges)[::-1], claimed_sum, transcript
+    return jnp.stack(polys), jnp.stack(challenges[::-1]), claimed_sum, transcript
 
 
 def eval_round_core(
