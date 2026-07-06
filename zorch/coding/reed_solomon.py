@@ -143,12 +143,13 @@ class ReedSolomon:
                 "unimplemented; only the base F2-subspace is supported"
             )
         # The additive eval-point tensor is the k basis-power codewords `Ŵ_i`
-        # over the domain, built eagerly (the geometric squaring the prime path
-        # uses does not apply in the novel basis). Prime fields skip this and
-        # keep the on-the-fly geometric form.
-        self._binary_eval_table = (
-            self._build_binary_eval_table() if self._binary else None
-        )
+        # over the domain (the geometric squaring the prime path uses does not
+        # apply in the novel basis). Built lazily on first `eval_point`:
+        # encode-only consumers (Ligero matrix commits, plain LDE) never pay
+        # the k extra encodes, and construction stays cheap enough to build
+        # codes per level (the #214 value-keyed-instances contract). Prime
+        # fields keep the on-the-fly geometric form and never build a table.
+        self._binary_eval_table: Array | None = None
 
     # Value equality/hash for static jit-zone keys — the LinearCode seam
     # contract (#214). The key is cached host-side because jit dispatch
@@ -219,11 +220,14 @@ class ReedSolomon:
 
         For a binary field `encode` is the additive NTT (novel basis), so the
         tensor factors are the subspace polynomials `Ŵ_i` instead; those are the
-        basis-power codewords, gathered from the table built at construction."""
+        basis-power codewords, gathered from a table built on first use."""
         if self._binary:
-            table = self._binary_eval_table
-            assert table is not None  # built in __init__ whenever the field is binary
-            return table[positions]  # (*positions.shape, k)
+            if self._binary_eval_table is None:
+                # Concrete even under an outer trace: a traced table stored on
+                # self would leak the tracer into later calls.
+                with jax.ensure_compile_time_eval():
+                    self._binary_eval_table = self._build_binary_eval_table()
+            return self._binary_eval_table[positions]  # (*positions.shape, k)
         k = log2_strict_usize(self.message_len)
         cur = self.domain()[positions]  # (*positions.shape,) evaluation point(s)
         cols = []
@@ -242,8 +246,8 @@ class ReedSolomon:
         so the tensor factors are read off the encoder itself. A per-query
         subset-XOR reconstruction (each `Ŵ_i` is F2-linear) would be lighter but
         needs an int→field select, which the binary-field lowering does not yet
-        support; the resident gather lowers cleanly. Built from concrete arrays
-        at construction, so no `.at[].set` (scatter is unsupported here)."""
+        support; the resident gather lowers cleanly. Built from concrete arrays,
+        so no `.at[].set` (scatter is unsupported here)."""
         k = log2_strict_usize(self.message_len)
         units = jnp.asarray(
             [
