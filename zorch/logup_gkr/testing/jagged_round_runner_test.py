@@ -16,6 +16,7 @@ from jax import Array
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
+    _ROUND_KERNEL_CACHE,
     RoundWidthCaps,
     _InterpConsts,
     _JaggedSchedule,
@@ -205,6 +206,23 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         self._check_round_runner(
             layer, rand_field(17, (), KB), rand_field(18, (z_len,), KB)
         )
+
+    def test_multi_round_blocks_fire(self) -> None:
+        # nrv=3 gives a 2-round row stretch and niv=3 a 2-round dense stretch,
+        # so the k=2 block binaries cover BOTH uniform mid stretches on the
+        # capped export legs — and the full reference byte-gate runs on the
+        # same call. The cache-key diff guards against the block branches
+        # silently never firing while the single-round path keeps the bytes
+        # green (a block that never dispatches is dead perf work, not a
+        # correctness failure the reference match could see).
+        before = set(_ROUND_KERNEL_CACHE)
+        layer = random_jagged_layer(23, (3, 1, 5, 2, 1, 1, 2, 4))
+        self._check_round_runner(
+            layer, rand_field(27, (), KB), rand_field(28, (6,), KB)
+        )
+        fresh = {k[0] for k in set(_ROUND_KERNEL_CACHE) - before}
+        self.assertIn("row_block", fresh)
+        self.assertIn("int_block", fresh)
 
     def test_matches_reference_multi_limb_ef(self) -> None:
         # koalabearx4 challenges (four squeezes reinterpreted) through the loop.

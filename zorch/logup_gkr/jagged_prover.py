@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -70,8 +70,10 @@ from zorch.sumcheck.prover import (
     fold_pair,
 )
 from zorch.transcript import (
+    DuplexState,
     DuplexTranscript,
     Transcript,
+    _state_leaves,
     observe_and_sample_marked,
     reinterpret_challenge,
     sample_challenge,
@@ -1497,9 +1499,9 @@ def _export_path(key: tuple) -> Path:
     )
 
 
-def _round_get(key: tuple) -> export.Exported | None:
+def _round_get(key: tuple, *, disk: bool = True) -> export.Exported | None:
     exp = _ROUND_KERNEL_CACHE.get(key)
-    if exp is None and _EXPORT_CACHE_DIR is not None:
+    if exp is None and disk and _EXPORT_CACHE_DIR is not None:
         path = _export_path(key)
         if path.exists():
             exp = export.deserialize(bytearray(path.read_bytes()))
@@ -1507,9 +1509,9 @@ def _round_get(key: tuple) -> export.Exported | None:
     return exp
 
 
-def _round_put(key: tuple, exp: export.Exported) -> None:
+def _round_put(key: tuple, exp: export.Exported, *, disk: bool = True) -> None:
     _ROUND_KERNEL_CACHE[key] = exp
-    if _EXPORT_CACHE_DIR is not None:
+    if disk and _EXPORT_CACHE_DIR is not None:
         # Atomic publish: write a per-pid sibling temp then os.replace into place,
         # so a process sharing ZORCH_EXPORT_CACHE_DIR never deserializes a
         # half-written .bin (rename is atomic within one filesystem).
@@ -1520,7 +1522,11 @@ def _round_put(key: tuple, exp: export.Exported) -> None:
 
 
 def _round_dispatch(
-    key: tuple, operands: tuple, build: Callable[[], export.Exported]
+    key: tuple,
+    operands: tuple,
+    build: Callable[[], export.Exported],
+    *,
+    disk: bool = True,
 ) -> Any:
     """The shared round export-cache dispatch every `_dispatch_*` runs: reuse the
     cached binary for `key`, else `build()` it (the symbolic export is the cold
@@ -1534,11 +1540,17 @@ def _round_dispatch(
     differentiates. Skipping it is ~177us -> ~55us warm per dispatch (a `jax.jit`
     dispatch costs the same) on the dispatch-bound host-FS prove, with the SAME one
     symbolic binary -- no per-shape recompile, byte-identical (same primitive, same
-    flat operands)."""
-    exported = _round_get(key)
+    flat operands).
+
+    `disk=False` keeps the binary out of the on-disk cache (in-memory only):
+    the multi-round block keys carry the live `Permutation`/fs objects, whose
+    default reprs are process-local addresses -- a stable `_export_path` does
+    not exist for them, and a colliding address must never alias two configs'
+    binaries."""
+    exported = _round_get(key, disk=disk)
     if exported is None:
         exported = build()
-        _round_put(key, exported)
+        _round_put(key, exported, disk=disk)
     flat = jax.tree_util.tree_leaves(operands)
     return exported.out_tree.unflatten(_call_exported_p.bind(*flat, exported=exported))
 
@@ -1839,6 +1851,328 @@ def _dispatch_fix_and_sum_row(
     return _round_dispatch(key, operands, build)
 
 
+# ============================================================================
+# Multi-round blocks (xla#179 host-wall): the decoupled prove's ~330 rounds
+# each pay one `call_exported` bind (~55us) plus one FS-zone dispatch -- a
+# ~200 ms host wall while the GPU is busy well under half that. A block binary
+# runs K uniform mid rounds (round compute + `_fs_reduce` FS hop, challenge
+# chained in-trace) per bind, dividing the host wall by K and letting XLA fuse
+# the inter-round repack glue that separate binaries must materialize. K is
+# static (the in-binary loop unrolls), so the greedy ladder below keeps the
+# binary census O(1): one binary per (phase, K, dtype-mix) -- never per shard,
+# layer, or position. Under the fixed caps every operand shape is
+# round-invariant, which is exactly what lets one K-block serve every stretch.
+_ROUND_BLOCK_SIZES = (8, 4, 2)
+
+
+def _row_live_block(live: list[Array], start: int, k: int) -> Array:
+    """The (k, 3) stacked live-triple operand for a row block covering rounds
+    `[start, start+k)` -- one tiny stack dispatch per block per layer (the
+    triples are the memoized `_round_live_meta` arrays)."""
+    return jnp.stack(live[start : start + k])
+
+
+@cache
+def _dense_live_block(pairs0: int, k: int) -> Array:
+    """The (k, 2) stacked `{live pairs, 0}` operand for a dense block whose
+    first round folds `pairs0` pairs -- consecutive dense rounds halve, so row
+    i carries `pairs0 >> i`. Values restate `_dense_live_operand`; memoized per
+    (pairs0, k) like it."""
+    with jax.ensure_compile_time_eval():
+        return jax.device_put(
+            np.asarray([[pairs0 >> i, 0] for i in range(k)], np.int32)
+        )
+
+
+def _block_fs_key(transcript: DuplexTranscript, challenge_limbs: int) -> tuple:
+    """The FS-config part of a block binary's cache key. The block bakes the
+    permutation's constants and the fs backend into its trace (the singles
+    never did -- their FS ran outside), so the key must carry them.
+    `Poseidon2.__eq__/__hash__` are value-based, making the in-memory dict
+    exact; these objects have no stable cross-process repr, which is why block
+    binaries skip the on-disk cache (`_round_dispatch(disk=False)`)."""
+    return (transcript.permutation, transcript.rate, transcript.fs, challenge_limbs)
+
+
+def _dispatch_row_block(
+    planes: _Planes,
+    eq_row: Array,
+    alpha: Array,
+    row_counts: Array,
+    eq_int: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+    live_block: Array,
+    transcript: DuplexTranscript,
+    eval_point: Array,
+    pos: Array,
+    challenge_limbs: int,
+) -> tuple[
+    Array, Array, _Planes, Array, DuplexTranscript, Array, Array, Array, Array, Array
+]:
+    """Dispatch `k = live_block.shape[0]` consecutive capped row rounds --
+    each a `fix_and_sum_row` marker plus its `_fs_reduce` FS hop, the round
+    challenge chained in-trace -- through ONE cached binary. Only the capped
+    (width-preserving, `out_pairs is None`) route exists in block form: the
+    exact layout changes width per round, so it keeps the single-round path.
+
+    The transcript crosses the boundary as its five `DuplexState` leaves (the
+    permutation / rate / fs metadata is baked into the trace and carried in
+    the key via `_block_fs_key`). Returns the stacked `(k, DEGREE+1)` round
+    polys, the `(k,)` challenges, and the advanced carry
+    `(planes, eq_row, transcript, claim, pad_adj, z_cur, pos, last_r)`."""
+    k = live_block.shape[0]
+    state_ops = _state_leaves(transcript.state)
+    operands = (
+        planes,
+        eq_row,
+        alpha,
+        row_counts,
+        eq_int,
+        scalars,
+        live_block,
+        state_ops,
+        eval_point,
+        pos,
+    )
+    key = (
+        "row_block",
+        k,
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        row_counts.shape,
+        eq_int.shape,
+        eval_point.shape,
+        tuple(leaf.shape for leaf in state_ops),
+        consts.naturals.shape[0],
+        consts.naturals.dtype,
+        _block_fs_key(transcript, challenge_limbs),
+    )
+
+    def build() -> export.Exported:
+        pp, rr = export.symbolic_shape(
+            "pp, rr",
+            constraints=[
+                "pp >= 1",
+                f"pp <= {_ROUND_SYM_MAX}",
+                "rr >= 1",
+                f"rr <= {_ROUND_SYM_MAX}",
+            ],
+        )
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct((2 * pp,), getattr(planes, f).dtype)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            jax.ShapeDtypeStruct(row_counts.shape, row_counts.dtype),
+            jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
+            _abst_scalars(scalars),
+            jax.ShapeDtypeStruct(live_block.shape, live_block.dtype),
+            tuple(jax.ShapeDtypeStruct(s.shape, s.dtype) for s in state_ops),
+            jax.ShapeDtypeStruct(eval_point.shape, eval_point.dtype),
+            jax.ShapeDtypeStruct(pos.shape, pos.dtype),
+        )
+        template = transcript
+
+        def fn(
+            pl: _Planes,
+            er: Array,
+            al: Array,
+            rc: Array,
+            ei: Array,
+            sc: _RoundScalars,
+            lv: Array,
+            st: tuple[Array, Array, Array, Array, Array],
+            ep: Array,
+            po: Array,
+        ) -> tuple[
+            Array,
+            Array,
+            _Planes,
+            Array,
+            tuple[Array, Array, Array, Array, Array],
+            Array,
+            Array,
+            Array,
+            Array,
+            Array,
+        ]:
+            t = replace(template, state=DuplexState(*st))
+            dtype = sc.claim.dtype
+            pad_adj, z_cur, claim = sc.pad_adj, sc.z_cur, sc.claim
+            prev = al
+            polys: list[Array] = []
+            rs: list[Array] = []
+            # eq_adj / lam are row-stretch constants (the eq_adj swap happens
+            # at the row->boundary handoff, outside any block), so each
+            # iteration rebuilds the scalars bundle around the moving trio.
+            for i in range(k):
+                sci = _RoundScalars(sc.eq_adj, pad_adj, z_cur, claim, sc.lam)
+                poly, pl, er = _composite_fix_and_sum_row(
+                    pl, er, prev, rc, ei, sci, consts, lv[i], None
+                )
+                t, r, claim, pad_adj, z_cur, po = _fs_reduce(
+                    poly, t, pad_adj, z_cur, ep, po, challenge_limbs, dtype
+                )
+                polys.append(poly)
+                rs.append(r)
+                prev = r
+            return (
+                jnp.stack(polys),
+                jnp.stack(rs),
+                pl,
+                er,
+                _state_leaves(t.state),
+                claim,
+                pad_adj,
+                z_cur,
+                po,
+                prev,
+            )
+
+        return export.export(jax.jit(fn))(*abst)
+
+    out = _round_dispatch(key, operands, build, disk=False)
+    polys, rs, planes, eq_row, st, claim, pad_adj, z_cur, pos, prev = out
+    return (
+        polys,
+        rs,
+        planes,
+        eq_row,
+        replace(transcript, state=DuplexState(*st)),
+        claim,
+        pad_adj,
+        z_cur,
+        pos,
+        prev,
+    )
+
+
+def _dispatch_int_block(
+    planes: _Planes,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+    live_block: Array,
+    transcript: DuplexTranscript,
+    eval_point: Array,
+    pos: Array,
+    challenge_limbs: int,
+) -> tuple[
+    Array, Array, _Planes, Array, DuplexTranscript, Array, Array, Array, Array, Array
+]:
+    """`_dispatch_row_block` for `k` consecutive capped dense interaction
+    rounds (`fix_and_sum_int` + `_fs_reduce` each, challenge chained
+    in-trace). The state and `eq_int` share the dense rounds' `4*g` symbol
+    exactly like the single-round dispatch."""
+    k = live_block.shape[0]
+    state_ops = _state_leaves(transcript.state)
+    operands = (planes, eq_int, alpha, scalars, live_block, state_ops, eval_point, pos)
+    key = (
+        "int_block",
+        k,
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        eval_point.shape,
+        tuple(leaf.shape for leaf in state_ops),
+        consts.naturals.shape[0],
+        consts.naturals.dtype,
+        _block_fs_key(transcript, challenge_limbs),
+    )
+
+    def build() -> export.Exported:
+        (g,) = export.symbolic_shape(
+            "g", constraints=["g >= 1", f"g <= {_ROUND_SYM_MAX}"]
+        )
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct((4 * g,), getattr(planes, f).dtype)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct((4 * g,), eq_int.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            _abst_scalars(scalars),
+            jax.ShapeDtypeStruct(live_block.shape, live_block.dtype),
+            tuple(jax.ShapeDtypeStruct(s.shape, s.dtype) for s in state_ops),
+            jax.ShapeDtypeStruct(eval_point.shape, eval_point.dtype),
+            jax.ShapeDtypeStruct(pos.shape, pos.dtype),
+        )
+        template = transcript
+
+        def fn(
+            pl: _Planes,
+            ei: Array,
+            al: Array,
+            sc: _RoundScalars,
+            lv: Array,
+            st: tuple[Array, Array, Array, Array, Array],
+            ep: Array,
+            po: Array,
+        ) -> tuple[
+            Array,
+            Array,
+            _Planes,
+            Array,
+            tuple[Array, Array, Array, Array, Array],
+            Array,
+            Array,
+            Array,
+            Array,
+            Array,
+        ]:
+            t = replace(template, state=DuplexState(*st))
+            dtype = sc.claim.dtype
+            pad_adj, z_cur, claim = sc.pad_adj, sc.z_cur, sc.claim
+            prev = al
+            polys: list[Array] = []
+            rs: list[Array] = []
+            for i in range(k):
+                sci = _RoundScalars(sc.eq_adj, pad_adj, z_cur, claim, sc.lam)
+                poly, pl, ei = _composite_fix_and_sum_dense(
+                    pl, ei, prev, sci, consts, lv[i]
+                )
+                t, r, claim, pad_adj, z_cur, po = _fs_reduce(
+                    poly, t, pad_adj, z_cur, ep, po, challenge_limbs, dtype
+                )
+                polys.append(poly)
+                rs.append(r)
+                prev = r
+            return (
+                jnp.stack(polys),
+                jnp.stack(rs),
+                pl,
+                ei,
+                _state_leaves(t.state),
+                claim,
+                pad_adj,
+                z_cur,
+                po,
+                prev,
+            )
+
+        return export.export(jax.jit(fn))(*abst)
+
+    out = _round_dispatch(key, operands, build, disk=False)
+    polys, rs, planes, eq_int, st, claim, pad_adj, z_cur, pos, prev = out
+    return (
+        polys,
+        rs,
+        planes,
+        eq_int,
+        replace(transcript, state=DuplexState(*st)),
+        claim,
+        pad_adj,
+        z_cur,
+        pos,
+        prev,
+    )
+
+
 def _fold_scalars(
     poly: Array, r: Array, pad_adj: Array, z: Array, one: Array
 ) -> tuple[Array, Array]:
@@ -1956,7 +2290,24 @@ def _finalize_layer(
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
     head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
     fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
-    return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
+    if all(c.ndim == 0 for c in chal):
+        # Per-round entries only (the traced and single-round paths): the
+        # original one-stack structure, byte-for-byte.
+        return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
+    # Multi-round block segments ((k,) challenges / (k, DEGREE+1) polys) mixed
+    # with singles: flatten in round order -- the challenge reversal composes
+    # segment reversal with an in-segment flip. Same elements the stacked form
+    # carries, concatenated instead of stacked.
+    rev = [c[::-1] if c.ndim else c[None] for c in reversed(chal)]
+    rows = [p if p.ndim == 2 else p[None] for p in poly]
+    return (
+        fn0,
+        fn1,
+        fd0,
+        fd1,
+        rev[0] if len(rev) == 1 else jnp.concatenate(rev),
+        rows[0] if len(rows) == 1 else jnp.concatenate(rows),
+    )
 
 
 def _run_jagged_rounds(
@@ -2080,7 +2431,96 @@ def _run_jagged_rounds(
         and eval_point.shape[0] <= _FS_EVAL_POINT_CAP
     ):
         eval_point = _pad_to_width(eval_point, _FS_EVAL_POINT_CAP, 0)
-    for rnd in range(nrv + niv):
+    # Multi-round blocks fire only on the decoupled capped path: concrete
+    # operands (outside any outer jit) and fixed-width buffers (`out_pairs is
+    # None` exactly when the caps fix every round shape). The traced path
+    # keeps the single-round structure -- the whole layer already fuses into
+    # one program there, so a block would change nothing but the trace shape.
+    block_sizes = (
+        _ROUND_BLOCK_SIZES
+        if export_dispatch
+        and caps is not None
+        and sched.out_pairs is None
+        and not isinstance(planes.n0, jax.core.Tracer)
+        else ()
+    )
+    rnd = 0
+    while rnd < nrv + niv:
+        if block_sizes and 1 <= rnd < nrv:
+            # Greedy row blocks over the uniform mid stretch [1, nrv): K
+            # rounds per bind, challenge chained inside the binary.
+            k = next((n for n in block_sizes if rnd + n <= nrv), 0)
+            if k:
+                scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
+                (
+                    poly,
+                    r,
+                    planes,
+                    eq_row,
+                    transcript,
+                    claim,
+                    pad_adj,
+                    z_cur,
+                    pos,
+                    prev_r,
+                ) = _dispatch_row_block(
+                    planes,
+                    eq_row,
+                    prev_r,
+                    row_counts,
+                    eq_int,
+                    scalars,
+                    consts,
+                    _row_live_block(sched.live, rnd, k),
+                    transcript,
+                    eval_point,
+                    pos,
+                    challenge_limbs,
+                )
+                polys.append(poly)
+                challenges.append(r)
+                if rnd + k == nrv:
+                    # The block covered round nrv-1: the row->boundary swap
+                    # (eq_adj takes the row stretch's pad mass) applies here,
+                    # exactly as the single-round tail below does it.
+                    eq_adj = pad_adj
+                    pad_adj = one
+                rnd += k
+                continue
+        if block_sizes and nrv < rnd:
+            # Greedy dense blocks over (nrv, nrv+niv): the first covered
+            # round folds `1 << (niv - 1 - (rnd - nrv))` pairs, halving per
+            # round inside the block.
+            k = next((n for n in block_sizes if rnd + n <= nrv + niv), 0)
+            if k:
+                scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
+                (
+                    poly,
+                    r,
+                    planes,
+                    eq_int,
+                    transcript,
+                    claim,
+                    pad_adj,
+                    z_cur,
+                    pos,
+                    prev_r,
+                ) = _dispatch_int_block(
+                    planes,
+                    eq_int,
+                    prev_r,
+                    scalars,
+                    consts,
+                    _dense_live_block(1 << (niv - 1 - (rnd - nrv)), k),
+                    transcript,
+                    eval_point,
+                    pos,
+                    challenge_limbs,
+                )
+                polys.append(poly)
+                challenges.append(r)
+                rnd += k
+                continue
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
         if rnd == 0:
@@ -2157,6 +2597,7 @@ def _run_jagged_rounds(
             eq_adj = pad_adj
             pad_adj = one
         prev_r = r
+        rnd += 1
 
     fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
         planes, prev_r, challenges, polys
