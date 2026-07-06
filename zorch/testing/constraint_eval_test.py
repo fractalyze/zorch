@@ -280,6 +280,33 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertIn("live_width_operand_idx = 2", txt)
         self.assertIn("pv_operand_idx = 3", txt)
 
+    def test_pv_composes_with_live_width_and_column_weights(self) -> None:
+        # All three optionals present: order is (trace, alpha, live, weights, pv),
+        # so pv's index shifts to 4. The eager result must equal the masked fold
+        # plus the unmasked column term (column_weights is added after the mask).
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        weights = rand_field(5, (3,), F)
+        pv = rand_field(7, (2,), F)
+        fold = _eval_fn_pv(rows, pv) @ alpha
+        masked = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
+        golden = masked + rows @ weights
+        got = constraint_eval(
+            _eval_fn_pv, rows, alpha, live_width=5, column_weights=weights, pv=pv
+        )
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        txt = (
+            jax.jit(
+                lambda t, a, lw, w, p: constraint_eval(
+                    _eval_fn_pv, t, a, live_width=lw, column_weights=w, pv=p
+                )
+            )
+            .lower(rows, alpha, jnp.int32(5), weights, pv)
+            .as_text()
+        )
+        self.assertIn("live_width_operand_idx = 2", txt)
+        self.assertIn("pv_operand_idx = 4", txt)
+
 
 if __name__ == "__main__":
     absltest.main()
