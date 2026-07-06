@@ -56,6 +56,7 @@ from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.sumcheck.prover import SumcheckRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+from zorch.utils.field import field_sum
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
@@ -173,7 +174,7 @@ def _open(
     # reduces and checks it); `value = f(z)` is the opened value it returns.
     W = pd.f
     B = expand_eq_to_hypercube(z, one)
-    value = (pd.f * B).sum()  # f(z) = <f, eq(z)>; reuse B rather than rebuild eq(z)
+    value = field_sum(pd.f * B)  # f(z) = <f, eq(z)>; reuse B rather than rebuild eq(z)
 
     # Bind the statement (root, point, value) before any challenge.
     t = transcript.observe(pd.initial.root)
@@ -230,7 +231,7 @@ def _open(
         alpha = alpha[: cfg.queries[j]]  # (Q,) partial-Lagrange weights
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)  # (Q, 2^nv)
-        b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
+        b_new = field_sum(alpha[:, None] * eqps, axis=0)  # (2^num_vars,)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new

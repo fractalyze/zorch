@@ -35,6 +35,7 @@ from zorch.pcs.ligero.config import LigeroCommitment, LigeroProof
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+from zorch.utils.field import field_sum
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
@@ -111,12 +112,12 @@ def _verify_body(
     # whole block; index it at the sampled positions. The committed leaves store
     # base-field limbs, so reinterpret each opened row to the value dtype first.
     opened = from_base_field(proof.component_opening.row, dtype, cols)  # (Q, cols)
-    lhs = (opened * r_col[None, :]).sum(axis=1)  # (Q,)  broadcast-mul + sum, not `@`
+    lhs = field_sum(opened * r_col[None, :], axis=1)  # (Q,) proximity LHS
     rhs = verifier.code.encode(proof.w)[positions]  # (Q,)
     proximity_ok = jnp.all(lhs == rhs)
 
     # Value: <r_row, w> == y.
-    value_ok = (r_row * proof.w).sum() == value
+    value_ok = field_sum(r_row * proof.w) == value
 
     return merkle_ok & proximity_ok & value_ok, t
 

@@ -33,6 +33,7 @@ from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck.prover import fold as sc_fold
 from zorch.sumcheck.verifier import SumcheckRound
 from zorch.transcript import Transcript
+from zorch.utils.field import field_sum
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
@@ -141,7 +142,7 @@ def _verify(
         opening = proof.component_openings[j]
         ok = ok & verify_openings(verifier.tree, [(roots[j], positions, opening)])
         opened = from_base_field(opening.row, dtype, kappa_j)  # (Q, kappa_j)
-        v = (opened * eqc[None, :]).sum(axis=1)  # (Q,) proximity LHS
+        v = field_sum(opened * eqc[None, :], axis=1)  # (Q,) proximity LHS
         points_s = code_j.eval_point(positions)  # (Q, num_vars)
 
         if is_final:
@@ -149,7 +150,7 @@ def _verify(
             # and the sumcheck's terminal claim closes against Σ_x residual·B.
             expected = jax.vmap(lambda p: eval_mle(residual, p))(points_s)  # (Q,)
             ok = ok & jnp.all(expected == v)
-            ok = ok & (claim == (residual * B).sum())
+            ok = ok & (claim == field_sum(residual * B))
             break
 
         # Induce the batched proximity claim into the running sumcheck (mirror
@@ -158,8 +159,8 @@ def _verify(
         t, alpha = sample_staggered_coeffs(t, cfg.queries[j], dtype)
         alpha = alpha[: cfg.queries[j]]
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)
-        b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
-        h_new = (alpha * v).sum()
+        b_new = field_sum(alpha[:, None] * eqps, axis=0)  # (2^num_vars,)
+        h_new = field_sum(alpha * v)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new

@@ -50,3 +50,15 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "multilinear_ghash_test",
+    size = "small",
+    srcs = ["multilinear_ghash_test.py"],
+    deps = [
+        "//zorch/poly",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

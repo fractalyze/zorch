@@ -33,6 +33,7 @@ from zorch.pcs.matrix_commit import commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.transcript import Transcript
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
+from zorch.utils.field import field_sum
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsProver
@@ -152,8 +153,8 @@ def _open_body(
 
     # Broadcast-multiply + sum, not `@`: field matmul is not the zorch idiom
     # (eval_mle contracts the same way) and extension dtypes reject some ops.
-    w = (pd.matrix * r_col[None, :]).sum(axis=1)  # (rows,)  = X̃ · r_col
-    value = (r_row * w).sum()  # scalar = f(z)
+    w = field_sum(pd.matrix * r_col[None, :], axis=1)  # (rows,)  = X̃ · r_col
+    value = field_sum(r_row * w)  # scalar = f(z)
 
     # FS commit step (mirror `verify`): bind the root, the opened value, then the
     # sent vector w — so the query positions depend on all three.

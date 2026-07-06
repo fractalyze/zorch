@@ -17,6 +17,7 @@ from jax import Array, lax
 
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.utils.bits import log2_strict_usize
+from zorch.utils.field import field_sum
 
 
 def _butterfly_scan(table: Array, combine: Callable[[Array, Array], Array]) -> Array:
@@ -73,7 +74,9 @@ def eval_mle(mle: Array, point: Array, axis: int = 0) -> Array:
     eq = expand_eq_to_hypercube(point, jnp.ones((), mle.dtype))
     shape = [1] * mle.ndim
     shape[axis] = eq.shape[0]
-    return (mle * eq.reshape(shape)).sum(axis=axis)
+    # `field_sum`, not `.sum`: a reduce-add over a binary field SIGSEGVs on the
+    # CUDA backend (zorch#400); it folds a tree of elementwise adds there instead.
+    return field_sum(mle * eq.reshape(shape), axis=axis)
 
 
 def mle_fold(evals: Array, beta: Array) -> Array:
