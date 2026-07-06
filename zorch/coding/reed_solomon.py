@@ -35,6 +35,7 @@ from zorch.utils.bits import is_power_of_two, log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.coding.foldable_code import FoldableCode, KFoldableCode
+    from zorch.coding.tensor_code import TensorCode
 
 
 def _base_dtype(dtype: Any) -> Any:
@@ -172,6 +173,26 @@ class ReedSolomon:
             shift=self.coset_shift,
             generator=self.generator,
         )
+
+    def eval_point(self, positions: Array) -> Array:
+        """TensorCode seam: the multilinear point `p_s` that codeword coordinate
+        `positions` evaluates. `encode` is coefficient-basis
+        (`encode(w)[s] = Σ_j w[j]·dₛʲ`, `dₛ = domain()[s]`), so the generator row
+        `(1, dₛ, dₛ², …)` factors as the geometric tensor
+        `p_s = (dₛ^{2^{k-1}}, …, dₛ², dₛ)` — MSB-first to match `eval_mle`'s
+        lexicographic eq order. Hence
+        `encode(w)[s] == eval_mle(mle_coeffs_to_evals(w), eval_point(s))`, which
+        turns the Ligerito proximity RHS into a point-eval of the committed `w`.
+        The `dₛ^{2^i}` are built by repeated squaring so
+        no array exponent is taken (field dtypes reject `jnp.power`)."""
+        k = log2_strict_usize(self.message_len)
+        cur = self.domain()[positions]  # (*positions.shape,) evaluation point(s)
+        cols = []
+        for _ in range(k):
+            cols.append(cur)
+            cur = cur * cur
+        # MSB-first: variable 0 binds the highest power dₛ^{2^{k-1}}.
+        return jnp.stack(cols[::-1], axis=-1)  # (*positions.shape, k)
 
     def fold(self, codeword: Array, beta: Array) -> Array:
         """FoldableCode fold: natural-order `(x, -x)` conjugate pairs. The layer
@@ -485,3 +506,4 @@ if TYPE_CHECKING:
     _: type[FoldableCode] = ReedSolomon
     _bitrev: type[FoldableCode] = BitReversedReedSolomon
     _kary: type[KFoldableCode] = ReedSolomon
+    _tensor: type[TensorCode] = ReedSolomon
