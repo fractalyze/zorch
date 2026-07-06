@@ -63,8 +63,10 @@ evaluates its MLE at the PCS's final point in `O(ℓ·W)` field multiplies plus
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 from jax import Array, jit, lax
 
@@ -143,7 +145,14 @@ def rs_eq_ind(tensor: Array, eq_r_dprime: Array) -> Array:
 def tensor_algebra_transpose(v: Array) -> Array:
     """The `W×W` bit transpose between the two readings of a tensor-algebra
     element: `bit_b(out[h]) = bit_h(v[b])`. `(W,) -> (W,)`; an involution."""
-    (w,) = v.shape
+    w = field_bit_width(v.dtype)
+    if v.shape != (w,):
+        # Any other length reshapes into a rectangular bit matrix and returns
+        # garbage instead of erroring.
+        raise ValueError(
+            f"a tensor-algebra element over {jnp.dtype(v.dtype).name} is "
+            f"shape ({w},), got {v.shape}"
+        )
     bits_t = _bits(v).T  # (W, W): row h = bit h of every v[b]
     shifts = (_LANE(1) << jnp.arange(_LANE_BITS, dtype=_LANE))[None, None, :]
     lanes = jnp.sum(bits_t.reshape(w, -1, _LANE_BITS) * shifts, axis=-1, dtype=_LANE)
@@ -156,10 +165,16 @@ def inner_product(a: Array, b: Array) -> Array:
     return _from_lanes(_xor_reduce(_lanes(a * b), axis=0), a.dtype)
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=["s_hat_v", "rs_eq_ind", "claim"],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class RingSwitch:
     """One reduced claim: observe `s_hat_v`, then let the PCS prove
-    `Σ_i packed_witness[i] · rs_eq_ind[i] = claim`."""
+    `Σ_i packed_witness[i] · rs_eq_ind[i] = claim`. A registered pytree so a
+    consumer's jitted open path can return it across the `jit` boundary."""
 
     s_hat_v: Array  # (W,) — the wire
     rs_eq_ind: Array  # (2^ℓ,) — the PCS sumcheck's transparent counterpart
@@ -176,6 +191,11 @@ def reduce_bit_claim(
     challenge `r''` (length `W`). Fiat-Shamir order is the caller's — see the
     module docstring.
     """
+    if packed_witness.ndim != 1 or packed_witness.shape != suffix_tensor.shape:
+        raise ValueError(
+            f"packed_witness and suffix_tensor must share one 1-D shape, got "
+            f"{packed_witness.shape} vs {suffix_tensor.shape}"
+        )
     s_hat_v = bit_slice_evals(packed_witness, suffix_tensor)
     claim = inner_product(tensor_algebra_transpose(s_hat_v), eq_r_dprime)
     return RingSwitch(

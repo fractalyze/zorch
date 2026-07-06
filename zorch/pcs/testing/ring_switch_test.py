@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import zk_dtypes
@@ -110,6 +111,11 @@ class RingSwitchKernelsTest(parameterized.TestCase):
         a, b = _rand(6, (4,), dtype), _rand(7, (4,), dtype)
         np.testing.assert_array_equal(_np_lanes(add(a, b)), _np_lanes(a) ^ _np_lanes(b))
 
+    def test_transpose_wrong_width_raises(self) -> None:
+        dtype = zk_dtypes.binary_field_ghash
+        with self.assertRaisesRegex(ValueError, "tensor-algebra element"):
+            tensor_algebra_transpose(_rand(8, (64,), dtype))  # W=128 field
+
 
 class RingSwitchReductionTest(parameterized.TestCase):
     """The identity that makes the reduction work: both readings of
@@ -131,6 +137,26 @@ class RingSwitchReductionTest(parameterized.TestCase):
         self.assertIsInstance(rs, RingSwitch)
         lhs = inner_product(witness, rs.rs_eq_ind)
         np.testing.assert_array_equal(_np_lanes(lhs), _np_lanes(rs.claim))
+
+    def test_result_crosses_a_jit_boundary(self) -> None:
+        """`RingSwitch` is a registered pytree: a jitted reduction can return it,
+        and the result matches the eager path."""
+        dtype = zk_dtypes.binary_field_ghash
+        w = field_bit_width(dtype)
+        args = _rand(11, (16,), dtype), _rand(12, (16,), dtype), _rand(13, (w,), dtype)
+        eager, jitted = reduce_bit_claim(*args), jax.jit(reduce_bit_claim)(*args)
+        for field in ("s_hat_v", "rs_eq_ind", "claim"):
+            np.testing.assert_array_equal(
+                _np_lanes(getattr(jitted, field)), _np_lanes(getattr(eager, field))
+            )
+
+    def test_mismatched_witness_tensor_raises(self) -> None:
+        dtype = zk_dtypes.binary_field_ghash
+        w = field_bit_width(dtype)
+        with self.assertRaisesRegex(ValueError, "share one 1-D shape"):
+            reduce_bit_claim(
+                _rand(1, (8,), dtype), _rand(2, (4,), dtype), _rand(3, (w,), dtype)
+            )
 
 
 class EvalRsEqTest(parameterized.TestCase):
