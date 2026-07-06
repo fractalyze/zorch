@@ -52,7 +52,7 @@ from zorch.pcs.jagged.poly import (
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_coeffs
 from zorch.round import Round
-from zorch.transcript import Transcript, sample_challenge
+from zorch.transcript import Transcript, reinterpret_challenge, sample_challenge
 from zorch.utils.bits import log2_ceil_usize
 
 
@@ -211,10 +211,10 @@ def outer_sumcheck(
         s_inf = jnp.sum((p1a - p0a) * (p1b - p0b))
         coef = jnp.stack([s0, cur - two * s0 - s_inf, s_inf])
 
-        # SP1 binds each variable with one extension element (its
-        # ``sample_ext_element``) — the shared ``sample_challenge`` rule.
-        transcript = transcript.observe(coef)
-        transcript, alpha = sample_challenge(transcript, ef, ef_limbs)
+        # One extension challenge per variable; fused absorb+squeeze, so byte
+        # for byte the same as observe + sample_challenge.
+        transcript, raw = transcript.observe_and_sample(coef, ef_limbs)
+        alpha = reinterpret_challenge(raw, ef)
         state_a = p0a + alpha * (p1a - p0a)
         state_b = p0b + alpha * (p1b - p0b)
         cur = eval_coeffs(coef, alpha)
@@ -259,18 +259,15 @@ def inner_sumcheck_core(
     dtype: Any,
     num_bits: Any,
 ) -> tuple[Array, Array, Array, Transcript]:
-    """The branching-program sumcheck over a prebuilt ``(merged, weights)``,
-    shape-polymorphic in BOTH the column count ``merged.shape[0]`` and the
-    prefix-bit width ``num_bits`` (= n_d).
+    """Branching-program sumcheck over a prebuilt (merged, weights).
 
-    Column axis: per-column work is a ``vmap`` + ``jnp.sum`` over ``merged``'s real
-    columns (no padding), mirroring ``stacked_basefold_open``'s symbolic ``K``.
-    ``n_d`` axis: the round loop is a ``lax.scan`` over ``n_vars = 2·num_bits``
-    rounds (fixed-shape carry — the buffer is bound in place), so the round count
-    can be a symbolic export dim; ``bp_num_vars = max(n_r, n_d)`` is the BP layer
-    count, derived as a value so it stays symbolic-safe. ``weights`` is the
-    column-eq table ``col_eq[:L]`` the caller derives from ``z_col`` (``z_col``
-    stays at the real ``n_c``, so SP1 byte-match is preserved)."""
+    Polymorphic in the column count L = merged.shape[0]: per-column work is a
+    vmap + jnp.sum over the real columns (no padding), so L can be a symbolic
+    export dim. The 2*num_bits round loop is unrolled (num_bits concrete) — one
+    fused zorch.duplex_fs kernel per round. bp_num_vars = max(n_r, n_d) is the BP
+    layer count. weights is the column-eq table col_eq[:L]; the caller keeps z_col
+    at its true length (n_c, unpadded) so those weights are exact even when L is
+    a symbolic dim."""
     n_vars = 2 * num_bits
     bp_num_vars = jnp.maximum(z_row.shape[0], num_bits)
     t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
@@ -289,33 +286,32 @@ def inner_sumcheck_core(
     # rounds; its verifier re-absorbs it the same way (fractalyze/sp1-zorch#90).
     transcript = transcript.observe(claimed_sum)
 
-    # Eliminate LSB-first via lax.scan (round n_vars-1 down to 0) so the round count
-    # 2·n_d can be a symbolic export dim. The carry is fixed-shape (buffer bound in
-    # place, never shrunk) as scan requires; bits_i reads `merged` since the round's
-    # column is untouched until its own step (merged == buf there).
-    def _round(carry: Any, round_idx: Array) -> tuple[Any, tuple[Array, Array]]:
-        buf, claim, weights, transcript = carry
+    # Eliminate LSB-first (column n_vars-1 down to 0), unrolled so each round's
+    # Fiat-Shamir absorb+squeeze lowers to its own fused zorch.duplex_fs kernel.
+    # bits_i reads merged since the round's column is untouched until its own step
+    # (merged == buf there).
+    buf, claim, weights_c = merged, claimed_sum, weights
+    polys: list[Array] = []
+    challenges: list[Array] = []
+    for round_idx in range(n_vars - 1, -1, -1):
         bits_i = merged[:, round_idx]
         eq0 = one - bits_i
         bp0 = bp_all(buf.at[:, round_idx].set(0))
         bp1 = bp_all(buf.at[:, round_idx].set(1))
-        p0 = jnp.sum(weights * eq0 * bp0)
-        p_inf = jnp.sum(weights * (bits_i - eq0) * (bp1 - bp0))
+        p0 = jnp.sum(weights_c * eq0 * bp0)
+        p_inf = jnp.sum(weights_c * (bits_i - eq0) * (bp1 - bp0))
         coef = jnp.stack([p0, claim - two * p0 - p_inf, p_inf])
 
-        # One extension element per variable, as in ``outer_sumcheck``.
-        transcript = transcript.observe(coef)
-        transcript, alpha = sample_challenge(transcript, dtype, ef_limbs)
+        # One extension challenge per variable; fused absorb+squeeze, so byte
+        # for byte the same as observe + sample_challenge.
+        transcript, raw = transcript.observe_and_sample(coef, ef_limbs)
+        alpha = reinterpret_challenge(raw, dtype)
         buf = buf.at[:, round_idx].set(alpha)
-        weights = weights * (alpha * bits_i + (one - alpha) * eq0)
+        weights_c = weights_c * (alpha * bits_i + (one - alpha) * eq0)
         claim = eval_coeffs(coef, alpha)
-        return (buf, claim, weights, transcript), (coef, alpha)
-
-    round_ids = jnp.arange(n_vars, dtype=jnp.int32)[::-1]
-    (_, _, _, transcript), (polys, challenges) = jax.lax.scan(
-        _round, (merged, claimed_sum, weights, transcript), round_ids
-    )
-    return polys, challenges[::-1], claimed_sum, transcript
+        polys.append(coef)
+        challenges.append(alpha)
+    return jnp.stack(polys), jnp.stack(challenges[::-1]), claimed_sum, transcript
 
 
 def eval_round_core(
