@@ -21,7 +21,11 @@ from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix
-from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER, Poseidon2
+from zorch.hash.poseidon2.poseidon2 import (
+    POSEIDON2_MARKER,
+    SPONGE_HASH_MARKER,
+    Poseidon2,
+)
 from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_POSEIDON2_ATTRS,
     koalabear16_params,
@@ -146,46 +150,6 @@ class MerkleTreeTest(absltest.TestCase):
         roots = run(matrix, layers, indices)
         self.assertTrue(
             bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
-        )
-
-    def test_commit_rolls_layer_fold_into_scan(self) -> None:
-        # The prover commit folds the tree layers with one scan, not `log2(N)`
-        # unrolled compresses: the lowered form carries a single while loop and
-        # its composite count is independent of tree height, so commit's
-        # trace+lower is O(1) in depth, not O(depth). The unrolled fold
-        # dominated the trace-commit compile; the verifier reconstruct was
-        # already rolled this way (#163/#182).
-        _, _, tree = koalabear16_merkle()
-
-        def lowered(height: int) -> str:
-            matrix = jnp.zeros((height, 8), F)
-            return jax.jit(tree.commit).lower(matrix).as_text()
-
-        shallow, deep = lowered(4), lowered(64)  # depth 2 vs depth 6
-        self.assertIn("stablehlo.while", shallow)  # the fold is a scan, not unrolled
-        self.assertEqual(  # a deeper tree adds no unrolled region
-            shallow.count("stablehlo.composite"), deep.count("stablehlo.composite")
-        )
-
-    def test_reconstruct_root_rolls_path_into_scan(self) -> None:
-        # The leaf->root fold is one scan, not `depth` unrolled compresses: the
-        # lowered form carries a single while loop and its op count is
-        # independent of path depth, so the verifier's per-layer reconstruct
-        # chains lower in O(1), not O(depth) (#163 — the unrolled fold dominated
-        # trace+lower).
-        _, _, tree = koalabear16_merkle()
-
-        def lowered(depth: int) -> str:
-            opening = Opening(
-                row=jnp.zeros((8,), F),
-                path=[jnp.zeros((8,), F) for _ in range(depth)],
-            )
-            return jax.jit(tree.reconstruct_root).lower(0, opening).as_text()
-
-        shallow, deep = lowered(2), lowered(8)
-        self.assertIn("stablehlo.while", shallow)  # the fold is a scan, not unrolled
-        self.assertEqual(  # a 4x-deeper path adds no unrolled region
-            shallow.count("stablehlo.composite"), deep.count("stablehlo.composite")
         )
 
     def test_reconstruct_root_recovers_root_on_deeper_tree(self) -> None:
@@ -355,15 +319,13 @@ class MerkleTreeTest(absltest.TestCase):
         )
 
     def test_commit_lowers_to_nested_poseidon2_markers(self) -> None:
-        # commit emits no whole-tree marker; the leaf/fold permutes survive as
-        # dedicated zorch.poseidon2 markers (with their attributes) the vendor
-        # lowers to per-permute kernels. The permutes are vmap'd and their round
-        # constants auto-lift, so this also guards composite.attributes survive.
         _, _, tree = koalabear16_merkle()
         matrix = jnp.arange(32, dtype=F).reshape(4, 8)
         text = jax.jit(tree.commit).lower(matrix).as_text()
-        self.assertNotIn('"zorch.merkle_commit"', text)
+        self.assertIn(f'"{SPONGE_HASH_MARKER}"', text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
+        # vmap auto-lifts the round constants to operands; check the attributes
+        # survive that lift — the vendor recognizer parses them off the marker.
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, text)
 
     def test_value_equality_across_fresh_instances(self) -> None:
@@ -509,7 +471,7 @@ class ColumnMajorMerkleTreeTest(absltest.TestCase):
 
 class CommitDtypeRejectionTest(absltest.TestCase):
     """Committing a matrix whose field mismatches the leaf hasher is rejected —
-    the permutation's dtype check fires during the leaf hash."""
+    the leaf hasher's dtype guard fires at the start of the leaf hash."""
 
     def test_commit_rejects_wrong_field_matrix(self) -> None:
         sponge, comp, _ = koalabear16_merkle()

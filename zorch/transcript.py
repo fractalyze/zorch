@@ -10,14 +10,16 @@ host callback or zkVM FFI.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, Self
+from functools import cache, partial
+from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 
+import jax
 import jax.numpy as jnp
 from jax import Array, jit, lax, vmap
 from jax.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
 
+from zorch.fusion import fused_region
 from zorch.hash.permutation import Permutation
 
 # Candidate window for the grind search: each `lax.while_loop` step tests this
@@ -79,6 +81,13 @@ class GrindingTranscript(Transcript, Protocol):
     def grind(self, pow_bits: int) -> tuple[Self, Array]: ...
 
 
+# Generic over the transcript flavor so the free Fiat-Shamir helpers
+# (`sample_challenge`, the open/verifier's `sample_*`) preserve a
+# `GrindingTranscript` rather than widening it to the base `Transcript`.
+TranscriptT = TypeVar("TranscriptT", bound=Transcript)
+
+
+@partial(jit, static_argnums=(1,))
 def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
     """Reinterpret consecutive transcript squeezes `raw` as one `dtype` challenge:
     the identity when `dtype` is the transcript's own field, else the extension
@@ -89,7 +98,15 @@ def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
     Fails loud on a packing mismatch: the squeezes are already consumed, so
     silently truncating to the first element would leave the stream advanced past
     a challenge nobody received.
-    """
+
+    Jitted: the `view` + bounds-check + index are three ops that, called eagerly
+    per FS squeeze (every layer-boundary `lam`/`r`, head sample), each launch a
+    separate kernel -- the dominant "loose single-op dispatch" cost on the warm
+    prove. As one jit they fuse to a single dispatch (and XLA elides the identity
+    bitcast when `dtype` is the transcript's own field). The shape check runs at
+    trace time (shapes are static), so the loud failure is preserved. Nested
+    inside an outer jit/export (the round FS, sumcheck scan) it inlines, leaving
+    those paths byte-identical. `dtype` rides static."""
     viewed = raw.view(dtype)
     if viewed.shape != (1,):
         raise ValueError(
@@ -100,8 +117,8 @@ def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
 
 
 def sample_challenge(
-    transcript: Transcript, dtype: Any, limbs: int = 1
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, dtype: Any, limbs: int = 1
+) -> tuple[TranscriptT, Array]:
     """Squeeze one challenge of `dtype` as `limbs` transcript samples.
 
     A transcript squeezes elements of its own field; a challenge field that
@@ -144,29 +161,125 @@ def _absorb_permute(
     return permutation.permute(sponge.at[:rate].set(merged))
 
 
-@partial(register_dataclass, data_fields=["state"], meta_fields=["permutation", "rate"])
+class _FsBackend(Protocol):
+    """The Fiat-Shamir sponge backend a `DuplexTranscript` dispatches every absorb /
+    squeeze through — device (graph ops) or host (CPU callback, state-resident). A
+    transcript meta-field, so the device/host choice is structural: every method
+    routes through it and none can silently forget to honor the host (the trap the
+    old per-method `if self.fs_on_host` invited -- `check_witness` once did)."""
+
+    @property
+    def on_host(self) -> bool: ...
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript: ...
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]: ...
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]: ...
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]: ...
+
+
+@dataclass(frozen=True)
+class _DeviceFs:
+    """The default backend: every duplex step is a device op (the compiled graph)."""
+
+    on_host: bool = False
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript:
+        return _observe_body(t, values)
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+        return _sample_body(t, n)
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return observe_and_sample_marked(t, values, n)
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _check_witness_body(t, witness, pow_bits)
+
+
+@dataclass(frozen=True)
+class _HostFs:
+    """The host-FS backend: the serial sponge runs on the CPU and its state stays
+    host-resident across the stream (see the host-FS backend section below)."""
+
+    on_host: bool = True
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript:
+        return _observe_host(t, values)
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+        return _sample_host(t, n)
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _observe_and_sample_host(t, values, n)
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]:
+        return _check_witness_host(t, witness, pow_bits)
+
+
+_DEVICE_FS = _DeviceFs()
+_HOST_FS = _HostFs()
+
+
+@partial(
+    register_dataclass,
+    data_fields=["state"],
+    meta_fields=["permutation", "rate", "fs"],
+)
 @dataclass(frozen=True)
 class DuplexTranscript:
     """Overwrite-mode duplex sponge implementing `Transcript`. A JAX pytree whose
     `state` buffers are the leaves and whose `permutation`/`rate` are static, so
     the whole transcript threads through `@jit` (and, later, a `lax.scan` carry).
-    Every step is a device op — no host callback, no zkVM FFI."""
+    Every step is a device op — no host callback, no zkVM FFI.
+
+    The `fs` backend (`_DeviceFs` / `_HostFs`) chooses where every absorb / squeeze
+    runs. `_HostFs` runs the serial Poseidon chain on the host CPU (a latency-bound
+    hash chain idles accelerator cores, so a host-driven, per-round-kernel consumer
+    offloads it), with the sponge state kept CPU-resident across the stream -- an
+    eager primitive (see the host-FS backend section below). `_DeviceFs` (the
+    default) leaves the device path and its compiled graph untouched. Pick one via
+    `new(..., fs_on_host=)`."""
 
     permutation: Permutation
     rate: int
     state: DuplexState
+    fs: _FsBackend = _DEVICE_FS
+
+    @property
+    def fs_on_host(self) -> bool:
+        """Whether Fiat-Shamir runs on the host CPU — read off the `fs` backend.
+        Kept as a bool for callers (the `sumcheck.prover` gate, the consumer's
+        `.new(fs_on_host=...)`)."""
+        return self.fs.on_host
 
     @property
     def has_dedicated_fusion(self) -> bool:
         """Whether the Fiat-Shamir permutation lowers to a dedicated fusion marker
-        a vendor can expand — the gate `zorch.sumcheck.prover` reads to mark its
-        scan as one register-resident sumcheck kernel (mirrors `Sponge`/
-        `Compression`). False for a test `CheapPermutation`, so unit tests keep the
-        plain scan."""
+        a vendor can expand — the LogUp-GKR jagged prover's gate
+        (`zorch.logup_gkr.jagged_prover`) reads it to mark its sumcheck scan as one
+        register-resident kernel (mirrors `Sponge`/`Compression`). False for a test
+        `CheapPermutation`, so unit tests keep the plain scan."""
         return self.permutation.has_dedicated_fusion
 
     @classmethod
-    def new(cls, permutation: Permutation, rate: int) -> DuplexTranscript:
+    def new(
+        cls, permutation: Permutation, rate: int, fs_on_host: bool = False
+    ) -> DuplexTranscript:
         if not 1 <= rate < permutation.width:
             raise ValueError(
                 f"rate ({rate}) must satisfy 1 <= rate < width ({permutation.width})"
@@ -179,10 +292,10 @@ class DuplexTranscript:
             in_pos=jnp.int32(0),
             out_pos=jnp.int32(0),
         )
-        return cls(permutation, rate, state)
+        return cls(permutation, rate, state, _HOST_FS if fs_on_host else _DEVICE_FS)
 
     def _with_state(self, state: DuplexState) -> DuplexTranscript:
-        return DuplexTranscript(self.permutation, self.rate, state)
+        return DuplexTranscript(self.permutation, self.rate, state, self.fs)
 
     def _duplexing(self) -> DuplexTranscript:
         """Flush the pending input prefix and refill the output buffer."""
@@ -204,7 +317,7 @@ class DuplexTranscript:
         """Absorb `values` (any field, flattened to the base field) into the
         transcript. The absorb is one `lax.scan` over the flat input, so the
         compiled graph size is independent of `len(values)`."""
-        return _observe_body(self, values)
+        return self.fs.observe(self, values)
 
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
         # Permute when input is pending or the output buffer is drained.
@@ -226,7 +339,7 @@ class DuplexTranscript:
         return t._with_state(replace(t.state, out_pos=out_pos)), item
 
     def sample(self, n: int = 1) -> tuple[DuplexTranscript, Array]:
-        return _sample_body(self, n)
+        return self.fs.sample(self, n)
 
     def observe_and_sample(
         self, values: Array, n: int = 1
@@ -235,7 +348,7 @@ class DuplexTranscript:
         Fiat-Shamir primitive (commit -> challenge). One method so the absorb and
         squeeze fuse into a single kernel under `@jit` by construction, never by a
         per-primitive pattern-match (the repo's fusion contract)."""
-        return _observe_and_sample_body(self, values, n)
+        return self.fs.observe_and_sample(self, values, n)
 
     def check_witness(
         self, pow_bits: int, witness: Array
@@ -257,7 +370,7 @@ class DuplexTranscript:
                 f"witness must be a scalar {field_dtype} field element (the grind "
                 f"search's domain), got shape {witness.shape} dtype {witness.dtype}"
             )
-        return _check_witness_body(self, witness, pow_bits)
+        return self.fs.check_witness(self, witness, pow_bits)
 
     @partial(jit, static_argnames=("pow_bits", "chunk"))
     def _grind_search(self, pow_bits: int, chunk: int) -> Array:
@@ -467,23 +580,29 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
     combined = combined_src[src_idx]  # (total,) — valid prefix is [0:length]
 
-    # Unroll the rate-block absorb in Python (num_blocks is STATIC) rather than
-    # `lax.scan`: a scan whose array carry evolves under a per-step scatter
-    # (`sponge.at[:rate].set`) and a `dynamic_slice` of the closed-over `combined`
-    # is the fractalyze/zkx#500 CPU-backend miscompile, which silently corrupts
-    # the CPU Fiat-Shamir transcript (the byte-identity tests are GPU-pinned, so
-    # it slipped through). num_blocks = ceil((rate-1+M)/rate) is small and
-    # CONSTANT for the fixed-size messages the rolled prove observes per round, so
-    # the per-call graph stays O(1) across rounds; a one-time large observe pays a
-    # small static unroll. `concatenate` (not `sponge.at[:rate].set`) overwrites
-    # the rate lanes, byte-identical to the per-element absorb, and the static
-    # `combined[k*rate:(k+1)*rate]` avoids the traced-index dynamic_slice.
-    sponge = st.sponge_state
-    for k in range(num_blocks):
-        block = combined[k * rate : (k + 1) * rate]  # static slice
+    # Absorb the rate-blocks with a `lax.scan`: ONE permute body regardless of
+    # message length, so the HLO module (and its compile) is O(1) in M. A Python
+    # unroll instead emits `num_blocks` block-permute instructions + glue -- fine
+    # for the tiny per-round observes, but a ~15 MB module / minutes of XLA passes
+    # for a one-shot large observe like the shard preamble (num_blocks ~hundreds).
+    # reuse_key dedups the permute cubin either way; it is the O(num_blocks) HLO
+    # graph, not the cubin, that the roll collapses.
+    #
+    # Blocks ride as a leading-axis `xs` and the carry evolves by `concatenate` (no
+    # in-place scatter, no traced dynamic_slice), which keeps the absorb
+    # byte-identical on GPU and CPU. `k` rides the carry so the live-count mask
+    # needs no `arange`, one path for concrete and symbolic `num_blocks` (export).
+    blocks = combined[: num_blocks * rate].reshape(num_blocks, rate)
+
+    def _absorb(
+        carry: tuple[Array, Array], block: Array
+    ) -> tuple[tuple[Array, Array], None]:
+        sponge, k = carry
         permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
-        # Blocks past the live count are padding-only: leave the sponge untouched.
-        sponge = jnp.where(jnp.int32(k) < active_blocks, permuted, sponge)
+        # Blocks past the live count are padding-only: leave the sponge alone.
+        return (jnp.where(k < active_blocks, permuted, sponge), k + jnp.int32(1)), None
+
+    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, jnp.int32(0)), blocks)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode
@@ -515,11 +634,250 @@ def _observe_and_sample_body(
     return _sample_body(_observe_body(t, values), n)
 
 
+# ============================================================================
+# Device-FS Fiat-Shamir fusion marker (`zorch.duplex_fs`)
+#
+# One absorb+squeeze hop otherwise scatters ~9 GPU kernels: two `zorch.poseidon2`
+# permute composites plus ~7 unfused loop/input fusions for the duplex buffer glue
+# (rate-block merge, position select, output extraction). This marker wraps the
+# whole hop so a vendor fuses it into one register-resident kernel -- fusion by
+# construction, the CLAUDE.md non-negotiable.
+#
+# The decomposition is the plain `_observe_and_sample_body`, so a marker no vendor
+# emits inlines byte-identically. Duplex `(in_pos, out_pos)` ride as runtime
+# OPERANDS (inside the threaded state), not compile-time attrs: they are scalars
+# shared by every thread, so the permute-firing test (`in_pos == rate`,
+# `out_pos == 0`) is a uniform branch -- zero warp divergence -- and one kernel
+# serves every round's phase. Only the message length and sample count `n` are
+# static (the absorb/squeeze loop bounds), so the binary is recompile-free per
+# shape, like the round-compute kernels. No host schedule mirror.
+# ============================================================================
+DUPLEX_FS_MARKER = "zorch.duplex_fs"
+DUPLEX_FS_MARKER_VERSION = 1
+
+
+def _duplex_fs_region(
+    in_buf: Array,
+    out_buf: Array,
+    sponge: Array,
+    in_pos: Array,
+    out_pos: Array,
+    values: Array,
+    *,
+    perm: Permutation,
+    rate: int,
+    n: int,
+    **_attrs: object,
+) -> tuple[Array, Array, Array, Array, Array, Array]:
+    """The `zorch.duplex_fs` decomposition: the plain device hop, entered at the
+    runtime duplex positions carried in the state. `rate`/`width`/`n` ride as attrs
+    (the emitter's static loop bounds); the positions stay operands so one kernel
+    serves every round phase (`_attrs` swallows the pass-through `width`)."""
+    state = DuplexState(in_buf, out_buf, sponge, in_pos, out_pos)
+    advanced, r = _observe_and_sample_body(
+        DuplexTranscript(perm, rate, state), values, n
+    )
+    return (*_state_leaves(advanced.state), r)
+
+
+@partial(jit, static_argnames=("n",), inline=True)
+def _duplex_fs_zone(
+    t: DuplexTranscript, values: Array, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """The marked hop as one compiled dispatch carrying the `zorch.duplex_fs`
+    composite, so the eager host loop fires a single fused FS kernel (mirrors the
+    module-level `_observe_body`/`_sample_body` jit zones). `inline=True` keeps a
+    call site already inside an outer jit byte-identical."""
+    ib, ob, sp, ip, op, r = fused_region(
+        partial(_duplex_fs_region, perm=t.permutation),
+        *_state_leaves(t.state),
+        values,
+        name=DUPLEX_FS_MARKER,
+        version=DUPLEX_FS_MARKER_VERSION,
+        rate=t.rate,
+        width=t.permutation.width,
+        n=n,
+    )
+    return t._with_state(DuplexState(ib, ob, sp, ip, op)), r
+
+
+def observe_and_sample_marked(
+    t: DuplexTranscript, values: Array, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """`observe_and_sample` under a `zorch.duplex_fs` fusion marker so a vendor
+    fuses the ~9-kernel hop (two permutes + duplex glue) into one register-resident
+    kernel. Positions ride as runtime operands, so one recompile-free kernel serves
+    every round. A marker no vendor emits inlines to the plain hop (byte-identical);
+    only a dedicated-fusion permutation is marked (a test `CheapPermutation` keeps
+    the plain path)."""
+    if not t.has_dedicated_fusion:
+        return _observe_and_sample_body(t, values, n)
+    return _duplex_fs_zone(t, values, n)
+
+
 @partial(jit, static_argnames=("pow_bits",), inline=True)
 def _check_witness_body(
     t: DuplexTranscript, witness: Array, pow_bits: int
 ) -> tuple[DuplexTranscript, Array]:
     advanced, sample = _sample_body(_observe_body(t, witness), 1)
+    return advanced, _pow_satisfied(sample[0], pow_bits)
+
+
+# ============================================================================
+# Host-FS backend — the duplex sponge run on the host CPU. A serial hash chain
+# idles accelerator cores, so a host-driven, per-round-kernel consumer offloads it;
+# The `_HostFs` backend routes observe/sample/observe_and_sample/check_witness here
+# and the device path above is untouched.
+#
+# The sponge state lives on the CPU for the whole Fiat-Shamir stream: the host op
+# calls the CPU sponge jit DIRECTLY on host-resident leaves and moves only `values`
+# in / the squeezed challenge back to the compute device. Crossing the host
+# boundary costs per array-leaf (a `jax.pure_callback` round-trip of the 5 state
+# leaves every hop was ~6x that and dominated a warm prove once the sponge math got
+# fast); keeping the state resident drops each hop to one `values` in + one
+# challenge out. This is an eager primitive -- it is the production jit=False
+# relaunch's per-round FS, not a graph op.
+#
+# Byte-identical to the device sponge: the jit reconstructs a `DuplexTranscript`
+# (fs_on_host defaults False -> no recursion) and runs the SAME `_observe_body`/
+# `_sample_body`. The `permutation` must lower its `permute` to the host (a raw
+# permute, not one pinning an inner accelerator jit). State leaves cross as their
+# own field dtype -- jax_fork#45 (FFI ABI carries ZK field types) retired the
+# uint32 bitcast workaround for the #44 abort.
+# ============================================================================
+
+
+@cache
+def _host_cpu() -> jax.Device:
+    """The host device, resolved lazily so a host-FS transcript -- not merely
+    importing -- is what requires a CPU backend."""
+    return jax.devices("cpu")[0]
+
+
+def _state_leaves(
+    state: DuplexState,
+) -> tuple[Array, Array, Array, Array, Array]:
+    """The five `DuplexState` arrays in field order — the jagged LogUp-GKR prover's
+    `zorch.sumcheck` marker threads them as its `lax.composite` operands and reads
+    them back, and a downstream consumer reads them in this order, so every
+    producer/consumer shares this one ordering. (`_state_on_host` also walks them to
+    commit each leaf to the CPU.)"""
+    return (
+        state.input_buffer,
+        state.output_buffer,
+        state.sponge_state,
+        state.in_pos,
+        state.out_pos,
+    )
+
+
+def _host_raw(permutation: Permutation) -> Permutation:
+    """The CPU sponge needs a permutation whose `permute` lowers to the host. A
+    wrapper pinning `permute` to an accelerator exposes the underlying one as
+    `_inner`; unwrap to it -- the accelerator jit is what host-FS bypasses."""
+    return getattr(permutation, "_inner", permutation)
+
+
+# The CPU sponge jit per config -- the host sponge math, memoized so a fixed
+# closure compiles once. Runs on the CPU because the caller feeds it a host-
+# resident state (`_state_on_host`) and CPU-committed `values`.
+@cache
+def _host_observe_jit(perm: Permutation, rate: int) -> Any:
+    @jit
+    def f(s: DuplexState, x: Array) -> DuplexState:
+        return DuplexTranscript(perm, rate, s).observe(x).state
+
+    return f
+
+
+@cache
+def _host_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
+    @jit
+    def f(s: DuplexState) -> tuple[DuplexState, Array]:
+        t, out = DuplexTranscript(perm, rate, s).sample(n)
+        return t.state, out
+
+    return f
+
+
+@cache
+def _host_obs_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
+    @jit
+    def f(s: DuplexState, x: Array) -> tuple[DuplexState, Array]:
+        t, out = DuplexTranscript(perm, rate, s).observe(x).sample(n)
+        return t.state, out
+
+    return f
+
+
+@cache
+def _host_compute_device() -> jax.Device:
+    """Where a squeezed challenge returns to -- the device the surrounding eager
+    prove computes on (its kernels consume the challenge)."""
+    return jax.devices()[0]
+
+
+def _on_host(x: Array) -> bool:
+    return next(iter(x.devices())).platform == "cpu"
+
+
+def _state_on_host(state: DuplexState) -> DuplexState:
+    """Commit the sponge state to the CPU. The first hop pays it once; the host
+    sponge returns host leaves, so later hops find it already resident and the
+    per-hop device<->host round-trip of the 5 state leaves disappears."""
+    if _on_host(state.sponge_state):
+        return state
+    c = _host_cpu()
+    return DuplexState(*(jax.device_put(leaf, c) for leaf in _state_leaves(state)))
+
+
+def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
+    """`observe` on the host sponge; the state stays host-resident."""
+    s = _state_on_host(transcript.state)
+    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)  # type: ignore[arg-type]
+    return transcript._with_state(f(s, jax.device_put(values, _host_cpu())))
+
+
+def _sample_host(
+    transcript: DuplexTranscript, n: int = 1
+) -> tuple[DuplexTranscript, Array]:
+    """`sample` n raw squeezes on the host sponge; the state stays host-resident,
+    the challenge returns to the compute device."""
+    s = _state_on_host(transcript.state)
+    f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
+    state, out = f(s)
+    return (
+        transcript._with_state(state),
+        jax.device_put(out, _host_compute_device()),
+    )
+
+
+def _observe_and_sample_host(
+    transcript: DuplexTranscript, values: Array, n: int = 1
+) -> tuple[DuplexTranscript, Array]:
+    """`observe_and_sample`: absorb then squeeze n raw in one host hop -- the
+    per-round Fiat-Shamir primitive. The challenge returns to the device `values`
+    came from -- the accelerator the round polys are produced on -- so a
+    multi-device prove gets it back where its kernels consume it (the sponge state
+    is CPU-resident in steady state, so its device can't name the compute one)."""
+    compute_device = next(iter(values.devices()))
+    s = _state_on_host(transcript.state)
+    f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
+    state, out = f(s, jax.device_put(values, _host_cpu()))
+    return (
+        transcript._with_state(state),
+        jax.device_put(out, compute_device),
+    )
+
+
+def _check_witness_host(
+    transcript: DuplexTranscript, witness: Array, pow_bits: int
+) -> tuple[DuplexTranscript, Array]:
+    """`check_witness` on the host sponge — observe + one squeeze + the pow check,
+    the host counterpart of `_check_witness_body`. Routing it through the backend
+    (not the device body unconditionally) keeps a host-FS grind and its re-check on
+    the same sponge, so the two can't disagree."""
+    advanced, sample = _observe_and_sample_host(transcript, witness, 1)
     return advanced, _pow_satisfied(sample[0], pow_bits)
 
 

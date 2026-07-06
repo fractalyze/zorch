@@ -17,6 +17,37 @@ py_library(
     ],
 )
 
+py_library(
+    name = "sp1_koalabear16",
+    srcs = ["sp1_koalabear16.py"],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        "//zorch/hash/poseidon2",
+        requirement("jax"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
+    name = "smcs_test",
+    size = "small",
+    srcs = ["smcs_test.py"],
+    # poseidon2 permute; CI's published jaxlib can't run it (as merkle_test).
+    tags = ["local_only"],
+    deps = [
+        ":sp1_koalabear16",
+        "//zorch/commit:merkle",
+        "//zorch/commit:smcs",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/hash/poseidon2",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
 py_test(
     name = "merkle_test",
     # medium: the per-test fixed cost (jit trace + XLA compile of the fused

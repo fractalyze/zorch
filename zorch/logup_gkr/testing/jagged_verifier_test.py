@@ -98,7 +98,7 @@ class JaggedRoundtripTest(absltest.TestCase):
         # The PCS-consumer closing check, done directly: the reduced claims
         # are the input layer's interleaved virtual planes at the final point.
         num_eval, den_eval, point = verifier_final
-        nrv = point.shape[0] - layers[0].num_interaction_variables - 1
+        nrv = point.shape[0] - layers[0].num_batch_variables - 1
         n0, n1, d0, d1 = virtual_planes(layers[0], nrv)
         self.assertTrue(bool(num_eval == eval_mle(_interleave(n0, n1), point)))
         self.assertTrue(bool(den_eval == eval_mle(_interleave(d0, d1), point)))

@@ -19,7 +19,7 @@ from zorch.logup_gkr.testing import random_first_layer
 
 _SEED = 42
 
-# (num_interaction_variables, num_row_variables) -> SHA256 of the output MLEs.
+# (num_batch_variables, num_row_variables) -> SHA256 of the output MLEs.
 _GOLDENS = {
     (2, 3): "09f0bbf7f0cc0223e004a83f43c58f656463d2c157f32d627a182602da27fe93",
     (2, 4): "a899f692b4ded58fd8218b37c29515ca3f3086588f5ddc6fa16e46e5e7ddb32b",
@@ -28,8 +28,8 @@ _GOLDENS = {
 }
 
 
-def _output_hash(num_interaction_variables: int, num_row_variables: int) -> str:
-    layer = random_first_layer(_SEED, num_interaction_variables, num_row_variables)
+def _output_hash(num_batch_variables: int, num_row_variables: int) -> str:
+    layer = random_first_layer(_SEED, num_batch_variables, num_row_variables)
     out = extract_outputs(build_pyramid(layer)[-1])
     words = jnp.concatenate([out.numerator, out.denominator])
     return hashlib.sha256(np.array(words.tolist(), dtype="<u4").tobytes()).hexdigest()
@@ -38,7 +38,7 @@ def _output_hash(num_interaction_variables: int, num_row_variables: int) -> str:
 class DenseGkrGoldenTest(absltest.TestCase):
     def test_output_hash_matches_golden(self) -> None:
         for (niv, nrv), expected in _GOLDENS.items():
-            with self.subTest(num_interaction_variables=niv, num_row_variables=nrv):
+            with self.subTest(num_batch_variables=niv, num_row_variables=nrv):
                 self.assertEqual(_output_hash(niv, nrv), expected)
 
 

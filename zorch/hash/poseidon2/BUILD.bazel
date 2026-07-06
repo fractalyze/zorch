@@ -13,6 +13,7 @@ py_library(
     deps = [
         "//zorch:fusion",
         "//zorch/hash:permutation",
+        "//zorch/hash:sponge",
         requirement("jax"),
         requirement("numpy"),
     ],

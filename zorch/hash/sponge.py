@@ -6,14 +6,17 @@ final partial block overwrites only its own lanes. Squeeze the first `out` lanes
 This is the Merkle leaf hasher (Plonky3 PaddingFreeSponge).
 
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
-`SpongeParams` (capacity = width - rate), like `Poseidon2Params`. The first
-block (and a partial last block) absorb outside the loop; the remaining full
-blocks run in one `lax.scan`, keeping trace and lowering cost constant in the
-input width instead of paying one permute trace per block (#135).
+`SpongeParams` (capacity = width - rate), like `Poseidon2Params`. A permutation
+exposing a dedicated `sponge_hash` (the poseidon2 fusion path) absorbs the whole
+input as one `zorch.sponge_hash` region the vendor expands into a single
+register-resident kernel; a generic permutation runs the `while_loop` absorb. Both
+read the absorb length at runtime, so a concrete and a symbolic (shape-poly
+export) `n` lower the same way — one path, no static-`n` special case.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,6 +24,48 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from zorch.hash.permutation import Permutation
+
+# Permutation-agnostic sponge-hash marker: absorb + squeeze as ONE region the
+# vendor expands into the fused `sponge_hash` kernel (state register-resident vs
+# a per-block permute chain through DRAM). Each permutation family carries its own
+# attrs plus a required `permutation` discriminator; the kernel reads the absorb
+# length at runtime, so one cubin serves every leaf width and a symbolic width
+# exports.
+SPONGE_HASH_MARKER = "zorch.sponge_hash"
+SPONGE_HASH_MARKER_VERSION = 1
+
+
+def _absorb_symbolic(
+    input: Array,
+    state: Array,
+    rate: int,
+    out: int,
+    permute: Callable[[Array], Array],
+) -> Array:
+    """Overwrite-mode absorb as a ``while_loop`` over ``ceil(n/rate)`` blocks.
+
+    The fallback for a permutation with no dedicated sponge kernel, and the
+    symbolic branch of the poseidon2 sponge-hash marker body — shared so the two
+    cannot drift. The loop reads its bound at runtime, so it serves concrete and
+    symbolic ``n`` alike; that is why ``Sponge.hash`` needs no static-``n`` path."""
+    n = input.shape[0]
+    nb = (n + rate - 1) // rate
+    lanes = jnp.arange(rate)
+
+    def cond(carry: tuple[Array, Array]) -> Array:
+        return carry[1] < nb
+
+    def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
+        s, i = carry
+        start = i * rate
+        w = jnp.minimum(rate, n - start)
+        # Last block reads past n; clamp OOB indices (masked out below).
+        block = input[jnp.clip(start + lanes, 0, n - 1)]
+        s = s.at[:rate].set(jnp.where(lanes < w, block, s[:rate]))
+        return permute(s), i + 1
+
+    state, _ = lax.while_loop(cond, body, (state, jnp.int32(0)))
+    return state[:out]
 
 
 @dataclass(frozen=True)
@@ -94,33 +139,27 @@ class Sponge:
         return self._permutation.dtype
 
     def hash(self, input: Array) -> Array:
-        """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,)."""
+        """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,).
+
+        A permutation that exposes a dedicated `sponge_hash` (the poseidon2
+        fusion path) absorbs the whole input as one `zorch.sponge_hash`
+        region the vendor expands into a single register-resident kernel; a
+        generic permutation runs the `while_loop` absorb. Both read the absorb
+        length at runtime, so a symbolic `n` (shape-poly export) lowers exactly
+        like a concrete one — one path, no static-`n` special case.
+        """
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        # Otherwise a mismatch surfaces deep in the absorb (input mixed with the
+        # round constants) as an opaque promotion error; also gates EF rows out.
+        if input.dtype != self.dtype:
+            raise TypeError(
+                f"input dtype {input.dtype} must match the sponge field {self.dtype}"
+            )
+        fused = getattr(self._permutation, "sponge_hash", None)
+        if fused is not None:
+            return fused(input, self.rate, self.out)
         state = jnp.zeros(self._permutation.width, dtype=input.dtype)
-        n = input.shape[0]
-        if n == 0:
-            return state[: self.out]
-        if n <= self.rate:  # single (possibly partial) block
-            state = state.at[:n].set(input)
-            return self._permutation.permute(state)[: self.out]
-        # Block 0 absorbs outside the scan so the first permute is a top-level
-        # marker (not nested in a loop body); the rest fold in one scan below.
-        state = state.at[: self.rate].set(input[: self.rate])
-        state = self._permutation.permute(state)
-        # Remaining full blocks in one scan: trace cost constant in n (#135).
-        full = n // self.rate
-        if full > 1:
-            blocks = input[self.rate : full * self.rate].reshape(full - 1, self.rate)
-
-            def absorb(s: Array, block: Array) -> tuple[Array, None]:
-                s = s.at[: self.rate].set(block)
-                return self._permutation.permute(s), None
-
-            state, _ = lax.scan(absorb, state, blocks)
-        # A partial last block overwrites only its own lanes (padding-free).
-        tail = n - full * self.rate
-        if tail:
-            state = state.at[:tail].set(input[full * self.rate :])
-            state = self._permutation.permute(state)
-        return state[: self.out]
+        return _absorb_symbolic(
+            input, state, self.rate, self.out, self._permutation.permute
+        )

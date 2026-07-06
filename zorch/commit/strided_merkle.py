@@ -18,9 +18,9 @@ root; the strided levels below are not stored — a verifier recomputes them by
 re-hashing the opened rows. ``rows_per_query = 1`` adds no strided level and is
 exactly the plain binary tree (`zorch.commit.merkle.MerkleTree`, arity 2).
 
-Like `MerkleTree`, this emits no whole-tree marker: the nested permutes carry
-their own dedicated `zorch.poseidon2` markers (a dedicated merkle-chain fusion
-benchmarked slower than the per-permute kernels).
+Like `MerkleTree`, the leaf hash lowers to a `zorch.sponge_hash` marker
+and each fold layer's `compress` to a `zorch.poseidon2` marker, so the strided
+tree commits by its plain vmap/fold body.
 
 This carries the prover-side commitment and opening accessors plus the
 verifier-side `open` / `reconstruct_root` (device-indexed, `vmap`-able), the
@@ -72,8 +72,8 @@ class StridedMerkleTree:
         self._compressor = compressor
         self._rows_per_query = rows_per_query
         self.digest_elems = compressor.chunk
-        # The query layer up is a plain binary tree; reuse MerkleTree's scanned
-        # regular fold rather than re-implement it.
+        # The query layer up is a plain binary tree; reuse MerkleTree's fold
+        # rather than re-implement it.
         self._top = MerkleTree(leaf_hasher, compressor)
 
     # Value equality/hash for static jit-zone keys (#214) — identity equality
@@ -130,13 +130,11 @@ class StridedMerkleTree:
             pairs = layer.reshape(-1, 2, query_stride, d).transpose(0, 2, 1, 3)
             layer = jax.vmap(self._compressor.compress)(pairs.reshape(-1, 2, d))
 
-        # Plain binary fold from the query layer to the root (stored). The query
-        # layer is a power-of-two node count, so reuse MerkleTree's scanned
-        # regular-binary fold — O(1) in height and byte-identical to the unrolled
-        # form (#221). A single query-layer node is already the root.
+        # Plain binary fold from the query layer to the root (stored); a single
+        # query-layer node is already the root.
         if layer.shape[0] == 1:
             return layer[0], [layer]
-        return self._top._fold_scan(layer, log2_strict_usize(layer.shape[0]))
+        return self._top._fold_to_root(layer)
 
     def opened_rows(self, matrix: Array, index: int) -> Array:
         """The ``rows_per_query`` rows query ``index`` opens —
@@ -195,19 +193,14 @@ class StridedMerkleTree:
         Returns the root Array, not a verdict (a separator-binding consumer
         rebinds it before comparing). Single-index; batch by `vmap`-ing over
         `(index, opening)`. Mirrors `MerkleTree.reconstruct_root`."""
-        # Collapse the coset to its query-layer node with the same scanned
-        # regular-binary fold `_build` uses for the stored tree — one compress
-        # body traced once (not unrolled per level), even under an outer vmap
-        # (#163). `rows_per_query == 1` adds no strided level: the lone hashed
-        # row is already the node (and `_fold_scan` can't take a zero-height
-        # tree, mirroring `_build`'s single-node guard).
+        # Collapse the coset to its query-layer node with the same `_fold_to_root`
+        # `_build` uses; `rows_per_query == 1` adds no strided level (the lone
+        # hashed row is already the node).
         leaves = jax.vmap(self._leaf_hasher.hash)(opening.row)  # (rows_per_query, d)
         if self._rows_per_query == 1:
             query_node = leaves[0]
         else:
-            query_node, _ = self._top._fold_scan(
-                leaves, log2_strict_usize(self._rows_per_query)
-            )
+            query_node, _ = self._top._fold_to_root(leaves)
         if not opening.path:
             return query_node
 

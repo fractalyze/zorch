@@ -8,6 +8,7 @@ py_library(
     srcs = [
         "__init__.py",
         "field_ops.py",
+        "gruen.py",
         "prover.py",
         "verifier.py",
     ],

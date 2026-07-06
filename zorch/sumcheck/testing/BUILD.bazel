@@ -40,13 +40,25 @@ py_test(
 )
 
 py_test(
-    name = "prove_marked_test",
+    name = "gruen_test",
+    size = "small",
+    srcs = ["gruen_test.py"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "prove_per_permute_test",
     size = "medium",
-    srcs = ["prove_marked_test.py"],
+    srcs = ["prove_per_permute_test.py"],
     deps = [
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
-        "//zorch/logup_gkr",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",

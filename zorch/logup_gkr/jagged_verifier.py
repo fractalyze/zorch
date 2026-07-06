@@ -28,7 +28,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
-from zorch.logup_gkr.prover import Carry, logup_combine
+from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import Round
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
@@ -68,6 +68,14 @@ class JaggedGkrLayerRound(Round):
         # LSB-first binding: the last challenge bound the MSB, so the
         # MSB-first bound point is the sample order reversed.
         point = point[::-1]
+        # The carry's eval_point must have one coordinate per sumcheck round, or
+        # `eval_eq` reads the wrong eq weight (a degenerate length-1 carry would
+        # broadcast silently against the bound point) -- reject, never broadcast.
+        if eval_point.shape[0] != point.shape[0]:
+            raise ValueError(
+                f"eq point mismatch: carry has {eval_point.shape[0]} coords, "
+                f"layer ran {point.shape[0]} rounds"
+            )
         # LogUp oracle: the reduced claim equals the combine at the bound
         # point, with eq evaluated in closed form (both points MSB-first).
         eq_eval = eval_eq(eval_point, point)
@@ -78,9 +86,7 @@ class JaggedGkrLayerRound(Round):
         transcript, r = sample_challenge(
             transcript, num_eval.dtype, self.challenge_limbs
         )
-        num_eval = n0 + (n1 - n0) * r
-        den_eval = d0 + (d1 - d0) * r
-        eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+        num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok
 
 

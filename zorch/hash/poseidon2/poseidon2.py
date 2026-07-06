@@ -32,6 +32,11 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
+from zorch.hash.sponge import (
+    SPONGE_HASH_MARKER,
+    SPONGE_HASH_MARKER_VERSION,
+    _absorb_symbolic,
+)
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -99,6 +104,16 @@ class Poseidon2:
                 f"{self.dtype}"
             )
         return _permute_body(self, state)
+
+    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Absorb `input` and squeeze `out` lanes as ONE `sponge_hash`
+        region (fused kernel, state register-resident) — byte-identical to
+        `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
+        generic permutation runs the inline absorb. Lowers under symbolic
+        `len(input)` (the kernel reads the length at runtime) for export."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        return _sponge_hash_body(self, input, rate, out)
 
 
 def _permutation_body(
@@ -182,29 +197,31 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     )
 
 
+def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
+    """The base M4 flattened row-major as a numpy int64 `(16,)`. A numpy value
+    (not a Python list) so it lowers to a `dense<[..]> : tensor<16xi64>` the zkx
+    recognizer can parse (a plain list lowers to an unparsed ArrayAttr). Caller
+    guards on `has_dedicated_fusion`."""
+    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
+    return np.array(perm._external_m4, dtype=np.int64).flatten()
+
+
 def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
-    """The dedicated marker's `composite.attributes` + version. On the dedicated
-    marker the permutation shape rides as attributes — the zkx recognizer's
-    contract: the four shape ints (it maps `alpha` to its s-box degree) plus
-    `external_m4`, the 4×4 base M4 flattened row-major, which the emitter applies
-    per 4-block (so the external layer is no longer hardcoded). The body ignores
-    them (metadata only); the generic marker stays attrs-free."""
+    """The dedicated marker's `composite.attributes` + version. The permutation
+    shape rides as attributes — the zkx recognizer's contract: the four shape ints
+    (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4 base M4. The
+    recognizer rewrites only the M4 its kernel implements (the canonical
+    `circ(2,3,1,1)`) and leaves any other matrix to inline its real body, so the
+    attr is what identifies the matrix. The body ignores these attrs (metadata
+    only); the generic marker stays attrs-free."""
     if not perm.has_dedicated_fusion:
         return {}, 0
-    assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
     attrs: dict[str, object] = {
         "width": perm.width,
         "external_rounds": perm._p.external_rounds,
         "internal_rounds": perm._p.internal_rounds,
         "alpha": perm._p.alpha,
-        # A numpy value (not a Python list) so it lowers to a
-        # `dense<[..]> : tensor<16xi64>` attribute the zkx recognizer parses with
-        # GetCompositeAttrIntArray (a plain list lowers to an unparsed ArrayAttr).
-        # Row-major 4×4.
-        "external_m4": np.array(
-            [perm._external_m4[r][c] for r in range(4) for c in range(4)],
-            dtype=np.int64,
-        ),
+        "external_m4": _external_m4_attr(perm),
     }
     return attrs, POSEIDON2_MARKER_VERSION
 
@@ -243,6 +260,64 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         name=perm._fused_region_name,
         version=version,
         **attrs,
+    )
+
+
+def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
+    """Emit the `sponge_hash` marker (dedicated path) or run the
+    `while_loop` absorb (generic). The decomposition is byte-identical to
+    `Sponge.hash` so the region's fallback HLO matches the kernel. The 6-operand
+    region carries
+    the round constants explicitly — a `lax.composite` would lift closed-over
+    consts as extra operands and break the Poseidon2Fusion ABI."""
+    w = perm.width
+
+    def sponge(
+        inp: Array,
+        ext_init_rc: Array,
+        int_rc: Array,
+        ext_term_rc: Array,
+        diag: Array,
+        off_diag: Array,
+        **_attrs: object,
+    ) -> Array:
+        def permute(s: Array) -> Array:
+            return _permutation_body(
+                perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
+            )
+
+        # One `while_loop` absorb for any length, concrete or symbolic. A static
+        # unroll traced once per emission (`lax.composite` has no trace cache), so
+        # a wide leaf paid O(blocks) trace + compile for a body the recognizer
+        # discards anyway — it matches the marker by name + attrs, not its shape.
+        state = jnp.zeros(w, dtype=inp.dtype)
+        return _absorb_symbolic(inp, state, rate, out, permute)
+
+    operands = _abi_operands(perm, input)
+    # Generic permutation: no fused sponge kernel, run the absorb directly (a
+    # whole-sponge LoopFusion register-spills); only the dedicated path marks it.
+    if not perm.has_dedicated_fusion:
+        return sponge(*operands)
+    p = perm._p
+    # external_m4 rides here too (like the permute marker) so the recognizer can
+    # gate the sponge kernel on the M4 it implements — the canonical circ(2,3,1,1)
+    # rewrites, any other M4 inlines its real body.
+    marker_attrs: dict[str, object] = {
+        "permutation": "poseidon2",
+        "width": w,
+        "rate": rate,
+        "digest_elems": out,
+        "external_rounds": p.external_rounds,
+        "internal_rounds": p.internal_rounds,
+        "alpha": p.alpha,
+        "external_m4": _external_m4_attr(perm),
+    }
+    return fused_region(
+        sponge,
+        *operands,
+        name=SPONGE_HASH_MARKER,
+        version=SPONGE_HASH_MARKER_VERSION,
+        **marker_attrs,
     )
 
 

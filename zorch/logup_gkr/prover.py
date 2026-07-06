@@ -1,13 +1,16 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Dense LogUp-GKR prover.
 
-`LogupSumcheckRound` is one per-variable sumcheck round whose summand (`_combine`)
-is the LogUp combine `eq * (lam*(n0*d1 + n1*d0) + d0*d1)` over five MLE factors
-`[eq, n0, d1, n1, d0]` -- the sibling of the product `zorch.sumcheck.prover.
-SumcheckRound`. Its `__call__` emits a `RoundMsg(round_poly, challenge)` for the
-generic `fold_rounds` driver; the homogeneous scan driver `prove` (which
-`GkrLayerRound` uses) reads only `degree` + `_combine` and stacks that same
-`RoundMsg`, so the evaluation point is `msgs.challenge`.
+`LogupSummand` is the LogUp combine `eq * (lam*(n0*d1 + n1*d0) + d0*d1)` over
+five MLE factors `[eq, n0, d1, n1, d0]`, shared by this module's value-form
+round and `jagged_prover`'s coeff-form round. `LogupSumcheckRound` is one
+per-variable sumcheck round whose summand (`_combine`) delegates to a
+`LogupSummand` scoped to its `lam` -- the sibling of the product
+`zorch.sumcheck.prover.SumcheckRound`. Its `__call__` emits a
+`RoundMsg(round_poly, challenge)` for the generic `fold_rounds` driver; the
+homogeneous scan driver `prove` (which `GkrLayerRound` uses) reads only
+`degree` + `_combine` and stacks that same `RoundMsg`, so the evaluation point
+is `msgs.challenge`.
 
 `GkrLayerRound` is one GKR layer: it runs the layer's per-variable LogUp sumcheck
 (via the homogeneous scan driver `prove` over `LogupSumcheckRound`), then reduces
@@ -33,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -49,11 +52,8 @@ from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
+    from zorch.sumcheck.gruen import GruenSummand
     from zorch.sumcheck.prover import SumcheckSummand
-
-# eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2).
-_DEGREE = 3
-_NUM_FACTORS = 5  # [eq, n0, d1, n1, d0]
 
 
 def logup_combine(
@@ -68,6 +68,57 @@ def logup_combine(
     return eq * (lam * (n0 * d1 + n1 * d0) + d0 * d1)
 
 
+class LogupSummand:
+    """The LogUp sumcheck summand shared by the dense round (value-form) and the
+    jagged round (coeff-form): the combine `eq*(lam*(n0*d1+n1*d0)+d0*d1)` over
+    [eq, n0, d1, n1, d0], its loop-invariant scalar (lam), and its degree. Single
+    source of the combine math the verifier oracle also calls."""
+
+    DEGREE: int = 3  # eq (deg1) * (lam*cross + d0*d1) (deg2)
+    NUM_FACTORS: int = 5  # [eq, n0, d1, n1, d0]
+
+    def __init__(self, lam: Array) -> None:
+        self.lam = lam
+
+    @property
+    def degree(self) -> int:
+        return self.DEGREE
+
+    def combine_scalars(self) -> tuple[Array, ...]:
+        return (self.lam,)
+
+    def combine(self, scalars: Sequence[Array], *factors: Array) -> Array:
+        if len(factors) != self.NUM_FACTORS:
+            raise ValueError(
+                f"LogUp combine needs {self.NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
+                f"got {len(factors)}"
+            )
+        (lam,) = scalars
+        return logup_combine(lam, *factors)
+
+    @classmethod
+    def extra_ts(cls, dtype: Any) -> tuple[Array, ...]:
+        """The jagged round's one materialized extra point ``{1/2}`` — degree
+        3 makes d - 2 = 1 extra beyond s(0), the Gruen seam's invariant
+        (`zorch.sumcheck.gruen.GruenSummand`). The dense (value-form) round
+        never reads this."""
+        one = jnp.ones((), dtype)
+        return (one / jnp.array(2, dtype),)
+
+
+def fold_carry(
+    n0: Array, n1: Array, d0: Array, d1: Array, point: Array, r: Array
+) -> tuple[Array, Array, Array]:
+    """Reduce a LogUp layer's four openings to the next GKR carry under the
+    child selector `r`: bind num/den, and append `r` as the low (last) bit of
+    the MSB-first point. Module-level for the same reason as `logup_combine` --
+    the prover and verifier carry folds must stay byte-identical or the verifier
+    accepts proofs the prover stopped producing."""
+    num_eval = n0 + (n1 - n0) * r
+    den_eval = d0 + (d1 - d0) * r
+    return num_eval, den_eval, jnp.concatenate([point, jnp.atleast_1d(r)])
+
+
 @partial(jax.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
 @dataclass(frozen=True)
 class LogupSumcheckRound(Round):
@@ -78,8 +129,15 @@ class LogupSumcheckRound(Round):
     lam: Array
 
     @property
+    def _summand(self) -> LogupSummand:
+        """The shared LogUp combine, scoped to this round's lam. A derived
+        property, not a dataclass field, so `lam` stays the only pytree leaf --
+        the registered dataclass above only knows about `lam`."""
+        return LogupSummand(self.lam)
+
+    @property
     def degree(self) -> int:
-        return _DEGREE
+        return LogupSummand.DEGREE
 
     def combine_scalars(self) -> tuple[Array, ...]:
         """The batching challenge λ, fixed across the layer's variable-rounds; the
@@ -91,17 +149,12 @@ class LogupSumcheckRound(Round):
         """LogUp summand over [eq, n0, d1, n1, d0] (the scalar-explicit seam):
         single source of the combine math -- `_combine`, the round-poly reduction,
         and the marked path's nested combine region all route here. Delegates to
-        the module-level `logup_combine` the verifier oracle also calls, so prover
-        and verifier cannot drift. Guards the factor count at this summand seam --
-        both `_round_poly` and the scan driver reach it, so neither rechecks (arg
-        count is static, so the guard is trace-safe)."""
-        if len(factors) != _NUM_FACTORS:
-            raise ValueError(
-                f"LogUp combine needs {_NUM_FACTORS} factors [eq, n0, d1, n1, d0], "
-                f"got {len(factors)}"
-            )
-        (lam,) = scalars
-        return logup_combine(lam, *factors)
+        the shared `LogupSummand`, which itself calls the module-level
+        `logup_combine` the verifier oracle also calls, so prover and verifier
+        cannot drift. `LogupSummand` guards the factor count at this summand seam
+        -- both `_round_poly` and the scan driver reach it, so neither rechecks
+        (arg count is static, so the guard is trace-safe)."""
+        return self._summand.combine(scalars, *factors)
 
     def _combine(self, *factors: Array) -> Array:
         """LogUp summand bound to its scalars (λ)."""
@@ -110,7 +163,7 @@ class LogupSumcheckRound(Round):
     def _round_poly(self, state: Sequence[Array]) -> Array:
         """Round polynomial over [0..degree], shape (degree+1, *batch):
         s[u] = sum_x' combine(f_u for each factor). One batched reduction."""
-        return jnp.sum(self._combine(*factors_on_domain(state, _DEGREE)), axis=-1)
+        return jnp.sum(self._combine(*factors_on_domain(state, self.degree)), axis=-1)
 
     def __call__(
         self, state: Sequence[Array], transcript: Transcript
@@ -190,10 +243,7 @@ class GkrLayerRound(Round):
         _, n0, d1, n1, d0 = (factor[0] for factor in final_state)
         transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
-        num_eval = n0 + (n1 - n0) * r
-        den_eval = d0 + (d1 - d0) * r
-        # MSB-first point + the pyramid's child selector as the low (last) bit.
-        eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+        num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
 
         proof = LayerProof(round_polys, point, n0, n1, d0, d1)
         return (num_eval, den_eval, eval_point), transcript, proof
@@ -202,5 +252,6 @@ class GkrLayerRound(Round):
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _summand: type[SumcheckSummand] = LogupSumcheckRound
+    _gruen_summand: type[GruenSummand] = LogupSummand
     _sumcheck_round: type[ProverRound] = LogupSumcheckRound
     _layer_round: type[ProverRound] = GkrLayerRound

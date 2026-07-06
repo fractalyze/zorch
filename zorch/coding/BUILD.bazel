@@ -34,3 +34,13 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "tensor_code",
+    srcs = ["tensor_code.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":linear_code",
+        requirement("jax"),
+    ],
+)

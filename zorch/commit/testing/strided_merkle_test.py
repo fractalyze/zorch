@@ -18,6 +18,7 @@ from zk_dtypes import koalabear_mont as F
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
 from zorch.hash.compression import Compression, CompressionParams
+from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER, SPONGE_HASH_MARKER
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.hash.sponge import Sponge, SpongeParams
 
@@ -79,12 +80,12 @@ class StridedMerkleTest(absltest.TestCase):
         self.assertEqual(strided.query_stride(16), 4)
 
     def test_commit_lowers_to_nested_poseidon2_markers(self) -> None:
-        # The query-strided `_build` path is separate from MerkleTree's, so cover
-        # it too: no whole-tree marker, just the per-permute zorch.poseidon2 ones.
+        # The query-strided `_build` is a separate path from MerkleTree's — cover
+        # the same marker shape here too.
         _, _, strided = _stack(rows_per_query=4)
         text = jax.jit(strided.commit).lower(_matrix(16)).as_text()
-        self.assertNotIn('"zorch.merkle_commit"', text)
-        self.assertIn('"zorch.poseidon2"', text)
+        self.assertIn(f'"{SPONGE_HASH_MARKER}"', text)
+        self.assertIn(f'"{POSEIDON2_MARKER}"', text)
 
     def test_opened_rows_are_the_strided_coset(self) -> None:
         _, _, strided = _stack(rows_per_query=4)

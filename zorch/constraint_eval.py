@@ -27,10 +27,10 @@ shapes reuses one compiled kernel across rounds while paying constraint-circuit
 work for live rows only — the recognizing emitter computes
 `out[x] = x < live ? body(x) : 0` and the decomposition mirrors that masked
 form exactly, keeping marked and inlined paths byte-identical lane for lane.
-The sumcheck marker's `num_real` expresses the same leading-row liveness as a
-static composite ATTRIBUTE; here the bound is an OPERAND because it must vary
-per round without changing the marker's fingerprint — static-vs-runtime is the
-axis that picks the wire shape.
+The jagged sumcheck marker's `row_counts` attribute expresses the same
+leading-row liveness as a static composite ATTRIBUTE; here the bound is an OPERAND
+because it must vary per round without changing the marker's fingerprint —
+static-vs-runtime is the axis that picks the wire shape.
 """
 
 from __future__ import annotations
@@ -46,12 +46,13 @@ CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
 
 def constraint_eval(
-    eval_fn: Callable[[Array], Array],
+    eval_fn: Callable[..., Array],
     trace: Array,
     alpha: Array,
     *,
     live_width: Array | int | None = None,
     column_weights: Array | None = None,
+    aux_operands: tuple[Array, ...] = (),
     name: str = CONSTRAINT_EVAL_MARKER,
 ) -> Array:
     """Mark `sum_k alpha_k * eval_fn(trace)_k` as one `zorch.constraint_eval`.
@@ -73,8 +74,10 @@ def constraint_eval(
 
     `column_weights`, when given, adds a per-row weighted column sum
     `sum_c trace[row, c] * column_weights[c]` to each row's accumulated value —
-    a rank-1 vector with one weight per trace column. It rides as the trailing
-    operand; the recognizing emitter folds the `trace @ column_weights` dot into
+    a rank-1 vector with one weight per trace column. It rides as an operand
+    after `live_width` (and before `aux_operands`, when given); the emitter
+    identifies it structurally (not by index) and folds the
+    `trace @ column_weights` dot into
     the per-row accumulator (computed thread-locally while the row is already
     loaded), so no separate matmul kernel is launched. The marker keeps the dot
     in its body so the inlined / monolithic paths stay byte-identical. It
@@ -83,6 +86,18 @@ def constraint_eval(
     vanishes and the masked and unmasked forms agree. The term carries no
     proving-scheme meaning here (a consumer may use it for a column opening
     batch) — `zorch` stays scheme-agnostic.
+
+    `aux_operands`, when non-empty, are extra inputs the constraint reads beyond
+    the trace: `eval_fn` is called as `eval_fn(trace, *aux_operands)` instead of
+    1-ary `eval_fn(trace)`. They ride as the trailing operands with their indices
+    declared in `aux_operand_idxs`. A constraint that depends on a runtime array
+    its trace does not carry passes it here as a DECLARED operand rather than
+    closing over it. That distinction is load-bearing under `jax.jit`: a
+    closed-over array enters the composite decomposition as a Tracer constant,
+    which `lax.composite` rejects (`UnexpectedTracerError`), whereas a declared
+    operand traces cleanly. `zorch` reads no meaning from them; the recognizing
+    emitter forwards them to the constraint body and the inlined path passes them
+    to the same `eval_fn`, so marked and inlined stay byte-identical.
     """
     num_constraints = alpha.shape[-1]
     if num_constraints < 1:
@@ -90,11 +105,9 @@ def constraint_eval(
             f"alpha must carry at least one coefficient, got {num_constraints}"
         )
     if column_weights is not None:
-        # Rides as the trailing operand AFTER live_width — so it requires one,
-        # keeping the operand order fixed (trace, alpha, live, weights) for the
-        # decomposition's positional binding — and carries one weight per trace
-        # column. Validate at the entry point so a mismatch fails loud here
-        # rather than as a cryptic matmul trace error.
+        # Rides after live_width (so it requires one), keeping the optional
+        # order fixed. Validate here so a mismatch fails loud, not as a cryptic
+        # matmul trace error.
         if live_width is None:
             raise ValueError("column_weights requires live_width")
         num_cols = trace.shape[-1]
@@ -103,15 +116,40 @@ def constraint_eval(
                 "column_weights must be rank-1 with one weight per trace column "
                 f"({num_cols}), got shape {column_weights.shape}"
             )
+    if aux_operands is None or hasattr(aux_operands, "ndim"):
+        # None (a `pv=None`-style migration slip) or a bare array (which would
+        # splat into per-element scalars) — want a sequence of whole arrays.
+        raise ValueError("aux_operands must be a tuple of arrays (use () for none)")
+    aux_operands = tuple(aux_operands)  # accept any sequence; normalize to tuple
+
+    # Optional operands are independent, so they don't form a fixed prefix;
+    # bind them by presence in a known order (live, weights, then aux) rather
+    # than by defaulted params, which would mis-bind aux to the weights slot.
+    has_live = live_width is not None
+    has_weights = column_weights is not None
+    n_aux = len(aux_operands)
 
     def decomposition(
         trace: Array,
         alpha: Array,
-        live_width: Array | None = None,
-        column_weights: Array | None = None,
+        *optional: Array,
         **_attrs: object,
     ) -> Array:
-        constraints = eval_fn(trace)
+        # *optional silently drops a surplus operand from the inlined path while
+        # the marked kernel still carries it (a marked-vs-inlined divergence);
+        # guard loud instead.
+        n_expected = has_live + has_weights + n_aux
+        if len(optional) != n_expected:
+            raise TypeError(
+                f"constraint_eval decomposition expected {n_expected} optional "
+                f"operand(s), got {len(optional)} — an appended operand is not "
+                "accounted for here"
+            )
+        tail = iter(optional)
+        live_width = next(tail) if has_live else None
+        column_weights = next(tail) if has_weights else None
+        aux = tuple(tail)  # the remaining n_aux operands feed the constraint body
+        constraints = eval_fn(trace, *aux)
         acc = constraints[..., 0] * alpha[..., 0]
         for k in range(1, num_constraints):
             acc = acc + constraints[..., k] * alpha[..., k]
@@ -154,7 +192,19 @@ def constraint_eval(
         operands += (live,)
         attrs["live_width_operand_idx"] = 2
     if column_weights is not None:
-        # Trailing operand; the emitter recognizes it structurally (the rank-1
-        # operand of the body-root dot), so no operand-index attribute is needed.
+        # The emitter recognizes it structurally (the rank-1 operand of the
+        # body-root dot), so no operand-index attribute is needed.
         operands += (column_weights,)
-    return composite(decomposition, *operands, name=name, **attrs)
+    # Two emit sites, not one: the list-valued aux_operand_idxs can only be
+    # passed as a named kwarg (a dict-typed attrs unpack would collide with
+    # composite's typed `version` param under mypy), and a named kwarg cannot be
+    # conditional within a single call. The no-aux branch keeps the attribute
+    # off entirely, which the emitter routes on.
+    if not aux_operands:
+        return composite(decomposition, *operands, name=name, **attrs)
+    # Trailing operands at dynamic indices; the emitter finds them by these.
+    aux_operand_idxs = list(range(len(operands), len(operands) + n_aux))
+    operands += aux_operands
+    return composite(
+        decomposition, *operands, name=name, aux_operand_idxs=aux_operand_idxs, **attrs
+    )

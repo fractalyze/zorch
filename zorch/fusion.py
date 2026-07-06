@@ -49,9 +49,8 @@ def fused_region(
     the generic one — e.g. a `zorch.poseidon2` region goes to `Poseidon2Fusion`
     rather than the generic `LoopFusion` (unusable for a full hash permutation).
     The `operands` must then follow that emitter's ABI. Such a region need not be
-    single-kernel: a vendor may expand it into a chain (e.g. `zorch.merkle_commit`
-    → per-layer hash kernels), so `decomposition` may return a pytree, not just an
-    Array.
+    single-kernel: a vendor may expand it into a kernel chain, so `decomposition`
+    may return a pytree, not just an Array.
 
     `version` and `attrs` ride through to the composite (`composite.version` and
     `composite.attributes`) — the structural metadata a recognizer parses, e.g. a

@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.logup_gkr.prover import Carry, LayerProof, logup_combine
+from zorch.logup_gkr.prover import Carry, LayerProof, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import Round
 from zorch.sumcheck.verifier import SumcheckRound as SumcheckVerifierRound
@@ -50,6 +50,14 @@ class GkrLayerRound(Round):
         point, final_claim, transcript, ok_sc = verify(
             SumcheckVerifierRound(_DEGREE), claim, layer_proof.round_polys, transcript
         )
+        # The carry's eval_point must have one coordinate per sumcheck round, or
+        # `eval_eq` reads the wrong eq weight (a degenerate length-1 carry would
+        # broadcast silently against the bound point) -- reject, never broadcast.
+        if eval_point.shape[0] != point.shape[0]:
+            raise ValueError(
+                f"eq point mismatch: carry has {eval_point.shape[0]} coords, "
+                f"layer ran {point.shape[0]} rounds"
+            )
         # LogUp oracle: the reduced claim equals the combine at the bound point.
         # eq is MSB-first on both sides, so the points align with no flip.
         eq_eval = eval_eq(eval_point, point)
@@ -58,9 +66,7 @@ class GkrLayerRound(Round):
 
         transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
-        num_eval = n0 + (n1 - n0) * r
-        den_eval = d0 + (d1 - d0) * r
-        eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+        num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok
 
 
