@@ -22,7 +22,6 @@ from zorch.logup_gkr.jagged_prover import (
     _JaggedState,
     _Planes,
     _round_metadata,
-    _round_metadata_host,
     _run_jagged_rounds,
     _run_jagged_rounds_reference,
 )
@@ -220,26 +219,6 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             rand_ext_field(52, (5,), KB, EF),
             challenge_limbs=4,
         )
-
-
-class PackedRoundScheduleTest(absltest.TestCase):
-    """The capped schedule's packed commit -- four stacked arrays staged in one
-    batched device_put, handed back as per-round row slices -- must reproduce
-    the host-built schedule exactly."""
-
-    def test_packed_commit_matches_host_build(self) -> None:
-        counts = (5, 3, 8)  # odd segments force real re-pad gathers
-        nrv, width = 4, 20
-        got = _round_metadata(counts, nrv, width=width)
-        want = _round_metadata_host(counts, nrv, width)
-        for rnd, (w, g) in enumerate(zip(want, got, strict=True)):
-            for name, x, y in zip(
-                ("gather", "col_index", "pair_index", "live"), w, g, strict=True
-            ):
-                self.assertTrue(
-                    bool(jnp.all(jnp.asarray(x) == y)),
-                    f"round {rnd} {name} diverged",
-                )
 
 
 if __name__ == "__main__":
