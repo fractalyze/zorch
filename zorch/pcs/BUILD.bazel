@@ -15,6 +15,18 @@ py_library(
 )
 
 py_library(
+    name = "matrix_commit",
+    srcs = ["matrix_commit.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/coding:linear_code",
+        "//zorch/commit:merkle",
+        "//zorch/pcs:fold",
+        requirement("jax"),
+    ],
+)
+
+py_library(
     name = "protocol",
     srcs = [
         "__init__.py",
