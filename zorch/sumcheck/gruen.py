@@ -37,8 +37,12 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.poly.eq import eq_root
-from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
+from zorch.poly.eq import eq_factor, eq_root
+from zorch.poly.univariate import (
+    compute_inv_vandermonde,
+    compute_lagrange_basis,
+    eval_coeffs,
+)
 
 
 @cache
@@ -128,3 +132,18 @@ def round_coeffs(
             f"and {len(extra_ys)} evaluations"
         )
     return round_coeffs_from_matrix(interp_matrix(extra_ts, z), s_zero, claim, extra_ys)
+
+
+def fold_round_scalars(
+    poly: Array, r: Array, mass: Array, z: Array
+) -> tuple[Array, Array]:
+    """The post-round scalar fold every Gruen-compressed round ends with: the
+    next claim is the coefficient-form round polynomial evaluated at the
+    sampled challenge, and the running bound-eq mass gains the bound
+    variable's eq factor. Returns ``(claim', mass')``.
+
+    One definition so a prover's round loop and its unrolled oracle cannot
+    drift out of byte-equality — the LogUp jagged prover
+    (`zorch.logup_gkr.jagged_prover`) and the jagged zerocheck engine in
+    sp1-zorch both end every round with exactly this pair."""
+    return eval_coeffs(poly, r), mass * eq_factor(r, z)
