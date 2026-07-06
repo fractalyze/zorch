@@ -13,8 +13,6 @@ from jax import Array
 
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
-    _DEGREE,
-    _InterpConsts,
     _JaggedSchedule,
     _JaggedState,
     _Planes,
@@ -25,7 +23,6 @@ from zorch.logup_gkr.jagged_prover import (
 from zorch.logup_gkr.prover import logup_combine
 from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.univariate import compute_inv_vandermonde
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, Transcript
@@ -44,8 +41,6 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
     def _setup(self, layer: JaggedGkrLayer, lam: Array, z: Array) -> tuple[
         _JaggedState,
         list[tuple[Array | None, Array, Array]],
-        Array,
-        Array,
         int,
         int,
     ]:
@@ -58,8 +53,6 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         eq = expand_eq_to_hypercube(z, one)
         claim = jnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
         meta = _round_metadata(layer.row_counts, nrv)
-        naturals = jnp.stack([jnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
-        inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
         state = _JaggedState(
             _Planes(
                 layer.numerator_0,
@@ -73,15 +66,13 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             lam,
             claim,
         )
-        return state, meta, naturals, inv_vand, nrv, niv
+        return state, meta, nrv, niv
 
     def _check_round_runner(
         self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
     ) -> None:
-        state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
-        sched = _JaggedSchedule(
-            meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
-        )
+        state, meta, nrv, niv = self._setup(layer, lam, z)
+        sched = _JaggedSchedule(meta, nrv, niv, challenge_limbs)
         ref = _run_jagged_rounds_reference(state, sched, cheap_transcript(KB))
         # `_run_jagged_rounds` runs under the consumer's whole-layer jit (its FS hop
         # traces into the layer kernel); under jit it must reproduce the unrolled

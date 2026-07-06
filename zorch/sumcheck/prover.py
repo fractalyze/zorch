@@ -5,7 +5,10 @@ homogeneous scan driver `prove`.
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial over the domain [0..degree], then folds every MLE at the verifier's
 challenge (P0 + r*(P1 - P0)). The split/validate and fold steps are summand-
-independent, so they live as `split_halves` / `factors_on_domain` / `fold` and
+independent, so they live as `split_halves` / `factors_on_domain` / `fold`
+(plus the LSB stride-2 duals `split_pairs` / `fold_lsb` the jagged engines
+bind by, and `zero_extend` — the fixed-width re-pad the scan carry below
+pairs with its fold) and
 each round supplies only its summand via `_round_poly`: `SumcheckRound` (here)
 sums a product of factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums
 the LogUp combine. The round body is element-wise field ops plus the one inherent
@@ -78,6 +81,36 @@ def split_halves(state: Sequence[Array]) -> list[tuple[Array, Array]]:
 def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
     """Fold one split pair at challenge `r`: P0 + r*(P1 - P0)."""
     return p0 + r * (p1 - p0)
+
+
+def split_pairs(arr: Array) -> tuple[Array, Array]:
+    """Split on the LSB variable: the stride-2 `(arr[..., 0::2], arr[..., 1::2])`
+    consecutive-pair dual of `split_halves`' contiguous MSB halves. The jagged
+    engines bind LSB-first -- a batch-major jagged layout makes the row LSB the
+    in-segment pair dimension, so the pair fold never crosses a segment
+    boundary -- while the dense drivers here stay MSB-halving."""
+    return arr[..., 0::2], arr[..., 1::2]
+
+
+def fold_lsb(arr: Array, r: Array) -> Array:
+    """Bind the LSB variable at challenge `r`: `fold_pair` over the stride-2
+    pairs. Halves the last axis; the LSB dual of `fold`."""
+    p0, p1 = split_pairs(arr)
+    return fold_pair(p0, p1, r)
+
+
+def zero_extend(arr: Array, width: int) -> Array:
+    """Zero-extend the last axis to `width` -- the re-extension a fixed-shape
+    round carry pairs with a fold: the live prefix halves each round while the
+    buffer width stays put, and the dead tail stays exactly zero so full-width
+    reductions match live-prefix-truncated ones byte-for-byte (field zero-adds
+    are exact)."""
+    pad = width - arr.shape[-1]
+    if pad < 0:
+        raise ValueError(f"width {width} < last-axis size {arr.shape[-1]}")
+    if pad == 0:
+        return arr
+    return jnp.concatenate([arr, jnp.zeros((*arr.shape[:-1], pad), arr.dtype)], axis=-1)
 
 
 def lift_to_domain(p0: Array, p1: Array, degree: int, start: int = 0) -> Array:
@@ -317,10 +350,7 @@ def _prove_scan(
             if challenge_dtype is None
             else reinterpret_challenge(raw, challenge_dtype)
         )
-        state = [
-            jnp.concatenate([fold_pair(p0, p1, r), jnp.zeros_like(p0)], axis=-1)
-            for p0, p1 in pairs
-        ]
+        state = [zero_extend(fold_pair(p0, p1, r), width) for p0, p1 in pairs]
         return (state, transcript, half // 2), RoundMsg(msg, r)
 
     init = (state, transcript, jnp.int32(half_max))

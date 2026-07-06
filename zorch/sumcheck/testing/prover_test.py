@@ -89,6 +89,47 @@ class SumcheckRoundTest(absltest.TestCase):
             prover.SumcheckRound(degree=2)._round_poly([a, b])
 
 
+class LsbHelpersTest(absltest.TestCase):
+    def test_split_pairs_strides_the_last_axis(self) -> None:
+        f = jnp.array([[0, 1, 2, 3], [4, 5, 6, 7]], KB)
+        p0, p1 = prover.split_pairs(f)
+        self.assertTrue(bool(jnp.all(p0 == jnp.array([[0, 2], [4, 6]], KB))))
+        self.assertTrue(bool(jnp.all(p1 == jnp.array([[1, 3], [5, 7]], KB))))
+
+    def test_fold_lsb_matches_manual_pair_fold(self) -> None:
+        f = rand_field(21, (8,), KB)
+        r = jnp.array(6, KB)
+        got = prover.fold_lsb(f, r)
+        want = f[0::2] + r * (f[1::2] - f[0::2])
+        self.assertEqual(got.shape, (4,))
+        self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_fold_lsb_is_the_stride_dual_of_fold(self) -> None:
+        # fold_lsb on an interleaved buffer equals `fold` on the deinterleaved
+        # one: same pairs, different layout.
+        f = rand_field(22, (8,), KB)
+        r = jnp.array(9, KB)
+        deinterleaved = jnp.concatenate([f[0::2], f[1::2]])
+        self.assertTrue(
+            bool(jnp.all(prover.fold_lsb(f, r) == prover.fold([deinterleaved], r)[0]))
+        )
+
+    def test_zero_extend_pads_the_last_axis(self) -> None:
+        f = rand_field(23, (2, 3), KB)
+        got = prover.zero_extend(f, 5)
+        self.assertEqual(got.shape, (2, 5))
+        self.assertTrue(bool(jnp.all(got[:, :3] == f)))
+        self.assertTrue(bool(jnp.all(got[:, 3:] == jnp.zeros((2, 2), KB))))
+
+    def test_zero_extend_at_width_is_identity(self) -> None:
+        f = rand_field(24, (4,), KB)
+        self.assertIs(prover.zero_extend(f, 4), f)
+
+    def test_zero_extend_rejects_shrinking(self) -> None:
+        with self.assertRaises(ValueError):
+            prover.zero_extend(rand_field(25, (4,), KB), 3)
+
+
 class SumcheckRoundPytreeTest(absltest.TestCase):
     def test_config_is_static_pytree(self) -> None:
         # degree is config, not data: prover and verifier rounds carry zero array
