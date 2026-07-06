@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cache
-from typing import Any
+from typing import Any, Protocol
 
 import jax
 import jax.numpy as jnp
@@ -43,6 +43,33 @@ from zorch.poly.univariate import (
     compute_lagrange_basis,
     eval_coeffs,
 )
+
+
+class GruenSummand(Protocol):
+    """The seam a Gruen-compressed jagged round needs from its summand: the
+    round-poly ``degree`` and the ``degree - 2`` extra evaluation points the
+    engine materializes beyond s(0) — t = 1 and the eq-factor root come free
+    (the claim identity and the Gruen zero), so a degree-d round materializes
+    exactly d - 1 evaluations. The round LOOP stays the consumer's (host loop
+    vs fixed-shape scan — the engines' module docstrings own that choice);
+    this protocol pins the vocabulary the shared assembly below reads. The
+    known instances: `zorch.logup_gkr.prover.LogupSummand` (degree 3, extra
+    ``{1/2}``) and sp1-zorch's ``JaggedZerocheckSummand`` (degree 4, extra
+    ``{2, 4}``).
+
+    Every jagged summand also carries a **padding correction** — the
+    sumcheck runs over materialized positions only, and the non-materialized
+    ones contribute in closed form: LogUp's fold-neutral fraction (n=0, d=1)
+    collapses to its eq weight
+    (`zorch.logup_gkr.jagged_prover._virtual_mass_correction`), the
+    zerocheck zero-extension row to its constant ``C(0_row)`` removed via
+    the virtual geq. The correction's math is each summand's own; the
+    concept is this seam's."""
+
+    @property
+    def degree(self) -> int: ...
+
+    def extra_ts(self, dtype: Any) -> tuple[Array, ...]: ...
 
 
 @cache

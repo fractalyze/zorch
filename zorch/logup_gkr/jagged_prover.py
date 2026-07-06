@@ -195,8 +195,9 @@ def _round_coeffs(
     s_half = (
         (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
     )
-    half = one / jnp.array(2, dtype)
-    return gruen.round_coeffs(s_zero, claim, [half], [s_half], z_cur)
+    return gruen.round_coeffs(
+        s_zero, claim, LogupSummand.extra_ts(dtype), [s_half], z_cur
+    )
 
 
 def _paired_sums(
