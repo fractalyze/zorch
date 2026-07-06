@@ -8,6 +8,8 @@ are a consumer concern, not zorch API.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
@@ -274,22 +276,10 @@ def koalabear16_scaled_perm() -> Poseidon2:
     lowering that silently substitutes identity for the J term's scale (or
     re-encodes its Montgomery storage) is byte-invisible when the true scale
     is already one. The value here is R⁻¹ mod p — its Montgomery STORAGE is
-    exactly 1, the enc-fixed-point-adjacent trap a raw-bits/canonical mixup
-    lands on (fractalyze/xla#206, sp1-zorch#208) — and it mirrors how a real
-    consumer folds R⁻¹ out of `R⁻¹·M·state` internal layers (SP1 koalabear).
+    exactly 1, the trap a raw-bits/canonical mixup lands on
+    (fractalyze/xla#206, sp1-zorch#208) — and it mirrors a consumer folding
+    R⁻¹ out of an `R⁻¹·M·state` internal layer.
     """
-    params = koalabear16_params()
     return Poseidon2(
-        Poseidon2Params(
-            width=params.width,
-            dtype=params.dtype,
-            alpha=params.alpha,
-            external_rounds=params.external_rounds,
-            internal_rounds=params.internal_rounds,
-            external_constants_initial=params.external_constants_initial,
-            external_constants_terminal=params.external_constants_terminal,
-            internal_constants=params.internal_constants,
-            internal_diag=params.internal_diag,
-            internal_j_scale=jnp.array(1057030144, F),  # R⁻¹ mod p
-        )
+        replace(koalabear16_params(), internal_j_scale=jnp.array(1057030144, F))
     )

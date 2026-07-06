@@ -119,7 +119,11 @@ class DuplexTranscriptTest(absltest.TestCase):
             t_ref, ref = _observe_and_sample_body(t, v, 4)
             t_mk, mk = observe_and_sample_marked(t, v, 4)
             self.assertTrue(bool(jnp.all(ref == mk)))
-            for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_mk)):
+            for a, b in zip(
+                tree_util.tree_leaves(t_ref),
+                tree_util.tree_leaves(t_mk),
+                strict=True,
+            ):
                 self.assertTrue(bool(jnp.all(a == b)))
 
     def test_duplex_fs_marker_byte_matches_plain(self) -> None:
