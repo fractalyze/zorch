@@ -265,3 +265,31 @@ def koalabear16_params() -> Poseidon2Params:
 def koalabear16_perm() -> Poseidon2:
     """The golden koalabear-16 Poseidon2 permutation instance (width 16)."""
     return Poseidon2(koalabear16_params())
+
+
+def koalabear16_scaled_perm() -> Poseidon2:
+    """The golden instance with a non-identity `internal_j_scale`.
+
+    The default instance's identity scale hides an entire bug class: a
+    lowering that silently substitutes identity for the J term's scale (or
+    re-encodes its Montgomery storage) is byte-invisible when the true scale
+    is already one. The value here is R⁻¹ mod p — its Montgomery STORAGE is
+    exactly 1, the enc-fixed-point-adjacent trap a raw-bits/canonical mixup
+    lands on (fractalyze/xla#206, sp1-zorch#208) — and it mirrors how a real
+    consumer folds R⁻¹ out of `R⁻¹·M·state` internal layers (SP1 koalabear).
+    """
+    params = koalabear16_params()
+    return Poseidon2(
+        Poseidon2Params(
+            width=params.width,
+            dtype=params.dtype,
+            alpha=params.alpha,
+            external_rounds=params.external_rounds,
+            internal_rounds=params.internal_rounds,
+            external_constants_initial=params.external_constants_initial,
+            external_constants_terminal=params.external_constants_terminal,
+            internal_constants=params.internal_constants,
+            internal_diag=params.internal_diag,
+            internal_j_scale=jnp.array(1057030144, F),  # R⁻¹ mod p
+        )
+    )
