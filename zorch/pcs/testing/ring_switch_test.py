@@ -23,7 +23,6 @@ from jax import Array
 
 from zorch.pcs.ring_switch import (
     RingSwitch,
-    add,
     bit_slice_evals,
     eval_rs_eq,
     field_bit_width,
@@ -32,6 +31,8 @@ from zorch.pcs.ring_switch import (
     rs_eq_ind,
     tensor_algebra_transpose,
 )
+from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.poly.multilinear import eval_mle
 
 FIELDS = {
     "ghash": zk_dtypes.binary_field_ghash,
@@ -44,10 +45,8 @@ def _rand(seed: int, shape: tuple[int, ...], dtype: Any) -> Array:
     """Uniform field elements drawn as raw storage bytes (every bit pattern is
     an element of a binary field)."""
     lanes = np.dtype(dtype).itemsize // 4
-    raw = (
-        np.random.default_rng(seed)
-        .integers(0, 1 << 32, size=(*shape, lanes), dtype=np.uint64)
-        .astype(np.uint32)
+    raw = np.random.default_rng(seed).integers(
+        0, 1 << 32, size=(*shape, lanes), dtype=np.uint32
     )
     return jnp.asarray(raw.view(np.dtype(dtype)).reshape(shape))
 
@@ -55,17 +54,12 @@ def _rand(seed: int, shape: tuple[int, ...], dtype: Any) -> Array:
 def _np_bits(x: Array) -> np.ndarray:
     """(n,) field -> (n, W) 0/1 via the numpy byte buffer, little-endian."""
     b = np.asarray(x).view(np.uint8)
-    n = x.shape[0] if x.shape else 1
-    return np.unpackbits(b.reshape(n, -1), axis=1, bitorder="little")
+    return np.unpackbits(b.reshape(x.shape[0], -1), axis=1, bitorder="little")
 
 
 def _np_lanes(x: Array) -> np.ndarray:
     flat = np.asarray(x).reshape(-1)  # 0-d (scalar claims) can't view in place
     return flat.view(np.uint32).reshape(*x.shape, -1)
-
-
-def _np_field(lanes: np.ndarray, dtype: Any) -> np.ndarray:
-    return lanes.astype(np.uint32).view(np.dtype(dtype)).reshape(lanes.shape[:-1])
 
 
 class RingSwitchKernelsTest(parameterized.TestCase):
@@ -106,11 +100,6 @@ class RingSwitchKernelsTest(parameterized.TestCase):
         back = tensor_algebra_transpose(got)
         np.testing.assert_array_equal(_np_lanes(back), _np_lanes(v))
 
-    def test_add_is_xor(self) -> None:
-        dtype = zk_dtypes.binary_field_ghash
-        a, b = _rand(6, (4,), dtype), _rand(7, (4,), dtype)
-        np.testing.assert_array_equal(_np_lanes(add(a, b)), _np_lanes(a) ^ _np_lanes(b))
-
     def test_transpose_wrong_width_raises(self) -> None:
         dtype = zk_dtypes.binary_field_ghash
         with self.assertRaisesRegex(ValueError, "tensor-algebra element"):
@@ -133,7 +122,7 @@ class RingSwitchReductionTest(parameterized.TestCase):
         witness = _rand(11, (16,), dtype)
         tensor = _rand(12, (16,), dtype)
         eq_r = _rand(13, (w,), dtype)
-        rs = reduce_bit_claim(witness, tensor, eq_r)
+        rs = reduce_bit_claim(bit_slice_evals(witness, tensor), tensor, eq_r)
         self.assertIsInstance(rs, RingSwitch)
         lhs = inner_product(witness, rs.rs_eq_ind)
         np.testing.assert_array_equal(_np_lanes(lhs), _np_lanes(rs.claim))
@@ -143,51 +132,25 @@ class RingSwitchReductionTest(parameterized.TestCase):
         and the result matches the eager path."""
         dtype = zk_dtypes.binary_field_ghash
         w = field_bit_width(dtype)
-        args = _rand(11, (16,), dtype), _rand(12, (16,), dtype), _rand(13, (w,), dtype)
+        s_hat = bit_slice_evals(_rand(11, (16,), dtype), _rand(12, (16,), dtype))
+        args = s_hat, _rand(12, (16,), dtype), _rand(13, (w,), dtype)
         eager, jitted = reduce_bit_claim(*args), jax.jit(reduce_bit_claim)(*args)
+        leaves, treedef = jax.tree_util.tree_flatten(eager)
+        self.assertLen(leaves, 3)
+        self.assertEqual(treedef, jax.tree_util.tree_flatten(jitted)[1])
         for field in ("s_hat_v", "rs_eq_ind", "claim"):
             np.testing.assert_array_equal(
                 _np_lanes(getattr(jitted, field)), _np_lanes(getattr(eager, field))
             )
 
-    def test_mismatched_witness_tensor_raises(self) -> None:
-        dtype = zk_dtypes.binary_field_ghash
-        w = field_bit_width(dtype)
-        with self.assertRaisesRegex(ValueError, "share one 1-D shape"):
-            reduce_bit_claim(
-                _rand(1, (8,), dtype), _rand(2, (4,), dtype), _rand(3, (w,), dtype)
-            )
-
 
 class EvalRsEqTest(parameterized.TestCase):
     """Succinct verifier path vs dense: materialize `rs_eq_ind` from the eq
-    tensor of `z` and fold it at `query`, then compare with `eval_rs_eq`."""
-
-    @staticmethod
-    def _eq_tensor(point: Array) -> Array:
-        """eq(point, ·) over the hypercube, variable `i` at index bit `i`
-        (LSB-first) — built by the textbook doubling, sharing no module code."""
-        dtype = point.dtype
-        lanes = np.dtype(dtype).itemsize // 4
-        one_lanes = np.zeros((1, lanes), dtype=np.uint32)
-        one_lanes[0, 0] = 1
-        t = jnp.asarray(_np_field(one_lanes, dtype))
-        one = t[0]
-        for i in range(point.shape[0]):
-            hi = t * point[i]
-            lo = t * add(one, point[i])  # 1 - r = 1 + r in characteristic 2
-            t = jnp.concatenate([lo, hi])
-        return t
-
-    @classmethod
-    def _mle_eval(cls, evals: Array, point: Array) -> Array:
-        """Fold variable 0 (LSB) first — the order `_eq_tensor` lays out."""
-        v = evals
-        one_like = cls._eq_tensor(point[:0])[0]
-        for i in range(point.shape[0]):
-            q = point[i]
-            v = add(v[0::2] * add(one_like, q), v[1::2] * q)
-        return v[0]
+    tensor of `z` and fold it at `query` with `zorch.poly`'s MLE evaluator,
+    then compare with `eval_rs_eq`. The two dense-side helpers share one
+    variable-order convention (`point[0]` = MSB), and the succinct side is
+    order-blind — each step multiplies by `1 + z_i + q_i` in the commutative
+    tensor algebra — so both sides pair `z_i` with `q_i` consistently."""
 
     @parameterized.named_parameters(FIELDS.items())
     def test_matches_dense_fold(self, dtype: Any) -> None:
@@ -196,7 +159,8 @@ class EvalRsEqTest(parameterized.TestCase):
         z_vals = _rand(21, (ell,), dtype)
         query = _rand(22, (ell,), dtype)
         eq_r = _rand(23, (w,), dtype)
-        dense = self._mle_eval(rs_eq_ind(self._eq_tensor(z_vals), eq_r), query)
+        eq_z = expand_eq_to_hypercube(z_vals, jnp.ones((), dtype))
+        dense = eval_mle(rs_eq_ind(eq_z, eq_r), query)
         succinct = eval_rs_eq(z_vals, query, eq_r)
         np.testing.assert_array_equal(_np_lanes(dense), _np_lanes(succinct))
 

@@ -109,11 +109,6 @@ def _xor_reduce(lanes: Array, axis: int) -> Array:
     return lax.reduce(lanes, _LANE(0), lax.bitwise_xor, (axis,))
 
 
-def add(a: Array, b: Array) -> Array:
-    """Field addition via lane XOR — exact in every binary-field representation."""
-    return _from_lanes(_lanes(a) ^ _lanes(b), a.dtype)
-
-
 @jit
 def bit_slice_evals(packed_witness: Array, tensor: Array) -> Array:
     """`s_hat_v[r] = Σ_i bit_r(packed_witness[i]) · tensor[i]` for `r ∈ [0, W)`.
@@ -182,21 +177,18 @@ class RingSwitch:
 
 
 def reduce_bit_claim(
-    packed_witness: Array, suffix_tensor: Array, eq_r_dprime: Array
+    s_hat_v: Array, suffix_tensor: Array, eq_r_dprime: Array
 ) -> RingSwitch:
     """The prover-side reduction for one claim.
 
-    `suffix_tensor` is the eq tensor of the claim point's suffix (the coordinates
-    that index packed elements), `eq_r_dprime` the eq tensor of the post-observe
-    challenge `r''` (length `W`). Fiat-Shamir order is the caller's — see the
-    module docstring.
+    `s_hat_v` is the wire message from [`bit_slice_evals`] — taken as input, not
+    recomputed from the witness, so a caller cannot assemble the reduction
+    without first holding the message it must observe (and the dominant kernel
+    runs once). `suffix_tensor` is the eq tensor of the claim point's suffix
+    (the coordinates that index packed elements), `eq_r_dprime` the eq tensor of
+    the post-observe challenge `r''` (length `W`). Sampling order stays the
+    caller's — see the module docstring.
     """
-    if packed_witness.ndim != 1 or packed_witness.shape != suffix_tensor.shape:
-        raise ValueError(
-            f"packed_witness and suffix_tensor must share one 1-D shape, got "
-            f"{packed_witness.shape} vs {suffix_tensor.shape}"
-        )
-    s_hat_v = bit_slice_evals(packed_witness, suffix_tensor)
     claim = inner_product(tensor_algebra_transpose(s_hat_v), eq_r_dprime)
     return RingSwitch(
         s_hat_v=s_hat_v,
@@ -220,10 +212,11 @@ def eval_rs_eq(z_vals: Array, query: Array, eq_r_dprime: Array) -> Array:
         raise ValueError(f"point length mismatch: {z_vals.shape} vs {query.shape}")
     (w,) = eq_r_dprime.shape
     dtype = eq_r_dprime.dtype
-    one_lanes = jnp.zeros((w, jnp.dtype(dtype).itemsize // 4), dtype=_LANE)
-    e = _from_lanes(one_lanes.at[0, 0].set(1), dtype)  # 1 ⊗ 1
+    # 1 ⊗ 1 by concatenation — `.at[].set` and `pad` don't legalize on these
+    # dtypes.
+    e = jnp.concatenate([jnp.ones((1,), dtype), jnp.zeros((w - 1,), dtype)])
     for i in range(z_vals.shape[0]):
         vert = e * z_vals[i]
         horiz = tensor_algebra_transpose(tensor_algebra_transpose(e) * query[i])
-        e = add(e, add(vert, horiz))
+        e = e + vert + horiz
     return inner_product(tensor_algebra_transpose(e), eq_r_dprime)

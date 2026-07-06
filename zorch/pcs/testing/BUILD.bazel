@@ -69,6 +69,7 @@ py_test(
     tags = ["local_only"],
     deps = [
         "//zorch/pcs:ring_switch",
+        "//zorch/poly",
         requirement("absl_py"),
         requirement("jax"),
         requirement("numpy"),
