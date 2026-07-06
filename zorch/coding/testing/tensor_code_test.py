@@ -101,6 +101,19 @@ class TensorCodeTest(parameterized.TestCase):
         with self.assertRaises(NotImplementedError):
             ReedSolomon(8, 2, GH, coset_shift=jnp.asarray(3, GH))
 
+    def test_binary_eval_table_lazy_and_jit_safe(self) -> None:
+        # Construction must not build the additive eval-point table — encode-only
+        # consumers (Ligero matrix commits) never read it, and per-level code
+        # factories rely on cheap construction. A first eval_point under jit must
+        # cache a CONCRETE table: a leaked tracer would fail the eager reuse.
+        code = ReedSolomon(8, 2, GH)
+        self.assertIsNone(code._binary_eval_table)
+
+        positions = jnp.array([0, 1, 5])
+        under_jit = jax.jit(code.eval_point)(positions)
+        reused = code.eval_point(positions)  # eager, reuses the cached table
+        self.assertTrue(bool(jnp.all(under_jit == reused)))
+
 
 if __name__ == "__main__":
     absltest.main()
