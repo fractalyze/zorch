@@ -31,13 +31,14 @@ from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck.prover import fold as sc_fold
-from zorch.sumcheck.verifier import SumcheckRound
+from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
 
 _ROUND = SumcheckRound(degree=2)
+_COMPRESSED_ROUND = CompressedCoeffsSumcheckRound()
 
 
 @dataclass(frozen=True)
@@ -101,6 +102,7 @@ def _verify(
     cfg = verifier.config
     dtype = z.dtype
     one = jnp.ones((), dtype)
+    round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
 
     B = expand_eq_to_hypercube(z, one)
     claim = value
@@ -120,7 +122,7 @@ def _verify(
         for _ in range(k_j):
             msg = proof.sumcheck_messages[msg_idx]
             msg_idx += 1
-            claim, t, r, ok_round = _ROUND(claim, msg, t)
+            claim, t, r, ok_round = round_(claim, msg, t)
             ok = ok & ok_round
             # The round verifier reduces only the claim; fold the public basis B
             # by the same challenge so it tracks the prover's folded B.

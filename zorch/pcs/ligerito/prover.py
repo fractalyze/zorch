@@ -53,7 +53,7 @@ from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, Ligeri
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import mle_evals_to_coeffs
-from zorch.sumcheck.prover import SumcheckRound
+from zorch.sumcheck.prover import CompressedProductRound, SumcheckRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -68,6 +68,7 @@ MakeCode = Callable[[int, int], TensorCode]
 # The degree-2 product round (`W·B`) drives every sumcheck round; one instance,
 # reused. The claim reduces through `eval_univariate` (value-form message).
 _ROUND = SumcheckRound(degree=2)
+_COMPRESSED_ROUND = CompressedProductRound()
 
 
 # Jitted commit body, keyed on code + tree + interleave by value (#214): commit
@@ -166,6 +167,7 @@ def _open(
     cfg = prover.config
     dtype = z.dtype
     one = jnp.ones((), dtype)
+    round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
 
     # The continuous sumcheck state: witness W (folds) and basis B (glued +
     # folds). B starts as the value basis eq(z). The prover only emits round
@@ -190,7 +192,7 @@ def _open(
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck ---
         for _ in range(k_j):
-            [W, B], t, msg = _ROUND([W, B], t)
+            [W, B], t, msg = round_([W, B], t)
             sumcheck_messages.append(msg)
         num_vars -= k_j
 

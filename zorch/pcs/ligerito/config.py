@@ -56,6 +56,11 @@ class LigeritoConfig:
         expansion; True = LSB-first (challenge `j` <-> table bit `j`), for wire
         formats that fix that convention. Prover and verifier both derive from it,
         so the round trip holds either way; it only changes the produced bytes.
+    compressed_sumcheck_messages: round-message wire form. False = the natural
+        domain evals `[s(0), s(1), s(2)]` (`SumcheckRound(degree=2)`); True = the
+        compressed coefficients `[c_0, c_2]` with the linear coefficient
+        reconstructed from the running claim (`CompressedProductRound`). Another
+        wire-convention knob: both sides derive from it, only the bytes change.
     """
 
     num_vars: int
@@ -64,6 +69,7 @@ class LigeritoConfig:
     queries: tuple[int, ...]
     ood_samples: tuple[int, ...] = ()
     alpha_lsb_first: bool = False
+    compressed_sumcheck_messages: bool = False
 
     def __post_init__(self) -> None:
         if not self.fold_ks:

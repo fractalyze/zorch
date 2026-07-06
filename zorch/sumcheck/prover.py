@@ -182,6 +182,40 @@ class SumcheckRound(Round):
         return state, transcript, msg
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=[])
+@dataclass(frozen=True)
+class CompressedProductRound(Round):
+    """Two-factor product round with the compressed coefficient wire: the message
+    is `[c_0, c_2]` — the degree-2 round polynomial's constant and leading
+    coefficients — and the linear coefficient stays off the wire (the verifier
+    dual, `verifier.CompressedCoeffsSumcheckRound`, reconstructs it from the
+    running claim via `s(0) + s(1) = claim`). Split and fold match
+    `SumcheckRound(degree=2)` exactly (the MSB variable binds); only the message
+    form differs, so a scheme whose wire fixes this form swaps rounds without
+    touching the fold. `c_2 = Σ (P1_f - P0_f)·(P1_b - P0_b)` is the honest
+    leading coefficient in any characteristic; over char 2 it coincides with the
+    `(P0 + P1)` products some wire specs write it as."""
+
+    def _round_poly(self, state: Sequence[Array]) -> Array:
+        """`[c_0, c_2]` of `s(X) = Σ_x' f(X, x')·b(X, x')`, shape (2, *batch):
+        one stacked element-wise product per coefficient, then the single
+        inherent Σ."""
+        if len(state) != 2:
+            raise ValueError(
+                f"compressed product round takes exactly 2 factors, got {len(state)}"
+            )
+        (f0, f1), (b0, b1) = split_halves(state)
+        return jnp.sum(jnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
+
+    def __call__(
+        self, state: Sequence[Array], transcript: Transcript
+    ) -> tuple[list[Array], Transcript, Array]:
+        msg = self._round_poly(state)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        state = fold(state, r[0])
+        return state, transcript, msg
+
+
 @partial(
     jax.tree_util.register_dataclass,
     data_fields=["round_poly", "challenge"],
@@ -362,3 +396,4 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _summand: type[SumcheckSummand] = SumcheckRound
     _prover_round: type[ProverRound] = SumcheckRound
+    _compressed_prover_round: type[ProverRound] = CompressedProductRound

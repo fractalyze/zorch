@@ -118,6 +118,18 @@ class LigeritoTest(parameterized.TestCase):
             queries=(6, 4, 4, 2),
             alpha_lsb_first=True,
         ),
+        # Compressed [c0, c2] round messages (c1 reconstructed from the claim),
+        # combined with the LSB-first alpha — the two wire-convention knobs a
+        # byte-fixed consumer flips together.
+        dict(
+            testcase_name="l4_8v_compressed_msgs",
+            num_vars=8,
+            fold_ks=(2, 1, 1, 1),
+            rates=(3, 2, 1, 1),
+            queries=(6, 4, 4, 2),
+            alpha_lsb_first=True,
+            compressed_sumcheck_messages=True,
+        ),
     )
     def test_open_verify_round_trip(
         self,
@@ -126,6 +138,7 @@ class LigeritoTest(parameterized.TestCase):
         rates: tuple[int, ...],
         queries: tuple[int, ...],
         alpha_lsb_first: bool = False,
+        compressed_sumcheck_messages: bool = False,
     ) -> None:
         cfg = LigeritoConfig(
             num_vars=num_vars,
@@ -133,6 +146,7 @@ class LigeritoTest(parameterized.TestCase):
             log_inv_rates=rates,
             queries=queries,
             alpha_lsb_first=alpha_lsb_first,
+            compressed_sumcheck_messages=compressed_sumcheck_messages,
         )
         prover, verifier, root, f, pdata = _setup(cfg)
         z = _rand_ef(2, (cfg.num_vars,))

@@ -91,7 +91,35 @@ class CoeffsSumcheckRound(Round):
         return eval_coeffs(msg, r), transcript, r, ok
 
 
+@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=[])
+@dataclass(frozen=True)
+class CompressedCoeffsSumcheckRound(Round):
+    """Verifier for the compressed coefficient wire
+    (`prover.CompressedProductRound`): the message carries `[c_0, c_2]` of the
+    degree-2 round polynomial; the linear coefficient never rides the wire and
+    is reconstructed from the running claim — `s(1) = claim - s(0)` with
+    `s(0) = c_0`, so `c_1 = s(1) - c_0 - c_2`. The reconstruction consumes the
+    `s(0) + s(1) == claim` identity, so there is no per-round redundancy left to
+    check (`ok` is constant true); binding rests on the terminal claim check,
+    the trade the compressed form makes for wire size."""
+
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
+        if msg.shape[0] != 2:
+            raise ValueError(
+                f"compressed round message must carry [c_0, c_2], got shape "
+                f"{msg.shape}"
+            )
+        c0, c2 = msg[0], msg[1]
+        c1 = claim - c0 - c0 - c2  # s(1) - c_0 - c_2, with s(1) = claim - c_0
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        reduced = eval_coeffs(jnp.stack([c0, c1, c2]), r[0])
+        return reduced, transcript, r[0], jnp.bool_(True)
+
+
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _eval_form: type[InnerVerifierRound] = SumcheckRound
     _coeffs_form: type[InnerVerifierRound] = CoeffsSumcheckRound
+    _compressed_coeffs_form: type[InnerVerifierRound] = CompressedCoeffsSumcheckRound
