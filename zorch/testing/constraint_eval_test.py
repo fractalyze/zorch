@@ -260,13 +260,31 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertNotIn("aux_operand_idxs", txt)
 
     def test_aux_rejects_a_bare_array(self) -> None:
-        # A single array (not a tuple) would splat into per-element scalars.
+        # A single array (not a sequence) would splat into per-element scalars.
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         with self.assertRaises(ValueError):
             constraint_eval(
                 _eval_fn_aux, rows, alpha, aux_operands=rand_field(7, (2,), F)
             )
+
+    def test_aux_rejects_none(self) -> None:
+        # A `pv=None`-style migration slip must fail loud, not as a len(None)
+        # crash deeper in the function.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(_eval_fn_aux, rows, alpha, aux_operands=None)  # type: ignore[arg-type]
+
+    def test_aux_accepts_a_list(self) -> None:
+        # A caller naturally passing a list (not a tuple) is normalized, not
+        # met with a cryptic tuple-concatenation error.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        aux = rand_field(7, (2,), F)
+        golden = _eval_fn_aux(rows, aux) @ alpha
+        got = constraint_eval(_eval_fn_aux, rows, alpha, aux_operands=[aux])  # type: ignore[arg-type]
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
 
     def test_multiple_aux_operands_thread_in_order(self) -> None:
         # Two aux operands feed eval_fn(trace, a0, a1) and ride at consecutive

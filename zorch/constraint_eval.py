@@ -116,9 +116,11 @@ def constraint_eval(
                 "column_weights must be rank-1 with one weight per trace column "
                 f"({num_cols}), got shape {column_weights.shape}"
             )
-    if isinstance(aux_operands, Array):
-        # A bare array would splat into per-element scalars; want a tuple.
-        raise ValueError("aux_operands must be a tuple of arrays, not one array")
+    if aux_operands is None or hasattr(aux_operands, "ndim"):
+        # None (a `pv=None`-style migration slip) or a bare array (which would
+        # splat into per-element scalars) — want a sequence of whole arrays.
+        raise ValueError("aux_operands must be a tuple of arrays (use () for none)")
+    aux_operands = tuple(aux_operands)  # accept any sequence; normalize to tuple
 
     # Optional operands are independent, so they don't form a fixed prefix;
     # bind them by presence in a known order (live, weights, then aux) rather
@@ -193,6 +195,11 @@ def constraint_eval(
         # The emitter recognizes it structurally (the rank-1 operand of the
         # body-root dot), so no operand-index attribute is needed.
         operands += (column_weights,)
+    # Two emit sites, not one: the list-valued aux_operand_idxs can only be
+    # passed as a named kwarg (a dict-typed attrs unpack would collide with
+    # composite's typed `version` param under mypy), and a named kwarg cannot be
+    # conditional within a single call. The no-aux branch keeps the attribute
+    # off entirely, which the emitter routes on.
     if not aux_operands:
         return composite(decomposition, *operands, name=name, **attrs)
     # Trailing operands at dynamic indices; the emitter finds them by these.
