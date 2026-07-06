@@ -11,7 +11,10 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array, lax, tree_util
 
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.hash.poseidon2.testing.koalabear16 import (
+    koalabear16_perm,
+    koalabear16_scaled_perm,
+)
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -104,28 +107,47 @@ class DuplexTranscriptTest(absltest.TestCase):
         _, want = self._new().observe(v).sample(2)
         self.assertTrue(bool(jnp.all(got == want)))
 
-    def test_duplex_fs_marker_byte_matches_plain(self) -> None:
-        # The `zorch.duplex_fs` fusion marker is a byte-identical drop-in for the
-        # plain hop (an un-emitted marker inlines to the same computation) at both a
-        # fresh entry and a mid-stream one (non-zero duplex positions ride as
-        # operands, so one kernel serves any phase). It also appears by construction
-        # in the lowered HLO for a vendor to fuse.
+    def _assert_marked_matches_plain(self, t0: DuplexTranscript) -> None:
+        # Marked hop vs plain decomposition at a fresh entry and a mid-stream
+        # one (non-zero duplex positions ride as operands, so one kernel serves
+        # any phase): challenge and all five state leaves byte-identical.
         v = rand_field(9, (5,), F)
         for advance in (0, 1):  # fresh, then non-zero (in_pos, out_pos)
-            t = self._new()
+            t = t0
             for _ in range(advance):
                 t, _ = _observe_and_sample_body(t, rand_field(2, (5,), F), 3)
             t_ref, ref = _observe_and_sample_body(t, v, 4)
             t_mk, mk = observe_and_sample_marked(t, v, 4)
             self.assertTrue(bool(jnp.all(ref == mk)))
-            for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_mk)):
+            for a, b in zip(
+                tree_util.tree_leaves(t_ref),
+                tree_util.tree_leaves(t_mk),
+                strict=True,
+            ):
                 self.assertTrue(bool(jnp.all(a == b)))
+
+    def test_duplex_fs_marker_byte_matches_plain(self) -> None:
+        # The `zorch.duplex_fs` fusion marker is a byte-identical drop-in for the
+        # plain hop (an un-emitted marker inlines to the same computation). It
+        # also appears by construction in the lowered HLO for a vendor to fuse.
+        self._assert_marked_matches_plain(self._new())
         hlo = (
             jax.jit(lambda t, x: observe_and_sample_marked(t, x, 4))
-            .lower(self._new(), v)
+            .lower(self._new(), rand_field(9, (5,), F))
             .as_text()
         )
         self.assertIn(DUPLEX_FS_MARKER, hlo)
+
+    def test_duplex_fs_marker_byte_matches_plain_scaled_j(self) -> None:
+        # Same drop-in contract under a NON-identity internal_j_scale. The
+        # default instance's identity scale hides a whole bug class: a vendor
+        # kernel that substitutes identity for the J term's scale — e.g. by
+        # re-encoding the operand's Montgomery storage as a canonical value
+        # (fractalyze/xla#206, sp1-zorch#208) — is byte-invisible above but
+        # diverges here on every hop.
+        self._assert_marked_matches_plain(
+            DuplexTranscript.new(koalabear16_scaled_perm(), rate=8)
+        )
 
     def test_duplex_fs_marker_state_survives_squeeze_consumer(self) -> None:
         # Regression: consuming the marked hop's squeezed challenge INSIDE the same

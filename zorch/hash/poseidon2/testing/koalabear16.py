@@ -8,6 +8,8 @@ are a consumer concern, not zorch API.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
@@ -265,3 +267,19 @@ def koalabear16_params() -> Poseidon2Params:
 def koalabear16_perm() -> Poseidon2:
     """The golden koalabear-16 Poseidon2 permutation instance (width 16)."""
     return Poseidon2(koalabear16_params())
+
+
+def koalabear16_scaled_perm() -> Poseidon2:
+    """The golden instance with a non-identity `internal_j_scale`.
+
+    The default instance's identity scale hides an entire bug class: a
+    lowering that silently substitutes identity for the J term's scale (or
+    re-encodes its Montgomery storage) is byte-invisible when the true scale
+    is already one. The value here is R⁻¹ mod p — its Montgomery STORAGE is
+    exactly 1, the trap a raw-bits/canonical mixup lands on
+    (fractalyze/xla#206, sp1-zorch#208) — and it mirrors a consumer folding
+    R⁻¹ out of an `R⁻¹·M·state` internal layer.
+    """
+    return Poseidon2(
+        replace(koalabear16_params(), internal_j_scale=jnp.array(1057030144, F))
+    )
