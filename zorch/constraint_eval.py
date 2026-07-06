@@ -46,12 +46,13 @@ CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
 
 def constraint_eval(
-    eval_fn: Callable[[Array], Array],
+    eval_fn: Callable[..., Array],
     trace: Array,
     alpha: Array,
     *,
     live_width: Array | int | None = None,
     column_weights: Array | None = None,
+    pv: Array | None = None,
     name: str = CONSTRAINT_EVAL_MARKER,
 ) -> Array:
     """Mark `sum_k alpha_k * eval_fn(trace)_k` as one `zorch.constraint_eval`.
@@ -83,6 +84,18 @@ def constraint_eval(
     vanishes and the masked and unmasked forms agree. The term carries no
     proving-scheme meaning here (a consumer may use it for a column opening
     batch) — `zorch` stays scheme-agnostic.
+
+    `pv`, when given, is a public-values array threaded to the constraint body:
+    `eval_fn` is then called 2-ary as `eval_fn(trace, pv)` instead of 1-ary
+    `eval_fn(trace)`. It rides as the trailing operand with its index declared in
+    `pv_operand_idx`, so a consumer whose constraint reads pv passes it as a
+    DECLARED operand rather than closing over it. That distinction is
+    load-bearing under `jax.jit`: a closed-over pv enters the composite
+    decomposition as a Tracer constant, which `lax.composite` rejects
+    (`UnexpectedTracerError`), whereas a declared operand traces cleanly. The
+    value is opaque marker data (`zorch` reads no meaning from it); the
+    recognizing emitter forwards it to the constraint body and the inlined path
+    passes it to the same `eval_fn`, so marked and inlined stay byte-identical.
     """
     num_constraints = alpha.shape[-1]
     if num_constraints < 1:
@@ -104,14 +117,27 @@ def constraint_eval(
                 f"({num_cols}), got shape {column_weights.shape}"
             )
 
+    # Bind the optional operands positionally by presence, not by named
+    # defaults: pv is independent of live_width/column_weights, so the present
+    # optionals no longer form a fixed prefix (e.g. trace, alpha, live, pv with
+    # no column_weights) and a defaulted-parameter signature would mis-bind pv
+    # to the column_weights slot. The tail order is fixed (live, weights, pv) to
+    # match the operand-append order below.
+    has_live = live_width is not None
+    has_weights = column_weights is not None
+    has_pv = pv is not None
+
     def decomposition(
         trace: Array,
         alpha: Array,
-        live_width: Array | None = None,
-        column_weights: Array | None = None,
+        *optional: Array,
         **_attrs: object,
     ) -> Array:
-        constraints = eval_fn(trace)
+        tail = iter(optional)
+        live_width = next(tail) if has_live else None
+        column_weights = next(tail) if has_weights else None
+        pv = next(tail) if has_pv else None
+        constraints = eval_fn(trace, pv) if has_pv else eval_fn(trace)
         acc = constraints[..., 0] * alpha[..., 0]
         for k in range(1, num_constraints):
             acc = acc + constraints[..., k] * alpha[..., k]
@@ -154,7 +180,12 @@ def constraint_eval(
         operands += (live,)
         attrs["live_width_operand_idx"] = 2
     if column_weights is not None:
-        # Trailing operand; the emitter recognizes it structurally (the rank-1
-        # operand of the body-root dot), so no operand-index attribute is needed.
+        # The emitter recognizes it structurally (the rank-1 operand of the
+        # body-root dot), so no operand-index attribute is needed.
         operands += (column_weights,)
+    if pv is not None:
+        # Trailing operand; its index is dynamic (2 + live + weights), so unlike
+        # column_weights it carries an explicit index attribute for the emitter.
+        attrs["pv_operand_idx"] = len(operands)
+        operands += (pv,)
     return composite(decomposition, *operands, name=name, **attrs)
