@@ -221,10 +221,108 @@ def _round_metadata(
     row_counts: tuple[int, ...], num_row_vars: int, width: int | None = None
 ) -> list[tuple[Array | None, Array, Array, Array]]:
     """The per-round row schedule: memoized for the exact layout, built fresh
-    for capped layouts (`_round_metadata_impl` has the full story)."""
+    for capped layouts (`_round_metadata_impl` has the full story).
+
+    Marker v2 (xla#179 device-derived schedule) no longer carries these
+    arrays — the claimed kernels and the composite decompositions derive the
+    schedule from `row_counts` + the round index (`_derive_row_schedule`).
+    This host builder remains the independent oracle's source
+    (`_run_jagged_rounds_reference`) so the derivation stays cross-checked
+    against the original construction."""
     if width is None:
         return _round_metadata_cached(row_counts, num_row_vars)
     return _round_metadata_impl(row_counts, num_row_vars, width)
+
+
+@cache
+def _round_live_meta(row_counts: tuple[int, ...], num_row_vars: int) -> list[Array]:
+    """Per-round i32[3] `{live pairs, live eq_row entry, round}` operands for
+    the v2 round markers — the only per-round schedule state that still rides
+    the marker (the index arrays derive in place from `row_counts`). Values
+    restate `_round_metadata_impl`'s recurrence; independent of any width cap
+    (a cap changes buffer layout, never liveness), so one memoized list serves
+    the exact and every capped layout. Tiny (3 ints/round), so the
+    never-evicting cache is safe."""
+    host = []
+    counts = row_counts
+    for rnd in range(num_row_vars):
+        _, pairs = _prepad_folded(counts)
+        # live[1] = eq_row liveness ENTERING round `rnd`: round 0 never folds
+        # eq_row, so round k enters with 2^nrv halved k-1 times (see
+        # _round_metadata_impl's note — only the claimed kernel reads this).
+        host.append(
+            np.asarray(
+                [sum(pairs), (1 << num_row_vars) >> max(rnd - 1, 0), rnd],
+                np.int32,
+            )
+        )
+        counts = pairs
+    with jax.ensure_compile_time_eval():
+        return jax.device_put(host)
+
+
+def _round_out_pairs(row_counts: tuple[int, ...], num_row_vars: int) -> tuple[int, ...]:
+    """Per-round padded pair count `sum(pairs_k)` — the STATIC output width of
+    an exact-layout round (`2 * out_pairs` padded slots). The capped layout is
+    width-preserving instead (out width = the plane buffer width), so it never
+    consumes this."""
+    out = []
+    counts = row_counts
+    for _ in range(num_row_vars):
+        _, pairs = _prepad_folded(counts)
+        out.append(sum(pairs))
+        counts = pairs
+    return tuple(out)
+
+
+def _derive_row_schedule(
+    row_counts: Array, rnd: Array, num_pairs: int, sentinel: int, idx_dtype: Any
+) -> tuple[Array, Array, Array]:
+    """Round `rnd`'s `(gather, col_index, pair_index)` derived in-trace from
+    the layer's `row_counts` — the traced mirror of `_round_metadata_impl`'s
+    host build, and the byte-exact fallback contract for the v2 markers (the
+    claimed kernels run the same derivation in place).
+
+    Entering round k every segment holds `counts_k[s] = ceil(rc[s] / 2^k)`
+    elements (iterated ceil-halving composes into one shift) and folds
+    `pairs_k[s] = ceil(counts_k / 2)` pairs. A pair (segment s, in-segment
+    pair pj) re-pads from source elements `cum_counts_k[s] + 2·pj / +1`; only
+    the odd element of the last pair of an odd-count segment is the neutral
+    pad. `num_pairs` is the STATIC output pair count (the fixed buffer's
+    `width // 2`, or the exact layout's `sum(pairs_k)`); `sentinel` any index
+    the pad blend treats as past-the-end (the folded state length). Dead
+    slots past the live pairs carry the sentinel / zero, matching
+    `_fixed_width_gather` / `_zero_pad_index_np`."""
+    i32 = jnp.int32
+    rc = row_counts.astype(i32)
+    # ((rc − 1) >> k) + 1 = ceil(rc / 2^k) for rc >= 1, and 0 for an empty
+    # segment under the arithmetic shift ((−1 >> k) + 1) — no pairs, so the
+    # searchsorted below never lands on it.
+    counts = (rc - i32(1) >> rnd.astype(i32)) + i32(1)
+    pairs = counts + i32(1) >> 1
+    cum_pairs = jnp.cumsum(pairs)  # inclusive; cum_pairs[-1] = live pairs
+    seg_base = jnp.concatenate([jnp.zeros((1,), i32), jnp.cumsum(counts)[:-1]])
+    pr = jnp.arange(num_pairs, dtype=i32)
+    s = jnp.searchsorted(cum_pairs, pr, side="right").astype(i32)
+    s = jnp.minimum(s, i32(row_counts.shape[0] - 1))  # dead-tail clamp
+    pj = pr - (cum_pairs[s] - pairs[s])
+    live = pr < cum_pairs[-1]
+    j_e = pj * 2
+    j_o = j_e + 1
+    src_e = seg_base[s] + j_e
+    src_o = seg_base[s] + j_o
+    sent = i32(sentinel)
+    gather_e = jnp.where(live, src_e, sent)
+    gather_o = jnp.where(live & (j_o < counts[s]), src_o, sent)
+    gather = jnp.stack([gather_e, gather_o], axis=1).reshape(-1)
+    zero = i32(0)
+    col_index = jnp.where(live, s, zero)
+    pair_index = jnp.where(live, pj, zero)
+    return (
+        gather.astype(idx_dtype),
+        col_index.astype(idx_dtype),
+        pair_index.astype(idx_dtype),
+    )
 
 
 def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
@@ -454,17 +552,22 @@ def prove_jagged_layer(
     """
     niv = layer.num_batch_variables
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
-    meta = _round_metadata(
-        layer.row_counts, nrv, width=None if caps is None else caps.row
-    )
     planes = _Planes(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
     )
-    return _prove_jagged_layer_from_meta(
-        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs, caps
+    return _prove_jagged_layer_from_counts(
+        planes,
+        niv,
+        layer.row_counts,
+        lam,
+        claim,
+        eval_point,
+        transcript,
+        challenge_limbs,
+        caps,
     )
 
 
@@ -486,10 +589,10 @@ def _check_row_space(row_counts: tuple[int, ...], num_vars: int, niv: int) -> in
     return nrv
 
 
-def _prove_jagged_layer_from_meta(
+def _prove_jagged_layer_from_counts(
     planes: _Planes,
     niv: int,
-    meta: list[tuple[Array | None, Array, Array, Array]],
+    row_counts: tuple[int, ...],
     lam: Array,
     claim: Array,
     eval_point: Array,
@@ -497,15 +600,49 @@ def _prove_jagged_layer_from_meta(
     challenge_limbs: int,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
-    """One jagged layer's sumcheck from a PREBUILT round schedule `meta`.
+    """One jagged layer's sumcheck from the layer's static `row_counts`.
 
-    `meta` is the per-round gather/index metadata, built host-side by
-    `_round_metadata` and passed in as a traced operand rather than closed over the
-    trace: its gathers span the layer height (hundreds of MB of int32 at shard
-    scale), and baking them in as HLO constants is what made the whole-layer jit
-    recompile from scratch per shard. As operands they leave the HLO tiny, so the
-    compile is cheap and `row_counts` never enters the jit key. `caps` must be the
-    width set the meta was laid out with (`_round_metadata(width=caps.row)`)."""
+    Marker v2 (xla#179 device-derived schedule): the per-round re-pad schedule
+    is a pure function of `row_counts` + the round index and derives inside
+    the claimed kernels (and the decompositions), so the loop carries only the
+    tiny i32[nseg] `row_counts` operand plus per-round i32[3] live triples —
+    the hundreds-of-MB host-built gather uploads (and their per-warm-pass
+    rebuild/staging) are gone, and the whole-layer jit's HLO stays tiny
+    without `row_counts` ever entering the jit key (both ride as operands)."""
+    nrv = eval_point.shape[0] - niv
+    return _prove_jagged_layer_from_ops(
+        planes,
+        niv,
+        _row_counts_operand(row_counts),
+        _round_live_meta(row_counts, nrv),
+        None if caps is not None else _round_out_pairs(row_counts, nrv),
+        lam,
+        claim,
+        eval_point,
+        transcript,
+        challenge_limbs,
+        caps,
+    )
+
+
+def _prove_jagged_layer_from_ops(
+    planes: _Planes,
+    niv: int,
+    row_counts: Array,
+    live: list[Array],
+    out_pairs: tuple[int, ...] | None,
+    lam: Array,
+    claim: Array,
+    eval_point: Array,
+    transcript: Transcript,
+    challenge_limbs: int,
+    caps: RoundWidthCaps | None = None,
+) -> tuple[Array, Transcript, JaggedLayerProof]:
+    """`_prove_jagged_layer_from_counts` from PREBUILT schedule operands — the
+    seam the whole-layer jit zone routes through, so `row_counts` and the live
+    triples ride as TRACED operands (never keying the jit) while `out_pairs`
+    (the exact layout's static padded widths; None under caps) stays static
+    like `niv`/`caps`."""
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
@@ -513,7 +650,14 @@ def _prove_jagged_layer_from_meta(
 
     state = _JaggedState(planes, eq_row, eq_int, eval_point, lam, claim)
     sched = _JaggedSchedule(
-        meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs, caps
+        row_counts,
+        live,
+        out_pairs,
+        _InterpConsts(naturals, inv_vand),
+        nrv,
+        niv,
+        challenge_limbs,
+        caps,
     )
     # The host round loop runs one fold-then-compute kernel per round, the FS hop
     # + reduce dispatching between them. `export_dispatch=True` selects the cached
@@ -549,6 +693,12 @@ def _run_jagged_rounds_reference(
         state.lam,
         state.claim,
     )
+    if sched.meta is None:
+        raise ValueError(
+            "the reference oracle needs the schedule's host-built explicit "
+            "meta (_round_metadata) — the round loop's derived-schedule "
+            "fields do not carry it"
+        )
     meta, nrv, niv = sched.meta, sched.nrv, sched.niv
     naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
     challenge_limbs = sched.challenge_limbs
@@ -694,20 +844,35 @@ class _JaggedState:
 
 @dataclass(frozen=True)
 class _JaggedSchedule:
-    """A jagged layer's static round schedule: the per-round gather/index/live
-    metadata, the interpolation constants, and the batch/row variable counts
-    plus the challenge limb count. Rides beside the state so the loop
-    signatures stay `(state, schedule, transcript)` rather than a
-    16-positional-arg bag. `caps` selects the fixed-width round layout (its
-    `row` must be the `width` the meta was built with); None runs the exact
-    (per-round-shape) layout."""
+    """A jagged layer's static round schedule: the layer's `row_counts`
+    operand plus the per-round live triples (marker v2 — the re-pad schedule
+    itself derives in-kernel from these), the interpolation constants, and
+    the batch/row variable counts plus the challenge limb count. Rides beside
+    the state so the loop signatures stay `(state, schedule, transcript)`
+    rather than a positional-arg bag. `caps` selects the fixed-width round
+    layout; None runs the exact (per-round-shape) layout, whose static padded
+    widths ride `out_pairs` (None under caps — width-preserving). `meta` (the
+    host-built explicit schedule) feeds ONLY the reference oracle
+    `_run_jagged_rounds_reference`; the round loop never reads it."""
 
-    meta: list[tuple[Array | None, Array, Array, Array]]
+    row_counts: Array
+    live: list[Array]
+    out_pairs: tuple[int, ...] | None
     consts: _InterpConsts
     nrv: int
     niv: int
     challenge_limbs: int
     caps: RoundWidthCaps | None = None
+    meta: list[tuple[Array | None, Array, Array, Array]] | None = None
+
+
+@cache
+def _row_counts_operand(row_counts: tuple[int, ...]) -> Array:
+    """The layer's `row_counts` as the tiny i32[nseg] device operand every v2
+    round marker carries (committed once per distinct layout; memoized like
+    the live triples)."""
+    with jax.ensure_compile_time_eval():
+        return jax.device_put(np.asarray(row_counts, np.int32))
 
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
@@ -983,33 +1148,38 @@ def _round_composite_row_decomp(
     planes: _Planes,
     eq_row: Array,
     alpha: Array,
-    gather: Array,
-    col_index: Array,
-    pair_index: Array,
+    row_counts: Array,
     eq_int: Array,
     scalars: _RoundScalars,
     naturals: Array,
     inv_vand: Array,
     live: Array,
+    out_pairs: int | None = None,
     **_attrs: object,
 ) -> tuple[Array, _Planes, Array]:
     """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `mid` phase
     -- the byte-exact fallback a recognizing emitter replaces. `_attrs` (phase /
     variant / degree / poly_form) are composite metadata the emitter parses; the
-    decomposition needs only the operands. The runtime jagged schedule (`gather` /
-    `col_index` / `pair_index`) and the interp constants (`naturals` / `inv_vand`)
-    ride as operands. `gather` is always concrete here (the caller resolves the
-    no-re-pad `None` case to an identity gather), so the marker carries a fixed
-    operand set.
+    decomposition needs only the operands. Marker v2 (xla#179 device-derived
+    schedule): the re-pad schedule derives in-trace from `row_counts` + the
+    round index `live[2]` (`_derive_row_schedule` — the claimed kernel runs
+    the same derivation in place), so no index array is uploaded per round.
+    `out_pairs` is the exact layout's STATIC padded pair count, closed over by
+    the wrapper (not an operand); None selects the width-preserving capped
+    convention (out width = the plane buffer width).
 
-    Size-invariance (xla#179): the schedule may be laid into fixed-width
-    buffers -- the sum masks to the `live[0]` live pairs (the re-padded state's
-    live prefix is `2 * live[0]`, the rest of the gather is sentinel → neutral
-    pad), and the folded `eq_row` zero-pads back to its input width, live to
-    `live[1] // 2`. On the exact layout the live prefixes are the whole buffers
-    and the values match `_fix_and_sum_row` bit-for-bit (modulo the eq_row
-    width restore)."""
+    Size-invariance (xla#179): the sum masks to the `live[0]` live pairs (the
+    re-padded state's live prefix is `2 * live[0]`, the rest of the derived
+    gather is sentinel → neutral pad), and the folded `eq_row` zero-pads back
+    to its input width, live to `live[1] // 2`. On the exact layout the live
+    prefixes are the whole buffers and the values match `_fix_and_sum_row`
+    bit-for-bit (modulo the eq_row width restore)."""
     eq_width = eq_row.shape[0]
+    folded_len = planes.n0.shape[0] // 2
+    num_pairs = folded_len if out_pairs is None else out_pairs
+    gather, col_index, pair_index = _derive_row_schedule(
+        row_counts, live[2], num_pairs, sentinel=folded_len, idx_dtype=jnp.int32
+    )
     bound = _bind_planes(planes, alpha)
     eq_bound = _bind_lsb(eq_row, alpha)
     poly, padded = _round_poly_row(
@@ -1030,36 +1200,32 @@ def _composite_fix_and_sum_row(
     planes: _Planes,
     eq_row: Array,
     alpha: Array,
-    gather: Array | None,
-    col_index: Array,
-    pair_index: Array,
+    row_counts: Array,
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
     live: Array,
+    out_pairs: int | None = None,
 ) -> tuple[Array, _Planes, Array]:
     """Emit the FS-less `zorch.sumcheck.round` (phase=mid, variant=jagged) marker
     around the row-variable fold+sum -- the segment-based jagged round (the
-    hardcoded LogUp combine over the runtime `gather`/`col_index`/`pair_index`
-    schedule and the segment-local `eq_row`, not a plain product). The signature
-    mirrors `_fix_and_sum_row` (plus the trailing i32[2] `live` prefix marker)
-    so the round loop can select it in place. A round that needs no re-pad
-    (`gather` None) gets an identity gather -- a no-op pad -- so the marker
-    always carries the operand and stays byte-identical, exactly as
-    `_dispatch_fix_and_sum_row` does. `eq_row` returns width-preserved (folded
+    hardcoded LogUp combine over the derived re-pad schedule and the
+    segment-local `eq_row`, not a plain product). The signature mirrors
+    `_fix_and_sum_row` with the schedule operands replaced by the layer's
+    `row_counts` (i32[nseg], marker v2) plus the trailing i32[3]
+    `{live pairs, live eq_row, round}` operand. `out_pairs` (static, exact
+    layout only) sizes the padded output run; None keeps the capped
+    width-preserving convention. `eq_row` returns width-preserved (folded
     live prefix, zero tail). Byte-identical to `_fix_and_sum_row` on the live
     prefixes whenever the marker is unclaimed (`lax.composite` runs the
     decomposition)."""
-    if gather is None:
-        gather = jnp.arange(planes.n0.shape[0] // 2, dtype=col_index.dtype)
+    decomp = partial(_round_composite_row_decomp, out_pairs=out_pairs)
     return composite(
-        _round_composite_row_decomp,
+        decomp,
         planes,
         eq_row,
         alpha,
-        gather,
-        col_index,
-        pair_index,
+        row_counts,
         eq_int,
         scalars,
         consts.naturals,
@@ -1182,23 +1348,29 @@ def _composite_fix_and_sum_boundary(
 def _round_composite_first_row_decomp(
     planes: _Planes,
     eq_row: Array,
-    gather: Array,
-    col_index: Array,
-    pair_index: Array,
+    row_counts: Array,
     eq_int: Array,
     scalars: _RoundScalars,
     naturals: Array,
     inv_vand: Array,
     live: Array,
+    out_pairs: int | None = None,
     **_attrs: object,
 ) -> tuple[Array, _Planes]:
     """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `first`
     phase -- the byte-exact fallback a recognizing emitter replaces. The operand
     order is the `mid` row ABI minus `alpha`: round 0 binds nothing, so there is
     no previous challenge to fold by and the marker carries no `alpha` slot.
-    The sum masks to the `live[0]` live pairs of a fixed-width schedule (the
-    re-padded state's live prefix is `2 * live[0]`; see the row `mid`
-    decomposition)."""
+    The re-pad schedule derives in-trace from `row_counts` + `live[2]` (= 0,
+    marker v2 — see the row `mid` decomposition); the derived indexes span the
+    FULL raw height (nothing folds this round). The sum masks to the `live[0]`
+    live pairs of a fixed-width schedule (the re-padded state's live prefix is
+    `2 * live[0]`)."""
+    raw_len = planes.n0.shape[0]
+    num_pairs = raw_len // 2 if out_pairs is None else out_pairs
+    gather, col_index, pair_index = _derive_row_schedule(
+        row_counts, live[2], num_pairs, sentinel=raw_len, idx_dtype=jnp.int32
+    )
     return _round_poly_row(
         planes,
         gather,
@@ -1214,34 +1386,30 @@ def _round_composite_first_row_decomp(
 
 def _composite_sum_as_poly_row(
     planes: _Planes,
-    gather: Array | None,
-    col_index: Array,
-    pair_index: Array,
+    row_counts: Array,
     eq_row: Array,
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
     live: Array,
+    out_pairs: int | None = None,
 ) -> tuple[Array, _Planes]:
     """Emit the FS-less `zorch.sumcheck.round` (phase=first, variant=jagged)
     marker around the round-0 sum -- no fold, no challenge, just the row-shaped
     round poly over the raw layer plus the re-padded state the caller binds next
-    round. The signature mirrors `_round_poly_row` (plus the trailing i32[2]
-    `live` prefix marker) so the round loop can select it in the `sum0` slot. A
-    round needing no re-pad (`gather` None) gets an identity gather over the
-    FULL height (no `//2`: nothing folds this round), exactly as
-    `_dispatch_sum_as_poly_row` does, so the marker always carries the operand.
+    round. The signature mirrors `_round_poly_row` with the schedule operands
+    replaced by the layer's `row_counts` (marker v2) plus the trailing i32[3]
+    `{live pairs, live eq_row, round}` operand, so the round loop can select it
+    in the `sum0` slot. `out_pairs` (static, exact layout only) sizes the
+    padded output run; None keeps the capped width-preserving convention.
     Byte-identical to `_round_poly_row` on the live prefixes whenever the
     marker is unclaimed (`lax.composite` runs the decomposition)."""
-    if gather is None:
-        gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
+    decomp = partial(_round_composite_first_row_decomp, out_pairs=out_pairs)
     return composite(
-        _round_composite_first_row_decomp,
+        decomp,
         planes,
         eq_row,
-        gather,
-        col_index,
-        pair_index,
+        row_counts,
         eq_int,
         scalars,
         consts.naturals,
@@ -1508,64 +1676,65 @@ def _dispatch_fix_and_sum_boundary(
 
 def _dispatch_sum_as_poly_row(
     planes: _Planes,
-    gather: Array | None,
-    col_index: Array,
-    pair_index: Array,
+    row_counts: Array,
     eq_row: Array,
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
     live: Array,
+    out_pairs: int | None = None,
 ) -> tuple[Array, _Planes]:
-    """Dispatch the round-0 sum (no fold, no challenge) through one cached binary
-    symbolic over the RAW layer height (`h`), the re-pad layout (`2*p` gather / `p`
-    schedule), and `eq_row` (`2*rr`); `eq_int` rides fixed. Mirrors
-    `_dispatch_fix_and_sum_row` without the bind -- one dispatched kernel replaces the
-    eager entry kernel. A round needing no re-pad (`gather` None) gets an identity
-    gather over the full height (no `//2` fold) so it hits the same binary."""
+    """Dispatch the round-0 sum (no fold, no challenge) through one cached
+    binary. The capped (width-preserving, `out_pairs` None) route exports
+    symbolic over the raw height (`2*h2`) and `eq_row` (`2*rr`) — the derived
+    schedule's width follows the plane width, so the marker v2 ABI needs no
+    schedule symbol; `eq_int` and `row_counts` ride fixed. The exact route's
+    padded width (`out_pairs`) is a static shape, so it exports concrete,
+    keyed per layout. Mirrors `_dispatch_fix_and_sum_row` without the bind."""
     if isinstance(planes.n0, jax.core.Tracer):
         return _composite_sum_as_poly_row(
-            planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts, live
+            planes, row_counts, eq_row, eq_int, scalars, consts, live, out_pairs
         )
-    if gather is None:
-        gather = jnp.arange(planes.n0.shape[0], dtype=col_index.dtype)
-    operands = (planes, gather, col_index, pair_index, eq_row, eq_int, scalars, live)
+    operands = (planes, row_counts, eq_row, eq_int, scalars, live)
     key = (
         "sum0",
         tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        row_counts.shape,
         eq_int.shape,
         consts.naturals.shape[0],
+        out_pairs,
+        None if out_pairs is None else (planes.n0.shape, eq_row.shape),
     )
 
     def build() -> export.Exported:
-        h, p, rr = export.symbolic_shape(
-            "h, p, rr",
-            constraints=[
-                "h >= 1",
-                f"h <= {_ROUND_SYM_MAX}",
-                "p >= 1",
-                f"p <= {_ROUND_SYM_MAX}",
-                "rr >= 1",
-                f"rr <= {_ROUND_SYM_MAX}",
-            ],
-        )
+        if out_pairs is None:
+            h2, rr = export.symbolic_shape(
+                "h2, rr",
+                constraints=[
+                    "h2 >= 1",
+                    f"h2 <= {_ROUND_SYM_MAX}",
+                    "rr >= 1",
+                    f"rr <= {_ROUND_SYM_MAX}",
+                ],
+            )
+            plane_w, eq_w = 2 * h2, 2 * rr
+        else:
+            plane_w, eq_w = planes.n0.shape[0], eq_row.shape[0]
         abst = (
             _Planes(
                 *(
-                    jax.ShapeDtypeStruct((h,), getattr(planes, f).dtype)
+                    jax.ShapeDtypeStruct((plane_w,), getattr(planes, f).dtype)
                     for f in ("n0", "n1", "d0", "d1")
                 )
             ),
-            jax.ShapeDtypeStruct((2 * p,), gather.dtype),
-            jax.ShapeDtypeStruct((p,), col_index.dtype),
-            jax.ShapeDtypeStruct((p,), pair_index.dtype),
-            jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
+            jax.ShapeDtypeStruct(row_counts.shape, row_counts.dtype),
+            jax.ShapeDtypeStruct((eq_w,), eq_row.dtype),
             jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
             _abst_scalars(scalars),
-            jax.ShapeDtypeStruct((2,), live.dtype),
+            jax.ShapeDtypeStruct((3,), live.dtype),
         )
-        fn = lambda pl, ga, ci, pi, er, ei, sc, lv: _composite_sum_as_poly_row(  # noqa: E731
-            pl, ga, ci, pi, er, ei, sc, consts, lv
+        fn = lambda pl, rc, er, ei, sc, lv: _composite_sum_as_poly_row(  # noqa: E731
+            pl, rc, er, ei, sc, consts, lv, out_pairs
         )
         return export.export(jax.jit(fn))(*abst)
 
@@ -1576,43 +1745,38 @@ def _dispatch_fix_and_sum_row(
     planes: _Planes,
     eq_row: Array,
     alpha: Array,
-    gather: Array | None,
-    col_index: Array,
-    pair_index: Array,
+    row_counts: Array,
     eq_int: Array,
     scalars: _RoundScalars,
     consts: _InterpConsts,
     live: Array,
+    out_pairs: int | None = None,
 ) -> tuple[Array, _Planes, Array]:
-    """Dispatch a jagged row round through one cached binary symbolic over the
-    input state (`2*pp`), the re-pad layout (`2*p` gather / `p` schedule), and
-    the width-preserved `eq_row` (`2*rr`); `eq_int` rides at its fixed width. A
-    round that needs no re-pad (gather `None`) gets an identity gather so it
-    hits the same binary -- the identity pad is a no-op, so byte-identical.
-    Under fixed caps every symbol binds one concrete size, so the binary
-    specializes exactly once."""
+    """Dispatch a jagged row round through one cached binary. The capped
+    (width-preserving, `out_pairs` None) route exports symbolic over the input
+    state (`2*pp`) and the width-preserved `eq_row` (`2*rr`) — the derived
+    schedule's width follows the plane width (marker v2), so no schedule
+    symbol exists; `eq_int` and `row_counts` ride fixed, and under fixed caps
+    every symbol binds one concrete size, so the binary specializes exactly
+    once. The exact route's padded width (`out_pairs`) is a static shape, so
+    it exports concrete, keyed per layout."""
     if isinstance(planes.n0, jax.core.Tracer):
         return _composite_fix_and_sum_row(
             planes,
             eq_row,
             alpha,
-            gather,
-            col_index,
-            pair_index,
+            row_counts,
             eq_int,
             scalars,
             consts,
             live,
+            out_pairs,
         )
-    if gather is None:
-        gather = jnp.arange(planes.n0.shape[0] // 2, dtype=col_index.dtype)
     operands = (
         planes,
         eq_row,
         alpha,
-        gather,
-        col_index,
-        pair_index,
+        row_counts,
         eq_int,
         scalars,
         live,
@@ -1620,41 +1784,44 @@ def _dispatch_fix_and_sum_row(
     key = (
         "row",
         tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        row_counts.shape,
         eq_int.shape,
         consts.naturals.shape[0],
+        out_pairs,
+        None if out_pairs is None else (planes.n0.shape, eq_row.shape),
     )
 
     def build() -> export.Exported:
-        pp, p, rr = export.symbolic_shape(
-            "pp, p, rr",
-            constraints=[
-                "pp >= 1",
-                f"pp <= {_ROUND_SYM_MAX}",
-                "p >= 1",
-                f"p <= {_ROUND_SYM_MAX}",
-                "rr >= 1",
-                f"rr <= {_ROUND_SYM_MAX}",
-            ],
-        )
+        if out_pairs is None:
+            pp, rr = export.symbolic_shape(
+                "pp, rr",
+                constraints=[
+                    "pp >= 1",
+                    f"pp <= {_ROUND_SYM_MAX}",
+                    "rr >= 1",
+                    f"rr <= {_ROUND_SYM_MAX}",
+                ],
+            )
+            plane_w, eq_w = 2 * pp, 2 * rr
+        else:
+            plane_w, eq_w = planes.n0.shape[0], eq_row.shape[0]
         abst = (
             _Planes(
                 *(
-                    jax.ShapeDtypeStruct((2 * pp,), getattr(planes, f).dtype)
+                    jax.ShapeDtypeStruct((plane_w,), getattr(planes, f).dtype)
                     for f in ("n0", "n1", "d0", "d1")
                 )
             ),
-            jax.ShapeDtypeStruct((2 * rr,), eq_row.dtype),
+            jax.ShapeDtypeStruct((eq_w,), eq_row.dtype),
             jax.ShapeDtypeStruct((), alpha.dtype),
-            jax.ShapeDtypeStruct((2 * p,), gather.dtype),
-            jax.ShapeDtypeStruct((p,), col_index.dtype),
-            jax.ShapeDtypeStruct((p,), pair_index.dtype),
+            jax.ShapeDtypeStruct(row_counts.shape, row_counts.dtype),
             jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
             _abst_scalars(scalars),
-            jax.ShapeDtypeStruct((2,), live.dtype),
+            jax.ShapeDtypeStruct((3,), live.dtype),
         )
         fn = (  # noqa: E731
-            lambda pl, er, al, ga, ci, pi, ei, sc, lv: _composite_fix_and_sum_row(
-                pl, er, al, ga, ci, pi, ei, sc, consts, lv
+            lambda pl, er, al, rc, ei, sc, lv: _composite_fix_and_sum_row(
+                pl, er, al, rc, ei, sc, consts, lv, out_pairs
             )
         )
         return export.export(jax.jit(fn))(*abst)
@@ -1779,7 +1946,8 @@ def _run_jagged_rounds(
         state.lam,
         state.claim,
     )
-    meta, nrv, niv = sched.meta, sched.nrv, sched.niv
+    nrv, niv = sched.nrv, sched.niv
+    row_counts = sched.row_counts
     challenge_limbs = sched.challenge_limbs
     one = jnp.ones((), eval_point.dtype)
     eq_adj = one
@@ -1858,31 +2026,29 @@ def _run_jagged_rounds(
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
         if rnd == 0:
-            gather, col_index, pair_index, live = meta[0]
+            out_pairs = None if sched.out_pairs is None else sched.out_pairs[0]
             poly, planes = sum0(
                 planes,
-                gather,
-                col_index,
-                pair_index,
+                row_counts,
                 eq_row,
                 eq_int,
                 scalars,
                 consts,
-                live,
+                sched.live[0],
+                out_pairs,
             )
         elif rnd < nrv:
-            gather, col_index, pair_index, live = meta[rnd]
+            out_pairs = None if sched.out_pairs is None else sched.out_pairs[rnd]
             poly, planes, eq_row = fix_row(
                 planes,
                 eq_row,
                 prev_r,
-                gather,
-                col_index,
-                pair_index,
+                row_counts,
                 eq_int,
                 scalars,
                 consts,
-                live,
+                sched.live[rnd],
+                out_pairs,
             )
         elif rnd == nrv:
             # The handoff's live pairs: the row phase saturates every segment
@@ -1988,7 +2154,9 @@ def _observe_openings_and_fold(
 def _prove_jagged_layer_round(
     planes: _Planes,
     niv: int,
-    meta: list[tuple[Array | None, Array, Array, Array]],
+    row_counts: Array,
+    live: list[Array],
+    out_pairs: tuple[int, ...] | None,
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
     carry: Carry,
@@ -1997,11 +2165,12 @@ def _prove_jagged_layer_round(
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
 
-    Takes the planes + batch count + prebuilt `meta` (not a `JaggedGkrLayer`)
-    so the whole-layer jit never keys on `row_counts` and never bakes the schedule
-    into the trace. A module-level function (no implicit `self`) so the chain can
-    drop a round -- and free its layer -- the moment it builds the next (the
-    one-live-layer release `ChainedJaggedProveTest` pins)."""
+    Takes the planes + batch count + prebuilt schedule operands (not a
+    `JaggedGkrLayer`) so the whole-layer jit never keys on `row_counts` and
+    never bakes the schedule into the trace. A module-level function (no
+    implicit `self`) so the chain can drop a round -- and free its layer --
+    the moment it builds the next (the one-live-layer release
+    `ChainedJaggedProveTest` pins)."""
     num_eval, den_eval, eval_point = carry
     dtype = num_eval.dtype
     transcript = cast(DuplexTranscript, transcript)
@@ -2011,8 +2180,18 @@ def _prove_jagged_layer_round(
     transcript, lam, claim = _sample_lam_and_claim(
         transcript, num_eval, den_eval, challenge_limbs, dtype
     )
-    point, transcript, proof = _prove_jagged_layer_from_meta(
-        planes, niv, meta, lam, claim, eval_point, transcript, challenge_limbs, caps
+    point, transcript, proof = _prove_jagged_layer_from_ops(
+        planes,
+        niv,
+        row_counts,
+        live,
+        out_pairs,
+        lam,
+        claim,
+        eval_point,
+        transcript,
+        challenge_limbs,
+        caps,
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
     d0, d1 = proof.denominator_0, proof.denominator_1
@@ -2029,38 +2208,48 @@ def _prove_jagged_layer_round(
     return (num_eval, den_eval, eval_point), transcript, proof
 
 
-# Shared by every `JaggedGkrLayerRound(jit=True)`. The schedule (`meta`) rides as
-# a TRACED operand, not a static arg: its per-round gather/index arrays span the
-# layer height (hundreds of MB of int32 at shard scale), so closing them over the
-# trace baked them into the HLO as constants -- XLA then spent minutes folding
-# those constants, a per-shard from-scratch compile that scaled with the trace. As
-# operands the HLO carries no data, so the compile is small and height-independent
-# (~15s whether the layer is 2M rows or 77M) and `row_counts` values leave the jit
-# key: it keys only on the per-round operand SHAPES plus the static `niv` /
-# `challenge_limbs` / `caps` (`nrv` is read from `eval_point`'s length inside).
-# Two layers still recompile when their shape sequence differs, but each compile
-# is cheap and persistent-cached -- and under `caps` every layer shares ONE shape
+# Shared by every `JaggedGkrLayerRound(jit=True)`. The schedule operands
+# (`row_counts` + the per-round live triples) ride as TRACED operands, not
+# static args, so `row_counts` values leave the jit key: it keys only on the
+# operand SHAPES plus the static `niv` / `challenge_limbs` / `caps` /
+# `out_pairs` (`nrv` is read from `eval_point`'s length inside; `out_pairs` is
+# None under caps, so the capped pyramid shares one key). Marker v2 shrank
+# these operands from the hundreds-of-MB per-round gather arrays to KBs — the
+# schedule now derives in-kernel — but the operand-not-closure rule stands:
+# baking per-layer values into the trace would recompile per shard. Two layers
+# still recompile when their shape sequence differs, but each compile is cheap
+# and persistent-cached -- and under `caps` every layer shares ONE shape
 # sequence, so the whole pyramid keys to a single trace. Routing through one
-# module-level zone lets freshly built same-shape rounds reuse a single trace, so
-# a consumer rebuilding the chain each warm iteration (the generator keeping lazy
-# one-live-layer release) re-traces at most per distinct shape sequence, not per
-# iter.
-@partial(jax.jit, static_argnums=(5, 6, 7))
+# module-level zone lets freshly built same-shape rounds reuse a single trace,
+# so a consumer rebuilding the chain each warm iteration (the generator
+# keeping lazy one-live-layer release) re-traces at most per distinct shape
+# sequence, not per iter.
+@partial(jax.jit, static_argnums=(6, 7, 8, 9))
 def _jagged_round_zone(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
-    meta: list[tuple[Array | None, Array, Array, Array]],
+    row_counts: Array,
+    live: list[Array],
     niv: int,
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
+    out_pairs: tuple[int, ...] | None,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
     planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
     return _prove_jagged_layer_round(
-        planes, niv, meta, challenge_limbs, caps, carry, transcript
+        planes,
+        niv,
+        row_counts,
+        live,
+        out_pairs,
+        challenge_limbs,
+        caps,
+        carry,
+        transcript,
     )
 
 
@@ -2071,25 +2260,25 @@ def _jagged_round_via_zone(
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    """Build the round schedule host-side and dispatch through `_jagged_round_zone`
-    with the planes + `meta` as traced operands. Splitting `meta` out of the trace
-    (rather than the layer's static `row_counts`) is what keeps the whole-layer
-    compile shard-independent."""
+    """Build the schedule operands host-side and dispatch through
+    `_jagged_round_zone` with the planes + `row_counts` + live triples as
+    traced operands. Splitting them out of the trace (rather than closing over
+    the layer's static `row_counts`) is what keeps the whole-layer compile
+    shard-independent."""
     niv = layer.num_batch_variables
     eval_point = carry[2]
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
-    meta = _round_metadata(
-        layer.row_counts, nrv, width=None if caps is None else caps.row
-    )
     return _jagged_round_zone(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
-        meta,
+        _row_counts_operand(layer.row_counts),
+        _round_live_meta(layer.row_counts, nrv),
         niv,
         challenge_limbs,
         caps,
+        None if caps is not None else _round_out_pairs(layer.row_counts, nrv),
         carry,
         transcript,
     )
@@ -2102,16 +2291,13 @@ def _jagged_round_eager(
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    """The `jit=False` body: build the schedule host-side and run the round loop
-    eagerly -- each round (and its FS hop) dispatches on its own, so the export
-    path can release every round's buffers before the next (the decoupled
-    wide-shard production path)."""
+    """The `jit=False` body: build the schedule operands host-side and run the
+    round loop eagerly -- each round (and its FS hop) dispatches on its own, so
+    the export path can release every round's buffers before the next (the
+    decoupled wide-shard production path)."""
     niv = layer.num_batch_variables
     eval_point = carry[2]
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
-    meta = _round_metadata(
-        layer.row_counts, nrv, width=None if caps is None else caps.row
-    )
     planes = _Planes(
         layer.numerator_0,
         layer.numerator_1,
@@ -2119,7 +2305,15 @@ def _jagged_round_eager(
         layer.denominator_1,
     )
     return _prove_jagged_layer_round(
-        planes, niv, meta, challenge_limbs, caps, carry, transcript
+        planes,
+        niv,
+        _row_counts_operand(layer.row_counts),
+        _round_live_meta(layer.row_counts, nrv),
+        None if caps is not None else _round_out_pairs(layer.row_counts, nrv),
+        challenge_limbs,
+        caps,
+        carry,
+        transcript,
     )
 
 

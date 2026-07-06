@@ -28,9 +28,12 @@ from zorch.logup_gkr.jagged_prover import (
     _InterpConsts,
     _Planes,
     _round_interp_constants,
+    _round_live_meta,
     _round_metadata,
+    _round_out_pairs,
     _round_poly_row,
     _RoundScalars,
+    _row_counts_operand,
 )
 from zorch.logup_gkr.testing import random_jagged_layer
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -174,8 +177,15 @@ def _round0_inputs(
     eq_row = expand_eq_to_hypercube(z_row, one)
     eq_int = expand_eq_to_hypercube(z_int, one)
     scalars0 = _RoundScalars(*(rand_field(seed * 10 + i, (), KB) for i in range(5)))
-    gather0, col0, pair0, live0 = _round_metadata(counts, nrv)[0]
-    return planes0, gather0, col0, pair0, eq_row, eq_int, scalars0, consts, live0
+    gather0, col0, pair0, _live0 = _round_metadata(counts, nrv)[0]
+    # The v2 marker operands (row_counts, live triple, static padded width) --
+    # the explicit arrays above feed only the eager want-side.
+    marker0 = (
+        _row_counts_operand(counts),
+        _round_live_meta(counts, nrv)[0],
+        _round_out_pairs(counts, nrv)[0],
+    )
+    return planes0, gather0, col0, pair0, eq_row, eq_int, scalars0, consts, marker0
 
 
 def _row_inputs(
@@ -198,28 +208,44 @@ def _row_inputs(
     Built by advancing the round-0 setup one round, mirroring the export test's
     round-1 setup so the gather/index shapes stay self-consistent over a
     genuinely jagged size."""
-    planes0, gather0, col0, pair0, eq_row, eq_int, scalars0, consts, _live0 = (
+    planes0, gather0, col0, pair0, eq_row, eq_int, scalars0, consts, _marker0 = (
         _round0_inputs(seed)
     )
     _poly, planes1 = _round_poly_row(
         planes0, gather0, col0, pair0, eq_row, eq_int, scalars0, consts
     )
     alpha = rand_field(seed + 7, (), KB)
-    gather1, col1, pair1, live1 = _round_metadata(_COUNTS, _NRV)[1]
+    gather1, col1, pair1, _live1 = _round_metadata(_COUNTS, _NRV)[1]
     scalars1 = _RoundScalars(
         *(rand_field(seed * 10 + 100 + i, (), KB) for i in range(5))
     )
-    return planes1, eq_row, alpha, gather1, col1, pair1, eq_int, scalars1, consts, live1
+    marker1 = (
+        _row_counts_operand(_COUNTS),
+        _round_live_meta(_COUNTS, _NRV)[1],
+        _round_out_pairs(_COUNTS, _NRV)[1],
+    )
+    return (
+        planes1,
+        eq_row,
+        alpha,
+        gather1,
+        col1,
+        pair1,
+        eq_int,
+        scalars1,
+        consts,
+        marker1,
+    )
 
 
 class RowRoundCompositeTest(absltest.TestCase):
     def test_byte_identical_to_eager(self) -> None:
-        pl, er, al, ga, ci, pi, ei, sc, consts, live = _row_inputs()
+        pl, er, al, ga, ci, pi, ei, sc, consts, (rc, live, op) = _row_inputs()
         want_poly, want_planes, want_eq = _fix_and_sum_row(
             pl, er, al, ga, ci, pi, ei, sc, consts
         )
         got_poly, got_planes, got_eq = _composite_fix_and_sum_row(
-            pl, er, al, ga, ci, pi, ei, sc, consts, live
+            pl, er, al, rc, ei, sc, consts, live, op
         )
         self.assertTrue(
             bool(jnp.all(got_poly == want_poly)), "marked row poly diverged"
@@ -233,14 +259,14 @@ class RowRoundCompositeTest(absltest.TestCase):
         _assert_prefix(self, got_eq, want_eq, "eq_row")
 
     def test_emits_marker_with_abi(self) -> None:
-        pl, er, al, ga, ci, pi, ei, sc, consts, live = _row_inputs()
+        pl, er, al, _ga, _ci, _pi, ei, sc, consts, (rc, live, op) = _row_inputs()
         # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
         # it and trace only the array operands.
         jaxpr = jax.make_jaxpr(
-            lambda pl, er, al, ga, ci, pi, ei, sc, lv: _composite_fix_and_sum_row(
-                pl, er, al, ga, ci, pi, ei, sc, consts, lv
+            lambda pl, er, al, rc, ei, sc, lv: _composite_fix_and_sum_row(
+                pl, er, al, rc, ei, sc, consts, lv, op
             )
-        )(pl, er, al, ga, ci, pi, ei, sc, live)
+        )(pl, er, al, rc, ei, sc, live)
         text = jaxpr.pretty_print()
         self.assertIn(SUMCHECK_ROUND_MARKER, text)
         # The phase/variant attributes are the recognizer's routing key.
@@ -280,17 +306,15 @@ class RoundClaimStatusTest(absltest.TestCase):
         )
 
     def test_claims_jagged_mid_round(self) -> None:
-        pl, er, al, ga, ci, pi, ei, sc, consts, live = _row_inputs()
+        pl, er, al, _ga, _ci, _pi, ei, sc, consts, (rc, live, op) = _row_inputs()
         self._assert_claimed(
-            lambda pl, er, al, ga, ci, pi, ei, sc, lv: _composite_fix_and_sum_row(
-                pl, er, al, ga, ci, pi, ei, sc, consts, lv
+            lambda pl, er, al, rc, ei, sc, lv: _composite_fix_and_sum_row(
+                pl, er, al, rc, ei, sc, consts, lv, op
             ),
             pl,
             er,
             al,
-            ga,
-            ci,
-            pi,
+            rc,
             ei,
             sc,
             live,
@@ -352,10 +376,10 @@ class BoundaryRoundCompositeTest(absltest.TestCase):
 
 class FirstRoundCompositeTest(absltest.TestCase):
     def test_byte_identical_to_eager(self) -> None:
-        pl, ga, ci, pi, er, ei, sc, consts, live = _round0_inputs()
+        pl, ga, ci, pi, er, ei, sc, consts, (rc, live, op) = _round0_inputs()
         self.assertIsNotNone(ga)  # odd segments -> a real re-pad this round
         want = _round_poly_row(pl, ga, ci, pi, er, ei, sc, consts)
-        got = _composite_sum_as_poly_row(pl, ga, ci, pi, er, ei, sc, consts, live)
+        got = _composite_sum_as_poly_row(pl, rc, er, ei, sc, consts, live, op)
         got_leaves = jax.tree_util.tree_leaves(got)
         want_leaves = jax.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
@@ -368,10 +392,12 @@ class FirstRoundCompositeTest(absltest.TestCase):
         # An already-even layout: the eager kernel skips the re-pad (`gather`
         # None) while the marker resolves it to a full-height identity gather --
         # a no-op pad, so still byte-identical.
-        pl, ga, ci, pi, er, ei, sc, consts, live = _round0_inputs(counts=(4, 4), nrv=2)
+        pl, ga, ci, pi, er, ei, sc, consts, (rc, live, op) = _round0_inputs(
+            counts=(4, 4), nrv=2
+        )
         self.assertIsNone(ga)
         want = _round_poly_row(pl, None, ci, pi, er, ei, sc, consts)
-        got = _composite_sum_as_poly_row(pl, None, ci, pi, er, ei, sc, consts, live)
+        got = _composite_sum_as_poly_row(pl, rc, er, ei, sc, consts, live, op)
         got_leaves = jax.tree_util.tree_leaves(got)
         want_leaves = jax.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
@@ -381,14 +407,14 @@ class FirstRoundCompositeTest(absltest.TestCase):
             )
 
     def test_emits_marker_with_abi(self) -> None:
-        pl, ga, ci, pi, er, ei, sc, consts, live = _round0_inputs()
+        pl, _ga, _ci, _pi, er, ei, sc, consts, (rc, live, op) = _round0_inputs()
         # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
         # it and trace only the array operands.
         jaxpr = jax.make_jaxpr(
-            lambda pl, ga, ci, pi, er, ei, sc, lv: _composite_sum_as_poly_row(
-                pl, ga, ci, pi, er, ei, sc, consts, lv
+            lambda pl, rc, er, ei, sc, lv: _composite_sum_as_poly_row(
+                pl, rc, er, ei, sc, consts, lv, op
             )
-        )(pl, ga, ci, pi, er, ei, sc, live)
+        )(pl, rc, er, ei, sc, live)
         text = jaxpr.pretty_print()
         self.assertIn(SUMCHECK_ROUND_MARKER, text)
         # The phase/variant attributes are the recognizer's routing key.

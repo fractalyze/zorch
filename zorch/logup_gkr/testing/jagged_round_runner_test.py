@@ -21,7 +21,10 @@ from zorch.logup_gkr.jagged_prover import (
     _JaggedSchedule,
     _JaggedState,
     _Planes,
+    _round_live_meta,
     _round_metadata,
+    _round_out_pairs,
+    _row_counts_operand,
     _run_jagged_rounds,
     _run_jagged_rounds_reference,
 )
@@ -82,8 +85,20 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
     ) -> None:
         state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
+        # The runner's schedule carries the v2 derived-schedule fields
+        # (row_counts operand + live triples + the exact layout's static
+        # padded widths); `meta` — the host-built explicit schedule — feeds
+        # only the reference oracle, keeping the derivation cross-checked
+        # against the original construction.
         sched = _JaggedSchedule(
-            meta, _InterpConsts(naturals, inv_vand), nrv, niv, challenge_limbs
+            _row_counts_operand(layer.row_counts),
+            _round_live_meta(layer.row_counts, nrv),
+            _round_out_pairs(layer.row_counts, nrv),
+            _InterpConsts(naturals, inv_vand),
+            nrv,
+            niv,
+            challenge_limbs,
+            meta=meta,
         )
         ref = _run_jagged_rounds_reference(state, sched, cheap_transcript(KB))
         # `_run_jagged_rounds` runs under the consumer's whole-layer jit (its FS hop
@@ -110,7 +125,9 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         for slack in (True, False):
             caps = self._caps(layer, nrv, niv, slack=slack)
             fixed_sched = _JaggedSchedule(
-                _round_metadata(layer.row_counts, nrv, width=caps.row),
+                _row_counts_operand(layer.row_counts),
+                _round_live_meta(layer.row_counts, nrv),
+                None,  # capped = width-preserving; no exact padded widths
                 _InterpConsts(naturals, inv_vand),
                 nrv,
                 niv,

@@ -224,7 +224,11 @@ SUMCHECK_MARKER_VERSION = 1
 # challenge, which arrives as one operand whose dtype already carries base vs
 # extension.
 SUMCHECK_ROUND_MARKER = "zorch.sumcheck.round"
-SUMCHECK_ROUND_MARKER_VERSION = 1
+# Version 2 (xla#179 device-derived schedule): the jagged phases dropped the
+# explicit `gather`/`col_index`/`pair_index` operands for `row_counts` +
+# the round index in `live[2]`; a v1 consumer fails recognition loudly
+# rather than silently mis-parsing the new operand layout.
+SUMCHECK_ROUND_MARKER_VERSION = 2
 
 
 def prove(
