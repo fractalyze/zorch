@@ -58,7 +58,7 @@ from zorch.utils.bits import log2_ceil_usize, log2_strict_usize
 
 @partial(
     jax.tree_util.register_dataclass,
-    data_fields=["mle", "codeword", "digest_layers"],
+    data_fields=["mle", "digest_layers"],
     meta_fields=[],
 )
 @dataclass(frozen=True)
@@ -67,15 +67,13 @@ class StackedRound:
 
     ``mle`` is the stacked ``[S, K]`` message-domain matrix (column ``k`` is the
     dense block stacked to height ``S = 2^log_stacking_height``); the open
-    evaluates each column at ``stack_point`` and folds their RLC. ``codeword`` is
-    the committed ``[S * blowup, K]`` RS codeword in bit-reversed row order (the
-    matrix ``trace_commit`` Merkle-commits — its rows are the leaves), opened at
-    the query positions and RLC-combined into the batched FRI codeword.
-    ``digest_layers`` is that SMCS commit's layered digest tree.
+    evaluates each column at ``stack_point`` and folds their RLC, and re-encodes
+    it to the committed ``[S * blowup, K]`` codeword (bit-reversed rows = the
+    leaves) for the FRI fold and query openings. ``digest_layers`` is that SMCS
+    commit's layered digest tree.
     """
 
     mle: Array
-    codeword: Array
     digest_layers: list[Array]
 
 
@@ -263,8 +261,12 @@ def stacked_basefold_open(
     else:
         total_width = sum(int(rd.mle.shape[1]) for rd in rounds)
         t, coeffs = sample_rlc_coeffs(t, total_width, ef_dtype)
+    # mle.T is the [K, S] message the commit encoded; the trailing .T lands the
+    # [S*blowup, K] leaf-major layout whose bit-reversed rows are the committed
+    # leaves, so these paths authenticate against the same digest tree.
+    round_codewords = [code.encode(rd.mle.T).T for rd in rounds]
     mle = batch_staggered([rd.mle for rd in rounds], coeffs)
-    codeword = batch_staggered([rd.codeword for rd in rounds], coeffs)
+    codeword = batch_staggered(round_codewords, coeffs)
     claim = batch_staggered(batch_evals, coeffs)
 
     # Domain separation: bind the fold-round count (mirrors the reference).
@@ -323,7 +325,8 @@ def stacked_basefold_open(
     # Each component matrix opened at the full positions; each fold layer's
     # pair-leaf opened at the cumulatively halved positions.
     component_openings = [
-        smcs.open_batch(positions, rd.codeword, rd.digest_layers) for rd in rounds
+        smcs.open_batch(positions, cw, rd.digest_layers)
+        for rd, cw in zip(rounds, round_codewords, strict=True)
     ]
     layer_positions = code.layer_positions(positions, num_vars)
     query_openings = [
@@ -337,11 +340,11 @@ def stacked_basefold_open(
     component_commitments = [
         smcs.bind_root(
             rd.digest_layers[-1][0],
-            log2_strict_usize(rd.codeword.shape[0]),
-            rd.codeword.shape[1],
+            log2_strict_usize(cw.shape[0]),
+            cw.shape[1],
             bf_dtype,
         )
-        for rd in rounds
+        for rd, cw in zip(rounds, round_codewords, strict=True)
     ]
 
     proof = StackedOpenProof(

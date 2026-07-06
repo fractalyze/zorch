@@ -28,7 +28,6 @@ from zorch.pcs.jagged.region import JaggedRegion
     data_fields=[
         "dense",
         "mle",
-        "codeword",
         "digest_layers",
         "row_counts",
         "column_counts",
@@ -38,15 +37,13 @@ from zorch.pcs.jagged.region import JaggedRegion
 )
 @dataclass(frozen=True)
 class TraceCommitData:
-    """Prover-side witness the opening stage retains: ``mle`` (``[S,K]`` message)
-    and ``codeword`` (``[S*blowup,K]`` bit-reversed leaves), ``None`` under
-    ``drop_codeword`` (the open re-encodes from ``mle``). The row/column counts
-    are kept because the structure hash bound them and the verifier rebind needs
-    the exact device values."""
+    """Prover-side witness the opening stage retains: the ``[S,K]`` message
+    ``mle`` and the digest tree. The codeword is not kept — the open re-encodes
+    it from ``mle``. The row/column counts are kept because the structure hash
+    bound them and the verifier rebind needs the exact device values."""
 
     dense: Array
     mle: Array
-    codeword: Array | None
     digest_layers: list[Array]
     row_counts: Array
     column_counts: Array
@@ -60,8 +57,7 @@ def _commit(
     *,
     smcs: SingleMatrixCommitmentScheme,
     log_blowup: int,
-    drop_codeword: bool = False,
-) -> tuple[Array, Array, Array | None, list[Array], Array]:
+) -> tuple[Array, Array, list[Array], Array]:
     """The device-side commit, shared by the eager and @jit paths. Folding the
     structure-bind poseidon2 into the Merkle-commit zone avoids its per-eager-call
     composite recompile (seconds at rsp scale). ``code`` is rebuilt per call, not
@@ -76,17 +72,13 @@ def _commit(
     codeword = code.encode(message)
     commitment, digest_layers = smcs.commit(codeword, column_major=True)
     bound = smcs.bind_structure(commitment, row_counts, column_counts)
-    # Retain the codeword in the open's [N, K] leaf-major layout (transpose, kept
-    # only when wanted). ``drop_codeword`` (SP1 drop_ldes) omits the ~6 GB blow-up
-    # from the outputs; the open re-encodes it from ``mle`` (sp1-zorch#55, #124).
-    out_codeword = None if drop_codeword else codeword.T
-    return bound, message.T, out_codeword, digest_layers, commitment
+    return bound, message.T, digest_layers, commitment
 
 
 # ``smcs`` is a static arg keyed by object identity (the scheme defines no
 # __eq__/__hash__): every call site must reuse one instance per process, or
 # each fresh instance silently recompiles the full poseidon2/Merkle pipeline.
-_commit_jit = jax.jit(_commit, static_argnames=("smcs", "log_blowup", "drop_codeword"))
+_commit_jit = jax.jit(_commit, static_argnames=("smcs", "log_blowup"))
 
 
 def commit_region(
@@ -95,17 +87,13 @@ def commit_region(
     *,
     log_blowup: int,
     jit: bool = False,
-    drop_codeword: bool = False,
 ) -> tuple[Array, TraceCommitData]:
     """Commit a packed region; returns ``(bound_commitment, prover_data)``.
 
     ``jit`` runs the commit tail as one fused graph — required at rsp scale
-    on a 32 GB device (see the module docstring). Byte-identical either way.
-
-    ``drop_codeword`` (SP1's drop_ldes) returns ``TraceCommitData.codeword =
-    None`` and never materializes the ~6 GB blow-up as an output, so it does not
-    stay device-resident through the chain; the open re-encodes it from ``mle``.
-    """
+    on a 32 GB device (see the module docstring). Byte-identical either way. The
+    ~6 GB blow-up codeword never leaves this function: the open re-encodes it
+    from ``mle``, so it never stays device-resident through the chain."""
     S = 1 << region.log_stacking_height
     dense = region.dense
     if dense.shape[0] % S != 0:
@@ -120,18 +108,16 @@ def commit_region(
     row_counts = jnp.array(region.row_counts, dtype=dense.dtype)
     column_counts = jnp.array(region.column_counts, dtype=dense.dtype)
     tail = _commit_jit if jit else _commit
-    bound, mle, codeword_t, digest_layers, commitment = tail(
+    bound, mle, digest_layers, commitment = tail(
         message,
         row_counts,
         column_counts,
         smcs=smcs,
         log_blowup=log_blowup,
-        drop_codeword=drop_codeword,
     )
     return bound, TraceCommitData(
         dense=dense,
         mle=mle,
-        codeword=codeword_t,
         digest_layers=digest_layers,
         row_counts=row_counts,
         column_counts=column_counts,
