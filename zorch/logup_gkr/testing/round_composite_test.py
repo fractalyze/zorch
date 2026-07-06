@@ -6,6 +6,9 @@ the xla `SumcheckRecognizer` extension (fractalyze/xla#179) must accept."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import Any
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -243,6 +246,55 @@ class RowRoundCompositeTest(absltest.TestCase):
         # The phase/variant attributes are the recognizer's routing key.
         self.assertIn("mid", text)
         self.assertIn("jagged", text)
+
+
+class RoundClaimStatusTest(absltest.TestCase):
+    """The installed backend must CLAIM the emitted markers -- compile them to
+    `sumcheck_round` custom fusions -- not silently decompose them. Every
+    byte-gate in this file passes either way (the decomposition is
+    byte-identical by the marker contract), so a marker/recognizer drift
+    between this checkout and the installed jaxlib would otherwise surface
+    only as a many-launch perf cliff at shard scale. GPU-only: the claim is
+    the register-resident GPU path's contract (fractalyze/xla#179 merge
+    gate); the fusion-config name `sumcheck_round` appears in the optimized
+    HLO iff the recognizer claimed the round (the unclaimed decomposition
+    inlines the composite away, marker attrs included)."""
+
+    def _assert_claimed(self, fn: Callable[..., Any], *args: Any) -> None:
+        if jax.default_backend() != "gpu":
+            self.skipTest("claim status is the GPU pairing's contract")
+        text = jax.jit(fn).lower(*args).compile().as_text()
+        self.assertIn(
+            "sumcheck_round", text, "round marker decomposed instead of claiming"
+        )
+
+    def test_claims_dense_mid_round(self) -> None:
+        planes, eq_int, alpha, scalars, consts, live = _inputs()
+        self._assert_claimed(
+            lambda p, e, a, s, lv: _composite_fix_and_sum_dense(p, e, a, s, consts, lv),
+            planes,
+            eq_int,
+            alpha,
+            scalars,
+            live,
+        )
+
+    def test_claims_jagged_mid_round(self) -> None:
+        pl, er, al, ga, ci, pi, ei, sc, consts, live = _row_inputs()
+        self._assert_claimed(
+            lambda pl, er, al, ga, ci, pi, ei, sc, lv: _composite_fix_and_sum_row(
+                pl, er, al, ga, ci, pi, ei, sc, consts, lv
+            ),
+            pl,
+            er,
+            al,
+            ga,
+            ci,
+            pi,
+            ei,
+            sc,
+            live,
+        )
 
 
 def _boundary_inputs(
