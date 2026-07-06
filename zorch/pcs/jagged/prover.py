@@ -259,17 +259,15 @@ def inner_sumcheck_core(
     dtype: Any,
     num_bits: Any,
 ) -> tuple[Array, Array, Array, Transcript]:
-    """The branching-program sumcheck over a prebuilt ``(merged, weights)``,
-    shape-polymorphic in the column count ``merged.shape[0]``.
+    """Branching-program sumcheck over a prebuilt (merged, weights).
 
-    Column axis: per-column work is a ``vmap`` + ``jnp.sum`` over ``merged``'s real
-    columns (no padding), mirroring ``stacked_basefold_open``'s symbolic ``K`` — so
-    ``L`` may be a symbolic export dim. ``n_d`` axis: the ``n_vars = 2·num_bits``
-    round loop is unrolled (``num_bits`` concrete), one fused ``zorch.duplex_fs``
-    kernel per round. ``bp_num_vars = max(n_r, n_d)`` is the BP layer count.
-    ``weights`` is the column-eq table ``col_eq[:L]`` the caller derives from
-    ``z_col`` (``z_col`` stays at the real ``n_c``, so the reference byte-match is
-    preserved)."""
+    Polymorphic in the column count L = merged.shape[0]: per-column work is a
+    vmap + jnp.sum over the real columns (no padding), so L can be a symbolic
+    export dim. The 2*num_bits round loop is unrolled (num_bits concrete) — one
+    fused zorch.duplex_fs kernel per round. bp_num_vars = max(n_r, n_d) is the BP
+    layer count. weights is the column-eq table col_eq[:L]; the caller keeps z_col
+    at its true length (n_c, unpadded) so those weights are exact even when L is
+    a symbolic dim."""
     n_vars = 2 * num_bits
     bp_num_vars = jnp.maximum(z_row.shape[0], num_bits)
     t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
@@ -289,9 +287,9 @@ def inner_sumcheck_core(
     transcript = transcript.observe(claimed_sum)
 
     # Eliminate LSB-first (column n_vars-1 down to 0), unrolled so each round's
-    # Fiat-Shamir absorb+squeeze lowers to its own fused ``zorch.duplex_fs``
-    # kernel. bits_i reads `merged` since the round's column is untouched until
-    # its own step (merged == buf there).
+    # Fiat-Shamir absorb+squeeze lowers to its own fused zorch.duplex_fs kernel.
+    # bits_i reads merged since the round's column is untouched until its own step
+    # (merged == buf there).
     buf, claim, weights_c = merged, claimed_sum, weights
     polys: list[Array] = []
     challenges: list[Array] = []
