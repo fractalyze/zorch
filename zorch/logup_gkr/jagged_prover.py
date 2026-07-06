@@ -875,6 +875,16 @@ def _row_counts_operand(row_counts: tuple[int, ...]) -> Array:
         return jax.device_put(np.asarray(row_counts, np.int32))
 
 
+@cache
+def _dense_live_operand(pairs: int) -> Array:
+    """The dense/boundary rounds' i32[2] `{live pairs, 0}` operand, memoized:
+    the eager round loop otherwise re-commits this 8-byte array once per round
+    per layer -- a real host->device dispatch each time. The value set is tiny
+    (one per power-of-two pair count), so the never-evicting cache is safe."""
+    with jax.ensure_compile_time_eval():
+        return jax.device_put(np.asarray([pairs, 0], np.int32))
+
+
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
     return _Planes(
         *(_bind_lsb(a, alpha) for a in (planes.n0, planes.n1, planes.d0, planes.d1))
@@ -1898,6 +1908,43 @@ def _fs_reduce(
     return transcript, r, claim, pad_adj, z_next, pos_next
 
 
+# Fixed eval_point width for the FS-hop zone below: the recognizer bounds
+# num_vars at 62, so 64 covers every layer, and one padded width keeps the
+# zone's compile key layer-invariant (the pad tail is never read — the
+# dynamic_index rides `pos`, which always points into the live prefix).
+_FS_EVAL_POINT_CAP = 64
+
+# The export path's per-round FS hop, hoisted into a module-level jit zone (the
+# `_composite.py`-recommended pattern, mirroring poseidon2's `_permute_body`):
+# called eagerly between round binaries, the bare `_fs_reduce` re-traces the
+# `zorch.duplex_fs` composite's Python body EVERY round and enqueues
+# `_reduce_body`'s ~15 element ops one dispatch at a time — measured as the
+# dominant host wall of the warm decoupled prove (~330 rounds/shard). The zone
+# collapses each hop to one cached-executable dispatch. Keyed by operand
+# shapes (eval_point length varies per layer) plus the static squeeze count and
+# dtype. jit is byte-transparent, so the transcript stream is unchanged.
+_fs_reduce_zone = partial(jax.jit, static_argnums=(6, 7))(_fs_reduce)
+
+
+def _fs_reduce_dispatch(
+    poly: Array,
+    transcript: DuplexTranscript,
+    pad_adj: Array,
+    z_cur: Array,
+    eval_point: Array,
+    pos: Array,
+    n: int,
+    dtype: Any,
+) -> tuple[DuplexTranscript, Array, Array, Array, Array, Array]:
+    """Route the FS hop through the jit zone on the eager/export path; under an
+    outer trace call the plain body so it keeps fusing into the whole-layer
+    program exactly as before (the zone would inline there anyway, but staying
+    out preserves the traced path's structure byte-for-byte by construction)."""
+    if isinstance(poly, jax.core.Tracer):
+        return _fs_reduce(poly, transcript, pad_adj, z_cur, eval_point, pos, n, dtype)
+    return _fs_reduce_zone(poly, transcript, pad_adj, z_cur, eval_point, pos, n, dtype)
+
+
 # The layer tail: the final fold (`_fix_last`) plus stacking the per-round
 # challenge/poly lists. Folding `_fix_last` in here keeps the final fold in the
 # whole-layer kernel without decorating the bare helper. The width-preserving
@@ -2022,6 +2069,17 @@ def _run_jagged_rounds(
     # GPU before each bind, which serializes the bind pipeline -- net slower).
     pos = jnp.asarray(eval_point.shape[0] - 1, jnp.int32)
     z_cur = jnp.take(eval_point, -1)
+    # On the eager path, pad eval_point to the fixed cap so the FS-hop jit
+    # zone keys on ONE shape across every layer of the pyramid (eval_point's
+    # length grows per layer; per-layer zone compiles multiplied the cold pass
+    # ~6x when measured). `pos` and `z_cur` were derived from the live length
+    # above, and the zone's `dynamic_index` only ever reads pos < live —
+    # value-identical.
+    if (
+        not isinstance(eval_point, jax.core.Tracer)
+        and eval_point.shape[0] <= _FS_EVAL_POINT_CAP
+    ):
+        eval_point = _pad_to_width(eval_point, _FS_EVAL_POINT_CAP, 0)
     for rnd in range(nrv + niv):
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
@@ -2055,7 +2113,7 @@ def _run_jagged_rounds(
             # to one row by construction (row counts <= 2^nrv), so the last
             # padded row layout is exactly two slots per interaction --
             # 2^(niv+1) live elements, 2^(niv-1) post-bind pairs.
-            live = jnp.asarray([1 << (niv - 1), 0], jnp.int32)
+            live = _dense_live_operand(1 << (niv - 1))
             # The boundary marker needs its eq operand at half its plane width
             # (the post-bind state), so the capped route reads a resized copy
             # -- the live 2^niv prefix always fits in row // 2 (the last row
@@ -2080,15 +2138,17 @@ def _run_jagged_rounds(
                     )
                 )
         else:
-            live = jnp.asarray([1 << (niv - 1 - (rnd - nrv)), 0], jnp.int32)
+            live = _dense_live_operand(1 << (niv - 1 - (rnd - nrv)))
             poly, planes, eq_int = fix_int(
                 planes, eq_int, prev_r, scalars, consts, live
             )
         # Device FS hop + reduce -- traced into the whole-layer jit on the default
-        # path (one fused region per round), dispatched eagerly between rounds on
-        # the export path. Slices the next z_cur via the decremented `pos`, riding
-        # the fold's dispatch instead of a standalone gather.
-        transcript, r, claim, pad_adj, z_cur, pos = _fs_reduce(
+        # path (one fused region per round), dispatched through the cached
+        # `_fs_reduce_zone` between rounds on the export path (one executable
+        # per hop instead of a composite retrace + ~15 element dispatches).
+        # Slices the next z_cur via the decremented `pos`, riding the fold's
+        # dispatch instead of a standalone gather.
+        transcript, r, claim, pad_adj, z_cur, pos = _fs_reduce_dispatch(
             poly, transcript, pad_adj, z_cur, eval_point, pos, challenge_limbs, dtype
         )
         polys.append(poly)
