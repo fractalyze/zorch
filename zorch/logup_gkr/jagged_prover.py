@@ -53,8 +53,7 @@ from zorch.logup_gkr.circuit import (
     _segment_gather_np,
 )
 from zorch.logup_gkr.prover import Carry, LogupSummand, fold_carry
-from zorch.poly.eq import eq_factor, expand_eq_to_hypercube
-from zorch.poly.univariate import eval_coeffs
+from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.round import Round
 from zorch.sumcheck import gruen
 from zorch.sumcheck.prover import fold_lsb, split_pairs
@@ -196,8 +195,9 @@ def _round_coeffs(
     s_half = (
         (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
     )
-    half = one / jnp.array(2, dtype)
-    return gruen.round_coeffs(s_zero, claim, [half], [s_half], z_cur)
+    return gruen.round_coeffs(
+        s_zero, claim, LogupSummand.extra_ts(dtype), [s_half], z_cur
+    )
 
 
 def _paired_sums(
@@ -417,7 +417,7 @@ def _run_jagged_rounds_reference(
         polys.append(poly)
         challenges.append(r)
 
-        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1])
+        claim, pad_adj = gruen.fold_round_scalars(poly, r, pad_adj, point[-1])
         n0, n1, d0, d1 = (fold_lsb(a, r) for a in (n0, n1, d0, d1))
         if in_rows:
             eq_row = fold_lsb(eq_row, r)
@@ -663,17 +663,6 @@ def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array
     return p.n0[0], p.n1[0], p.d0[0], p.d1[0]
 
 
-def _fold_scalars(
-    poly: Array, r: Array, pad_adj: Array, z: Array
-) -> tuple[Array, Array]:
-    """The per-round scalar fold: the next claim (round poly evaluated at `r`) and
-    the pad-mass accumulation `pad_adj * eq_factor(r, z)` -- the bound variable's
-    eq factor joins the running product. One source for both the oracle
-    `_run_jagged_rounds_reference` (which inlines it) and the round loop's
-    `_reduce_body`, so the two cannot drift out of byte-equality."""
-    return eval_coeffs(poly, r), pad_adj * eq_factor(r, z)
-
-
 def _reduce_body(
     raw: Array,
     poly: Array,
@@ -693,7 +682,7 @@ def _reduce_body(
     (un-jitted) so it fuses into whichever kernel owns it -- the round loop's
     `_fs_reduce`, which prepends the Fiat-Shamir hop."""
     r = reinterpret_challenge(raw, dtype)
-    claim, pad_adj = _fold_scalars(poly, r, pad_adj, z_cur)
+    claim, pad_adj = gruen.fold_round_scalars(poly, r, pad_adj, z_cur)
     # The last round's `pos_next` is -1 (a dead output -- no round consumes it);
     # clamp so the slice index is provably in-bounds rather than leaning on
     # `dynamic_slice`'s implicit index clamp. No-op for every live round (pos >= 1).

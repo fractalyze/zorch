@@ -19,8 +19,7 @@ agnostic). The known instances:
 
 - LogUp-GKR jagged (`zorch.logup_gkr.jagged_prover`): extra ``{1/2}``,
   degree 3.
-- the jagged zerocheck engine in sp1-zorch (the
-  ``sum_as_poly_in_last_variable`` encoding): extra ``{2, 4}``, degree 4.
+- the jagged zerocheck engines in consumers: extra ``{2, 4}``, degree 4.
 
 The next round's claim is the coefficients evaluated at the sampled challenge
 (`zorch.poly.univariate.eval_coeffs`), and the round's bound eq mass
@@ -31,14 +30,45 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from functools import cache
-from typing import Any
+from typing import Any, Protocol
 
 import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.poly.eq import eq_root
-from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
+from zorch.poly.eq import eq_factor, eq_root
+from zorch.poly.univariate import (
+    compute_inv_vandermonde,
+    compute_lagrange_basis,
+    eval_coeffs,
+)
+
+
+class GruenSummand(Protocol):
+    """The seam a Gruen-compressed jagged round needs from its summand: the
+    round-poly ``degree`` and the ``degree - 2`` extra evaluation points the
+    engine materializes beyond s(0) — t = 1 and the eq-factor root come free
+    (the claim identity and the Gruen zero), so a degree-d round materializes
+    exactly d - 1 evaluations. The round LOOP stays the consumer's (host loop
+    vs fixed-shape scan — the engines' module docstrings own that choice);
+    this protocol pins the vocabulary the shared assembly below reads. The
+    known instances: `zorch.logup_gkr.prover.LogupSummand` (degree 3, extra
+    ``{1/2}``) and the jagged zerocheck engines in consumers (degree 4,
+    extra ``{2, 4}``).
+
+    Every jagged summand also carries a **padding correction** — the
+    sumcheck runs over materialized positions only, and the non-materialized
+    ones contribute in closed form: LogUp's fold-neutral fraction (n=0, d=1)
+    collapses to its eq weight
+    (`zorch.logup_gkr.jagged_prover._virtual_mass_correction`), the
+    zerocheck zero-extension row to its constant ``C(0_row)`` removed via
+    the virtual geq. The correction's math is each summand's own; the
+    concept is this seam's."""
+
+    @property
+    def degree(self) -> int: ...
+
+    def extra_ts(self, dtype: Any) -> tuple[Array, ...]: ...
 
 
 @cache
@@ -128,3 +158,18 @@ def round_coeffs(
             f"and {len(extra_ys)} evaluations"
         )
     return round_coeffs_from_matrix(interp_matrix(extra_ts, z), s_zero, claim, extra_ys)
+
+
+def fold_round_scalars(
+    poly: Array, r: Array, mass: Array, z: Array
+) -> tuple[Array, Array]:
+    """The post-round scalar fold every Gruen-compressed round ends with: the
+    next claim is the coefficient-form round polynomial evaluated at the
+    sampled challenge, and the running bound-eq mass gains the bound
+    variable's eq factor. Returns ``(claim', mass')``.
+
+    One definition so a prover's round loop and its unrolled oracle cannot
+    drift out of byte-equality — every engine driving this assembly (the
+    LogUp jagged prover, `zorch.logup_gkr.jagged_prover`; consumers' jagged
+    zerocheck engines) ends its round with exactly this pair."""
+    return eval_coeffs(poly, r), mass * eq_factor(r, z)

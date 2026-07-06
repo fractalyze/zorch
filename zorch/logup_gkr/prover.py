@@ -36,7 +36,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -52,6 +52,7 @@ from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
+    from zorch.sumcheck.gruen import GruenSummand
     from zorch.sumcheck.prover import SumcheckSummand
 
 
@@ -94,6 +95,15 @@ class LogupSummand:
             )
         (lam,) = scalars
         return logup_combine(lam, *factors)
+
+    @classmethod
+    def extra_ts(cls, dtype: Any) -> tuple[Array, ...]:
+        """The jagged round's one materialized extra point ``{1/2}`` — degree
+        3 makes d - 2 = 1 extra beyond s(0), the Gruen seam's invariant
+        (`zorch.sumcheck.gruen.GruenSummand`). The dense (value-form) round
+        never reads this."""
+        one = jnp.ones((), dtype)
+        return (one / jnp.array(2, dtype),)
 
 
 def fold_carry(
@@ -242,5 +252,6 @@ class GkrLayerRound(Round):
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _summand: type[SumcheckSummand] = LogupSumcheckRound
+    _gruen_summand: type[GruenSummand] = LogupSummand
     _sumcheck_round: type[ProverRound] = LogupSumcheckRound
     _layer_round: type[ProverRound] = GkrLayerRound
