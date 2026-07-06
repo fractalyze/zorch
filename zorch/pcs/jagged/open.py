@@ -261,6 +261,15 @@ def stacked_basefold_open(
     else:
         total_width = sum(int(rd.mle.shape[1]) for rd in rounds)
         t, coeffs = sample_rlc_coeffs(t, total_width, ef_dtype)
+    # Fail loud at the code/mle seam: a stacking-height mismatch would otherwise
+    # surface as a cryptic RS-encode shape error inside the re-encode below.
+    stacking = 1 << log_stacking_height
+    if code.message_len != stacking:
+        raise ValueError(
+            f"code message_len {code.message_len} != stacking height {stacking}"
+        )
+    if any(rd.mle.shape[0] != stacking for rd in rounds):
+        raise ValueError(f"every round mle must stack to height {stacking}")
     # mle.T is the [K, S] message the commit encoded; the trailing .T lands the
     # [S*blowup, K] leaf-major layout whose bit-reversed rows are the committed
     # leaves, so these paths authenticate against the same digest tree.
