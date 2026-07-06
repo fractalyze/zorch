@@ -19,6 +19,16 @@ def _eval_fn(rows: jax.Array) -> jax.Array:
     return jnp.stack([c0, c1, c2], axis=-1)
 
 
+def _eval_fn_pv(rows: jax.Array, pv: jax.Array) -> jax.Array:
+    """A 2-ary constraint stand-in that reads public values: the pv-threading
+    counterpart to `_eval_fn`. Each leg mixes a pv element so a wrong pv value
+    (or a dropped operand) breaks the golden."""
+    c0 = rows[:, 0] * rows[:, 1] + pv[0]
+    c1 = rows[:, 1] + rows[:, 2]
+    c2 = rows[:, 0] * rows[:, 2] + rows[:, 1] * pv[1]
+    return jnp.stack([c0, c1, c2], axis=-1)
+
+
 class ConstraintEvalTest(absltest.TestCase):
     def test_folds_to_the_same_rlc_as_a_plain_dot(self) -> None:
         # The composite must inline to the identical result as the plain
@@ -193,6 +203,109 @@ class ConstraintEvalTest(absltest.TestCase):
                 live_width=5,
                 column_weights=rand_field(6, (3, 1), F),
             )
+
+    def test_pv_threads_through_to_a_two_ary_eval_fn(self) -> None:
+        # With pv given, eval_fn is called 2-ary as eval_fn(trace, pv); the
+        # composite must inline to the identical `eval_fn(rows, pv) @ alpha`.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        pv = rand_field(7, (2,), F)
+        golden = _eval_fn_pv(rows, pv) @ alpha
+        got = constraint_eval(_eval_fn_pv, rows, alpha, pv=pv)
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+
+    def test_pv_declared_operand_survives_jit_where_a_closure_breaks(self) -> None:
+        # The reason pv is an operand and not a closure: under jax.jit a pv
+        # closed into eval_fn reaches the composite decomposition as a Tracer
+        # constant, which lax.composite rejects. Threaded as a declared operand
+        # the same computation traces cleanly and matches the eager golden.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        pv = rand_field(7, (2,), F)
+        with self.assertRaises(jax.errors.UnexpectedTracerError):
+            jax.jit(
+                lambda t, a, p: constraint_eval(lambda tr: _eval_fn_pv(tr, p), t, a)
+            )(rows, alpha, pv)
+        golden = _eval_fn_pv(rows, pv) @ alpha
+        got = jax.jit(lambda t, a, p: constraint_eval(_eval_fn_pv, t, a, pv=p))(
+            rows, alpha, pv
+        )
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+
+    def test_pv_operand_idx_attr_rides_the_composite(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        pv = rand_field(7, (2,), F)
+        txt = (
+            jax.jit(lambda t, a, p: constraint_eval(_eval_fn_pv, t, a, pv=p))
+            .lower(rows, alpha, pv)
+            .as_text()
+        )
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        self.assertIn(CONSTRAINT_EVAL_MARKER, txt)
+        # No live_width/column_weights, so pv is the first optional at operand 2.
+        self.assertIn("pv_operand_idx = 2", txt)
+
+    def test_pv_absent_declares_no_operand_idx(self) -> None:
+        # Without pv the marker must NOT declare one — the declaration routes
+        # zkx to the pv-threading emitter path.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        txt = (
+            jax.jit(lambda t, a: constraint_eval(_eval_fn, t, a))
+            .lower(rows, alpha)
+            .as_text()
+        )
+        self.assertNotIn("pv_operand_idx", txt)
+
+    def test_pv_composes_with_live_width(self) -> None:
+        # pv rides AFTER live_width, so its index shifts to 3; the masked golden
+        # must still match lane for lane.
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        pv = rand_field(7, (2,), F)
+        golden = _eval_fn_pv(rows, pv) @ alpha
+        golden = jnp.where(jnp.arange(8) < 5, golden, jnp.zeros_like(golden))
+        got = constraint_eval(_eval_fn_pv, rows, alpha, live_width=5, pv=pv)
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        txt = (
+            jax.jit(
+                lambda t, a, lw, p: constraint_eval(
+                    _eval_fn_pv, t, a, live_width=lw, pv=p
+                )
+            )
+            .lower(rows, alpha, jnp.int32(5), pv)
+            .as_text()
+        )
+        self.assertIn("live_width_operand_idx = 2", txt)
+        self.assertIn("pv_operand_idx = 3", txt)
+
+    def test_pv_composes_with_live_width_and_column_weights(self) -> None:
+        # All three optionals present: order is (trace, alpha, live, weights, pv),
+        # so pv's index shifts to 4. The eager result must equal the masked fold
+        # plus the unmasked column term (column_weights is added after the mask).
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        weights = rand_field(5, (3,), F)
+        pv = rand_field(7, (2,), F)
+        fold = _eval_fn_pv(rows, pv) @ alpha
+        masked = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
+        golden = masked + rows @ weights
+        got = constraint_eval(
+            _eval_fn_pv, rows, alpha, live_width=5, column_weights=weights, pv=pv
+        )
+        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        txt = (
+            jax.jit(
+                lambda t, a, lw, w, p: constraint_eval(
+                    _eval_fn_pv, t, a, live_width=lw, column_weights=w, pv=p
+                )
+            )
+            .lower(rows, alpha, jnp.int32(5), weights, pv)
+            .as_text()
+        )
+        self.assertIn("live_width_operand_idx = 2", txt)
+        self.assertIn("pv_operand_idx = 4", txt)
 
 
 if __name__ == "__main__":
