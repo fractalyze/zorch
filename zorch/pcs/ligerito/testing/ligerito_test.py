@@ -108,6 +108,16 @@ class LigeritoTest(parameterized.TestCase):
             rates=(3, 2, 1, 1),
             queries=(6, 4, 4, 2),
         ),
+        # LSB-first alpha orientation; queries=6 is non-power-of-two, so the
+        # glue weights are a genuinely different set than the MSB-first default.
+        dict(
+            testcase_name="l4_8v_alpha_lsb",
+            num_vars=8,
+            fold_ks=(2, 1, 1, 1),
+            rates=(3, 2, 1, 1),
+            queries=(6, 4, 4, 2),
+            alpha_lsb_first=True,
+        ),
     )
     def test_open_verify_round_trip(
         self,
@@ -115,9 +125,14 @@ class LigeritoTest(parameterized.TestCase):
         fold_ks: tuple[int, ...],
         rates: tuple[int, ...],
         queries: tuple[int, ...],
+        alpha_lsb_first: bool = False,
     ) -> None:
         cfg = LigeritoConfig(
-            num_vars=num_vars, fold_ks=fold_ks, log_inv_rates=rates, queries=queries
+            num_vars=num_vars,
+            fold_ks=fold_ks,
+            log_inv_rates=rates,
+            queries=queries,
+            alpha_lsb_first=alpha_lsb_first,
         )
         prover, verifier, root, f, pdata = _setup(cfg)
         z = _rand_ef(2, (cfg.num_vars,))

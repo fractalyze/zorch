@@ -226,7 +226,9 @@ def _open(
         # sumcheck. B_new(x) = Σ_s α_s·eq(eval_point(s), x); the α weights and the
         # separation challenge match what the verifier resamples, so it rebuilds
         # the same B. Only B is threaded — the enforced sum is verifier-side.
-        t, alpha = sample_staggered_coeffs(t, cfg.queries[j], dtype)
+        t, alpha = sample_staggered_coeffs(
+            t, cfg.queries[j], dtype, lsb_first=cfg.alpha_lsb_first
+        )
         alpha = alpha[: cfg.queries[j]]  # (Q,) partial-Lagrange weights
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)  # (Q, 2^nv)

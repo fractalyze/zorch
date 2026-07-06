@@ -36,17 +36,27 @@ def partial_lagrange(point: Array) -> Array:
 
 
 def sample_staggered_coeffs(
-    transcript: Transcript, total_width: int, dtype: Any
+    transcript: Transcript, total_width: int, dtype: Any, *, lsb_first: bool = False
 ) -> tuple[Transcript, Array]:
     """Batch weights for `total_width` columns: `log2_ceil(total_width)` squeezed
     challenges expanded to the partial-Lagrange basis (length `2^nbv >= total_width`).
     `total_width == 1` -> `[1]`, no squeeze. Called by both `open` and `verify` so
-    the two sides derive identical weights."""
+    the two sides derive identical weights.
+
+    `lsb_first` picks the table's index orientation. False keeps
+    `partial_lagrange`'s native MSB-first indexing (challenge `j` <-> index bit
+    `nbv-1-j`); True reverses the challenge vector before expansion so challenge
+    `j` <-> index bit `j`. A wire-format convention knob: for non-power-of-two
+    widths the leading `total_width` weights are a *different set* per
+    orientation, so a consumer whose eq tables index LSB-first cannot be matched
+    by reordering after the fact. Transcript consumption is identical either way.
+    """
     nbv = log2_ceil_usize(total_width)
     if nbv == 0:
         return transcript, jnp.ones(1, dtype)
     transcript, s = transcript.sample(nbv)
-    return transcript, partial_lagrange(s.astype(dtype))
+    s = s.astype(dtype)
+    return transcript, partial_lagrange(s[::-1] if lsb_first else s)
 
 
 def batch_staggered(columns: Sequence[Array], coeffs: Array) -> Array:

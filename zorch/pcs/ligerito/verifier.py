@@ -155,7 +155,9 @@ def _verify(
         # Induce the batched proximity claim into the running sumcheck (mirror
         # the prover): recompute the eval-point basis and enforced sum, glue with
         # a fresh separation challenge.
-        t, alpha = sample_staggered_coeffs(t, cfg.queries[j], dtype)
+        t, alpha = sample_staggered_coeffs(
+            t, cfg.queries[j], dtype, lsb_first=cfg.alpha_lsb_first
+        )
         alpha = alpha[: cfg.queries[j]]
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)

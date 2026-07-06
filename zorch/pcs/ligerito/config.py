@@ -51,6 +51,11 @@ class LigeritoConfig:
         Placeholder counts, not soundness-calibrated (like Ligero/BaseFold).
     ood_samples: out-of-domain binding samples per level; `()` means no OOD (the
         RS de-risk gate default — flock uses OOD for soundness, calibrated later).
+    alpha_lsb_first: index orientation of the per-level partial-Lagrange batching
+        weights (the query-claim glue's alpha). False = the native MSB-first
+        expansion; True = LSB-first (challenge `j` <-> table bit `j`), for wire
+        formats that fix that convention. Prover and verifier both derive from it,
+        so the round trip holds either way; it only changes the produced bytes.
     """
 
     num_vars: int
@@ -58,6 +63,7 @@ class LigeritoConfig:
     log_inv_rates: tuple[int, ...]
     queries: tuple[int, ...]
     ood_samples: tuple[int, ...] = ()
+    alpha_lsb_first: bool = False
 
     def __post_init__(self) -> None:
         if not self.fold_ks:
