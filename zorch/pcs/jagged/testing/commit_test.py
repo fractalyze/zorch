@@ -124,18 +124,9 @@ class CommitRegionTest(absltest.TestCase):
         c1, _ = commit_region(_region(), smcs, log_blowup=1)
         self.assertFalse(bool(jnp.all(c1 == c2)))
 
-    def test_drop_codeword_omits_blowup_keeps_mle(self) -> None:
-        smcs = _smcs()
-        _, kept = commit_region(_region(), smcs, log_blowup=2)
-        _, dropped = commit_region(_region(), smcs, log_blowup=2, drop_codeword=True)
-        self.assertIsNotNone(kept.codeword)
-        self.assertIsNone(dropped.codeword)
-        # The open re-encodes the codeword from mle, so mle must survive the drop.
-        np.testing.assert_array_equal(_u32(kept.mle), _u32(dropped.mle))
-
     def test_matches_inline_round_commit(self) -> None:
-        """The retained ``(mle, codeword, digest_layers)`` and the shape-bound
-        root are byte-identical to the inline encode + row-major SMCS commit a
+        """The retained ``(mle, digest_layers)`` and the shape-bound root are
+        byte-identical to the inline encode + row-major SMCS commit a
         ``StackedRound`` is built from (open_test's ``build_round``). The commit
         reads the codeword column-major; the open's view is its leaf-major
         transpose — same leaf content, identical Merkle tree."""
@@ -152,7 +143,6 @@ class CommitRegionTest(absltest.TestCase):
         root_ref, layers_ref = smcs.commit(codeword_ref)  # row-major leaf view
 
         np.testing.assert_array_equal(_u32(data.mle), _u32(mle_ref))
-        np.testing.assert_array_equal(_u32(data.codeword), _u32(codeword_ref))
         np.testing.assert_array_equal(_u32(data.smcs_commitment), _u32(root_ref))
         self.assertEqual(len(data.digest_layers), len(layers_ref))
         for got, ref in zip(data.digest_layers, layers_ref, strict=True):
@@ -185,7 +175,6 @@ class CommitRegionTest(absltest.TestCase):
         codeword_ref = code.encode(dense.reshape(k, S)).T
         _root, layers_ref = smcs.commit(codeword_ref)
 
-        np.testing.assert_array_equal(_u32(data.codeword), _u32(codeword_ref))
         np.testing.assert_array_equal(_u32(data.mle), _u32(dense.reshape(k, S).T))
         for got, ref in zip(data.digest_layers, layers_ref, strict=True):
             np.testing.assert_array_equal(_u32(got), _u32(ref))
