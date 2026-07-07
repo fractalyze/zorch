@@ -14,18 +14,21 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from absl.testing import absltest, parameterized
+from jax import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.pcs.fold import sample_distinct_positions
+from zorch.pcs.ligerito.choreography import FsChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import LigeritoProver, LigeritoProverData
 from zorch.pcs.ligerito.verifier import LigeritoVerifier
 from zorch.poly.multilinear import eval_mle
 from zorch.testkit.random_field import rand_ext_field
-from zorch.transcript import DuplexTranscript
+from zorch.transcript import DuplexTranscript, TranscriptT
 
 
 def _transcript() -> DuplexTranscript:
@@ -262,6 +265,181 @@ class LigeritoTamperTest(parameterized.TestCase):
                 [z],
                 value,
                 dataclasses.replace(proof, ood_values=[]),
+                _transcript(),
+            )
+
+
+@dataclasses.dataclass(frozen=True)
+class _FlockShapedChoreography(FsChoreography):
+    """flock `pcs::ligerito`'s FS shape over the generic transcript: claim+root
+    statement binding (the point rides the outer basis), eager message
+    emission, tapered per-fold PoW, unconditional per-level query PoW (0 bits
+    still advances the stream), rejection-sampled distinct sorted queries, and
+    element-wise residual framing — the zorch-side rehearsal of the byte-fixed
+    consumer (fractalyze/flock-zorch#32), exercising every seam hook at once."""
+
+    fold_bits: tuple[int, ...] = ()
+    query_bits: tuple[int, ...] = ()
+
+    @property
+    def eager_messages(self) -> bool:
+        return True
+
+    def bind_statement(
+        self, transcript: TranscriptT, root: Array, point: Array, value: Array
+    ) -> TranscriptT:
+        del point
+        transcript = transcript.observe(value)
+        return transcript.observe(root)
+
+    def fold_challenge(
+        self, transcript: TranscriptT, msg: Array | None, level: int, fold_idx: int
+    ) -> tuple[TranscriptT, Array]:
+        del msg, level, fold_idx  # eager: the message is already absorbed
+        transcript, r = transcript.sample(1)
+        return transcript, r[0]
+
+    def fold_grind_bits(self, level: int, fold_idx: int) -> int | None:
+        bits = self.fold_bits[level] - fold_idx
+        return bits if bits > 0 else None
+
+    def query_grind_bits(self, level: int) -> int | None:
+        return self.query_bits[level]
+
+    def sample_queries(
+        self, transcript: TranscriptT, block_len: int, count: int
+    ) -> tuple[TranscriptT, Array]:
+        return sample_distinct_positions(transcript, block_len, count)
+
+    def observe_residual(self, transcript: TranscriptT, residual: Array) -> TranscriptT:
+        for k in range(residual.shape[0]):
+            transcript = transcript.observe(residual[k])
+        return transcript
+
+
+class LigeritoChoreographyTest(parameterized.TestCase):
+    """Round-trips under the flock-shaped choreography: eager emission,
+    grinding, distinct queries, and custom binding must keep prover and
+    verifier in Fiat-Shamir lockstep (pinned by comparing a post-open and a
+    post-verify squeeze) for both message wire forms, with and without OOD."""
+
+    @parameterized.named_parameters(
+        dict(testcase_name="value_form", compressed=False, ood=()),
+        dict(testcase_name="compressed_ood", compressed=True, ood=(2, 0)),
+    )
+    def test_open_verify_round_trip(
+        self, compressed: bool, ood: tuple[int, ...]
+    ) -> None:
+        cfg = LigeritoConfig(
+            num_vars=6,
+            fold_ks=(1, 1, 1),
+            log_inv_rates=(1, 1, 1),
+            queries=(4, 4, 4),
+            ood_samples=ood,
+            alpha_lsb_first=True,
+            compressed_sumcheck_messages=compressed,
+        )
+        chor = _FlockShapedChoreography(fold_bits=(2, 1, 0), query_bits=(1, 0, 2))
+        _, _, tree = koalabear16_merkle()
+        prover = LigeritoProver(_make_code, tree, cfg, chor)
+        verifier = LigeritoVerifier(_make_code, tree, cfg, chor)
+        f = _rand_ef(1, (1 << cfg.num_vars,))
+        root, pdata = prover.commit([f])
+        z = _rand_ef(2, (cfg.num_vars,))
+        value, proof, t_open = prover.open(pdata, [z], _transcript())
+        self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
+        # The eager wire carries the extras: initial + post-fold + introduces.
+        self.assertEqual(len(proof.sumcheck_messages), chor.num_messages(cfg))
+        self.assertEqual(len(proof.pow_witnesses), chor.num_pow_witnesses(cfg))
+        ok, t_verify = verifier.verify(root, [z], value, proof, _transcript())
+        self.assertTrue(bool(ok))
+        _, s_open = t_open.sample()
+        _, s_verify = t_verify.sample()
+        self.assertEqual(s_open.tolist(), s_verify.tolist())
+
+
+# L=2 with one OOD block and grinds on both schedules — the smallest config
+# whose eager wire carries every extra: [initial, post-fold, OOD intro,
+# induce, terminal] messages plus a fold witness and two query witnesses.
+_FLOCK_TAMPER_CFG = LigeritoConfig(
+    num_vars=4,
+    fold_ks=(1, 1),
+    log_inv_rates=(1, 1),
+    queries=(4, 4),
+    ood_samples=(1,),
+)
+_FLOCK_TAMPER_CHOR = _FlockShapedChoreography(fold_bits=(1, 0), query_bits=(0, 1))
+
+
+class LigeritoChoreographyTamperTest(absltest.TestCase):
+    def _open(
+        self,
+    ) -> tuple[
+        LigeritoVerifier, LigeritoCommitment, jnp.ndarray, jnp.ndarray, LigeritoProof
+    ]:
+        _, _, tree = koalabear16_merkle()
+        prover = LigeritoProver(_make_code, tree, _FLOCK_TAMPER_CFG, _FLOCK_TAMPER_CHOR)
+        verifier = LigeritoVerifier(
+            _make_code, tree, _FLOCK_TAMPER_CFG, _FLOCK_TAMPER_CHOR
+        )
+        f = _rand_ef(1, (1 << _FLOCK_TAMPER_CFG.num_vars,))
+        root, pdata = prover.commit([f])
+        z = _rand_ef(3, (_FLOCK_TAMPER_CFG.num_vars,))
+        value, proof, _ = prover.open(pdata, [z], _transcript())
+        return verifier, root, z, value, proof
+
+    def test_rejects_tampered_pow_witness(self) -> None:
+        # A shifted witness desyncs the replayed stream (and likely fails the
+        # zero-bits check outright); every later challenge diverges.
+        verifier, root, z, value, proof = self._open()
+        wits = list(proof.pow_witnesses)
+        wits[0] = wits[0] + jnp.array(1, F)
+        ok, _ = verifier.verify(
+            root,
+            [z],
+            value,
+            dataclasses.replace(proof, pow_witnesses=wits),
+            _transcript(),
+        )
+        self.assertFalse(bool(ok))
+
+    def test_rejects_tampered_introduce_message(self) -> None:
+        # Index 2 is the OOD introduce message; the recombined round poly then
+        # disagrees with the tracked claim at the next round.
+        verifier, root, z, value, proof = self._open()
+        msgs = list(proof.sumcheck_messages)
+        msgs[2] = msgs[2] + jnp.array(1, EF)
+        ok, _ = verifier.verify(
+            root,
+            [z],
+            value,
+            dataclasses.replace(proof, sumcheck_messages=msgs),
+            _transcript(),
+        )
+        self.assertFalse(bool(ok))
+
+    def test_rejects_tampered_terminal_message(self) -> None:
+        # The last emission is pinned against the in-clear residual's poly.
+        verifier, root, z, value, proof = self._open()
+        msgs = list(proof.sumcheck_messages)
+        msgs[-1] = msgs[-1] + jnp.array(1, EF)
+        ok, _ = verifier.verify(
+            root,
+            [z],
+            value,
+            dataclasses.replace(proof, sumcheck_messages=msgs),
+            _transcript(),
+        )
+        self.assertFalse(bool(ok))
+
+    def test_rejects_missing_pow_witness(self) -> None:
+        verifier, root, z, value, proof = self._open()
+        with self.assertRaisesRegex(ValueError, "proof-of-work"):
+            verifier.verify(
+                root,
+                [z],
+                value,
+                dataclasses.replace(proof, pow_witnesses=[]),
                 _transcript(),
             )
 

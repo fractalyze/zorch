@@ -192,6 +192,15 @@ def _open(
     recursive_roots: list[Array] = []
     component_openings: list[Opening] = []
     ood_values: list[Array] = []
+    pow_witnesses: list[Array] = []
+
+    eager = chor.eager_messages
+    if eager:
+        # Eager emission: the initial state's message, absorbed the moment the
+        # sumcheck starts (each later state's follows right after it forms).
+        msg0 = round_._round_poly([W, B])
+        t = chor.observe_message(t, msg0)
+        sumcheck_messages.append(msg0)
 
     current = pd.initial  # M_j
     num_vars = cfg.num_vars
@@ -199,10 +208,22 @@ def _open(
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck ---
         for i in range(k_j):
-            msg = round_._round_poly([W, B])
-            sumcheck_messages.append(msg)
+            msg: Array | None = None  # eager: this round's is already absorbed
+            if not eager:
+                msg = round_._round_poly([W, B])
+                sumcheck_messages.append(msg)
+            bits = chor.fold_grind_bits(j, i)
+            if bits is not None:
+                t, w = chor.grind(t, bits)
+                pow_witnesses.append(w)
             t, r = chor.fold_challenge(t, msg, j, i)
             W, B = sc_fold([W, B], r)
+            if eager:
+                # The freshly folded state's message — the terminal residual
+                # state's included (the verifier recomputes it in the clear).
+                nxt_msg = round_._round_poly([W, B])
+                t = chor.observe_message(t, nxt_msg)
+                sumcheck_messages.append(nxt_msg)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---
@@ -223,6 +244,10 @@ def _open(
                 y = (W * b_ood).sum()
                 t = t.observe(y)
                 ood_values.append(y)
+                if eager:
+                    m = round_._round_poly([W, b_ood])
+                    t = chor.observe_message(t, m)
+                    sumcheck_messages.append(m)
                 t, sep = t.sample()
                 sep = sep.reshape(())
                 B = B + sep * b_ood
@@ -235,6 +260,10 @@ def _open(
         # M_j's message (encoded) axis is exactly the post-fold witness, so its
         # message length is 2^num_vars — rebuild the same code the commit used.
         code_j = prover._code(j, 1 << num_vars)
+        qbits = chor.query_grind_bits(j)
+        if qbits is not None:
+            t, w = chor.grind(t, qbits)
+            pow_witnesses.append(w)
         t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = open_rows(
             prover.tree, current.leaves, current.digest_layers, positions
@@ -257,6 +286,10 @@ def _open(
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
+        if eager:
+            m = round_._round_poly([W, b_new])
+            t = chor.observe_message(t, m)
+            sumcheck_messages.append(m)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new
@@ -269,6 +302,7 @@ def _open(
         component_openings=component_openings,
         final_residual=residual,
         ood_values=ood_values,
+        pow_witnesses=pow_witnesses,
     )
     return value, proof, t
 

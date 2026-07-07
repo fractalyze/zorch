@@ -161,6 +161,32 @@ def sample_positions(
     return t, (limbs[:, 0] % block_len).astype(jnp.int32)
 
 
+def sample_distinct_positions(
+    transcript: TranscriptT, block_len: int, count: int
+) -> tuple[TranscriptT, Array]:
+    """Rejection-sample `count` DISTINCT positions in `[0, block_len)`, sorted
+    ascending — the strategy of wire formats that spend one squeeze per
+    candidate and re-squeeze on a repeat (flock's `sample_distinct_queries`;
+    each squeeze reduces like `sample_positions`, low limb mod `block_len`).
+    Transcript consumption is data-dependent, so the loop is host-driven (one
+    device->host sync per candidate) and cannot run under `jit`; both sides
+    replay the identical rejections, so their streams stay in lockstep."""
+    if count > block_len:
+        raise ValueError(
+            f"cannot sample {count} distinct positions from a block of {block_len}"
+        )
+    seen: set[int] = set()
+    out: list[int] = []
+    t = transcript
+    while len(out) < count:
+        t, raw = t.sample(1)
+        pos = int(lax.bitcast_convert_type(raw, jnp.uint32).reshape(-1)[0]) % block_len
+        if pos not in seen:
+            seen.add(pos)
+            out.append(pos)
+    return t, jnp.sort(jnp.asarray(out, dtype=jnp.int32))
+
+
 def verify_openings(
     tree: MerkleTree, legs: Sequence[tuple[Array, Array, Opening]]
 ) -> Array:

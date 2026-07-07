@@ -137,6 +137,7 @@ class LigeritoConfig:
         "component_openings",
         "final_residual",
         "ood_values",
+        "pow_witnesses",
     ],
     meta_fields=[],
 )
@@ -159,6 +160,9 @@ class LigeritoProof:
     ood_values: the claimed out-of-domain evaluations, one per OOD block in
         schedule order (empty when `ood_samples` is `()`). Claimed, not proven
         here — each is glued into the running sumcheck, which enforces it.
+    pow_witnesses: proof-of-work witnesses, one per grind the choreography
+        schedules (`FsChoreography.fold_grind_bits` / `query_grind_bits`), in
+        schedule order (empty under the default no-grinding choreography).
     """
 
     sumcheck_messages: list[Array]
@@ -166,3 +170,4 @@ class LigeritoProof:
     component_openings: list[Opening]
     final_residual: Array
     ood_values: list[Array] = field(default_factory=list)
+    pow_witnesses: list[Array] = field(default_factory=list)

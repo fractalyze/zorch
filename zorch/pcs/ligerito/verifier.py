@@ -31,6 +31,7 @@ from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, Ligeri
 from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
+from zorch.sumcheck import prover as sc_prover
 from zorch.sumcheck.prover import fold as sc_fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
 from zorch.transcript import Transcript
@@ -40,6 +41,10 @@ if TYPE_CHECKING:
 
 _ROUND = SumcheckRound(degree=2)
 _COMPRESSED_ROUND = CompressedCoeffsSumcheckRound()
+# Prover-round duals, for the eager policy's terminal pin: the last emitted
+# message is the residual state's round poly, recomputable in the clear.
+_P_ROUND = sc_prover.SumcheckRound(degree=2)
+_P_COMPRESSED_ROUND = sc_prover.CompressedProductRound()
 
 
 @dataclass(frozen=True)
@@ -97,6 +102,12 @@ class LigeritoVerifier:
                 f"malformed proof: expected {cfg.total_ood} OOD values, "
                 f"got {len(proof.ood_values)}"
             )
+        num_pow = self.choreography.num_pow_witnesses(cfg)
+        if len(proof.pow_witnesses) != num_pow:
+            raise ValueError(
+                f"malformed proof: expected {num_pow} proof-of-work witnesses, "
+                f"got {len(proof.pow_witnesses)}"
+            )
         return _verify(self, commitment, z, value, proof, transcript)
 
 
@@ -124,20 +135,45 @@ def _verify(
     residual = proof.final_residual
     msg_idx = 0
     ood_idx = 0
+    wit_idx = 0
     num_vars = cfg.num_vars
+
+    # Under the eager policy `cur` tracks the current round's message as the
+    # prover emitted it: read off the proof after every fold, recombined
+    # linearly at every glue (round polys are linear in the basis factor), so
+    # each round checks against the same combined message the lazy wire would
+    # have carried whole.
+    eager = chor.eager_messages
+    cur = proof.sumcheck_messages[0] if eager else None
+    if eager:
+        msg_idx = 1
+        t = chor.observe_message(t, proof.sumcheck_messages[0])
+
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         challenges = []
         for i in range(k_j):
-            msg = proof.sumcheck_messages[msg_idx]
-            msg_idx += 1
-            t, r = chor.fold_challenge(t, msg, j, i)
+            if cur is not None:
+                msg = cur
+            else:
+                msg = proof.sumcheck_messages[msg_idx]
+                msg_idx += 1
+            bits = chor.fold_grind_bits(j, i)
+            if bits is not None:
+                t, ok_grind = chor.check_grind(t, bits, proof.pow_witnesses[wit_idx])
+                wit_idx += 1
+                ok = ok & ok_grind
+            t, r = chor.fold_challenge(t, None if eager else msg, j, i)
             claim, ok_round = round_.check_reduce(claim, msg, r)
             ok = ok & ok_round
             # The round verifier reduces only the claim; fold the public basis B
             # by the same challenge so it tracks the prover's folded B.
             B = sc_fold([B], r)[0]
             challenges.append(r)
+            if eager:
+                cur = proof.sumcheck_messages[msg_idx]
+                msg_idx += 1
+                t = chor.observe_message(t, cur)
         num_vars -= k_j
         eqc = expand_eq_to_hypercube(jnp.stack(challenges), one)  # (kappa_j,)
         kappa_j = 1 << k_j
@@ -154,14 +190,25 @@ def _verify(
                 y = proof.ood_values[ood_idx]
                 ood_idx += 1
                 t = t.observe(y)
+                if cur is not None:
+                    m = proof.sumcheck_messages[msg_idx]
+                    msg_idx += 1
+                    t = chor.observe_message(t, m)
                 t, sep = t.sample()
                 sep = sep.reshape(())
                 B = B + sep * b_ood
                 claim = claim + sep * y
+                if cur is not None:
+                    cur = cur + sep * m
         else:
             t = chor.observe_residual(t, residual)
 
         code_j = verifier._code(j, 1 << num_vars)
+        qbits = chor.query_grind_bits(j)
+        if qbits is not None:
+            t, ok_grind = chor.check_grind(t, qbits, proof.pow_witnesses[wit_idx])
+            wit_idx += 1
+            ok = ok & ok_grind
         t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = proof.component_openings[j]
         ok = ok & verify_openings(verifier.tree, [(roots[j], positions, opening)])
@@ -175,6 +222,15 @@ def _verify(
             expected = jax.vmap(lambda p: eval_mle(residual, p))(points_s)  # (Q,)
             ok = ok & jnp.all(expected == v)
             ok = ok & (claim == (residual * B).sum())
+            if cur is not None:
+                # The eager wire's terminal emission is the residual state's
+                # round poly — recompute it in the clear and pin it exactly.
+                p_round = (
+                    _P_COMPRESSED_ROUND
+                    if cfg.compressed_sumcheck_messages
+                    else _P_ROUND
+                )
+                ok = ok & jnp.all(cur == p_round._round_poly([residual, B]))
             break
 
         # Induce the batched proximity claim into the running sumcheck (mirror
@@ -187,10 +243,16 @@ def _verify(
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
         h_new = (alpha * v).sum()
+        if cur is not None:
+            m = proof.sumcheck_messages[msg_idx]
+            msg_idx += 1
+            t = chor.observe_message(t, m)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new
         claim = claim + sep * h_new
+        if cur is not None:
+            cur = cur + sep * m
 
     return ok, t
 
