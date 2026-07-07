@@ -8,11 +8,12 @@ construction adds a member + a row, never a method.
 
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
 `SpongeParams` (capacity = width - rate), like `Poseidon2Params`. A permutation
-exposing a dedicated `sponge_hash` (the poseidon2 fusion path) absorbs the whole
-input as one `zorch.sponge_hash` region the vendor expands into a single
-register-resident kernel; a generic permutation runs the `while_loop` absorb. Both
-read the absorb length at runtime, so a concrete and a symbolic (shape-poly
-export) `n` lower the same way — one path, no static-`n` special case.
+exposing the fusion seam (`FusedPermutation`) lets this module wrap the whole
+absorb as one `zorch.sponge_hash` region the vendor expands into a single
+register-resident kernel — the construction is assembled here, over the
+permutation's ABI; a bare permutation runs the `while_loop` absorb over its
+`permute`. Both read the absorb length at runtime, so a concrete and a symbolic
+(shape-poly export) `n` lower the same way — one path, no static-`n` special case.
 """
 
 from __future__ import annotations
@@ -25,14 +26,15 @@ from typing import Any
 import jax.numpy as jnp
 from jax import Array, lax
 
-from zorch.hash.permutation import Permutation
+from zorch.fusion import fused_region
+from zorch.hash.permutation import FusedPermutation, Permutation
 
 
 class SpongeType(enum.Enum):
     """Which sponge construction a hash uses. `Sponge.hash(..., sponge_type=...)`
-    and the permutation's `sponge_hash` hook take one of these; the behaviour is
-    a `_MODES` registry entry, so a NEW construction is a new member + one
-    registry row — no new method on `Sponge` or on any permutation."""
+    takes one of these; the behaviour is a `_MODES` registry entry, so a NEW
+    construction is a new member + one registry row — no new method on `Sponge`
+    and nothing on any permutation (which stays sponge-agnostic)."""
 
     OVERWRITE = "overwrite"  # Plonky3 PaddingFreeSponge (default)
     CHAINED = "chained"  # Merkle-Damgard (zisk-zorch's linear hash)
@@ -143,6 +145,60 @@ def _absorb(
     return state[:out]
 
 
+def _fused_hash(
+    perm: FusedPermutation,
+    input: Array,
+    rate: int,
+    out: int,
+    sponge_type: SpongeType,
+) -> Array:
+    """Absorb + squeeze as ONE `zorch.sponge_hash` region over a permutation that
+    exposes the fusion seam — the whole sponge construction, owned here (not on
+    the permutation). The decomposition rebuilds a const-free `permute` from the
+    region's ABI operands — a `lax.composite` lifts closed-over consts to leading
+    operands and would break the emitter ABI — then runs the shared `_absorb`, so
+    the region's fallback HLO is byte-identical to the generic path. Only the
+    dedicated permutation marks it (the vendor expands the marker into one
+    register-resident kernel); a generic one runs the absorb raw so the whole
+    sponge stays one LoopFusion, not a loop of per-permute composites.
+    """
+    operands = perm.fusion_operands(input)
+
+    def sponge(inp: Array, *constants: Array, **_attrs: object) -> Array:
+        state = jnp.zeros(perm.width, dtype=inp.dtype)
+        return _absorb(
+            inp,
+            state,
+            rate,
+            out,
+            lambda s: perm.permute_from_operands(s, *constants),
+            sponge_type,
+        )
+
+    if not perm.has_dedicated_fusion:
+        return sponge(*operands)
+    # The permutation's identifying attrs plus this sponge's shape: `rate` /
+    # `digest_elems` and, for a capacity-chaining construction, the `chained`
+    # discriminator the vendor kernel selects on (int — composite bool attrs have
+    # no precedent). The marker name/version belong to the sponge, not the
+    # permutation, so they live here.
+    attrs: dict[str, object] = {
+        **perm.fusion_attrs(),
+        "rate": rate,
+        "digest_elems": out,
+    }
+    marker_chained = _MODES[sponge_type].marker_chained
+    if marker_chained:
+        attrs["chained"] = marker_chained
+    return fused_region(
+        sponge,
+        *operands,
+        name=SPONGE_HASH_MARKER,
+        version=SPONGE_HASH_MARKER_VERSION,
+        **attrs,
+    )
+
+
 @dataclass(frozen=True)
 class SpongeParams:
     """Free parameters of a padding-free sponge.
@@ -172,9 +228,8 @@ class Sponge:
     padding-free) or `CHAINED` (Merkle-Damgard) — and a new construction is a new
     `SpongeType` + `_MODES` row, not a new method. One call = one function, the
     unit that lowers to one fused `zorch.sponge_hash` kernel. The permutation
-    supplies its arithmetic (`permute`) and, where it has a dedicated fusion, the
-    `sponge_hash` marker emitter; the construction lives here, not on the
-    permutation.
+    supplies only its arithmetic — `permute`, and (a `FusedPermutation`) its
+    fused-region ABI; the sponge construction lives here, not on the permutation.
     """
 
     def __init__(self, permutation: Permutation, params: SpongeParams) -> None:
@@ -249,10 +304,12 @@ class Sponge:
                 f"fills the capacity), got {self.rate} + {self.out} != "
                 f"{self._permutation.width}"
             )
-        fused = getattr(self._permutation, "sponge_hash", None)
-        if fused is not None:
-            return fused(input, self.rate, self.out, sponge_type)
-        state = jnp.zeros(self._permutation.width, dtype=input.dtype)
-        return _absorb(
-            input, state, self.rate, self.out, self._permutation.permute, sponge_type
-        )
+        # A permutation exposing the fusion seam lowers the whole sponge as one
+        # `zorch.sponge_hash` region (built here — the construction is the
+        # sponge's, the ABI the permutation's); a bare permutation runs the
+        # generic `while_loop` absorb over its `permute`.
+        perm = self._permutation
+        if isinstance(perm, FusedPermutation):
+            return _fused_hash(perm, input, self.rate, self.out, sponge_type)
+        state = jnp.zeros(perm.width, dtype=input.dtype)
+        return _absorb(input, state, self.rate, self.out, perm.permute, sponge_type)

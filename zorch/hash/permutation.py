@@ -39,3 +39,39 @@ class Permutation(Protocol):
         needed.
         """
         ...
+
+
+@runtime_checkable
+class FusedPermutation(Permutation, Protocol):
+    """A permutation that exposes its fused-region ABI, so a consumer can wrap a
+    whole computation built from it — an `absorb`/`squeeze`, a compression — as
+    ONE `fused_region` in this permutation's ABI without knowing the operand
+    layout. The three primitives below are the seam; the consumer (e.g. `Sponge`)
+    owns the region's marker name and its own attributes, the permutation owns
+    only its arithmetic. A permutation without a dedicated fusion need not
+    implement this; consumers fall back to iterating `permute`.
+
+    The invariant that ties the three together:
+    ``permute_from_operands(state, *fusion_operands(x)[1:])`` runs this
+    permutation on ``state`` (marker-free), and ``fusion_operands(x)[0] is x``.
+    """
+
+    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
+        """The composite operands ``(leading, *constants)`` — the region's ABI.
+        ``leading`` is the caller's data (a sponge input, a state); the rest are
+        this permutation's constants (round constants), passed explicitly so a
+        `lax.composite` does not lift them to leading operands and break the ABI.
+        """
+        ...
+
+    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
+        """Run the permutation on ``state`` given the constant operands (the tail
+        of `fusion_operands`), as a straight-line body with no captured consts —
+        the decomposition a `fused_region` runs."""
+        ...
+
+    def fusion_attrs(self) -> dict[str, Any]:
+        """This permutation's identifying `composite.attributes` (a `permutation`
+        discriminator plus the shape the vendor recognizer reads). Meaningful only
+        on the dedicated path (`has_dedicated_fusion`)."""
+        ...

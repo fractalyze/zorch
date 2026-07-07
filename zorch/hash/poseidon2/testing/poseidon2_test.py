@@ -133,11 +133,8 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             dtype=F,
         )
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
-        txt = (
-            jax.jit(lambda x: p.sponge_hash(x, 8, 8))
-            .lower(jnp.arange(w, dtype=F))
-            .as_text()
-        )
+        s = Sponge(p, SpongeParams(rate=8, out=8))
+        txt = jax.jit(lambda x: s.hash(x)).lower(jnp.arange(w, dtype=F)).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"
@@ -149,7 +146,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
 def _ref_chained(perm: Poseidon2, x: jnp.ndarray, rate: int, out: int) -> jnp.ndarray:
     """Independent Merkle-Damgard reference: explicit per-block unroll (zero-pad a
     short final block; chain the prior digest state[:out] into capacity
-    [rate:rate+out]). Cross-checks Sponge.linear_hash's shared while_loop absorb."""
+    [rate:rate+out]). Cross-checks Sponge.hash(CHAINED)'s shared while_loop absorb."""
     w = perm.width
     n = int(x.shape[0])
     st = jnp.zeros(w, dtype=x.dtype)
