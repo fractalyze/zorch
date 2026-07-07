@@ -86,12 +86,21 @@ class _ScriptedTranscript:
         stream = jax.lax.bitcast_convert_type(jnp.asarray(challenges), BF).reshape(-1)
         return cls(stream=stream, pos=jnp.array(0, jnp.int32))
 
+    # No dedicated-fusion permutation: observe_and_sample falls back to the plain
+    # observe+sample body, so the scripted replay drives it unchanged.
+    has_dedicated_fusion = False
+
     def observe(self, values: Array) -> _ScriptedTranscript:
         return self
 
     def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
         out = jax.lax.dynamic_slice(self.stream, (self.pos,), (n,))
         return replace(self, pos=self.pos + n), out
+
+    def observe_and_sample(
+        self, values: Array, n: int = 1
+    ) -> tuple[_ScriptedTranscript, Array]:
+        return self.sample(n)
 
 
 class JaggedEvalRoundByteMatchTest(absltest.TestCase):
@@ -139,9 +148,9 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         # The outer sumcheck samples its 23 alphas first, then the inner its 48.
         chain = ProveChain([JaggedEvalRound(dtype=EF)])
         script = jnp.concatenate([outer_alphas, inner_alphas])
-        # _ScriptedTranscript is a replay-only test double: it implements just the
-        # observe/sample the round drives, not the full Transcript protocol.
-        _, _, msgs = chain(carry, _ScriptedTranscript.create(script))  # type: ignore[arg-type]
+        # _ScriptedTranscript is a replay-only test double that reproduces the
+        # dumped Fiat-Shamir stream rather than re-deriving it.
+        _, _, msgs = chain(carry, _ScriptedTranscript.create(script))
         cls.msg = msgs[0]
 
     def _expect(self, name: str) -> np.ndarray:

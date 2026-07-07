@@ -156,7 +156,7 @@ class StackedOpenByteMatchTest(absltest.TestCase):
             mle = dense.reshape(k, S).T  # [S, K]
             codeword = code.encode(dense.reshape(k, S)).T  # [S*blowup, K]
             _root, digest_layers = smcs.commit(codeword)
-            return StackedRound(mle=mle, codeword=codeword, digest_layers=digest_layers)
+            return StackedRound(mle=mle, digest_layers=digest_layers)
 
         rounds = [build_round(prep), build_round(main)]
 

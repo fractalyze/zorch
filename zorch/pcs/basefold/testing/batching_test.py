@@ -65,6 +65,34 @@ class BatchingTest(absltest.TestCase):
         # log2_ceil(3) = 2 -> 2^2 = 4 weights, enough to stagger 3 columns.
         self.assertGreaterEqual(coeffs.shape[0], 3)
 
+    def test_partial_lagrange_is_msb_first(self) -> None:
+        # Pin the native index orientation: point[0] is the MSB of the table
+        # index — table = [(1-r0)(1-r1), (1-r0)r1, r0(1-r1), r0·r1].
+        r = _rand(8, (2,))
+        one = jnp.ones((), EF)
+        r0, r1 = r[0], r[1]
+        table = partial_lagrange(r)
+        expected = [
+            (one - r0) * (one - r1),
+            (one - r0) * r1,
+            r0 * (one - r1),
+            r0 * r1,
+        ]
+        self.assertEqual(table.tolist(), [e.tolist() for e in expected])
+
+    def test_sample_staggered_lsb_first_bit_reverses_the_table(self) -> None:
+        # Both orientations consume the transcript identically; the tables are
+        # index-bit-reversals of each other: lsb[i] == msb[bitrev(i)].
+        t = DuplexTranscript.new(koalabear16_perm(), rate=8)
+        t_msb, msb = sample_staggered_coeffs(t, 8, EF)
+        t_lsb, lsb = sample_staggered_coeffs(t, 8, EF, lsb_first=True)
+        bitrev3 = [0, 4, 2, 6, 1, 5, 3, 7]
+        self.assertEqual(lsb.tolist(), msb[jnp.array(bitrev3)].tolist())
+        # Same post-state: a follow-up squeeze from either transcript matches.
+        _, a = t_msb.sample()
+        _, b = t_lsb.sample()
+        self.assertEqual(a.tolist(), b.tolist())
+
 
 if __name__ == "__main__":
     absltest.main()

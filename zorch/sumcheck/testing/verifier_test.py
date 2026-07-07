@@ -14,6 +14,7 @@ from zorch.sumcheck.prover import prove
 from zorch.sumcheck.testing import eval_mle_oracle, product
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import Transcript
 from zorch.verify import verify
 
 KB = zk_dtypes.koalabear_mont
@@ -89,6 +90,30 @@ class SumcheckRoundtripTest(absltest.TestCase):
         next_claim, _, _, ok = v_round(msg[0] + msg[1], msg, cheap_transcript(KB))
         self.assertTrue(bool(ok))
         self.assertTrue(bool(next_claim == jnp.sum(state[0])))
+
+    def test_check_reduce_matches_fused_call(self) -> None:
+        # The FS-decoupled seam must be the same round math as the fused hop:
+        # an external observe_and_sample + check_reduce reproduces __call__'s
+        # (claim, challenge, ok) exactly.
+        v_round = verifier.SumcheckRound(1)
+        f = rand_field(57, (8,), KB)
+        _, _, msg = prover.SumcheckRound(1)([f], cheap_transcript(KB))
+        claim = msg[0] + msg[1]
+        fused_claim, _, fused_r, fused_ok = v_round(claim, msg, cheap_transcript(KB))
+        _, r = cheap_transcript(KB).observe_and_sample(msg, 1)
+        split_claim, split_ok = v_round.check_reduce(claim, msg, r[0])
+        self.assertTrue(bool(r[0] == fused_r))
+        self.assertTrue(bool(split_claim == fused_claim))
+        self.assertEqual(bool(split_ok), bool(fused_ok))
+
+    def test_check_reduce_rejects_wrong_claim(self) -> None:
+        v_round = verifier.SumcheckRound(1)
+        f = rand_field(58, (8,), KB)
+        _, _, msg = prover.SumcheckRound(1)([f], cheap_transcript(KB))
+        _, ok = v_round.check_reduce(
+            msg[0] + msg[1] + jnp.array(1, KB), msg, jnp.array(3, KB)
+        )
+        self.assertFalse(bool(ok))
 
     def test_wrong_claimed_sum_rejected(self) -> None:
         f = rand_field(48, (1 << 4,), KB)
@@ -185,6 +210,82 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
             verifier.CoeffsSumcheckRound(0)
         with self.assertRaises(ValueError):
             verifier.CoeffsSumcheckRound(3, challenge_limbs=0)
+
+
+class CompressedCoeffsRoundtripTest(absltest.TestCase):
+    """The compressed [c0, c2] wire (`prover.CompressedProductRound` /
+    `verifier.CompressedCoeffsSumcheckRound`). The scan driver `prove` is
+    summand-based, so the rounds run in a plain per-variable loop — the way the
+    Ligerito driver binds them."""
+
+    def test_product_roundtrip(self) -> None:
+        a = rand_field(60, (1 << 4,), KB)
+        b = rand_field(61, (1 << 4,), KB)
+        p_round = prover.CompressedProductRound()
+        v_round = verifier.CompressedCoeffsSumcheckRound()
+
+        state = [a, b]
+        tp: Transcript = cheap_transcript(KB)
+        msgs = []
+        for _ in range(4):
+            state, tp, msg = p_round(state, tp)
+            msgs.append(msg)
+
+        claim = jnp.sum(a * b)
+        tv: Transcript = cheap_transcript(KB)
+        point = []
+        for msg in msgs:
+            claim, tv, r, ok = v_round(claim, msg, tv)
+            self.assertTrue(bool(ok))
+            point.append(r)
+        # Terminal check: the reduced claim equals the product of the fully
+        # folded factors — and equals the oracle eval at the bound point (the
+        # Fiat-Shamir lockstep of the two fresh, identical sponges).
+        self.assertTrue(bool(claim == state[0][0] * state[1][0]))
+        pt = jnp.stack(point)
+        want = eval_mle_oracle(a, pt) * eval_mle_oracle(b, pt)
+        self.assertTrue(bool(claim == want))
+
+    def test_check_reduce_matches_fused_call(self) -> None:
+        # The FS-decoupled seam reproduces the fused hop's reduction exactly
+        # (c1 reconstruction included) for the same external challenge.
+        a = rand_field(66, (1 << 3,), KB)
+        b = rand_field(67, (1 << 3,), KB)
+        v_round = verifier.CompressedCoeffsSumcheckRound()
+        _, _, msg = prover.CompressedProductRound()([a, b], cheap_transcript(KB))
+        claim = jnp.sum(a * b)
+        fused_claim, _, fused_r, _ = v_round(claim, msg, cheap_transcript(KB))
+        _, r = cheap_transcript(KB).observe_and_sample(msg, 1)
+        split_claim, split_ok = v_round.check_reduce(claim, msg, r[0])
+        self.assertTrue(bool(r[0] == fused_r))
+        self.assertTrue(bool(split_claim == fused_claim))
+        self.assertTrue(bool(split_ok))
+
+    def test_tampered_message_breaks_terminal_claim(self) -> None:
+        # The compressed form has no per-round redundancy (c1 comes from the
+        # claim), so a tamper surfaces at the terminal check, not mid-loop.
+        a = rand_field(62, (1 << 3,), KB)
+        b = rand_field(63, (1 << 3,), KB)
+        p_round = prover.CompressedProductRound()
+        v_round = verifier.CompressedCoeffsSumcheckRound()
+        state = [a, b]
+        tp: Transcript = cheap_transcript(KB)
+        msgs = []
+        for _ in range(3):
+            state, tp, msg = p_round(state, tp)
+            msgs.append(msg)
+        msgs[1] = msgs[1].at[0].add(jnp.array(1, KB))
+        claim = jnp.sum(a * b)
+        tv: Transcript = cheap_transcript(KB)
+        for msg in msgs:
+            claim, tv, _, _ = v_round(claim, msg, tv)
+        self.assertFalse(bool(claim == state[0][0] * state[1][0]))
+
+    def test_wrong_message_width_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            verifier.CompressedCoeffsSumcheckRound()(
+                jnp.zeros((), KB), jnp.zeros((3,), KB), cheap_transcript(KB)
+            )
 
 
 if __name__ == "__main__":

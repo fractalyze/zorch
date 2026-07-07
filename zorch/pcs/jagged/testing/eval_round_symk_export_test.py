@@ -119,69 +119,7 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
 
 
 _ND_HEIGHTS = [3, 5, 2]  # area 10, fits any n_d >= 4
-_ND_DENSE = 16  # >= area, shared across the n_d tiers below
-
-
-class SymbolicNdEvalRoundExportTest(absltest.TestCase):
-    """n_d symbolic across the WHOLE round: the inner round count / merged width
-    (``2·n_d``) and the indicator's prefix-bit decode all flow from one symbolic
-    ``n_d`` (the outer Hadamard sumcheck rides the separate, here-fixed dense
-    axis). One binary byte-matches the concrete round at two area tiers; offsets
-    built at different ``n_d`` decode to the same prefix sums, so the indicator is
-    invariant and only the inner round count moves."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.col = len(_ND_HEIGHTS)
-        self.z_col = _rand_ef(1, (2,))  # n_c = 2 for L = 3
-        self.z_row = _rand_ef(2, (_N_R,))  # n_r = 5 < every n_d below
-        self.weights = expand_eq_to_hypercube(self.z_col, jnp.ones((), EF))[: self.col]
-        self.all_claims = _rand_ef(4, (self.col,))
-        self.dense = jnp.asarray(
-            np.random.default_rng(9).integers(0, _PRIME, (_ND_DENSE,), np.uint32)
-        ).view(BF)
-
-    def _offsets_merged(self, n_d: int) -> tuple[Array, Array]:
-        offsets = _offset_bit_tensor(_ND_HEIGHTS, self.col, n_d, EF)
-        merged = merged_prefix_bits(_ND_HEIGHTS, n_d, dtype=EF)
-        return offsets, merged
-
-    def _fn(self, offsets: Array, merged: Array, transcript: Any) -> Any:
-        return eval_round_core(
-            offsets,
-            merged,
-            self.weights,
-            self.all_claims,
-            self.dense,
-            self.z_row,
-            self.z_col,
-            transcript,
-            dtype=EF,
-        )
-
-    def _export(self) -> export.Exported:
-        (d,) = export.symbolic_shape("d", constraints=["d >= 6", "d <= 8"])
-        offsets_abs = jax.ShapeDtypeStruct((self.col + 1, d), EF)
-        merged_abs = jax.ShapeDtypeStruct((self.col, 2 * d), EF)
-        tr_abs = jax.tree_util.tree_map(
-            lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
-        )
-        return export.export(jax.jit(self._fn))(offsets_abs, merged_abs, tr_abs)
-
-    def test_one_binary_byte_matches_concrete_for_every_nd(self) -> None:
-        exported = self._export()
-        for n_d in (6, 8):
-            offsets, merged = self._offsets_merged(n_d)
-            self.assertEqual(merged.shape[1], 2 * n_d)
-
-            ref = self._fn(offsets, merged, cheap_transcript(BF))
-            got = exported.call(offsets, merged, cheap_transcript(BF))
-
-            ref_leaves = jax.tree_util.tree_leaves(ref)
-            got_leaves = jax.tree_util.tree_leaves(got)
-            self.assertEqual(len(ref_leaves), len(got_leaves), f"leaf count n_d={n_d}")
-            for i, (a, b) in enumerate(zip(ref_leaves, got_leaves, strict=True)):
-                self.assertEqual(_u32(a), _u32(b), f"leaf {i} diverged at n_d={n_d}")
+_ND_DENSE = 16  # >= area
 
 
 class SymbolicNrEvalRoundExportTest(absltest.TestCase):

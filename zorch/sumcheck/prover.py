@@ -5,7 +5,10 @@ homogeneous scan driver `prove`.
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial over the domain [0..degree], then folds every MLE at the verifier's
 challenge (P0 + r*(P1 - P0)). The split/validate and fold steps are summand-
-independent, so they live as `split_halves` / `factors_on_domain` / `fold` and
+independent, so they live as `split_halves` / `factors_on_domain` / `fold`
+(plus the LSB stride-2 duals `split_pairs` / `fold_lsb` the jagged engines
+bind by, and `zero_extend` — the fixed-width re-pad the scan carry below
+pairs with its fold) and
 each round supplies only its summand via `_round_poly`: `SumcheckRound` (here)
 sums a product of factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums
 the LogUp combine. The round body is element-wise field ops plus the one inherent
@@ -80,6 +83,36 @@ def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
     return p0 + r * (p1 - p0)
 
 
+def split_pairs(arr: Array) -> tuple[Array, Array]:
+    """Split on the LSB variable: the stride-2 `(arr[..., 0::2], arr[..., 1::2])`
+    consecutive-pair dual of `split_halves`' contiguous MSB halves. The jagged
+    engines bind LSB-first -- a batch-major jagged layout makes the row LSB the
+    in-segment pair dimension, so the pair fold never crosses a segment
+    boundary -- while the dense drivers here stay MSB-halving."""
+    return arr[..., 0::2], arr[..., 1::2]
+
+
+def fold_lsb(arr: Array, r: Array) -> Array:
+    """Bind the LSB variable at challenge `r`: `fold_pair` over the stride-2
+    pairs. Halves the last axis; the LSB dual of `fold`."""
+    p0, p1 = split_pairs(arr)
+    return fold_pair(p0, p1, r)
+
+
+def zero_extend(arr: Array, width: int) -> Array:
+    """Zero-extend the last axis to `width` -- the re-extension a fixed-shape
+    round carry pairs with a fold: the live prefix halves each round while the
+    buffer width stays put, and the dead tail stays exactly zero so full-width
+    reductions match live-prefix-truncated ones byte-for-byte (field zero-adds
+    are exact)."""
+    pad = width - arr.shape[-1]
+    if pad < 0:
+        raise ValueError(f"width {width} < last-axis size {arr.shape[-1]}")
+    if pad == 0:
+        return arr
+    return jnp.concatenate([arr, jnp.zeros((*arr.shape[:-1], pad), arr.dtype)], axis=-1)
+
+
 def lift_to_domain(p0: Array, p1: Array, degree: int, start: int = 0) -> Array:
     """Lift one split pair to the evaluation domain [start..degree]:
     f[u] = P0 + u*(P1 - P0), shape (degree+1-start, *P0.shape).
@@ -139,6 +172,40 @@ class SumcheckRound(Round):
         One batched reduction over the whole u-domain, so it lowers toward a
         single reduction kernel rather than degree+1 separate ones."""
         return jnp.sum(self._combine(*factors_on_domain(state, self.degree)), axis=-1)
+
+    def __call__(
+        self, state: Sequence[Array], transcript: Transcript
+    ) -> tuple[list[Array], Transcript, Array]:
+        msg = self._round_poly(state)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        state = fold(state, r[0])
+        return state, transcript, msg
+
+
+@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=[])
+@dataclass(frozen=True)
+class CompressedProductRound(Round):
+    """Two-factor product round with the compressed coefficient wire: the message
+    is `[c_0, c_2]` — the degree-2 round polynomial's constant and leading
+    coefficients — and the linear coefficient stays off the wire (the verifier
+    dual, `verifier.CompressedCoeffsSumcheckRound`, reconstructs it from the
+    running claim via `s(0) + s(1) = claim`). Split and fold match
+    `SumcheckRound(degree=2)` exactly (the MSB variable binds); only the message
+    form differs, so a scheme whose wire fixes this form swaps rounds without
+    touching the fold. `c_2 = Σ (P1_f - P0_f)·(P1_b - P0_b)` is the honest
+    leading coefficient in any characteristic; over char 2 it coincides with the
+    `(P0 + P1)` products some wire specs write it as."""
+
+    def _round_poly(self, state: Sequence[Array]) -> Array:
+        """`[c_0, c_2]` of `s(X) = Σ_x' f(X, x')·b(X, x')`, shape (2, *batch):
+        one stacked element-wise product per coefficient, then the single
+        inherent Σ."""
+        if len(state) != 2:
+            raise ValueError(
+                f"compressed product round takes exactly 2 factors, got {len(state)}"
+            )
+        (f0, f1), (b0, b1) = split_halves(state)
+        return jnp.sum(jnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
         self, state: Sequence[Array], transcript: Transcript
@@ -344,10 +411,7 @@ def _prove_scan(
             if challenge_dtype is None
             else reinterpret_challenge(raw, challenge_dtype)
         )
-        state = [
-            jnp.concatenate([fold_pair(p0, p1, r), jnp.zeros_like(p0)], axis=-1)
-            for p0, p1 in pairs
-        ]
+        state = [zero_extend(fold_pair(p0, p1, r), width) for p0, p1 in pairs]
         return (state, transcript, half // 2), RoundMsg(msg, r)
 
     init = (state, transcript, jnp.int32(half_max))
@@ -359,3 +423,4 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _summand: type[SumcheckSummand] = SumcheckRound
     _prover_round: type[ProverRound] = SumcheckRound
+    _compressed_prover_round: type[ProverRound] = CompressedProductRound

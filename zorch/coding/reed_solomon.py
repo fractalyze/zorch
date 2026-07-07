@@ -35,6 +35,7 @@ from zorch.utils.bits import is_power_of_two, log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.coding.foldable_code import FoldableCode, KFoldableCode
+    from zorch.coding.tensor_code import TensorCode
 
 
 def _base_dtype(dtype: Any) -> Any:
@@ -42,6 +43,19 @@ def _base_dtype(dtype: Any) -> Any:
         return zk_dtypes.efinfo(dtype).base_field_dtype
     except ValueError:
         return dtype
+
+
+def _is_binary_field(dtype: Any) -> bool:
+    """True for the binary-field family (`binary_field_ghash`, `binary_field_t*`).
+
+    These have characteristic 2, so their multiplicative group has odd order and
+    no 2^m-th roots of unity — `lax.ntt` runs the LCH *additive* NTT (novel
+    polynomial basis over an F2-affine subspace) instead of the multiplicative
+    one. That is the same code (Reed-Solomon = low-degree extension) but shifts
+    the `TensorCode` generator tensor from the geometric `(dₛ^{2^i})` (monomial
+    basis) to the subspace-polynomial `(Ŵ_i(dₛ))` (novel basis). Prime and
+    extension fields keep the multiplicative NTT and are False."""
+    return jnp.dtype(dtype).name.startswith("binary_field")
 
 
 def eval_domain(
@@ -118,6 +132,24 @@ class ReedSolomon:
         if coset_shift is not None:
             self._coset_powers = powers(jnp.asarray(coset_shift, dtype), self.block_len)
         self._key: tuple | None = None
+        # A binary field encodes via the additive NTT (see `_is_binary_field`).
+        # `encode` is unchanged — `lax.ntt` dispatches the transform by dtype —
+        # but `eval_point` needs the additive (subspace-polynomial) tensor, and
+        # the multiplicative fold/coset do not apply.
+        self._binary = _is_binary_field(dtype)
+        if self._binary and coset_shift is not None:
+            raise NotImplementedError(
+                "coset Reed-Solomon over a binary field (an additive coset) is "
+                "unimplemented; only the base F2-subspace is supported"
+            )
+        # The additive eval-point tensor is the k basis-power codewords `Ŵ_i`
+        # over the domain (the geometric squaring the prime path uses does not
+        # apply in the novel basis). Built lazily on first `eval_point`:
+        # encode-only consumers (Ligero matrix commits, plain LDE) never pay
+        # the k extra encodes, and construction stays cheap enough to build
+        # codes per level (the #214 value-keyed-instances contract). Prime
+        # fields keep the on-the-fly geometric form and never build a table.
+        self._binary_eval_table: Array | None = None
 
     # Value equality/hash for static jit-zone keys — the LinearCode seam
     # contract (#214). The key is cached host-side because jit dispatch
@@ -173,17 +205,85 @@ class ReedSolomon:
             generator=self.generator,
         )
 
+    def eval_point(self, positions: Array) -> Array:
+        """TensorCode seam: the multilinear point `p_s` that codeword coordinate
+        `positions` evaluates, so that
+        `encode(w)[s] == eval_mle(mle_coeffs_to_evals(w), eval_point(s))` — which
+        turns the Ligerito proximity RHS into a point-eval of the committed `w`.
+
+        For the multiplicative NTT `encode` is monomial-basis
+        (`encode(w)[s] = Σ_j w[j]·dₛʲ`, `dₛ = domain()[s]`), so the generator row
+        `(1, dₛ, dₛ², …)` factors as the geometric tensor
+        `p_s = (dₛ^{2^{k-1}}, …, dₛ², dₛ)` — MSB-first to match `eval_mle`'s
+        lexicographic eq order. The `dₛ^{2^i}` are built by repeated squaring so
+        no array exponent is taken (field dtypes reject `jnp.power`).
+
+        For a binary field `encode` is the additive NTT (novel basis), so the
+        tensor factors are the subspace polynomials `Ŵ_i` instead; those are the
+        basis-power codewords, gathered from a table built on first use."""
+        if self._binary:
+            if self._binary_eval_table is None:
+                # Concrete even under an outer trace: a traced table stored on
+                # self would leak the tracer into later calls.
+                with jax.ensure_compile_time_eval():
+                    self._binary_eval_table = self._build_binary_eval_table()
+            return self._binary_eval_table[positions]  # (*positions.shape, k)
+        k = log2_strict_usize(self.message_len)
+        cur = self.domain()[positions]  # (*positions.shape,) evaluation point(s)
+        cols = []
+        for _ in range(k):
+            cols.append(cur)
+            cur = cur * cur
+        # MSB-first: variable 0 binds the highest power dₛ^{2^{k-1}}.
+        return jnp.stack(cols[::-1], axis=-1)  # (*positions.shape, k)
+
+    def _build_binary_eval_table(self) -> Array:
+        """The `(block_len, k)` additive eval-point table, column `i` = the
+        subspace polynomial `Ŵ_{k-1-i}` over the domain (MSB-first).
+
+        `Ŵ_i(dₛ) == encode(e_{2^i})[s]`: the additive NTT of the unit novel-basis
+        coefficient `e_{2^i}` is that subspace polynomial over the whole domain,
+        so the tensor factors are read off the encoder itself. A per-query
+        subset-XOR reconstruction (each `Ŵ_i` is F2-linear) would be lighter but
+        needs an int→field select, which the binary-field lowering does not yet
+        support; the resident gather lowers cleanly. Built from concrete arrays,
+        so no `.at[].set` (scatter is unsupported here)."""
+        k = log2_strict_usize(self.message_len)
+        units = jnp.asarray(
+            [
+                [1 if c == (1 << i) else 0 for c in range(self.message_len)]
+                for i in range(k)
+            ],
+            dtype=self.dtype,
+        )
+        basis_codewords = self.encode(units)  # (k, block_len) = Ŵ_i over the domain
+        return basis_codewords[::-1].T  # (block_len, k), MSB-first
+
     def fold(self, codeword: Array, beta: Array) -> Array:
         """FoldableCode fold: natural-order `(x, -x)` conjugate pairs. The layer
         level — and with it the coset shift — is read off the codeword length."""
+        self._reject_binary_fold()
         level = log2_strict_usize(self.block_len // codeword.shape[0])
         return fri_fold(codeword, beta, shift=self._level_shift(level))
+
+    def _reject_binary_fold(self) -> None:
+        """The FRI fold is the multiplicative `(x, -x)` conjugate pair; the
+        additive-NTT analog is a different (subspace) fold and is unimplemented.
+        A binary-field Reed-Solomon is used as a `TensorCode` (Ligerito, which
+        re-commits per level), not a `FoldableCode` — guard rather than fold
+        silently over the wrong domain."""
+        if self._binary:
+            raise NotImplementedError(
+                "additive-NTT (binary-field) fold is unimplemented; a binary-field "
+                "Reed-Solomon is a TensorCode (Ligerito), not a FoldableCode"
+            )
 
     def fold_values(
         self, lo: Array, hi: Array, beta: Array, positions: Array, level: int
     ) -> Array:
         """Fold opened pairs of layer `level`; the x-coordinates are the first
         half of the layer's (level-times-squared) evaluation domain."""
+        self._reject_binary_fold()
         domain = eval_domain(
             self.dtype, self.block_len >> level, shift=self._level_shift(level)
         )
@@ -485,3 +585,4 @@ if TYPE_CHECKING:
     _: type[FoldableCode] = ReedSolomon
     _bitrev: type[FoldableCode] = BitReversedReedSolomon
     _kary: type[KFoldableCode] = ReedSolomon
+    _tensor: type[TensorCode] = ReedSolomon

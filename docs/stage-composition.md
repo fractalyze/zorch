@@ -39,25 +39,83 @@ Three placement rules say where each piece of state lives:
   never inside a carry or a message.
 - **Seam-crossing: a typed pytree per seam** (a frozen dataclass, or a small
   named tuple where the seam is three arrays). Stage N's carry-out type *is*
-  stage N+1's carry-in type — the two adjacent stages co-own it.
+  stage N+1's carry-in type — the two adjacent stages co-own it. That
+  contract is per-adjacent-seam; outputs that cross more than one seam, and
+  inputs read by several stages, ride one pipeline-owned carry instead
+  ([The pipeline carry](#the-pipeline-carry)).
   Where a reference makes two stages disagree (e.g. the next stage reads only
   the row-variable tail of the previous stage's point, or RLCs openings into
   claims under a fresh challenge), that reshaping is an explicit consumer
   round at the seam, not a silent slice inside the next stage — the seam is
   where the reference's schedule lives, so it must be visible in the chain.
 - **Stage-local: the witness, on the `Round` instance.** Traces, circuit
-  layers, dense buffers, and other big inputs are constructor state, never
-  carry. This split is what bounds a lazy chain's peak memory (`ProveChain`'s
-  generator consumption, `round.py`): a stage's witness is released once it
-  has proved — provided the chain is built over a generator and no host-side
-  reference pins the witness — and only the small seam carry survives to the
-  next stage.
+  layers, dense buffers, and other big inputs one stage consumes are
+  constructor state, never carry. This split is what bounds a lazy chain's
+  peak memory (`ProveChain`'s generator consumption, `round.py`): a stage's
+  witness is released once it has proved — provided the chain is built over
+  a generator and no host-side reference pins the witness — and only the
+  small seam carry survives to the next stage. Witness that several stages
+  read is not stage-local — it is a chain-wide input and rides the pipeline
+  carry, sized by the discipline there.
 
 The seam type also pins dtypes. The transcript/challenge field is part of
 the contract: a scan-shaped stage requires a scan-invariant carry type, and
 base-field leaves folded by extension-field challenges promote the carry
 mid-scan and fail to trace. Adjacent stages agree on the field embedding at
 the seam, in the seam type, not implicitly at the first fold.
+
+## The pipeline carry
+
+The pairwise rule above is exact for an output read by the next stage and
+nothing else. The real chains have two flows it does not cover:
+
+- **Skip-level outputs.** A stage's output can be read more than one seam
+  downstream: the trace-commit stage's committed-witness residue is consumed
+  by the PCS-opening stage at the end of the pipeline, two seams past the
+  type a pairwise contract would place it in, the stages between passing it
+  through untouched.
+- **Chain-wide inputs.** Some values are no stage's output but several
+  stages' input — the committed regions and the public values are read by up
+  to every stage in the chain.
+
+Pairwise seam types can express both only as pass-through fields: every
+intermediate seam re-declares data its stage never touches, and adding one
+skip-level field means editing every type between writer and reader. So a
+pipeline instead threads **one accumulating carry type** — a single frozen
+dataclass owned by the whole chain, one field per seam-crossing value. The
+first real pipeline's prover chain and its verifier dual settled on this
+shape independently of each other, which is what promoted it from deviation
+to sanctioned pattern; the evidence (a writer/reader table of both carries)
+and the decision live on
+[fractalyze/zorch#240](https://github.com/fractalyze/zorch/issues/240).
+
+What keeps one shared type from decaying into the bag of `Any` this page
+warns about:
+
+- **Every field declares its writer and readers.** The carry is the
+  pipeline's dataflow graph; the field comments are where a reviewer reads
+  it.
+- **A stage writes its own fields and passes the rest untouched**
+  (`dataclasses.replace` on a frozen carry). Chain-wide inputs are written
+  by no stage at all.
+- **Unwritten fields are `None` until their writer runs**, and a reader
+  fails loud naming the missing predecessor stage. Mis-sequencing a chain is
+  a construction bug caught on the first call, not a silent wrong proof.
+- **Fields are sized for the chain's lifetime.** A carry field is not
+  released until its last reader runs, so a skip-level field carries the
+  small residue (the mle and digest tree the open re-encodes from), never
+  the bulky recomputable (the blown-up codeword — re-encode at the open). This
+  is the peak-memory rule above, restated for state that outlives its stage.
+- **The carry is one registered pytree**, unwritten fields empty subtrees,
+  so the whole chain can cross a `@jit` boundary as a single donatable
+  argument — a property a per-seam type change at every seam would break.
+
+The two shapes are not in tension: pairwise seam types stay the contract for
+the agnostic stage rounds zorch ships (`JaggedEvalInputs` →
+`JaggedEvalRound`), which cannot know any consumer's pipeline; the
+consumer's stage Round adapts between its pipeline carry and those types.
+The accumulating carry is the pipeline's composition shape, the pairwise
+type the stage's.
 
 ## Pipelines as nested chains
 

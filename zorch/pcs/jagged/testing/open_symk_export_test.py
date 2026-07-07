@@ -71,7 +71,7 @@ class SymbolicKOpenExportTest(absltest.TestCase):
         mle = block.T
         codeword = self.code.encode(block).T
         _root, digest_layers = self.smcs.commit(codeword)
-        return StackedRound(mle=mle, codeword=codeword, digest_layers=digest_layers)
+        return StackedRound(mle=mle, digest_layers=digest_layers)
 
     def _export_symbolic(self) -> export.Exported:
         # Abstract round over a symbolic column count constrained to the bracket;
@@ -83,7 +83,6 @@ class SymbolicKOpenExportTest(absltest.TestCase):
         )
         rd_abs = StackedRound(
             mle=jax.ShapeDtypeStruct((_S, k), BF),
-            codeword=jax.ShapeDtypeStruct((_S * _BLOWUP, k), BF),
             digest_layers=[
                 jax.ShapeDtypeStruct(layer.shape, layer.dtype)
                 for layer in template.digest_layers

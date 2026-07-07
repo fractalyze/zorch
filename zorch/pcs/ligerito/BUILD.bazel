@@ -1,0 +1,28 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "ligerito",
+    srcs = [
+        "__init__.py",
+        "basis.py",
+        "choreography.py",
+        "config.py",
+        "prover.py",
+        "verifier.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/coding:tensor_code",
+        "//zorch/commit:merkle",
+        "//zorch/pcs:fold",
+        "//zorch/pcs:matrix_commit",
+        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
+        "//zorch/pcs/basefold",  # staggered batching (alpha-RLC)
+        "//zorch/poly",
+        "//zorch/sumcheck",  # degree-2 product round message
+        "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)
