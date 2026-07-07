@@ -31,10 +31,11 @@ from zorch.fusion import fused_region
 from zorch.hash.poseidon.linear import apply_dense_mds
 from zorch.hash.poseidon.params import PoseidonParams
 from zorch.hash.sponge import (
+    _MODES,
     SPONGE_HASH_MARKER,
     SPONGE_HASH_MARKER_VERSION,
-    _absorb_chained,
-    _absorb_overwrite,
+    SpongeType,
+    _absorb,
 )
 
 if TYPE_CHECKING:
@@ -88,16 +89,19 @@ class Poseidon:
         return _permute_body(self, state)
 
     def sponge_hash(
-        self, input: Array, rate: int, out: int, chained: bool = False
+        self,
+        input: Array,
+        rate: int,
+        out: int,
+        sponge_type: SpongeType = SpongeType.OVERWRITE,
     ) -> Array:
         """Fusion hook for `Sponge` — absorb+squeeze as ONE `zorch.sponge_hash`
-        region the vendor expands into a register-resident kernel. `chained`
-        picks the Merkle-Damgard construction over the padding-free overwrite one
-        (both share the marker; see `Sponge.hash` / `Sponge.linear_hash` for the
-        public API). Lowers under symbolic `len(input)` for export."""
+        region the vendor expands into a register-resident kernel. `sponge_type`
+        picks the construction (see `SpongeType`; `Sponge.hash` is the public
+        API). Lowers under symbolic `len(input)` for export."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
-        return _sponge_hash_body(self, input, rate, out, chained=chained)
+        return _sponge_hash_body(self, input, rate, out, sponge_type=sponge_type)
 
 
 # The classic Poseidon permute on `s` given round constants flattened row-major
@@ -185,7 +189,11 @@ def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
 
 
 def _sponge_hash_body(
-    perm: "Poseidon", input: Array, rate: int, out: int, chained: bool = False
+    perm: "Poseidon",
+    input: Array,
+    rate: int,
+    out: int,
+    sponge_type: SpongeType = SpongeType.OVERWRITE,
 ) -> Array:
     """Classic-Poseidon sponge: absorb+squeeze as ONE `zorch.sponge_hash` region.
 
@@ -194,16 +202,20 @@ def _sponge_hash_body(
     closed-over constants and break the operand ABI the recognizer expects). The
     `mds` rides as a marker attribute; `permutation="poseidon"` is the required
     discriminator that routes the recognizer to the classic-permute config arm.
-    `chained` selects the Merkle-Damgard variant (same shared absorb + marker).
+    `sponge_type` selects the construction (same shared absorb + marker).
     """
     p = perm._p
     w = perm.width
 
     def sponge(inp: Array, rc_flat: Array, **_attrs: object) -> Array:
         state = jnp.zeros(w, dtype=inp.dtype)
-        absorb = _absorb_chained if chained else _absorb_overwrite
-        return absorb(
-            inp, state, rate, out, lambda s: _permute_from_rc(perm, s, rc_flat)
+        return _absorb(
+            inp,
+            state,
+            rate,
+            out,
+            lambda s: _permute_from_rc(perm, s, rc_flat),
+            sponge_type,
         )
 
     operands = (input, p.round_constants.reshape(-1))
@@ -213,8 +225,9 @@ def _sponge_hash_body(
         "digest_elems": out,
         **_poseidon_marker_attrs(perm),
     }
-    if chained:
-        marker_attrs["chained"] = 1
+    marker_chained = _MODES[sponge_type].marker_chained
+    if marker_chained:
+        marker_attrs["chained"] = marker_chained
     return fused_region(
         sponge,
         *operands,

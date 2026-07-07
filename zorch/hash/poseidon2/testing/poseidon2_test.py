@@ -24,7 +24,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.hash.sponge import Sponge, SpongeParams, SpongeType
 from zorch.testkit.jit_cache import assert_single_trace
 
 
@@ -166,30 +166,35 @@ def _ref_chained(perm: Poseidon2, x: jnp.ndarray, rate: int, out: int) -> jnp.nd
 
 
 class Poseidon2ChainedHashTest(absltest.TestCase):
-    def test_linear_hash_matches_stepwise_merkle_damgard(self) -> None:
+    def test_chained_matches_stepwise_merkle_damgard(self) -> None:
         p = koalabear16_perm()  # width 16; rate + out == 16
         s = Sponge(p, SpongeParams(rate=8, out=8))
         # n=8 one block, 16 two full, 12/20 partial final block.
         for n in (8, 16, 12, 20):
             x = jnp.arange(n, dtype=F)
+            got = s.hash(x, sponge_type=SpongeType.CHAINED)
             self.assertTrue(
-                bool(jnp.array_equal(s.linear_hash(x), _ref_chained(p, x, 8, 8))),
+                bool(jnp.array_equal(got, _ref_chained(p, x, 8, 8))),
                 f"len {n}",
             )
 
-    def test_linear_hash_requires_rate_plus_out_equals_width(self) -> None:
+    def test_chained_requires_rate_plus_out_equals_width(self) -> None:
         p = koalabear16_perm()  # width 16
         s = Sponge(p, SpongeParams(rate=8, out=4))  # 8 + 4 != 16
         with self.assertRaises(ValueError):
-            s.linear_hash(jnp.arange(8, dtype=F))
+            s.hash(jnp.arange(8, dtype=F), sponge_type=SpongeType.CHAINED)
 
-    def test_linear_hash_lowers_under_symbolic_length(self) -> None:
+    def test_chained_lowers_under_symbolic_length(self) -> None:
         # The chained hash rides the shared while_loop absorb, so a symbolic
         # `len(input)` lowers (emits the sponge_hash marker) — the old static
         # for-loop raised NotImplementedError here.
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         (n,) = export.symbolic_shape("n")
-        txt = jax.jit(s.linear_hash).lower(jax.ShapeDtypeStruct((n,), F)).as_text()
+        txt = (
+            jax.jit(lambda x: s.hash(x, sponge_type=SpongeType.CHAINED))
+            .lower(jax.ShapeDtypeStruct((n,), F))
+            .as_text()
+        )
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
 
 

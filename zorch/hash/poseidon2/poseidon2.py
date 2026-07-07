@@ -33,10 +33,11 @@ from zorch.hash.poseidon2.linear import (
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
 from zorch.hash.sponge import (
+    _MODES,
     SPONGE_HASH_MARKER,
     SPONGE_HASH_MARKER_VERSION,
-    _absorb_chained,
-    _absorb_overwrite,
+    SpongeType,
+    _absorb,
 )
 
 if TYPE_CHECKING:
@@ -107,18 +108,20 @@ class Poseidon2:
         return _permute_body(self, state)
 
     def sponge_hash(
-        self, input: Array, rate: int, out: int, chained: bool = False
+        self,
+        input: Array,
+        rate: int,
+        out: int,
+        sponge_type: SpongeType = SpongeType.OVERWRITE,
     ) -> Array:
         """Fusion hook for `Sponge` — absorb+squeeze as ONE `zorch.sponge_hash`
-        region the vendor expands into a register-resident kernel. `chained`
-        picks the Merkle-Damgard construction over the padding-free overwrite one
-        (both share the marker; see `Sponge.hash` / `Sponge.linear_hash` for the
-        public API and the semantics). Only the dedicated (M4-structured) path
-        emits the marker; a generic permutation runs the inline absorb. Lowers
-        under symbolic `len(input)` for export."""
+        region the vendor expands into a register-resident kernel. `sponge_type`
+        picks the construction (see `SpongeType`; `Sponge.hash` is the public
+        API). Only the dedicated (M4-structured) path emits the marker; a generic
+        permutation runs the inline absorb. Lowers under symbolic `len(input)`."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
-        return _sponge_hash_body(self, input, rate, out, chained=chained)
+        return _sponge_hash_body(self, input, rate, out, sponge_type=sponge_type)
 
 
 def _permutation_body(
@@ -269,7 +272,11 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
 
 
 def _sponge_hash_body(
-    perm: Poseidon2, input: Array, rate: int, out: int, chained: bool = False
+    perm: Poseidon2,
+    input: Array,
+    rate: int,
+    out: int,
+    sponge_type: SpongeType = SpongeType.OVERWRITE,
 ) -> Array:
     """Emit the `sponge_hash` marker (dedicated path) or run the
     `while_loop` absorb (generic). The decomposition is byte-identical to
@@ -297,11 +304,10 @@ def _sponge_hash_body(
         # unroll traced once per emission (`lax.composite` has no trace cache), so
         # a wide leaf paid O(blocks) trace + compile for a body the recognizer
         # discards anyway — it matches the marker by name + attrs, not its shape.
-        # `chained` picks the Merkle-Damgard construction; both share the one
-        # permutation-agnostic absorb, so neither needs a static-`n` special case.
+        # `sponge_type` picks the construction; all share the one
+        # permutation-agnostic absorb, so none needs a static-`n` special case.
         state = jnp.zeros(w, dtype=inp.dtype)
-        absorb = _absorb_chained if chained else _absorb_overwrite
-        return absorb(inp, state, rate, out, permute)
+        return _absorb(inp, state, rate, out, permute, sponge_type)
 
     operands = _abi_operands(perm, input)
     # Generic permutation: no fused sponge kernel, run the absorb directly (a
@@ -322,12 +328,13 @@ def _sponge_hash_body(
         "alpha": p.alpha,
         "external_m4": _external_m4_attr(perm),
     }
-    if chained:
-        # Chained selects EmitLinearHashAbsorb; encoded as an int (1) since bool
-        # composite attributes have no precedent. external_m4 already rides in
-        # marker_attrs above (via _external_m4_attr), matching the
-        # decomposition's apply_external_m4.
-        marker_attrs["chained"] = 1
+    marker_chained = _MODES[sponge_type].marker_chained
+    if marker_chained:
+        # A capacity-chaining construction selects the vendor's chained kernel;
+        # encoded as an int since composite bool attributes have no precedent.
+        # external_m4 already rides in marker_attrs above (via _external_m4_attr),
+        # matching the decomposition's apply_external_m4.
+        marker_attrs["chained"] = marker_chained
     return fused_region(
         sponge,
         *operands,

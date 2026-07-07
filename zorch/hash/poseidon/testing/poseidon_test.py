@@ -22,7 +22,7 @@ from zorch.hash.poseidon.poseidon import (
     POSEIDON_MARKER_VERSION,
     Poseidon,
 )
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.hash.sponge import Sponge, SpongeParams, SpongeType
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -207,23 +207,24 @@ def _ref_chained(p: Poseidon, x: jnp.ndarray, rate: int, out: int) -> jnp.ndarra
 
 
 class PoseidonChainedHashTest(absltest.TestCase):
-    def test_linear_hash_matches_stepwise_merkle_damgard(self) -> None:
-        # Classic Poseidon gets linear_hash for free (shared absorb). width 3,
-        # rate 2 + out 1 == width. n=2 one block, 4 two full, 3/5 partial tail.
+    def test_chained_matches_stepwise_merkle_damgard(self) -> None:
+        # Classic Poseidon gets the chained hash for free (shared absorb). width
+        # 3, rate 2 + out 1 == width. n=2 one block, 4 two full, 3/5 partial tail.
         p = Poseidon(_poseidon_params())
         s = Sponge(p, SpongeParams(rate=2, out=1))
         for n in (2, 3, 4, 5):
             x = jnp.arange(n, dtype=F)
+            got = s.hash(x, sponge_type=SpongeType.CHAINED)
             self.assertTrue(
-                bool(jnp.array_equal(s.linear_hash(x), _ref_chained(p, x, 2, 1))),
+                bool(jnp.array_equal(got, _ref_chained(p, x, 2, 1))),
                 f"len {n}",
             )
 
-    def test_linear_hash_requires_rate_plus_out_equals_width(self) -> None:
+    def test_chained_requires_rate_plus_out_equals_width(self) -> None:
         p = Poseidon(_poseidon_params())  # width 3
         s = Sponge(p, SpongeParams(rate=2, out=2))  # 2 + 2 != 3
         with self.assertRaises(ValueError):
-            s.linear_hash(jnp.arange(2, dtype=F))
+            s.hash(jnp.arange(2, dtype=F), sponge_type=SpongeType.CHAINED)
 
 
 if __name__ == "__main__":
