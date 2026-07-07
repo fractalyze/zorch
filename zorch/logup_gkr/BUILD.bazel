@@ -9,7 +9,6 @@ py_library(
     name = "logup_gkr",
     srcs = [
         "__init__.py",
-        "_jagged_blocks.py",
         "_jagged_buffers.py",
         "_jagged_composites.py",
         "_jagged_export.py",

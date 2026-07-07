@@ -43,12 +43,6 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.logup_gkr._jagged_blocks import (
-    _ROUND_BLOCK_SIZES,
-    _dispatch_boundary_block,
-    _dispatch_int_block,
-    _dispatch_row_block,
-)
 from zorch.logup_gkr._jagged_buffers import (
     _pad_to_width,
     _pool_lay_batch,
@@ -81,13 +75,10 @@ from zorch.logup_gkr._jagged_rounds import (
 )
 from zorch.logup_gkr._jagged_schedule import (
     _check_row_space,
-    _dense_live_block,
     _dense_live_operand,
     _round_live_meta,
     _round_out_pairs,
     _row_counts_operand,
-    _row_live_block,
-    _row_live_blocks,
 )
 from zorch.logup_gkr._jagged_types import (
     RoundWidthCaps,
@@ -274,7 +265,6 @@ def _prove_jagged_layer_from_counts(
         transcript,
         challenge_limbs,
         caps,
-        counts=row_counts,
     )
 
 
@@ -290,14 +280,12 @@ def _prove_jagged_layer_from_ops(
     transcript: Transcript,
     challenge_limbs: int,
     caps: RoundWidthCaps | None = None,
-    counts: tuple[int, ...] | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """`_prove_jagged_layer_from_counts` from PREBUILT schedule operands — the
     seam the whole-layer jit zone routes through, so `row_counts` and the live
     triples ride as TRACED operands (never keying the jit) while `out_pairs`
     (the exact layout's static padded widths; None under caps) stays static
-    like `niv`/`caps`. `counts` (the Python-int layout, eager path only --
-    the jit zone must not carry it) keys the pre-staged live-block cache."""
+    like `niv`/`caps`."""
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
@@ -313,7 +301,6 @@ def _prove_jagged_layer_from_ops(
         niv,
         challenge_limbs,
         caps,
-        counts=counts,
     )
     # The host round loop runs one fold-then-compute kernel per round, the FS hop
     # + reduce dispatching between them. `export_dispatch=True` selects the cached
@@ -432,50 +419,15 @@ def _run_jagged_rounds_reference(
 # round buffers leave the fully-folded state as the live length-2 prefix, so
 # the tail slices it down before the final marker -- the final ABI stays the
 # exact (2,) planes.
-def _stack_rounds(chal: list[Array], poly: list[Array]) -> tuple[Array, Array]:
-    """Stack the per-round challenge/poly lists into the proof's transcript
-    order. Multi-round block segments ((k,) challenges / (k, DEGREE+1) polys)
-    mixed with singles flatten in round order -- the challenge reversal
-    composes segment reversal with an in-segment flip. Same elements the
-    stacked form carries, concatenated instead of stacked."""
-    rev = [c[::-1] if c.ndim else c[None] for c in reversed(chal)]
-    rows = [p if p.ndim == 2 else p[None] for p in poly]
-    return (
-        rev[0] if len(rev) == 1 else jnp.concatenate(rev),
-        rows[0] if len(rows) == 1 else jnp.concatenate(rows),
-    )
-
-
-# The eager block path's stacking, hoisted into a module-level jit zone: the
-# per-segment reverses / expands / concatenates otherwise dispatch one tiny
-# execution each per layer (~5). Keyed on the lists' pytree structure +
-# shapes -- static per layout. jit is byte-transparent, so the flattened
-# transcript is unchanged.
-_stack_rounds_zone = jax.jit(_stack_rounds)
-
-
 def _finalize_layer(
     planes: _Planes,
     alpha: Array,
     chal: list[Array],
     poly: list[Array],
-    openings: tuple[Array, Array, Array, Array] | None = None,
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
-    if openings is not None:
-        # A final boundary block already folded fix_last in-trace.
-        fn0, fn1, fd0, fd1 = openings
-    else:
-        head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
-        fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
-    if all(c.ndim == 0 for c in chal):
-        # Per-round entries only (the traced and single-round paths): the
-        # original one-stack structure, byte-for-byte.
-        return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
-    stack = (
-        _stack_rounds if isinstance(chal[0], jax.core.Tracer) else _stack_rounds_zone
-    )
-    stacked_chal, stacked_poly = stack(chal, poly)
-    return fn0, fn1, fd0, fd1, stacked_chal, stacked_poly
+    head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
+    fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
+    return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
 
 
 def _run_jagged_rounds(
@@ -627,149 +579,8 @@ def _run_jagged_rounds(
         and eval_point.shape[0] <= _FS_EVAL_POINT_CAP
     ):
         eval_point = _pad_to_width(eval_point, _FS_EVAL_POINT_CAP, 0)
-    # Multi-round blocks fire only on the decoupled capped path: concrete
-    # operands (outside any outer jit) and fixed-width buffers (`out_pairs is
-    # None` exactly when the caps fix every round shape). The traced path
-    # keeps the single-round structure -- the whole layer already fuses into
-    # one program there, so a block would change nothing but the trace shape.
-    block_sizes = (
-        _ROUND_BLOCK_SIZES
-        if export_dispatch
-        and caps is not None
-        and sched.out_pairs is None
-        and not isinstance(planes.n0, jax.core.Tracer)
-        else ()
-    )
     rnd = 0
-    openings: tuple[Array, Array, Array, Array] | None = None
     while rnd < nrv + niv:
-        if block_sizes and rnd < nrv:
-            # Greedy row blocks over [0, nrv): K rounds per bind, challenge
-            # chained inside the binary; a block starting at 0 folds the
-            # layer's round 0 (sum, no fold) in as its first iteration.
-            k = next((n for n in block_sizes if rnd + n <= nrv), 0)
-            if k:
-                scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
-                live_ops = (
-                    _row_live_blocks(sched.counts, nrv, rnd, k)
-                    if sched.counts is not None
-                    else _row_live_block(sched.live, rnd, k)
-                )
-                (
-                    poly,
-                    r,
-                    planes,
-                    eq_row,
-                    transcript,
-                    claim,
-                    pad_adj,
-                    z_cur,
-                    pos,
-                    prev_r,
-                ) = _dispatch_row_block(
-                    planes,
-                    eq_row,
-                    prev_r,
-                    row_counts,
-                    eq_int,
-                    scalars,
-                    consts,
-                    live_ops,
-                    transcript,
-                    eval_point,
-                    pos,
-                    challenge_limbs,
-                    first=rnd == 0,
-                )
-                polys.append(poly)
-                challenges.append(r)
-                if rnd + k == nrv:
-                    # The block covered round nrv-1: the row->boundary swap
-                    # (eq_adj takes the row stretch's pad mass) applies here,
-                    # exactly as the single-round tail below does it.
-                    eq_adj = pad_adj
-                    pad_adj = one
-                rnd += k
-                continue
-        if block_sizes and rnd == nrv and niv > 0:
-            # The boundary handoff plus the dense stretch through one
-            # binary; when it reaches the layer's last round it also folds
-            # fix_last, handing the pair openings to _finalize_layer.
-            k = next((n for n in block_sizes if n <= niv), 0)
-            if k:
-                # caps is not None on every block path (block_sizes guard),
-                # so the boundary eq operand was pre-laid by the batched
-                # layer-entry dispatch (eq_int is not folded by the row
-                # rounds, so the entry lay is value-identical).
-                assert eq_boundary_pre is not None
-                scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
-                (
-                    poly,
-                    r,
-                    planes,
-                    eq_int,
-                    transcript,
-                    claim,
-                    pad_adj,
-                    z_cur,
-                    pos,
-                    prev_r,
-                    opens,
-                ) = _dispatch_boundary_block(
-                    planes,
-                    eq_boundary_pre,
-                    eq_int,
-                    prev_r,
-                    scalars,
-                    consts,
-                    _dense_live_block(1 << (niv - 1), k),
-                    transcript,
-                    eval_point,
-                    pos,
-                    challenge_limbs,
-                    final=k == niv,
-                )
-                if opens is not None:
-                    openings = opens
-                polys.append(poly)
-                challenges.append(r)
-                rnd += k
-                continue
-        if block_sizes and nrv < rnd:
-            # Greedy dense continuation past a partial boundary block (only
-            # when the dense stretch outruns the largest block): the first
-            # covered round folds `1 << (niv - 1 - (rnd - nrv))` pairs,
-            # halving per round inside the block.
-            k = next((n for n in block_sizes if rnd + n <= nrv + niv), 0)
-            if k:
-                scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
-                (
-                    poly,
-                    r,
-                    planes,
-                    eq_int,
-                    transcript,
-                    claim,
-                    pad_adj,
-                    z_cur,
-                    pos,
-                    prev_r,
-                ) = _dispatch_int_block(
-                    planes,
-                    eq_int,
-                    prev_r,
-                    scalars,
-                    consts,
-                    _dense_live_block(1 << (niv - 1 - (rnd - nrv)), k),
-                    transcript,
-                    eval_point,
-                    pos,
-                    challenge_limbs,
-                )
-                polys.append(poly)
-                challenges.append(r)
-                rnd += k
-                continue
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
         if rnd == 0:
@@ -856,7 +667,7 @@ def _run_jagged_rounds(
         rnd += 1
 
     fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
-        planes, prev_r, challenges, polys, openings
+        planes, prev_r, challenges, polys
     )
     return (
         stacked_challenges,
@@ -918,7 +729,6 @@ def _prove_jagged_layer_round(
     caps: RoundWidthCaps | None,
     carry: Carry,
     transcript: Transcript,
-    counts: tuple[int, ...] | None = None,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
@@ -950,7 +760,6 @@ def _prove_jagged_layer_round(
         transcript,
         challenge_limbs,
         caps,
-        counts=counts,
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
     d0, d1 = proof.denominator_0, proof.denominator_1
@@ -1092,7 +901,6 @@ def _jagged_round_eager(
         caps,
         carry,
         transcript,
-        counts=layer.row_counts,
     )
 
 

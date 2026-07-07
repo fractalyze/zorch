@@ -93,9 +93,9 @@ def _export_path(key: tuple) -> Path:
     )
 
 
-def _round_get(key: tuple, *, disk: bool = True) -> export.Exported | None:
+def _round_get(key: tuple) -> export.Exported | None:
     exp = _ROUND_KERNEL_CACHE.get(key)
-    if exp is None and disk and _EXPORT_CACHE_DIR is not None:
+    if exp is None and _EXPORT_CACHE_DIR is not None:
         path = _export_path(key)
         if path.exists():
             exp = export.deserialize(bytearray(path.read_bytes()))
@@ -103,9 +103,9 @@ def _round_get(key: tuple, *, disk: bool = True) -> export.Exported | None:
     return exp
 
 
-def _round_put(key: tuple, exp: export.Exported, *, disk: bool = True) -> None:
+def _round_put(key: tuple, exp: export.Exported) -> None:
     _ROUND_KERNEL_CACHE[key] = exp
-    if disk and _EXPORT_CACHE_DIR is not None:
+    if _EXPORT_CACHE_DIR is not None:
         # Atomic publish: write a per-pid sibling temp then os.replace into place,
         # so a process sharing ZORCH_EXPORT_CACHE_DIR never deserializes a
         # half-written .bin (rename is atomic within one filesystem).
@@ -119,8 +119,6 @@ def _round_dispatch(
     key: tuple,
     operands: tuple,
     build: Callable[[], export.Exported],
-    *,
-    disk: bool = True,
 ) -> Any:
     """The shared round export-cache dispatch every `_dispatch_*` runs: reuse the
     cached binary for `key`, else `build()` it (the symbolic export is the cold
@@ -134,17 +132,11 @@ def _round_dispatch(
     differentiates. Skipping it is ~177us -> ~55us warm per dispatch (a `jax.jit`
     dispatch costs the same) on the dispatch-bound host-FS prove, with the SAME one
     symbolic binary -- no per-shape recompile, byte-identical (same primitive, same
-    flat operands).
-
-    `disk=False` keeps the binary out of the on-disk cache (in-memory only):
-    the multi-round block keys carry the live `Permutation`/fs objects, whose
-    default reprs are process-local addresses -- a stable `_export_path` does
-    not exist for them, and a colliding address must never alias two configs'
-    binaries."""
-    exported = _round_get(key, disk=disk)
+    flat operands)."""
+    exported = _round_get(key)
     if exported is None:
         exported = build()
-        _round_put(key, exported, disk=disk)
+        _round_put(key, exported)
     flat = jax.tree_util.tree_leaves(operands)
     return exported.out_tree.unflatten(_call_exported_p.bind(*flat, exported=exported))
 

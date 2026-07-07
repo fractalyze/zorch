@@ -1,6 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Static round schedules of the jagged sumcheck: pure functions of a
-layer's Python-int `row_counts` (fold/re-pad layouts, live triples, block
+layer's Python-int `row_counts` (fold/re-pad layouts, live triples, dense
 operands), plus their memoized device commits."""
 
 from __future__ import annotations
@@ -265,37 +265,3 @@ def _dense_live_operand(pairs: int) -> Array:
     (one per power-of-two pair count), so the never-evicting cache is safe."""
     with jax.ensure_compile_time_eval():
         return jax.device_put(np.asarray([pairs, 0], np.int32))
-
-
-def _row_live_block(live: list[Array], start: int, k: int) -> Array:
-    """The (k, 3) stacked live-triple operand for a row block covering rounds
-    `[start, start+k)` -- one tiny stack dispatch per block per layer (the
-    triples are the memoized `_round_live_meta` arrays). The fallback for a
-    hand-built schedule with no `counts`; the layout-keyed route below is the
-    zero-dispatch production path."""
-    return jnp.stack(live[start : start + k])
-
-
-@cache
-def _row_live_blocks(
-    row_counts: tuple[int, ...], num_row_vars: int, start: int, k: int
-) -> Array:
-    """`_row_live_block` pre-staged per layout: the greedy block partition is
-    a pure function of the layout, so the (k, 3) stacks commit once per
-    (layout, block) into this never-evicting cache (tiny i32 rows, the same
-    policy as `_round_live_meta`) instead of one stack dispatch per block per
-    layer per pass."""
-    with jax.ensure_compile_time_eval():
-        return jnp.stack(_round_live_meta(row_counts, num_row_vars)[start : start + k])
-
-
-@cache
-def _dense_live_block(pairs0: int, k: int) -> Array:
-    """The (k, 2) stacked `{live pairs, 0}` operand for a dense block whose
-    first round folds `pairs0` pairs -- consecutive dense rounds halve, so row
-    i carries `pairs0 >> i`. Values restate `_dense_live_operand`; memoized per
-    (pairs0, k) like it."""
-    with jax.ensure_compile_time_eval():
-        return jax.device_put(
-            np.asarray([[pairs0 >> i, 0] for i in range(k)], np.int32)
-        )

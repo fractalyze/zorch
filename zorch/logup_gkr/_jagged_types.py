@@ -127,9 +127,3 @@ class _JaggedSchedule:
     challenge_limbs: int
     caps: RoundWidthCaps | None = None
     meta: list[tuple[Array | None, Array, Array, Array]] | None = None
-    # The layout's Python-int row counts, when the caller has them: keys the
-    # pre-staged `_row_live_blocks` cache so a block dispatch carries zero
-    # per-layer stack executions. None (a hand-built schedule, or the jit zone
-    # -- a tuple of ints must not cross it as a traced pytree) falls back to
-    # the per-block `_row_live_block` stack.
-    counts: tuple[int, ...] | None = None
