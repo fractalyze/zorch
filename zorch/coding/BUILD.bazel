@@ -17,6 +17,17 @@ py_library(
 )
 
 py_library(
+    name = "additive_reed_solomon",
+    srcs = ["additive_reed_solomon.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/utils:bits",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "linear_code",
     srcs = ["linear_code.py"],
     visibility = ["//visibility:public"],
