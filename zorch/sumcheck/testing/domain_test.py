@@ -6,6 +6,7 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.sumcheck.domain import (
+    EvalDomain,
     extend_to_round_domain,
     fold_stacked,
     product_round_coeffs,
@@ -36,6 +37,23 @@ class DomainTest(absltest.TestCase):
         b0, db = b[:2], b[2:] - b[:2]
         self.assertTrue(bool(msg[0] == jnp.sum(da * db)))  # u = ∞
         self.assertTrue(bool(msg[1] == jnp.sum(a0 * b0)))  # u = 0
+
+    def test_round_domain_to_coeffs(self) -> None:
+        # p(x) = 1 + 2x + 3x², so p(0),p(1),p(2) = 1,6,17 and leading coeff = 3.
+        want = jnp.array([1, 2, 3], dtype=KB)
+        # Finite domain {0,1,2}: recover coeffs from the three evaluations.
+        finite = EvalDomain(jnp.array([0, 1, 2], dtype=KB))
+        self.assertTrue(
+            bool(
+                jnp.array_equal(finite.to_coeffs(jnp.array([1, 6, 17], dtype=KB)), want)
+            )
+        )
+        # ∞-led domain [∞,0,1]: recover from [leading, p(0), p(1)] = [3, 1, 6]; the
+        # degree and field come from the values, so the domain takes no args.
+        led = EvalDomain(leading=True)
+        self.assertTrue(
+            bool(jnp.array_equal(led.to_coeffs(jnp.array([3, 1, 6], dtype=KB)), want))
+        )
 
     def test_product_coeffs_verify(self) -> None:
         # The coefficient form of each product round verifies against

@@ -1,22 +1,19 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Evaluation domain for sumcheck round polynomials.
+"""Evaluation domains for sumcheck round polynomials.
 
-A round polynomial (degree ≤ d) goes on the wire as evaluations over some domain,
-with one node omitted and recovered from s(0)+s(1)=claim. This module owns that
-domain machinery. It currently carries U_d = {∞, 0, 1, …, d−1}, the domain the
-eq-poly family uses: ∞ is the leading coefficient (the product of the factor
-slopes, cheaper than a large finite node), and provers drop the u=1 node (Û_d).
-extend_to_round_domain lifts a linear pair onto it; product_round_poly builds a
-product round message; ProductRound / prove_product are the baseline product
-sumcheck (Algorithm 1) that emits them.
-
-The natural {0..d} and coefficient forms still live in prover.py / verifier.py;
-folding every form behind one domain parameter is the extension point the verifier
-duals will motivate (they need the same recover-omitted-node + eval-at-challenge).
+A round polynomial goes on the wire as ascending coefficients (the form
+verifier.CoeffsSumcheckRound checks). EvalDomain names the points a prover samples
+it at and owns the map from those samples to coefficients: a finite node set — the
+Gruen set {0, 1, *extra, eq_root(z)}, or the naturals — optionally led by the value
+at infinity (the leading coefficient, cheap for a product since it is the product of
+the factor slopes). extend_to_round_domain lifts a linear pair onto the Û_d sample
+domain; product_round_poly / product_round_coeffs build the baseline product round;
+ProductRound / prove_product are the product sumcheck (Algorithm 1).
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import cache
 from typing import Any
 
@@ -48,25 +45,52 @@ def _interp_constants(degree: int, dtype: Any) -> tuple[Array, Array]:
     return naturals, inv_vand
 
 
-def coeffs_from_nodes(nodes: Array, degree: int) -> Array:
-    """Value → ascending-coefficient matrix (degree+1, degree+1) for a round poly at
-    degree+1 finite nodes — bridged through the naturals {0..degree}, so any
-    node set reaches the form verifier.CoeffsSumcheckRound checks."""
-    naturals, inv_vand = _interp_constants(degree, nodes.dtype)
+def _naturals(n: int, dtype: Any) -> Array:
+    """The field-typed naturals {0, 1, …, n−1} (a stack, not iota — unsupported for
+    extension dtypes)."""
+    return jnp.stack([jnp.array(k, dtype) for k in range(n)])
+
+
+def _finite_coeff_matrix(nodes: Array) -> Array:
+    """Value → ascending-coefficient matrix (n, n) for a degree-(n−1) polynomial at
+    the n finite nodes, bridged through the naturals then the inverse Vandermonde."""
+    naturals, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
     lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, nodes)
     return jnp.dot(inv_vand, lagrange)
 
 
-def coeffs_from_round_domain(evals: Array, degree: int) -> Array:
-    """Ascending coefficients of a degree-degree polynomial given as its values
-    on the round domain [∞, 0, 1, …, degree−1] (the ∞ entry is the leading
-    coefficient). Splits p = q + c_deg·xᵈ: the finite residuals p(j) − c_deg·jᵈ
-    interpolate the degree−1 part q, and c_deg is the ∞ value."""
-    v_inf, v_finite = evals[0], evals[1:]
-    nodes = jnp.stack([jnp.array(k, evals.dtype) for k in range(degree)])
-    node_pow = jnp.stack([jnp.array(k, evals.dtype) ** degree for k in range(degree)])
-    low = jnp.dot(coeffs_from_nodes(nodes, degree - 1), v_finite - v_inf * node_pow)
-    return jnp.concatenate([low, jnp.atleast_1d(v_inf)])
+@dataclass(frozen=True)
+class EvalDomain:
+    """The sample points of a round polynomial and the map from those samples to
+    ascending coefficients.
+
+    nodes are the finite sample points — the Gruen set {0, 1, *extra, eq_root(z)},
+    or (when None) the naturals {0..}. leading prepends the value at infinity (the
+    leading coefficient) as the first sample. The polynomial's degree and field come
+    from the samples themselves, so nothing but the node shape is fixed here."""
+
+    nodes: Array | None = None
+    leading: bool = False
+
+    def coeff_matrix(self) -> Array:
+        """Value → coefficient matrix for the explicit finite nodes — what a driver
+        precomputes once per round. The leading / naturals domain has no fixed size,
+        so it reads its degree off the values instead: use to_coeffs."""
+        assert self.nodes is not None, "leading / naturals domain has no fixed matrix"
+        return _finite_coeff_matrix(self.nodes)
+
+    def to_coeffs(self, values: Array) -> Array:
+        """Ascending coefficients from this domain's samples of a round polynomial;
+        the degree (len−1) and field come from values."""
+        if not self.leading:
+            return jnp.dot(self.coeff_matrix(), values)
+        # [∞, *finite]: the ∞ sample is the leading coefficient c_d, and the finite
+        # samples (naturals {0..d−1} unless given) interpolate the residual p − c_d·xᵈ.
+        v_inf, finite = values[0], values[1:]
+        d = finite.shape[0]
+        nodes = self.nodes if self.nodes is not None else _naturals(d, values.dtype)
+        low = jnp.dot(_finite_coeff_matrix(nodes), finite - v_inf * nodes**d)
+        return jnp.concatenate([low, jnp.atleast_1d(v_inf)])
 
 
 def extend_to_round_domain(
@@ -105,7 +129,8 @@ def product_round_coeffs(stacked: Array) -> Array:
     pairs = jnp.reshape(stacked, (m, 2, -1))
     p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
     lifted = jax.vmap(lambda a, b: extend_to_round_domain(a, b, m))(p0, p1)
-    return coeffs_from_round_domain(jnp.sum(jnp.prod(lifted, axis=0), axis=1), m)
+    evals = jnp.sum(jnp.prod(lifted, axis=0), axis=1)
+    return EvalDomain(leading=True).to_coeffs(evals)
 
 
 def fold_stacked(stacked: Array, r: Array) -> Array:

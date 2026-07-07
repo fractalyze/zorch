@@ -36,7 +36,7 @@ from jax import Array
 
 from zorch.poly.eq import eq_factor, eq_root
 from zorch.poly.univariate import eval_coeffs
-from zorch.sumcheck.domain import coeffs_from_nodes
+from zorch.sumcheck.domain import EvalDomain
 
 
 class GruenSummand(Protocol):
@@ -78,14 +78,14 @@ def interp_matrix(extra_ts: Sequence[Array], z: Array) -> Array:
     eq_root(z)}`` to ascending coefficients, shape ``(degree + 1, degree + 1)``
     with ``degree = len(extra_ts) + 2``.
 
-    The Gruen node set is one instance of domain.coeffs_from_nodes. Depends only
-    on ``z`` and the static ``extra_ts``, so a fixed-shape scan driver precomputes
-    it per round OUTSIDE the scan (``jax.vmap`` over the stacked round coordinates)
-    and feeds it through the scan's xs; a host-relaunch driver just calls
-    `round_coeffs`, which composes this with the value assembly."""
+    The Gruen node set is one EvalDomain instance. Depends only on ``z`` and the
+    static ``extra_ts``, so a fixed-shape scan driver precomputes it per round
+    OUTSIDE the scan (``jax.vmap`` over the stacked round coordinates) and feeds it
+    through the scan's xs; a host-relaunch driver just calls `round_coeffs`, which
+    composes this with the value assembly."""
     dtype = z.dtype
     xs = jnp.stack([jnp.zeros((), dtype), jnp.ones((), dtype), *extra_ts, eq_root(z)])
-    return coeffs_from_nodes(xs, len(extra_ts) + 2)
+    return EvalDomain(xs).coeff_matrix()
 
 
 def round_coeffs_from_matrix(

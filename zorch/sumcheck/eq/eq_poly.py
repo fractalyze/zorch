@@ -22,7 +22,7 @@ from jax import Array
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import coeffs_from_round_domain
+from zorch.sumcheck.domain import EvalDomain
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -151,7 +151,8 @@ class EqPolyRound(Round):
         s = jnp.concatenate(
             [jnp.atleast_1d(l_diff * t[0]), (l_0 + us * l_diff) * t[1:]]
         )
-        return coeffs_from_round_domain(s, self.d + 1), (p0s, diffs, w_i)
+        coeffs = EvalDomain(leading=True).to_coeffs(s)
+        return coeffs, (p0s, diffs, w_i)
 
     def _fold(
         self, cache: tuple[Array, Array, Array], eq_w_prev: Array, r: Array
