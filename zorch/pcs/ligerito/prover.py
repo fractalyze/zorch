@@ -29,9 +29,12 @@ witness — the whole recursion stays in one basis (design note: the seam identi
 `encode(w)[s] == eval_mle(coeffs_to_evals(w), eval_point(s))`).
 
 Reuses `pcs/basefold`'s staggered partial-Lagrange batching for the per-level
-`α` weights and `pcs/fold`'s query machinery (`sample_positions` / `open_rows`).
-Code-generic over a `TensorCode`; the multiplicative Reed-Solomon instantiation
-is the de-risk vehicle (fractalyze/flock-zorch#32).
+`α` weights and `pcs/fold`'s query machinery (`open_rows`). Every transcript
+interaction routes through the `LigeritoChoreography` seam (statement binding, round
+hops, root/residual framing, query sampling), so a byte-fixed consumer swaps
+the wire without touching the recursion. Code-generic over a `TensorCode`; the
+multiplicative Reed-Solomon instantiation is the de-risk vehicle
+(fractalyze/flock-zorch#32).
 """
 
 from __future__ import annotations
@@ -48,12 +51,14 @@ from jax import Array
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
-from zorch.pcs.fold import open_rows, sample_positions
+from zorch.pcs.fold import open_rows
+from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import mle_evals_to_coeffs
-from zorch.sumcheck.prover import SumcheckRound
+from zorch.sumcheck.prover import CompressedProductRound, SumcheckRound
+from zorch.sumcheck.prover import fold as sc_fold
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -68,6 +73,7 @@ MakeCode = Callable[[int, int], TensorCode]
 # The degree-2 product round (`W·B`) drives every sumcheck round; one instance,
 # reused. The claim reduces through `eval_univariate` (value-form message).
 _ROUND = SumcheckRound(degree=2)
+_COMPRESSED_ROUND = CompressedProductRound()
 
 
 # Jitted commit body, keyed on code + tree + interleave by value (#214): commit
@@ -108,11 +114,13 @@ class LigeritoProverData:
 class LigeritoProver:
     """Ligerito recursive PCS prover. `make_code(message_len, log_inv_rate)`
     builds each level's `TensorCode`; `config` fixes the fold schedule; `tree`
-    commits every level's codeword rows."""
+    commits every level's codeword rows; `choreography` fixes the Fiat-Shamir
+    wire (share the instance with the verifier)."""
 
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
+    choreography: LigeritoChoreography = LigeritoChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -164,8 +172,10 @@ def _open(
     transcript: Transcript,
 ) -> tuple[Array, LigeritoProof, Transcript]:
     cfg = prover.config
+    chor = prover.choreography
     dtype = z.dtype
     one = jnp.ones((), dtype)
+    round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
 
     # The continuous sumcheck state: witness W (folds) and basis B (glued +
     # folds). B starts as the value basis eq(z). The prover only emits round
@@ -175,23 +185,54 @@ def _open(
     B = expand_eq_to_hypercube(z, one)
     value = (pd.f * B).sum()  # f(z) = <f, eq(z)>; reuse B rather than rebuild eq(z)
 
-    # Bind the statement (root, point, value) before any challenge.
-    t = transcript.observe(pd.initial.root)
-    t = t.observe(z)
-    t = t.observe(value)
+    # Bind the statement before any challenge.
+    t = chor.bind_statement(transcript, pd.initial.root, z, value)
 
     sumcheck_messages: list[Array] = []
     recursive_roots: list[Array] = []
     component_openings: list[Opening] = []
+    ood_values: list[Array] = []
+    pow_witnesses: list[Array] = []
+
+    # Under the eager policy each state's message is emitted (absorbed + put on
+    # the wire) the moment the state forms; under the lazy default the round
+    # message rides `fold_challenge`'s fused hop instead. The round poly is a
+    # full pass over the state, so the policy gates WHICH point computes it —
+    # never both.
+    eager = chor.eager_messages
+
+    def emit(t: Transcript, witness: Array, basis: Array) -> Transcript:
+        msg = round_._round_poly([witness, basis])
+        sumcheck_messages.append(msg)
+        return chor.observe_message(t, msg)
+
+    def grind(t: Transcript, bits: int | None) -> Transcript:
+        if bits is None:
+            return t
+        t, witness = chor.grind(t, bits)
+        pow_witnesses.append(witness)
+        return t
+
+    if eager:
+        t = emit(t, W, B)
 
     current = pd.initial  # M_j
     num_vars = cfg.num_vars
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck ---
-        for _ in range(k_j):
-            [W, B], t, msg = _ROUND([W, B], t)
-            sumcheck_messages.append(msg)
+        for i in range(k_j):
+            msg: Array | None = None  # eager: this round's is already absorbed
+            if not eager:
+                msg = round_._round_poly([W, B])
+                sumcheck_messages.append(msg)
+            t = grind(t, chor.fold_grind_bits(j, i))
+            t, r = chor.fold_challenge(t, msg, j, i)
+            W, B = sc_fold([W, B], r)
+            if eager:
+                # The freshly folded state's — the terminal residual state's
+                # included (the verifier recomputes that one in the clear).
+                t = emit(t, W, B)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---
@@ -200,18 +241,34 @@ def _open(
             k_next = cfg.fold_ks[j + 1]
             code_next = prover._code(j + 1, 1 << (num_vars - k_next))
             nxt = _commit(W, k_next, code_next, prover.tree)
-            t = t.observe(nxt.root)
+            t = chor.observe_root(t, nxt.root)
             recursive_roots.append(nxt.root)
+            # --- OOD binding of the fresh commit: glue the eval-claim at a
+            # sampled out-of-domain point into the running sumcheck, exactly
+            # like induce but with a transcript-drawn basis and a claimed
+            # (observed) value. The claim side is verifier-tracked. ---
+            for _ in range(cfg.ood_count(j)):
+                t, zs = t.sample(num_vars)
+                b_ood = expand_eq_to_hypercube(zs.astype(dtype), one)
+                y = (W * b_ood).sum()
+                t = t.observe(y)
+                ood_values.append(y)
+                if eager:
+                    t = emit(t, W, b_ood)
+                t, sep = t.sample()
+                sep = sep.reshape(())
+                B = B + sep * b_ood
         else:
             # Bind the in-clear residual before sampling the final level's queries
             # (the IOPP terminal binding — queries depend on it; verify mirrors).
-            t = t.observe(W)
+            t = chor.observe_residual(t, W)
 
         # --- open M_j's codeword rows at the sampled query positions ---
         # M_j's message (encoded) axis is exactly the post-fold witness, so its
         # message length is 2^num_vars — rebuild the same code the commit used.
         code_j = prover._code(j, 1 << num_vars)
-        t, positions = sample_positions(t, code_j.block_len, cfg.queries[j])
+        t = grind(t, chor.query_grind_bits(j))
+        t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = open_rows(
             prover.tree, current.leaves, current.digest_layers, positions
         )
@@ -226,11 +283,15 @@ def _open(
         # sumcheck. B_new(x) = Σ_s α_s·eq(eval_point(s), x); the α weights and the
         # separation challenge match what the verifier resamples, so it rebuilds
         # the same B. Only B is threaded — the enforced sum is verifier-side.
-        t, alpha = sample_staggered_coeffs(t, cfg.queries[j], dtype)
+        t, alpha = sample_staggered_coeffs(
+            t, cfg.queries[j], dtype, lsb_first=cfg.alpha_lsb_first
+        )
         alpha = alpha[: cfg.queries[j]]  # (Q,) partial-Lagrange weights
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
+        if eager:
+            t = emit(t, W, b_new)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new
@@ -242,7 +303,8 @@ def _open(
         recursive_roots=recursive_roots,
         component_openings=component_openings,
         final_residual=residual,
-        ood_values=[],
+        ood_values=ood_values,
+        pow_witnesses=pow_witnesses,
     )
     return value, proof, t
 

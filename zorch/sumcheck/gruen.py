@@ -56,14 +56,20 @@ class GruenSummand(Protocol):
     ``{1/2}``) and the jagged zerocheck engines in consumers (degree 4,
     extra ``{2, 4}``).
 
-    Every jagged summand also carries a **padding correction** — the
-    sumcheck runs over materialized positions only, and the non-materialized
-    ones contribute in closed form: LogUp's fold-neutral fraction (n=0, d=1)
-    collapses to its eq weight
-    (`zorch.logup_gkr.jagged_prover._virtual_mass_correction`), the
+    Beyond the two typed members, every jagged summand owns two SLOTS this
+    seam names but cannot type — their signatures carry engine state (LogUp's
+    ``pad_adj``/``eq_sum`` scalars vs zerocheck's virtual-geq/live-height):
+    the **materialized evaluations** at the summand's points
+    (`zorch.logup_gkr.prover.LogupSummand.paired_evals`; zerocheck's chip
+    evals) and the **padding correction** (`LogupSummand.correct`;
+    zerocheck's geq subtraction). The sumcheck runs over materialized
+    positions only, and the non-materialized ones contribute in closed form:
+    LogUp's fold-neutral fraction (n=0, d=1) collapses to its eq weight, the
     zerocheck zero-extension row to its constant ``C(0_row)`` removed via
-    the virtual geq. The correction's math is each summand's own; the
-    concept is this seam's."""
+    the virtual geq. A round body therefore reads evaluate → correct →
+    assemble (`round_coeffs`) → fold (`fold_round_scalars`), only the slots'
+    math differing between engines; the correction's math is each summand's
+    own, the concept and the slot names are this seam's."""
 
     @property
     def degree(self) -> int: ...

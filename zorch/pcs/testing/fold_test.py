@@ -25,6 +25,7 @@ from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.fold import (
     PreFoldKGroupCommitRound,
     open_rows,
+    sample_distinct_positions,
     sample_positions,
     verify_group_fold_chain,
     verify_openings,
@@ -143,6 +144,36 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
             lambda qo, b, idx, fp: verify_group_fold_chain(self.code, qo, b, idx, fp)
         )
         self.assertTrue(bool(jitted(query_openings, betas, a, final)))
+
+
+class SampleDistinctPositionsTest(absltest.TestCase):
+    def _seeded(self) -> Transcript:
+        # Rejection sampling never terminates on a degenerate stream, and a
+        # FRESH CheapPermutation sponge is one (permute(0) == 0 squeezes only
+        # zeros). Real call sites sample queries after absorbing the whole
+        # protocol, so seed the sponge the same way.
+        return _transcript().observe(rand_field(70, (4,), KB))
+
+    def test_distinct_sorted_in_range(self) -> None:
+        t, positions = sample_distinct_positions(self._seeded(), 8, 6)
+        got = positions.tolist()
+        self.assertEqual(got, sorted(set(got)))
+        self.assertLen(got, 6)
+        self.assertTrue(all(0 <= p < 8 for p in got))
+        # Both sides replay the identical rejections: a fresh identical sponge
+        # lands on the same set AND the same post-sampling stream state.
+        t2, positions2 = sample_distinct_positions(self._seeded(), 8, 6)
+        self.assertEqual(positions2.tolist(), got)
+        self.assertEqual(t.sample(1)[1].tolist(), t2.sample(1)[1].tolist())
+
+    def test_saturating_the_block_terminates(self) -> None:
+        # count == block_len forces the rejection loop through every repeat.
+        _, positions = sample_distinct_positions(self._seeded(), 4, 4)
+        self.assertEqual(positions.tolist(), [0, 1, 2, 3])
+
+    def test_rejects_impossible_count(self) -> None:
+        with self.assertRaisesRegex(ValueError, "distinct"):
+            sample_distinct_positions(_transcript(), 4, 5)
 
 
 class KGroupFoldBinaryFactorTest(KGroupFoldRoundTripTest):

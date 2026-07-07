@@ -89,6 +89,42 @@ class SumcheckRoundTest(absltest.TestCase):
             prover.SumcheckRound(degree=2)._round_poly([a, b])
 
 
+class CompressedProductRoundTest(absltest.TestCase):
+    def test_message_is_c0_and_leading_coeff(self) -> None:
+        # Reconstruct [c0, c1, c2] from the compressed message plus the eval
+        # form's s(1); the polynomial must reproduce every eval-form point.
+        a = rand_field(30, (8,), KB)
+        b = rand_field(31, (8,), KB)
+        evals = prover.SumcheckRound(degree=2)._round_poly([a, b])  # s(0..2)
+        comp = prover.CompressedProductRound()._round_poly([a, b])  # [c0, c2]
+        self.assertEqual(comp.shape, (2,))
+        self.assertTrue(bool(comp[0] == evals[0]))
+        c1 = evals[1] - comp[0] - comp[1]
+        for u in range(3):
+            u_pt = jnp.array(u, KB)
+            want = comp[0] + u_pt * c1 + u_pt * u_pt * comp[1]
+            self.assertTrue(bool(want == evals[u]))
+
+    def test_call_threads_state_transcript_msg(self) -> None:
+        a = rand_field(32, (8,), KB)
+        b = rand_field(33, (8,), KB)
+        state, _, msg = prover.CompressedProductRound()([a, b], cheap_transcript(KB))
+        self.assertEqual(msg.shape, (2,))
+        self.assertEqual(state[0].shape, (4,))  # width halved — one round consumed
+
+    def test_round_poly_is_fusion_ready(self) -> None:
+        a = rand_field(34, (8,), KB)
+        b = rand_field(35, (8,), KB)
+        assert_fusion_ready(
+            prover.CompressedProductRound()._round_poly, [a, b], reduces=1
+        )
+
+    def test_rejects_wrong_factor_count(self) -> None:
+        f = rand_field(36, (8,), KB)
+        with self.assertRaises(ValueError):
+            prover.CompressedProductRound()._round_poly([f])
+
+
 class LsbHelpersTest(absltest.TestCase):
     def test_split_pairs_strides_the_last_axis(self) -> None:
         f = jnp.array([[0, 1, 2, 3], [4, 5, 6, 7]], KB)

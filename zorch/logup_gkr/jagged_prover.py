@@ -152,87 +152,32 @@ def _round_metadata(
         return jax.device_put(host_meta)
 
 
-def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:
-    """The virtual (non-materialized) mass a round adds back in closed form.
-
-    The sumcheck runs only over the materialized rows; every non-materialized
-    position holds the fold-neutral fraction (n=0, d=1), whose LogUp summand
-    collapses to just its eq weight. The eq weights of the full remaining
-    hypercube sum to `pad_adj`, so the virtual positions contribute exactly
-    `pad_adj - eq_sum` (the full mass minus the materialized `eq_sum`) -- added
-    back by `_round_coeffs` in closed form rather than iterated over."""
-    return pad_adj - eq_sum
-
-
-def _round_coeffs(
-    eval_zero: Array,
-    eval_half: Array,
-    eq_sum: Array,
-    eq_adj: Array,
-    pad_adj: Array,
-    z_cur: Array,
-    claim: Array,
-) -> Array:
-    """Round polynomial coefficients from the materialized {0, 1/2} sums.
-
-    Every non-materialized position contributes exactly its eq weight, and
-    the eq weights of the full remaining hypercube sum to `pad_adj`, so the
-    virtual mass is `pad_adj - eq_sum`: at u=0 it carries the current
-    variable's eq factor `(1 - z_cur)`; at the doubled u=1/2 scale each
-    virtual pair contributes `den_h = 4` at weight `eq_h = eq_rest`, and the
-    doubled products overcount s(1/2) by 8. `eq_adj` is the row-eq residual
-    scalar once the row variables are exhausted (1 before that).
-
-    The corrected sums then assemble through the shared Gruen machinery
-    (`gruen.round_coeffs`): the claim identity, the implicit zero at the
-    eq-factor root, and the natural-domain coefficient crossing all live
-    there; only the {0, 1/2} domain choice and the corrections above are
-    LogUp's."""
-    dtype = claim.dtype
-    one = jnp.ones((), dtype)
-    correction = _virtual_mass_correction(pad_adj, eq_sum)
-    s_zero = (eval_zero + correction * (one - z_cur)) * eq_adj
-    s_half = (
-        (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
-    )
-    return gruen.round_coeffs(
-        s_zero, claim, LogupSummand.extra_ts(dtype), [s_half], z_cur
-    )
-
-
-def _paired_sums(
+def _round_poly(
     n0: Array,
     n1: Array,
     d0: Array,
     d1: Array,
     eq_0: Array,
     eq_1: Array,
-    lam: Array,
-) -> tuple[Array, Array, Array]:
-    """Materialized `(s(0), 8*s(1/2), eq mass)` over the stride-2 pairs.
-
-    s(0) reads the even elements at their eq weight; the u=1/2 sum works on
-    doubled values (`e0 + e1 = 2*e(1/2)` per factor, likewise eq), which
-    `_round_coeffs` rescales. Both go through the shared `LogupSummand` combine
-    so the summand cannot drift from the verifier oracle's.
-    """
-    summand = LogupSummand(lam)
-    scalars = summand.combine_scalars()
-    (n0_0, n0_1), (n1_0, n1_1) = split_pairs(n0), split_pairs(n1)
-    (d0_0, d0_1), (d1_0, d1_1) = split_pairs(d0), split_pairs(d1)
-    eval_zero = jnp.sum(summand.combine(scalars, eq_0, n0_0, d1_0, n1_0, d0_0))
-    eq_h = eq_0 + eq_1
-    eval_half = jnp.sum(
-        summand.combine(
-            scalars,
-            eq_h,
-            n0_0 + n0_1,
-            d1_0 + d1_1,
-            n1_0 + n1_1,
-            d0_0 + d0_1,
-        )
+    scalars: _RoundScalars,
+) -> Array:
+    """One round univariate as the summand-slot sequence — evaluate at the
+    summand's points, apply its padding correction, assemble through the
+    shared Gruen machinery (`zorch.sumcheck.gruen.GruenSummand` names the
+    slots). Only the eq-weight layout feeding the pairs is the callers' —
+    row-phase segment gathers vs the dense batch table."""
+    summand = LogupSummand(scalars.lam)
+    raw = summand.paired_evals(n0, n1, d0, d1, eq_0, eq_1)
+    s_zero, s_half = summand.correct(
+        *raw, scalars.eq_adj, scalars.pad_adj, scalars.z_cur
     )
-    return eval_zero, eval_half, jnp.sum(eq_h)
+    return gruen.round_coeffs(
+        s_zero,
+        scalars.claim,
+        summand.extra_ts(scalars.claim.dtype),
+        [s_half],
+        scalars.z_cur,
+    )
 
 
 def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
@@ -396,21 +341,19 @@ def _run_jagged_rounds_reference(
             gather, col_index, pair_index = meta[rnd]
             n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
             w = eq_int[col_index]
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0,
-                n1,
-                d0,
-                d1,
-                eq_row[pair_index * 2] * w,
-                eq_row[pair_index * 2 + 1] * w,
-                lam,
-            )
+            eq_0, eq_1 = eq_row[pair_index * 2] * w, eq_row[pair_index * 2 + 1] * w
         else:
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0, n1, d0, d1, *split_pairs(eq_int), lam
-            )
-        poly = _round_coeffs(
-            eval_zero, eval_half, eq_sum, eq_adj, pad_adj, point[-1], claim
+            eq_0, eq_1 = split_pairs(eq_int)
+        poly = _round_poly(
+            n0,
+            n1,
+            d0,
+            d1,
+            eq_0,
+            eq_1,
+            _RoundScalars(
+                eq_adj=eq_adj, pad_adj=pad_adj, z_cur=point[-1], claim=claim, lam=lam
+            ),
         )
         transcript = transcript.observe(poly)
         transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
@@ -532,24 +475,7 @@ def _round_poly_int(planes: _Planes, eq_int: Array, scalars: _RoundScalars) -> A
     after the round compute — so the body is pure field arithmetic. `eq_int` is
     split stride-2 once here."""
     eq_0, eq_1 = split_pairs(eq_int)
-    eval_zero, eval_half, eq_sum = _paired_sums(
-        planes.n0,
-        planes.n1,
-        planes.d0,
-        planes.d1,
-        eq_0,
-        eq_1,
-        scalars.lam,
-    )
-    return _round_coeffs(
-        eval_zero,
-        eval_half,
-        eq_sum,
-        scalars.eq_adj,
-        scalars.pad_adj,
-        scalars.z_cur,
-        scalars.claim,
-    )
+    return _round_poly(planes.n0, planes.n1, planes.d0, planes.d1, eq_0, eq_1, scalars)
 
 
 def _fix_and_sum_int(
@@ -562,7 +488,7 @@ def _fix_and_sum_int(
     round's challenge `alpha` (state size `m -> m/2`) **then** compute the next
     round's univariate at the halved size. Returns `(poly, planes, eq_int)` so the
     loop threads the folded state into the next round. The fold and the inner
-    `_paired_sums` slice stride-2 twice."""
+    `paired_evals` slice stride-2 twice."""
     planes = _bind_planes(planes, alpha)
     eq_int = fold_lsb(eq_int, alpha)
     poly = _round_poly_int(planes, eq_int, scalars)
@@ -585,26 +511,17 @@ def _round_poly_row(
     caller binds next round.
 
     The schedule (`gather`, `col_index`, `pair_index`) is host-built; the post-pad
-    state is `gather`'s length (even), so the `_paired_sums` stride-2 stays valid."""
+    state is `gather`'s length (even), so the `paired_evals` stride-2 stays valid."""
     n0, n1, d0, d1 = _pad_neutral(planes.n0, planes.n1, planes.d0, planes.d1, gather)
     w = eq_int[col_index]
-    eval_zero, eval_half, eq_sum = _paired_sums(
+    poly = _round_poly(
         n0,
         n1,
         d0,
         d1,
         eq_row[pair_index * 2] * w,
         eq_row[pair_index * 2 + 1] * w,
-        scalars.lam,
-    )
-    poly = _round_coeffs(
-        eval_zero,
-        eval_half,
-        eq_sum,
-        scalars.eq_adj,
-        scalars.pad_adj,
-        scalars.z_cur,
-        scalars.claim,
+        scalars,
     )
     return poly, _Planes(n0, n1, d0, d1)
 
