@@ -116,18 +116,17 @@ class Poseidon2:
         return _sponge_hash_body(self, input, rate, out)
 
     def linear_hash(self, input: Array, rate: int, out: int) -> Array:
-        """pil2's CHAINED linear hash as ONE `poseidon2_sponge_hash` region
-        (chained=1): each block zero-pads its partial tail and chains the prior
-        block's digest (state[:out]) through the capacity lanes [rate:rate+out],
-        instead of the overwrite sponge's carry-forward. Requires
-        rate + out == width; byte-identical to zisk-zorch's hand-rolled
-        LinearHash. Concrete `len(input)` only (the bench jits at fixed widths)."""
+        """Chained (Merkle-Damgard) hash — absorb in `rate`-sized blocks,
+        zero-padding a short final block, and carry the prior block's digest
+        (`state[:out]`) in the capacity lanes before each permute. The digest
+        fills the whole capacity, so `rate + out == width`. Concrete
+        `len(input)` only (no symbolic export)."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         if rate + out != self.width:
             raise ValueError(
-                f"chained linear hash needs rate + out == width, got "
-                f"{rate} + {out} != {self.width}"
+                f"chained hash needs rate + out == width (the digest fills the "
+                f"capacity), got {rate} + {out} != {self.width}"
             )
         return _sponge_hash_body(self, input, rate, out, chained=True)
 
@@ -310,9 +309,10 @@ def _sponge_hash_body(
         # discards anyway — it matches the marker by name + attrs, not its shape.
         state = jnp.zeros(w, dtype=inp.dtype)
         if chained:
-            # pil2 chained linear hash: each block is [data(rate, zero-padded) |
-            # prior-digest(out)] (rate + out == width), permuted. Block 0's zero
-            # capacity falls out of the zeroed initial state. Concrete n only.
+            # Chained (Merkle-Damgard) hash: each block is [data(rate,
+            # zero-padded) | prior-digest(out)] (rate + out == width), permuted.
+            # Block 0's zero capacity falls out of the zeroed initial state.
+            # Concrete n only.
             #
             # Written const-free (only the one `jnp.zeros(w)` state init, like the
             # `_absorb_symbolic` path below): jax.lax.composite lifts every traced
