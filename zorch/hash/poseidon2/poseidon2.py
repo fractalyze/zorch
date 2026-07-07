@@ -35,7 +35,8 @@ from zorch.hash.poseidon2.params import Poseidon2Params
 from zorch.hash.sponge import (
     SPONGE_HASH_MARKER,
     SPONGE_HASH_MARKER_VERSION,
-    _absorb_symbolic,
+    _absorb_chained,
+    _absorb_overwrite,
 )
 
 if TYPE_CHECKING:
@@ -105,22 +106,24 @@ class Poseidon2:
             )
         return _permute_body(self, state)
 
-    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` and squeeze `out` lanes as ONE `sponge_hash`
-        region (fused kernel, state register-resident) — byte-identical to
-        `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
-        generic permutation runs the inline absorb. Lowers under symbolic
-        `len(input)` (the kernel reads the length at runtime) for export."""
+    def overwrite_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Padding-free overwrite sponge (Plonky3 PaddingFreeSponge) — a short
+        final block overwrites only its own lanes, the capacity carries forward.
+        Absorb+squeeze as ONE `sponge_hash` region (fused kernel, state
+        register-resident) — byte-identical to `Sponge.hash`. Only the dedicated
+        (M4-structured) path emits the marker; a generic permutation runs the
+        inline absorb. Lowers under symbolic `len(input)` for export."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         return _sponge_hash_body(self, input, rate, out)
 
-    def linear_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Chained (Merkle-Damgard) hash — absorb in `rate`-sized blocks,
-        zero-padding a short final block, and carry the prior block's digest
-        (`state[:out]`) in the capacity lanes before each permute. The digest
-        fills the whole capacity, so `rate + out == width`. Concrete
-        `len(input)` only (no symbolic export)."""
+    def chained_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Chained (Merkle-Damgard) hash — a short final block is zero-padded, and
+        each block carries the prior block's digest (`state[:out]`) in the
+        capacity lanes before permuting. The digest fills the whole capacity, so
+        `rate + out == width`. Same fused `sponge_hash` region as `overwrite_hash`
+        (marked `chained`) and the same shared absorb, so it lowers under a
+        symbolic `len(input)` too."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         if rate + out != self.width:
@@ -307,39 +310,11 @@ def _sponge_hash_body(
         # unroll traced once per emission (`lax.composite` has no trace cache), so
         # a wide leaf paid O(blocks) trace + compile for a body the recognizer
         # discards anyway — it matches the marker by name + attrs, not its shape.
+        # `chained` picks the Merkle-Damgard construction; both share the one
+        # permutation-agnostic absorb, so neither needs a static-`n` special case.
         state = jnp.zeros(w, dtype=inp.dtype)
-        if chained:
-            # Chained (Merkle-Damgard) hash: each block is [data(rate,
-            # zero-padded) | prior-digest(out)] (rate + out == width), permuted.
-            # Block 0's zero capacity falls out of the zeroed initial state.
-            # Concrete n only.
-            #
-            # Written const-free (only the one `jnp.zeros(w)` state init, like the
-            # `_absorb_symbolic` path below): jax.lax.composite lifts every traced
-            # const to a leading operand, which would break the Poseidon2 6-operand
-            # ABI. So the block lanes come from `.at[].set(inp slice)`, the capacity
-            # from a slice, and the partial-tail zero-pad from field
-            # self-subtraction (`pad - pad`) rather than a fresh `jnp.zeros`.
-            n = input.shape[0]
-            if not isinstance(n, int):  # shape-poly export unsupported for chained
-                raise NotImplementedError(
-                    "chained linear hash does not support symbolic-n export"
-                )
-            if n == 0:
-                return state[:out]
-            num_blocks = (n + rate - 1) // rate  # permute every block
-            for blk in range(num_blocks):
-                start = blk * rate
-                count = min(rate, n - start)
-                cap = state[:out]  # prior digest (zeros on block 0)
-                state = state.at[:count].set(inp[start : start + count])
-                if count < rate:  # zero-pad the partial tail (no const)
-                    pad = state[count:rate]
-                    state = state.at[count:rate].set(pad - pad)
-                state = state.at[rate : rate + out].set(cap)  # chain
-                state = permute(state)
-            return state[:out]
-        return _absorb_symbolic(inp, state, rate, out, permute)
+        absorb = _absorb_chained if chained else _absorb_overwrite
+        return absorb(inp, state, rate, out, permute)
 
     operands = _abi_operands(perm, input)
     # Generic permutation: no fused sponge kernel, run the absorb directly (a

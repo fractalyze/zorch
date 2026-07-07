@@ -185,5 +185,43 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertIn("mds = dense<[2, 3, 1, 1, 2, 3, 3, 1, 2]> : tensor<9xi64>", txt)
 
 
+def _ref_chained(p: Poseidon, x: jnp.ndarray, rate: int, out: int):
+    """Independent Merkle-Damgard reference (zero-pad short block; chain the prior
+    digest state[:out] into capacity [rate:rate+out]). Classic-Poseidon mirror of
+    the Poseidon2 chained test — pins the reusability win (chained over any
+    permutation, from the shared absorb)."""
+    w = p.width
+    n = int(x.shape[0])
+    st = jnp.zeros(w, dtype=x.dtype)
+    for blk in range((n + rate - 1) // rate):
+        start = blk * rate
+        count = min(rate, n - start)
+        cap = st[:out]
+        st = st.at[:count].set(x[start : start + count])
+        if count < rate:
+            st = st.at[count:rate].set(jnp.zeros(rate - count, dtype=x.dtype))
+        st = st.at[rate : rate + out].set(cap)
+        st = p.permute(st)
+    return st[:out]
+
+
+class PoseidonChainedHashTest(absltest.TestCase):
+    def test_chained_hash_matches_stepwise_merkle_damgard(self) -> None:
+        # Classic Poseidon gains chained_hash for free (shared absorb). width 3,
+        # rate 2 + out 1 == width. n=2 one block, 4 two full, 3/5 partial tail.
+        p = Poseidon(_poseidon_params())
+        for n in (2, 3, 4, 5):
+            x = jnp.arange(n, dtype=F)
+            self.assertTrue(
+                bool(jnp.array_equal(p.chained_hash(x, 2, 1), _ref_chained(p, x, 2, 1))),
+                f"len {n}",
+            )
+
+    def test_chained_hash_requires_rate_plus_out_equals_width(self) -> None:
+        p = Poseidon(_poseidon_params())  # width 3
+        with self.assertRaises(ValueError):
+            p.chained_hash(jnp.arange(2, dtype=F), 2, 2)  # 2 + 2 != 3
+
+
 if __name__ == "__main__":
     absltest.main()

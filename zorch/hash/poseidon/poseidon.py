@@ -33,7 +33,8 @@ from zorch.hash.poseidon.params import PoseidonParams
 from zorch.hash.sponge import (
     SPONGE_HASH_MARKER,
     SPONGE_HASH_MARKER_VERSION,
-    _absorb_symbolic,
+    _absorb_chained,
+    _absorb_overwrite,
 )
 
 if TYPE_CHECKING:
@@ -86,13 +87,29 @@ class Poseidon:
             )
         return _permute_body(self, state)
 
-    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` and squeeze `out` lanes as ONE `zorch.sponge_hash`
-        region (fused kernel, state register-resident) — byte-identical to
-        `Sponge.hash`. Lowers under symbolic `len(input)` for export."""
+    def overwrite_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Padding-free overwrite sponge (Plonky3 PaddingFreeSponge) — absorb
+        `input` and squeeze `out` lanes as ONE `zorch.sponge_hash` region (fused
+        kernel, state register-resident) — byte-identical to `Sponge.hash`.
+        Lowers under symbolic `len(input)` for export."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         return _sponge_hash_body(self, input, rate, out)
+
+    def chained_hash(self, input: Array, rate: int, out: int) -> Array:
+        """Chained (Merkle-Damgard) hash — a short final block is zero-padded, and
+        each block carries the prior block's digest (`state[:out]`) in the
+        capacity lanes before permuting. The digest fills the whole capacity, so
+        `rate + out == width`. Same fused `sponge_hash` region as `overwrite_hash`
+        (marked `chained`), from the same shared absorb."""
+        if input.ndim != 1:
+            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
+        if rate + out != self.width:
+            raise ValueError(
+                f"chained hash needs rate + out == width (the digest fills the "
+                f"capacity), got {rate} + {out} != {self.width}"
+            )
+        return _sponge_hash_body(self, input, rate, out, chained=True)
 
 
 # The classic Poseidon permute on `s` given round constants flattened row-major
@@ -179,7 +196,9 @@ def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
     }
 
 
-def _sponge_hash_body(perm: "Poseidon", input: Array, rate: int, out: int) -> Array:
+def _sponge_hash_body(
+    perm: "Poseidon", input: Array, rate: int, out: int, chained: bool = False
+) -> Array:
     """Classic-Poseidon sponge: absorb+squeeze as ONE `zorch.sponge_hash` region.
 
     Byte-identical to `Sponge.hash`. The region carries the ABI operands
@@ -187,13 +206,15 @@ def _sponge_hash_body(perm: "Poseidon", input: Array, rate: int, out: int) -> Ar
     closed-over constants and break the operand ABI the recognizer expects). The
     `mds` rides as a marker attribute; `permutation="poseidon"` is the required
     discriminator that routes the recognizer to the classic-permute config arm.
+    `chained` selects the Merkle-Damgard variant (same shared absorb + marker).
     """
     p = perm._p
     w = perm.width
 
     def sponge(inp: Array, rc_flat: Array, **_attrs: object) -> Array:
         state = jnp.zeros(w, dtype=inp.dtype)
-        return _absorb_symbolic(
+        absorb = _absorb_chained if chained else _absorb_overwrite
+        return absorb(
             inp, state, rate, out, lambda s: _permute_from_rc(perm, s, rc_flat)
         )
 
@@ -204,6 +225,8 @@ def _sponge_hash_body(perm: "Poseidon", input: Array, rate: int, out: int) -> Ar
         "digest_elems": out,
         **_poseidon_marker_attrs(perm),
     }
+    if chained:
+        marker_attrs["chained"] = 1
     return fused_region(
         sponge,
         *operands,
