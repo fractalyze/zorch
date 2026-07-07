@@ -44,7 +44,7 @@ def _state(seed: int, width: int) -> list[Array]:
 
 class LogupSummandTest(absltest.TestCase):
     """`LogupSummand` is the seam shared by the dense round (here) and the
-    jagged round's `_paired_sums` (jagged_prover_test); pinning it directly
+    jagged round's `paired_evals` (jagged_prover_test); pinning it directly
     keeps both consumers honest against the same combine."""
 
     def test_combine_matches_module_level_logup_combine(self) -> None:
