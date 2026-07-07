@@ -38,3 +38,12 @@ py_library(
         requirement("jax"),
     ],
 )
+
+py_library(
+    name = "ring_switch",
+    srcs = ["ring_switch.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("jax"),
+    ],
+)
