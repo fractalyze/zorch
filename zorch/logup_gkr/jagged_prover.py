@@ -36,7 +36,7 @@ homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import cache, partial
 from pathlib import Path
@@ -426,6 +426,47 @@ def _pool_lay(role: str, src: Array, width: int) -> Array:
     return out
 
 
+@partial(jax.jit, donate_argnums=(0,))
+def _lay_prefix_many(
+    dsts: tuple[Array, ...], srcs: tuple[Array, ...]
+) -> tuple[Array, ...]:
+    """`_lay_prefix` over a batch: one executable lays every (dst, src) pair of
+    a layer entry instead of one dispatch per role -- the entry's ~6-7 tiny
+    executions collapse to 1. Every dst is donated; the shape combo is static
+    per layer layout, so the executable census stays per-layout, same as the
+    per-role classes it replaces."""
+    return tuple(jax.lax.dynamic_update_slice(d, s, (0,)) for d, s in zip(dsts, srcs))
+
+
+def _pool_lay_batch(entries: Sequence[tuple[str, Array, int]]) -> list[Array]:
+    """The batched `_pool_lay`: lay every `(role, src, width)` entry through
+    ONE `_lay_prefix_many` dispatch. Equal-width entries pass through untouched
+    (exactly `_pool_lay`'s short-circuit); the rest donate their pooled buffer
+    and re-enter the pool as the laid result."""
+    out: list[Array] = []
+    laid_at: list[int] = []
+    bufs: list[Array] = []
+    srcs: list[Array] = []
+    for role, src, width in entries:
+        if src.shape[0] == width:
+            out.append(src)
+            continue
+        buf = _LAYER_BUF_POOL.get((role, width, src.dtype))
+        if buf is None:
+            buf = jnp.zeros((width,), src.dtype)
+        laid_at.append(len(out))
+        out.append(buf)  # placeholder, overwritten below
+        bufs.append(buf)
+        srcs.append(src)
+    if bufs:
+        laid = _lay_prefix_many(tuple(bufs), tuple(srcs))
+        for i, arr in zip(laid_at, laid):
+            role, src, width = entries[i]
+            _LAYER_BUF_POOL[(role, width, src.dtype)] = arr
+            out[i] = arr
+    return out
+
+
 def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:
     """The virtual (non-materialized) mass a round adds back in closed form.
 
@@ -667,6 +708,7 @@ def _prove_jagged_layer_from_counts(
         transcript,
         challenge_limbs,
         caps,
+        counts=row_counts,
     )
 
 
@@ -682,12 +724,14 @@ def _prove_jagged_layer_from_ops(
     transcript: Transcript,
     challenge_limbs: int,
     caps: RoundWidthCaps | None = None,
+    counts: tuple[int, ...] | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """`_prove_jagged_layer_from_counts` from PREBUILT schedule operands — the
     seam the whole-layer jit zone routes through, so `row_counts` and the live
     triples ride as TRACED operands (never keying the jit) while `out_pairs`
     (the exact layout's static padded widths; None under caps) stays static
-    like `niv`/`caps`."""
+    like `niv`/`caps`. `counts` (the Python-int layout, eager path only --
+    the jit zone must not carry it) keys the pre-staged live-block cache."""
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
@@ -703,6 +747,7 @@ def _prove_jagged_layer_from_ops(
         niv,
         challenge_limbs,
         caps,
+        counts=counts,
     )
     # The host round loop runs one fold-then-compute kernel per round, the FS hop
     # + reduce dispatching between them. `export_dispatch=True` selects the cached
@@ -909,6 +954,12 @@ class _JaggedSchedule:
     challenge_limbs: int
     caps: RoundWidthCaps | None = None
     meta: list[tuple[Array | None, Array, Array, Array]] | None = None
+    # The layout's Python-int row counts, when the caller has them: keys the
+    # pre-staged `_row_live_blocks` cache so a block dispatch carries zero
+    # per-layer stack executions. None (a hand-built schedule, or the jit zone
+    # -- a tuple of ints must not cross it as a traced pytree) falls back to
+    # the per-block `_row_live_block` stack.
+    counts: tuple[int, ...] | None = None
 
 
 @cache
@@ -1914,8 +1965,23 @@ _ROUND_BLOCK_SIZES = (8, 4, 2, 1)
 def _row_live_block(live: list[Array], start: int, k: int) -> Array:
     """The (k, 3) stacked live-triple operand for a row block covering rounds
     `[start, start+k)` -- one tiny stack dispatch per block per layer (the
-    triples are the memoized `_round_live_meta` arrays)."""
+    triples are the memoized `_round_live_meta` arrays). The fallback for a
+    hand-built schedule with no `counts`; the layout-keyed route below is the
+    zero-dispatch production path."""
     return jnp.stack(live[start : start + k])
+
+
+@cache
+def _row_live_blocks(
+    row_counts: tuple[int, ...], num_row_vars: int, start: int, k: int
+) -> Array:
+    """`_row_live_block` pre-staged per layout: the greedy block partition is
+    a pure function of the layout, so the (k, 3) stacks commit once per
+    (layout, block) into this never-evicting cache (tiny i32 rows, the same
+    policy as `_round_live_meta`) instead of one stack dispatch per block per
+    layer per pass."""
+    with jax.ensure_compile_time_eval():
+        return jnp.stack(_round_live_meta(row_counts, num_row_vars)[start : start + k])
 
 
 @cache
@@ -2520,6 +2586,28 @@ def _fs_reduce_dispatch(
 # round buffers leave the fully-folded state as the live length-2 prefix, so
 # the tail slices it down before the final marker -- the final ABI stays the
 # exact (2,) planes.
+def _stack_rounds(chal: list[Array], poly: list[Array]) -> tuple[Array, Array]:
+    """Stack the per-round challenge/poly lists into the proof's transcript
+    order. Multi-round block segments ((k,) challenges / (k, DEGREE+1) polys)
+    mixed with singles flatten in round order -- the challenge reversal
+    composes segment reversal with an in-segment flip. Same elements the
+    stacked form carries, concatenated instead of stacked."""
+    rev = [c[::-1] if c.ndim else c[None] for c in reversed(chal)]
+    rows = [p if p.ndim == 2 else p[None] for p in poly]
+    return (
+        rev[0] if len(rev) == 1 else jnp.concatenate(rev),
+        rows[0] if len(rows) == 1 else jnp.concatenate(rows),
+    )
+
+
+# The eager block path's stacking, hoisted into a module-level jit zone: the
+# per-segment reverses / expands / concatenates otherwise dispatch one tiny
+# execution each per layer (~5). Keyed on the lists' pytree structure +
+# shapes -- static per layout. jit is byte-transparent, so the flattened
+# transcript is unchanged.
+_stack_rounds_zone = jax.jit(_stack_rounds)
+
+
 def _finalize_layer(
     planes: _Planes,
     alpha: Array,
@@ -2537,20 +2625,11 @@ def _finalize_layer(
         # Per-round entries only (the traced and single-round paths): the
         # original one-stack structure, byte-for-byte.
         return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
-    # Multi-round block segments ((k,) challenges / (k, DEGREE+1) polys) mixed
-    # with singles: flatten in round order -- the challenge reversal composes
-    # segment reversal with an in-segment flip. Same elements the stacked form
-    # carries, concatenated instead of stacked.
-    rev = [c[::-1] if c.ndim else c[None] for c in reversed(chal)]
-    rows = [p if p.ndim == 2 else p[None] for p in poly]
-    return (
-        fn0,
-        fn1,
-        fd0,
-        fd1,
-        rev[0] if len(rev) == 1 else jnp.concatenate(rev),
-        rows[0] if len(rows) == 1 else jnp.concatenate(rows),
+    stack = (
+        _stack_rounds if isinstance(chal[0], jax.core.Tracer) else _stack_rounds_zone
     )
+    stacked_chal, stacked_poly = stack(chal, poly)
+    return fn0, fn1, fd0, fd1, stacked_chal, stacked_poly
 
 
 def _run_jagged_rounds(
@@ -2603,6 +2682,10 @@ def _run_jagged_rounds(
     # serves every round/layer/shard under the caps. The dead tails are zeros
     # here and never read (every consumer masks by `live`).
     caps = sched.caps
+    # The boundary round's pre-laid eq operand (concrete capped path only) --
+    # set by the batched layer-entry lay-in below, consumed at the
+    # row->interaction handoff.
+    eq_boundary_pre: Array | None = None
     if caps is not None:
         if caps.row % 4:
             raise ValueError(
@@ -2629,15 +2712,26 @@ def _run_jagged_rounds(
         if not isinstance(planes.n0, jax.core.Tracer):
             # Concrete (decoupled) path: lay each layer into the pooled,
             # donated cap buffers -- prefix-only in-place writes instead of
-            # fresh cap-wide materializations (see _LAYER_BUF_POOL).
-            planes = _Planes(
-                *(
-                    _pool_lay(f, getattr(planes, f), caps.row)
-                    for f in ("n0", "n1", "d0", "d1")
-                )
-            )
-            eq_row = _pool_lay("eq_row", eq_row, caps.eq_row)
-            eq_int = _pool_lay("eq_int", eq_int, caps.interaction)
+            # fresh cap-wide materializations (see _LAYER_BUF_POOL) -- through
+            # ONE batched dispatch per layer instead of one per role. The
+            # boundary round's eq operand (eq_int's live prefix at half the
+            # plane width) rides the same dispatch: the row rounds never fold
+            # eq_int, so laying it at entry is value-identical to laying it at
+            # the row->interaction handoff where it is consumed.
+            entries = [
+                (f, getattr(planes, f), caps.row) for f in ("n0", "n1", "d0", "d1")
+            ]
+            entries.append(("eq_row", eq_row, caps.eq_row))
+            entries.append(("eq_int", eq_int, caps.interaction))
+            if niv > 0:
+                half = caps.row // 2
+                src = eq_int if eq_int.shape[0] <= half else eq_int[:half]
+                entries.append(("eq_boundary", src, half))
+            laid = _pool_lay_batch(entries)
+            planes = _Planes(*laid[:4])
+            eq_row, eq_int = laid[4], laid[5]
+            if niv > 0:
+                eq_boundary_pre = laid[6]
         else:
             planes = _Planes(
                 *(
@@ -2710,6 +2804,11 @@ def _run_jagged_rounds(
             k = next((n for n in block_sizes if rnd + n <= nrv), 0)
             if k:
                 scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
+                live_ops = (
+                    _row_live_blocks(sched.counts, nrv, rnd, k)
+                    if sched.counts is not None
+                    else _row_live_block(sched.live, rnd, k)
+                )
                 (
                     poly,
                     r,
@@ -2729,7 +2828,7 @@ def _run_jagged_rounds(
                     eq_int,
                     scalars,
                     consts,
-                    _row_live_block(sched.live, rnd, k),
+                    live_ops,
                     transcript,
                     eval_point,
                     pos,
@@ -2753,10 +2852,10 @@ def _run_jagged_rounds(
             k = next((n for n in block_sizes if n <= niv), 0)
             if k:
                 # caps is not None on every block path (block_sizes guard),
-                # so the boundary eq operand comes from the pool like the
-                # single-round path's concrete branch below.
-                half = caps.row // 2  # type: ignore[union-attr]
-                src = eq_int if eq_int.shape[0] <= half else eq_int[:half]
+                # so the boundary eq operand was pre-laid by the batched
+                # layer-entry dispatch (eq_int is not folded by the row
+                # rounds, so the entry lay is value-identical).
+                assert eq_boundary_pre is not None
                 scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
                 (
                     poly,
@@ -2772,7 +2871,7 @@ def _run_jagged_rounds(
                     opens,
                 ) = _dispatch_boundary_block(
                     planes,
-                    _pool_lay("eq_boundary", src, half),
+                    eq_boundary_pre,
                     eq_int,
                     prev_r,
                     scalars,
@@ -2869,12 +2968,11 @@ def _run_jagged_rounds(
             elif isinstance(eq_int, jax.core.Tracer):
                 eq_boundary = _resize_zero(eq_int, caps.row // 2)
             else:
-                # Pooled lay-in of the live prefix (concrete path): the old
-                # `_resize_zero` wrote a fresh caps.row//2 buffer that is
-                # mostly zero tail at a wide cap.
-                half = caps.row // 2
-                src = eq_int if eq_int.shape[0] <= half else eq_int[:half]
-                eq_boundary = _pool_lay("eq_boundary", src, half)
+                # Pre-laid by the batched layer-entry dispatch (concrete
+                # path); the old per-handoff `_resize_zero` wrote a fresh
+                # caps.row//2 buffer that is mostly zero tail at a wide cap.
+                assert eq_boundary_pre is not None
+                eq_boundary = eq_boundary_pre
             poly, planes, _ = fix_boundary(
                 planes, eq_boundary, prev_r, scalars, consts, live
             )
@@ -2974,6 +3072,7 @@ def _prove_jagged_layer_round(
     caps: RoundWidthCaps | None,
     carry: Carry,
     transcript: Transcript,
+    counts: tuple[int, ...] | None = None,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
@@ -3005,6 +3104,7 @@ def _prove_jagged_layer_round(
         transcript,
         challenge_limbs,
         caps,
+        counts=counts,
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
     d0, d1 = proof.denominator_0, proof.denominator_1
@@ -3127,6 +3227,7 @@ def _jagged_round_eager(
         caps,
         carry,
         transcript,
+        counts=layer.row_counts,
     )
 
 
