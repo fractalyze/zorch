@@ -5,6 +5,7 @@ py_library(
     name = "ligerito",
     srcs = [
         "__init__.py",
+        "basis.py",
         "choreography.py",
         "config.py",
         "prover.py",

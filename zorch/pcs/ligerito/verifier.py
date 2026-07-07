@@ -18,7 +18,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -26,11 +25,11 @@ from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
 from zorch.pcs.fold import from_base_field, verify_openings
+from zorch.pcs.ligerito.basis import select_commit_basis
 from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck import prover as sc_prover
 from zorch.sumcheck.prover import fold as sc_fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
@@ -73,14 +72,45 @@ class LigeritoVerifier:
         if len(points) != 1:
             raise ValueError(f"Ligerito opens at one point, got {len(points)}")
         z = points[0]
-        cfg = self.config
-        if z.shape[0] != cfg.num_vars:
+        if z.shape[0] != self.config.num_vars:
             raise ValueError(
                 f"point dimension {z.shape[0]} must equal the variable count "
-                f"{cfg.num_vars}"
+                f"{self.config.num_vars}"
             )
-        # Fail loud on a structurally malformed proof — a short list would let the
-        # replay silently skip checks.
+        self._check_shape(proof)
+        one = jnp.ones((), z.dtype)
+        return _verify(
+            self,
+            commitment,
+            z,
+            expand_eq_to_hypercube(z, one),
+            value,
+            proof,
+            transcript,
+        )
+
+    def verify_with_basis(
+        self,
+        commitment: LigeritoCommitment,
+        basis: Array,
+        value: Array,
+        proof: LigeritoProof,
+        transcript: Transcript,
+    ) -> tuple[Array, Transcript]:
+        """`verify` for a RAW hypercube basis instead of a point — the dual of
+        `LigeritoProver.open_with_basis` (`bind_statement` receives
+        `point=None`)."""
+        if basis.shape[0] != 1 << self.config.num_vars:
+            raise ValueError(
+                f"basis length {basis.shape[0]} must be 2^{self.config.num_vars}"
+            )
+        self._check_shape(proof)
+        return _verify(self, commitment, None, basis, value, proof, transcript)
+
+    def _check_shape(self, proof: LigeritoProof) -> None:
+        """Fail loud on a structurally malformed proof — a short list would let
+        the replay silently skip checks."""
+        cfg = self.config
         num_messages = self.choreography.num_messages(cfg)
         if len(proof.sumcheck_messages) != num_messages:
             raise ValueError(
@@ -108,24 +138,24 @@ class LigeritoVerifier:
                 f"malformed proof: expected {num_pow} proof-of-work witnesses, "
                 f"got {len(proof.pow_witnesses)}"
             )
-        return _verify(self, commitment, z, value, proof, transcript)
 
 
 def _verify(
     verifier: LigeritoVerifier,
     commitment: Array,
-    z: Array,
+    z: Array | None,
+    B: Array,
     value: Array,
     proof: LigeritoProof,
     transcript: Transcript,
 ) -> tuple[Array, Transcript]:
     cfg = verifier.config
     chor = verifier.choreography
-    dtype = z.dtype
+    dtype = B.dtype
     one = jnp.ones((), dtype)
     round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
+    basis = select_commit_basis(cfg.monomial_commit)
 
-    B = expand_eq_to_hypercube(z, one)
     claim = value
     ok = jnp.bool_(True)
 
@@ -177,7 +207,12 @@ def _verify(
             if eager:
                 t, cur = take(t)
         num_vars -= k_j
-        eqc = expand_eq_to_hypercube(jnp.stack(challenges), one)  # (kappa_j,)
+        # The opened row's lane axis follows the commit basis: bit-reversed
+        # under monomial_commit (lane bit j <-> challenge k_j-1-j), natural
+        # otherwise. eq of the reversed challenge vector IS the bit-reversed
+        # eq table, so one expansion serves both.
+        lane_chals = challenges[::-1] if cfg.monomial_commit else challenges
+        eqc = expand_eq_to_hypercube(jnp.stack(lane_chals), one)  # (kappa_j,)
         kappa_j = 1 << k_j
         is_final = j == cfg.num_levels - 1
 
@@ -214,7 +249,8 @@ def _verify(
         if is_final:
             # Direct: the in-clear residual must reproduce each proximity claim,
             # and the sumcheck's terminal claim closes against Σ_x residual·B.
-            expected = jax.vmap(lambda p: eval_mle(residual, p))(points_s)  # (Q,)
+            bases = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
+            expected = (residual[None, :] * bases).sum(axis=1)  # (Q,)
             ok = ok & jnp.all(expected == v)
             ok = ok & (claim == (residual * B).sum())
             if cur is not None:
@@ -235,7 +271,7 @@ def _verify(
             t, cfg.queries[j], dtype, lsb_first=cfg.alpha_lsb_first
         )
         alpha = alpha[: cfg.queries[j]]
-        eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)
+        eqps = basis.proximity_basis(points_s, one)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
         h_new = (alpha * v).sum()
         if cur is not None:
