@@ -225,6 +225,7 @@ def _open(
     sumcheck_messages: list[Array] = []
     recursive_roots: list[Array] = []
     component_openings: list[Opening] = []
+    component_positions: list[Array] = []
     ood_values: list[Array] = []
     pow_witnesses: list[Array] = []
 
@@ -307,6 +308,7 @@ def _open(
             prover.tree, current.leaves, current.digest_layers, positions
         )
         component_openings.append(opening)
+        component_positions.append(positions)
 
         if is_final:
             # The final level's proximity ties the in-clear residual to M_j and
@@ -339,6 +341,7 @@ def _open(
         final_residual=residual,
         ood_values=ood_values,
         pow_witnesses=pow_witnesses,
+        component_positions=component_positions,
     )
     return proof, t
 
