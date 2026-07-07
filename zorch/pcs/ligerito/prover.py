@@ -29,9 +29,12 @@ witness — the whole recursion stays in one basis (design note: the seam identi
 `encode(w)[s] == eval_mle(coeffs_to_evals(w), eval_point(s))`).
 
 Reuses `pcs/basefold`'s staggered partial-Lagrange batching for the per-level
-`α` weights and `pcs/fold`'s query machinery (`sample_positions` / `open_rows`).
-Code-generic over a `TensorCode`; the multiplicative Reed-Solomon instantiation
-is the de-risk vehicle (fractalyze/flock-zorch#32).
+`α` weights and `pcs/fold`'s query machinery (`open_rows`). Every transcript
+interaction routes through the `FsChoreography` seam (statement binding, round
+hops, root/residual framing, query sampling), so a byte-fixed consumer swaps
+the wire without touching the recursion. Code-generic over a `TensorCode`; the
+multiplicative Reed-Solomon instantiation is the de-risk vehicle
+(fractalyze/flock-zorch#32).
 """
 
 from __future__ import annotations
@@ -48,12 +51,14 @@ from jax import Array
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
-from zorch.pcs.fold import open_rows, sample_positions
+from zorch.pcs.fold import open_rows
+from zorch.pcs.ligerito.choreography import FsChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.sumcheck.prover import CompressedProductRound, SumcheckRound
+from zorch.sumcheck.prover import fold as sc_fold
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -109,11 +114,13 @@ class LigeritoProverData:
 class LigeritoProver:
     """Ligerito recursive PCS prover. `make_code(message_len, log_inv_rate)`
     builds each level's `TensorCode`; `config` fixes the fold schedule; `tree`
-    commits every level's codeword rows."""
+    commits every level's codeword rows; `choreography` fixes the Fiat-Shamir
+    wire (share the instance with the verifier)."""
 
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
+    choreography: FsChoreography = FsChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -165,6 +172,7 @@ def _open(
     transcript: Transcript,
 ) -> tuple[Array, LigeritoProof, Transcript]:
     cfg = prover.config
+    chor = prover.choreography
     dtype = z.dtype
     one = jnp.ones((), dtype)
     round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
@@ -177,10 +185,8 @@ def _open(
     B = expand_eq_to_hypercube(z, one)
     value = (pd.f * B).sum()  # f(z) = <f, eq(z)>; reuse B rather than rebuild eq(z)
 
-    # Bind the statement (root, point, value) before any challenge.
-    t = transcript.observe(pd.initial.root)
-    t = t.observe(z)
-    t = t.observe(value)
+    # Bind the statement before any challenge.
+    t = chor.bind_statement(transcript, pd.initial.root, z, value)
 
     sumcheck_messages: list[Array] = []
     recursive_roots: list[Array] = []
@@ -191,9 +197,11 @@ def _open(
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck ---
-        for _ in range(k_j):
-            [W, B], t, msg = round_([W, B], t)
+        for i in range(k_j):
+            msg = round_._round_poly([W, B])
             sumcheck_messages.append(msg)
+            t, r = chor.fold_challenge(t, msg, j, i)
+            W, B = sc_fold([W, B], r)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---
@@ -202,18 +210,18 @@ def _open(
             k_next = cfg.fold_ks[j + 1]
             code_next = prover._code(j + 1, 1 << (num_vars - k_next))
             nxt = _commit(W, k_next, code_next, prover.tree)
-            t = t.observe(nxt.root)
+            t = chor.observe_root(t, nxt.root)
             recursive_roots.append(nxt.root)
         else:
             # Bind the in-clear residual before sampling the final level's queries
             # (the IOPP terminal binding — queries depend on it; verify mirrors).
-            t = t.observe(W)
+            t = chor.observe_residual(t, W)
 
         # --- open M_j's codeword rows at the sampled query positions ---
         # M_j's message (encoded) axis is exactly the post-fold witness, so its
         # message length is 2^num_vars — rebuild the same code the commit used.
         code_j = prover._code(j, 1 << num_vars)
-        t, positions = sample_positions(t, code_j.block_len, cfg.queries[j])
+        t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = open_rows(
             prover.tree, current.leaves, current.digest_layers, positions
         )

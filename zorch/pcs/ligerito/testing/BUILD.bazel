@@ -22,6 +22,7 @@ py_test(
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
+        requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

@@ -30,7 +30,7 @@ from jax import Array, lax
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.round import Round
-from zorch.transcript import Transcript
+from zorch.transcript import Transcript, TranscriptT
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
@@ -150,11 +150,12 @@ def open_rows(
 
 
 def sample_positions(
-    transcript: Transcript, block_len: int, count: int
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, block_len: int, count: int
+) -> tuple[TranscriptT, Array]:
     """Squeeze `count` query positions in `[0, block_len)` as one device int32
     array — no host round-trip — derived identically on both sides. Each squeezed
-    field element's low limb is reduced mod `block_len`."""
+    field element's low limb is reduced mod `block_len`. Generic over the
+    transcript flavor so a `GrindingTranscript` caller keeps its type."""
     t, raw = transcript.sample(count)
     limbs = lax.bitcast_convert_type(raw, jnp.uint32).reshape(count, -1)
     return t, (limbs[:, 0] % block_len).astype(jnp.int32)

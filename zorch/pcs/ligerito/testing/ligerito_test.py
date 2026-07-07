@@ -8,8 +8,11 @@ the additive-NTT code (fractalyze/flock-zorch#11, #27).
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 
+import jax
 import jax.numpy as jnp
+import numpy as np
 from absl.testing import absltest, parameterized
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
@@ -224,6 +227,54 @@ class LigeritoTamperTest(parameterized.TestCase):
     def test_rejects_tampered_value(self) -> None:
         verifier, root, z, value, proof = self._open()
         self._reject(verifier, root, z, value + jnp.array(1, EF), proof)
+
+
+class LigeritoWireGoldenTest(parameterized.TestCase):
+    """Byte-pin of the default (zorch-native) wire: the digest covers the
+    opened value, every proof leaf, and a post-open / post-verify squeeze from
+    each side's transcript, so ANY reordered or reframed Fiat-Shamir
+    interaction moves it. Captured before the `FsChoreography` seam landed —
+    the default choreography must keep these bytes forever; regenerate only
+    for an intentional wire change."""
+
+    @parameterized.named_parameters(
+        dict(
+            testcase_name="l4_8v",
+            alpha_lsb_first=False,
+            compressed_sumcheck_messages=False,
+            want="17a4aba743d71aeb91106c22022f0fb881506cfaf6df22ea0ea86937e22373b1",
+        ),
+        dict(
+            testcase_name="l4_8v_flockknobs",
+            alpha_lsb_first=True,
+            compressed_sumcheck_messages=True,
+            want="681b90e6fae895dde779163a295bd729cb04c3ac143e8f17e8d9c15dd1dcae4e",
+        ),
+    )
+    def test_default_wire_digest(
+        self, alpha_lsb_first: bool, compressed_sumcheck_messages: bool, want: str
+    ) -> None:
+        cfg = LigeritoConfig(
+            num_vars=8,
+            fold_ks=(2, 1, 1, 1),
+            log_inv_rates=(3, 2, 1, 1),
+            queries=(6, 4, 4, 2),
+            alpha_lsb_first=alpha_lsb_first,
+            compressed_sumcheck_messages=compressed_sumcheck_messages,
+        )
+        prover, verifier, root, _, pdata = _setup(cfg)
+        z = _rand_ef(2, (cfg.num_vars,))
+        value, proof, t_open = prover.open(pdata, [z], _transcript())
+        ok, t_verify = verifier.verify(root, [z], value, proof, _transcript())
+        self.assertTrue(bool(ok))
+        _, s_open = t_open.sample()
+        _, s_verify = t_verify.sample()
+        h = hashlib.sha256()
+        for leaf in [value, *jax.tree_util.tree_leaves(proof), s_open, s_verify]:
+            h.update(
+                np.asarray(jnp.asarray(leaf).reshape(-1).view(jnp.uint32)).tobytes()
+            )
+        self.assertEqual(h.hexdigest(), want)
 
 
 class LigeritoConfigTest(absltest.TestCase):

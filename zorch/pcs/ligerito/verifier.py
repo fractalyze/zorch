@@ -25,7 +25,8 @@ from jax import Array
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
-from zorch.pcs.fold import from_base_field, sample_positions, verify_openings
+from zorch.pcs.fold import from_base_field, verify_openings
+from zorch.pcs.ligerito.choreography import FsChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -44,11 +45,13 @@ _COMPRESSED_ROUND = CompressedCoeffsSumcheckRound()
 @dataclass(frozen=True)
 class LigeritoVerifier:
     """Ligerito recursive PCS verifier. Mirrors `LigeritoProver`'s `make_code` /
-    `tree` / `config`."""
+    `tree` / `config` / `choreography` (share the choreography instance with
+    the prover — it fixes the Fiat-Shamir wire for both sides)."""
 
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
+    choreography: FsChoreography = FsChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -73,9 +76,10 @@ class LigeritoVerifier:
             )
         # Fail loud on a structurally malformed proof — a short list would let the
         # replay silently skip checks.
-        if len(proof.sumcheck_messages) != sum(cfg.fold_ks):
+        num_messages = self.choreography.num_messages(cfg)
+        if len(proof.sumcheck_messages) != num_messages:
             raise ValueError(
-                f"malformed proof: expected {sum(cfg.fold_ks)} sumcheck messages, "
+                f"malformed proof: expected {num_messages} sumcheck messages, "
                 f"got {len(proof.sumcheck_messages)}"
             )
         if len(proof.recursive_roots) != cfg.num_levels - 1:
@@ -100,6 +104,7 @@ def _verify(
     transcript: Transcript,
 ) -> tuple[Array, Transcript]:
     cfg = verifier.config
+    chor = verifier.choreography
     dtype = z.dtype
     one = jnp.ones((), dtype)
     round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
@@ -108,9 +113,7 @@ def _verify(
     claim = value
     ok = jnp.bool_(True)
 
-    t = transcript.observe(commitment)
-    t = t.observe(z)
-    t = t.observe(value)
+    t = chor.bind_statement(transcript, commitment, z, value)
 
     roots = [commitment] + list(proof.recursive_roots)  # root of M_j = roots[j]
     residual = proof.final_residual
@@ -119,10 +122,11 @@ def _verify(
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         challenges = []
-        for _ in range(k_j):
+        for i in range(k_j):
             msg = proof.sumcheck_messages[msg_idx]
             msg_idx += 1
-            claim, t, r, ok_round = round_(claim, msg, t)
+            t, r = chor.fold_challenge(t, msg, j, i)
+            claim, ok_round = round_.check_reduce(claim, msg, r)
             ok = ok & ok_round
             # The round verifier reduces only the claim; fold the public basis B
             # by the same challenge so it tracks the prover's folded B.
@@ -134,12 +138,12 @@ def _verify(
         is_final = j == cfg.num_levels - 1
 
         if not is_final:
-            t = t.observe(roots[j + 1])
+            t = chor.observe_root(t, roots[j + 1])
         else:
-            t = t.observe(residual)
+            t = chor.observe_residual(t, residual)
 
         code_j = verifier._code(j, 1 << num_vars)
-        t, positions = sample_positions(t, code_j.block_len, cfg.queries[j])
+        t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = proof.component_openings[j]
         ok = ok & verify_openings(verifier.tree, [(roots[j], positions, opening)])
         opened = from_base_field(opening.row, dtype, kappa_j)  # (Q, kappa_j)
