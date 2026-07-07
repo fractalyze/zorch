@@ -28,6 +28,5 @@ py_library(
         "//zorch/sumcheck/jagged",
         "//zorch/utils:bits",
         requirement("jax"),
-        requirement("numpy"),
     ],
 )

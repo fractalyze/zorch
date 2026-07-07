@@ -18,13 +18,9 @@ from zorch.logup_gkr._jagged_rounds import (
     _round_poly_row,
 )
 from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
-from zorch.sumcheck.jagged.buffers import (
-    _pad_to_width,
-)
+from zorch.sumcheck.jagged.buffers import _pad_to_width
 from zorch.sumcheck.jagged.rounds import _bind_lsb
-from zorch.sumcheck.jagged.schedule import (
-    _derive_row_schedule,
-)
+from zorch.sumcheck.jagged.schedule import _derive_row_schedule
 from zorch.sumcheck.jagged.types import _InterpConsts
 from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER,
