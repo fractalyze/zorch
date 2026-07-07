@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax import Array
 
-from zorch.logup_gkr.circuit import (
+from zorch.sumcheck.jagged.layout import (
     _prepad_folded,
     _segment_gather_np,
 )

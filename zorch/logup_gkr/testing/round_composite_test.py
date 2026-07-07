@@ -30,19 +30,16 @@ from zorch.logup_gkr._jagged_rounds import (
     _round_interp_constants,
     _round_poly_row,
 )
-from zorch.logup_gkr._jagged_schedule import (
+from zorch.logup_gkr._jagged_types import _Planes, _RoundScalars
+from zorch.logup_gkr.testing import random_jagged_layer
+from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.sumcheck.jagged.schedule import (
     _round_live_meta,
     _round_metadata,
     _round_out_pairs,
     _row_counts_operand,
 )
-from zorch.logup_gkr._jagged_types import (
-    _InterpConsts,
-    _Planes,
-    _RoundScalars,
-)
-from zorch.logup_gkr.testing import random_jagged_layer
-from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.sumcheck.jagged.types import _InterpConsts
 from zorch.sumcheck.prover import SUMCHECK_ROUND_MARKER
 from zorch.testkit.random_field import rand_field
 

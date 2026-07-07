@@ -6,12 +6,16 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 # verify_gkr) — used by the package tests.
 py_library(
     name = "testing",
-    srcs = ["__init__.py"],
+    srcs = [
+        "__init__.py",
+        "_jagged_reference.py",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/logup_gkr",
+        "//zorch/sumcheck/jagged",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("jax"),
@@ -62,6 +66,7 @@ py_test(
         "//zorch:transcript",
         "//zorch/logup_gkr",
         "//zorch/poly",
+        "//zorch/sumcheck/jagged",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
@@ -96,6 +101,7 @@ py_test(
         ":testing",
         "//zorch/logup_gkr",
         "//zorch/sumcheck",
+        "//zorch/sumcheck/jagged",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),

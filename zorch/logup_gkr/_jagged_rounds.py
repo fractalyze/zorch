@@ -1,7 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Eager numeric bodies of one jagged sumcheck round: LSB binds, the
-Gruen coefficient-form round polynomial, and the row/boundary/interaction
-fold+sum variants the composites and the reference oracle share."""
+"""LogUp-specific eager bodies of one jagged sumcheck round: the LogUp
+combine (`_paired_sums`), the plane binds, and the row/boundary/interaction
+fold+sum variants the composites and the reference oracle share. The
+scheme-agnostic round helpers live in `zorch.sumcheck.jagged.rounds`."""
 
 from __future__ import annotations
 
@@ -12,85 +13,12 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.logup_gkr._jagged_types import (
-    _DEGREE,
-    _InterpConsts,
-    _Planes,
-    _RoundScalars,
-)
-from zorch.logup_gkr.circuit import (
-    _pad_neutral,
-)
+from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
+from zorch.logup_gkr.circuit import _pad_neutral
 from zorch.logup_gkr.prover import LogupSummand
-from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.univariate import (
-    compute_inv_vandermonde,
-    compute_lagrange_basis,
-)
-from zorch.sumcheck.prover import (
-    fold_pair,
-)
-
-
-def _bind_lsb(arr: Array, r: Array) -> Array:
-    """Bind the LSB variable: stride-2 consecutive pairs fold via the shared
-    `sumcheck.prover.fold_pair` -- `e0 + r*(e1 - e0)`. (The split is LSB/stride-2,
-    distinct from `fold`/`split_halves`' contiguous MSB halves; only the scalar
-    fold is shared.)"""
-    return fold_pair(arr[0::2], arr[1::2], r)
-
-
-def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:
-    """The virtual (non-materialized) mass a round adds back in closed form.
-
-    The sumcheck runs only over the materialized rows; every non-materialized
-    position holds the fold-neutral fraction (n=0, d=1), whose LogUp summand
-    collapses to just its eq weight. The eq weights of the full remaining
-    hypercube sum to `pad_adj`, so the virtual positions contribute exactly
-    `pad_adj - eq_sum` (the full mass minus the materialized `eq_sum`) -- added
-    back by `_round_coeffs` in closed form rather than iterated over."""
-    return pad_adj - eq_sum
-
-
-def _round_coeffs(
-    eval_zero: Array,
-    eval_half: Array,
-    eq_sum: Array,
-    eq_adj: Array,
-    pad_adj: Array,
-    z_cur: Array,
-    claim: Array,
-    naturals: Array,
-    inv_vand: Array,
-) -> Array:
-    """Round polynomial coefficients from the materialized {0, 1/2} sums.
-
-    Every non-materialized position contributes exactly its eq weight, and
-    the eq weights of the full remaining hypercube sum to `pad_adj`, so the
-    virtual mass is `pad_adj - eq_sum`: at u=0 it carries the current
-    variable's eq factor `(1 - z_cur)`; at the doubled u=1/2 scale each
-    virtual pair contributes `den_h = 4` at weight `eq_h = eq_rest`, and the
-    doubled products overcount s(1/2) by 8. `eq_adj` is the row-eq residual
-    scalar once the row variables are exhausted (1 before that).
-
-    The interpolant through {0, 1, 1/2, b} crosses to coefficients via the
-    natural domain: Lagrange-evaluate it at `naturals` ({0..3}), then
-    `inv_vand` maps values to coefficients. Both are hoisted by the caller
-    -- they only depend on the degree.
-    """
-    dtype = claim.dtype
-    one = jnp.ones((), dtype)
-    correction = _virtual_mass_correction(pad_adj, eq_sum)
-    s_zero = (eval_zero + correction * (one - z_cur)) * eq_adj
-    s_half = (
-        (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
-    )
-    s_one = claim - s_zero
-    b_root = (one - z_cur) / (one - jnp.array(2, dtype) * z_cur)
-    xs = jnp.stack([jnp.zeros((), dtype), one, one / jnp.array(2, dtype), b_root])
-    ys = jnp.stack([s_zero, s_one, s_half, jnp.zeros((), dtype)])
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
-    return jnp.dot(inv_vand, jnp.dot(lagrange, ys))
+from zorch.poly.univariate import compute_inv_vandermonde
+from zorch.sumcheck.jagged.rounds import _bind_lsb, _round_coeffs
+from zorch.sumcheck.jagged.types import _InterpConsts
 
 
 def _paired_sums(
@@ -133,14 +61,6 @@ def _paired_sums(
         terms_half = jnp.where(mask, terms_half, jnp.zeros_like(terms_half))
         eq_h = jnp.where(mask, eq_h, jnp.zeros_like(eq_h))
     return jnp.sum(terms_zero), jnp.sum(terms_half), jnp.sum(eq_h)
-
-
-def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
-    """`expand_eq_to_hypercube` over the row (`eval_point[niv:]`) or batch
-    (`eval_point[:niv]`) coordinate block, traced into the whole-layer jit. `niv`
-    (and hence the slice bounds + output length) rides static."""
-    coords = eval_point[niv:] if row else eval_point[:niv]
-    return expand_eq_to_hypercube(coords, jnp.ones((), eval_point.dtype))
 
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:

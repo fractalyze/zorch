@@ -1,0 +1,29 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+# Scheme-agnostic jagged-sumcheck plumbing, extracted from logup_gkr: the
+# fixed-width round-buffer caps (xla#179 size-invariance), the per-round
+# Fiat-Shamir hop, the row_counts-driven re-pad/live schedule with its segment
+# layout recurrences, and the degree-agnostic round-coefficient helpers. The
+# LogUp combine (the four planes + `lam` summand) stays in //zorch/logup_gkr; a
+# jagged zerocheck consumer reuses this package with its own summand.
+py_library(
+    name = "jagged",
+    srcs = [
+        "__init__.py",
+        "buffers.py",
+        "fs.py",
+        "layout.py",
+        "rounds.py",
+        "schedule.py",
+        "types.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)

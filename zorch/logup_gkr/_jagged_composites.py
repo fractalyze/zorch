@@ -11,25 +11,21 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch._composite import composite
-from zorch.logup_gkr._jagged_buffers import (
-    _pad_to_width,
-)
 from zorch.logup_gkr._jagged_rounds import (
-    _bind_lsb,
     _bind_planes,
     _fix_last,
     _round_poly_int,
     _round_poly_row,
 )
-from zorch.logup_gkr._jagged_schedule import (
+from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
+from zorch.sumcheck.jagged.buffers import (
+    _pad_to_width,
+)
+from zorch.sumcheck.jagged.rounds import _bind_lsb
+from zorch.sumcheck.jagged.schedule import (
     _derive_row_schedule,
 )
-from zorch.logup_gkr._jagged_types import (
-    _DEGREE,
-    _InterpConsts,
-    _Planes,
-    _RoundScalars,
-)
+from zorch.sumcheck.jagged.types import _InterpConsts
 from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER,
     SUMCHECK_ROUND_MARKER_VERSION,

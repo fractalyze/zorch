@@ -43,11 +43,6 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.logup_gkr._jagged_buffers import (
-    _pad_to_width,
-    _pool_lay_batch,
-    _resize_zero,
-)
 from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
@@ -55,26 +50,8 @@ from zorch.logup_gkr._jagged_composites import (
     _composite_fix_last,
     _composite_sum_as_poly_row,
 )
-from zorch.logup_gkr._jagged_fs import _fs_reduce
-from zorch.logup_gkr._jagged_rounds import (
-    _expand_eq_slice,
-    _round_interp_constants,
-)
-from zorch.logup_gkr._jagged_schedule import (
-    _check_row_space,
-    _dense_live_operand,
-    _round_live_meta,
-    _round_out_pairs,
-    _row_counts_operand,
-)
-from zorch.logup_gkr._jagged_types import (
-    RoundWidthCaps,
-    _InterpConsts,
-    _JaggedSchedule,
-    _JaggedState,
-    _Planes,
-    _RoundScalars,
-)
+from zorch.logup_gkr._jagged_rounds import _round_interp_constants
+from zorch.logup_gkr._jagged_types import _JaggedState, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _pad_neutral,
@@ -82,6 +59,25 @@ from zorch.logup_gkr.circuit import (
 )
 from zorch.logup_gkr.prover import Carry, fold_carry
 from zorch.round import Round
+from zorch.sumcheck.jagged.buffers import (
+    _pad_to_width,
+    _pool_lay_batch,
+    _resize_zero,
+)
+from zorch.sumcheck.jagged.fs import _fs_reduce
+from zorch.sumcheck.jagged.rounds import _expand_eq_slice
+from zorch.sumcheck.jagged.schedule import (
+    _check_row_space,
+    _dense_live_operand,
+    _round_live_meta,
+    _round_out_pairs,
+    _row_counts_operand,
+)
+from zorch.sumcheck.jagged.types import (
+    RoundWidthCaps,
+    _InterpConsts,
+    _JaggedSchedule,
+)
 from zorch.transcript import (
     DuplexTranscript,
     Transcript,

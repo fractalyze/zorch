@@ -12,21 +12,7 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from jax import Array
 
-from zorch.logup_gkr._jagged_buffers import _LAYER_BUF_POOL, _pool_lay_batch
-from zorch.logup_gkr._jagged_schedule import (
-    _round_live_meta,
-    _round_metadata,
-    _round_out_pairs,
-    _row_counts_operand,
-)
-from zorch.logup_gkr._jagged_types import (
-    _DEGREE,
-    RoundWidthCaps,
-    _InterpConsts,
-    _JaggedSchedule,
-    _JaggedState,
-    _Planes,
-)
+from zorch.logup_gkr._jagged_types import _DEGREE, _JaggedState, _Planes
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import _run_jagged_rounds
 from zorch.logup_gkr.prover import logup_combine
@@ -34,6 +20,18 @@ from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
 from zorch.logup_gkr.testing._jagged_reference import _run_jagged_rounds_reference
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_inv_vandermonde
+from zorch.sumcheck.jagged.buffers import _LAYER_BUF_POOL, _pool_lay_batch
+from zorch.sumcheck.jagged.schedule import (
+    _round_live_meta,
+    _round_metadata,
+    _round_out_pairs,
+    _row_counts_operand,
+)
+from zorch.sumcheck.jagged.types import (
+    RoundWidthCaps,
+    _InterpConsts,
+    _JaggedSchedule,
+)
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, Transcript

@@ -12,10 +12,12 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array
 
-from zorch.logup_gkr._jagged_fs import _fold_scalars
-from zorch.logup_gkr._jagged_rounds import _bind_lsb, _paired_sums, _round_coeffs
-from zorch.logup_gkr._jagged_types import _JaggedSchedule, _JaggedState
+from zorch.logup_gkr._jagged_rounds import _paired_sums
+from zorch.logup_gkr._jagged_types import _JaggedState
 from zorch.logup_gkr.circuit import _pad_neutral
+from zorch.sumcheck.jagged.fs import _fold_scalars
+from zorch.sumcheck.jagged.rounds import _bind_lsb, _round_coeffs
+from zorch.sumcheck.jagged.types import _JaggedSchedule
 from zorch.transcript import Transcript, sample_challenge
 
 
