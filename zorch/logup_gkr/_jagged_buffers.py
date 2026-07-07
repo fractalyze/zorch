@@ -39,7 +39,7 @@ def _resize_zero(arr: Array, width: int) -> Array:
 # cap the entry pad materializes FRESH cap-wide buffers every layer -- an
 # alloc + zero-fill + prefix copy per plane/eq table, ~2x cap-width writes,
 # a top GPU item of the warm prove (wrapped_concatenate + wrapped_broadcast at
-# a cap that is ~19x shard17's live prefix). The pool instead holds ONE
+# a cap many times the live prefix's width). The pool instead holds ONE
 # persistent cap-wide array per (role, width, dtype); the zone donates it back
 # via `_lay_prefix_many` (in `_jagged_round_via_zone`, before the trace),
 # which writes only the live prefix in place. The tail keeps the PREVIOUS

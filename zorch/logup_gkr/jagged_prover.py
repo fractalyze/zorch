@@ -55,15 +55,9 @@ from zorch.logup_gkr._jagged_composites import (
     _composite_fix_last,
     _composite_sum_as_poly_row,
 )
-from zorch.logup_gkr._jagged_fs import (
-    _fold_scalars,
-    _fs_reduce,
-)
+from zorch.logup_gkr._jagged_fs import _fs_reduce
 from zorch.logup_gkr._jagged_rounds import (
-    _bind_lsb,
     _expand_eq_slice,
-    _paired_sums,
-    _round_coeffs,
     _round_interp_constants,
 )
 from zorch.logup_gkr._jagged_schedule import (
@@ -92,7 +86,6 @@ from zorch.transcript import (
     DuplexTranscript,
     Transcript,
     reinterpret_challenge,
-    sample_challenge,
 )
 
 if TYPE_CHECKING:
@@ -205,7 +198,7 @@ def prove_jagged_layer(
     Byte-identical to the exact layout.
     """
     niv = layer.num_batch_variables
-    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    _check_row_space(layer.row_counts, eval_point.shape[0], niv)  # validates only
     planes = _Planes(
         layer.numerator_0,
         layer.numerator_1,
@@ -304,101 +297,6 @@ def _prove_jagged_layer_from_ops(
     bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
     proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
     return bound_point, advanced, proof
-
-
-def _run_jagged_rounds_reference(
-    state: _JaggedState,
-    sched: _JaggedSchedule,
-    transcript: Transcript,
-) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
-    """The unrolled oracle for `_run_jagged_rounds`: the per-round jagged sumcheck
-    written out with an explicit observe/sample per round. Returns the bound point
-    (challenges reversed), the advanced transcript, the stacked round polynomials,
-    and the four folded pair openings. The round runner must match this byte-for-byte.
-    """
-    n0, n1, d0, d1 = state.planes.n0, state.planes.n1, state.planes.d0, state.planes.d1
-    eq_row, eq_int, eval_point, lam, claim = (
-        state.eq_row,
-        state.eq_int,
-        state.eval_point,
-        state.lam,
-        state.claim,
-    )
-    if sched.meta is None:
-        raise ValueError(
-            "the reference oracle needs the schedule's host-built explicit "
-            "meta (_round_metadata) — the round loop's derived-schedule "
-            "fields do not carry it"
-        )
-    meta, nrv, niv = sched.meta, sched.nrv, sched.niv
-    naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
-    challenge_limbs = sched.challenge_limbs
-    one = jnp.ones((), eval_point.dtype)
-    eq_adj = one
-    pad_adj = one
-    point = eval_point
-    polys: list[Array] = []
-    challenges: list[Array] = []
-    for rnd in range(nrv + niv):
-        in_rows = rnd < nrv
-        if in_rows:
-            # The oracle runs the exact layout; the schedule's `live` operand
-            # (the fixed-width prefix marker) is the production loop's concern.
-            gather, col_index, pair_index, _live = meta[rnd]
-            n0, n1, d0, d1 = _pad_neutral(n0, n1, d0, d1, gather)
-            w = eq_int[col_index]
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0,
-                n1,
-                d0,
-                d1,
-                eq_row[pair_index * 2] * w,
-                eq_row[pair_index * 2 + 1] * w,
-                lam,
-            )
-        else:
-            eval_zero, eval_half, eq_sum = _paired_sums(
-                n0, n1, d0, d1, eq_int[0::2], eq_int[1::2], lam
-            )
-        poly = _round_coeffs(
-            eval_zero,
-            eval_half,
-            eq_sum,
-            eq_adj,
-            pad_adj,
-            point[-1],
-            claim,
-            naturals,
-            inv_vand,
-        )
-        transcript = transcript.observe(poly)
-        transcript, r = sample_challenge(transcript, claim.dtype, challenge_limbs)
-        polys.append(poly)
-        challenges.append(r)
-
-        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1], one)
-        n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
-        if in_rows:
-            eq_row = _bind_lsb(eq_row, r)
-            if rnd == nrv - 1:
-                # Rows exhausted: the accumulated row-eq product becomes the
-                # scalar factor of every batch round; pad_adj restarts
-                # to track the batch variables' own bound mass.
-                eq_adj = pad_adj
-                pad_adj = one
-        else:
-            eq_int = _bind_lsb(eq_int, r)
-        point = point[:-1]
-
-    return (
-        jnp.stack(challenges[::-1]),
-        transcript,
-        jnp.stack(polys),
-        n0[0],
-        n1[0],
-        d0[0],
-        d1[0],
-    )
 
 
 # The layer tail: the final fold (`_fix_last`) plus stacking the per-round
@@ -507,8 +405,7 @@ def _run_jagged_rounds(
     # GPU before each bind, which serializes the bind pipeline -- net slower).
     pos = jnp.asarray(eval_point.shape[0] - 1, jnp.int32)
     z_cur = jnp.take(eval_point, -1)
-    rnd = 0
-    while rnd < nrv + niv:
+    for rnd in range(nrv + niv):
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
         if rnd == 0:
@@ -583,7 +480,6 @@ def _run_jagged_rounds(
             eq_adj = pad_adj
             pad_adj = one
         prev_r = r
-        rnd += 1
 
     fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
         planes, prev_r, challenges, polys
@@ -768,15 +664,24 @@ def _jagged_round_via_zone(
     # `_pad_to_width` no-ops on an already-cap-width operand, so the zone body
     # is unchanged. Concrete path only: a tracer means an outer trace owns the
     # layout (and pooling would donate a traced value).
-    if caps is not None and not isinstance(planes[0], jax.core.Tracer):
-        planes = tuple(
-            _pool_lay_batch(
-                [
-                    (role, a, caps.row)
-                    for role, a in zip(("n0", "n1", "d0", "d1"), planes)
-                ]
+    if caps is not None:
+        if caps.row < planes[0].shape[0]:
+            raise ValueError(
+                f"row cap {caps.row} cannot hold the layer's row-phase plane "
+                f"width ({planes[0].shape[0]}); widen the cap (or its ladder "
+                "class) so the fixed-width pad is non-negative"
             )
-        )
+        # Concrete path only: a tracer means an outer trace owns the layout
+        # (and pooling would donate a traced value).
+        if not isinstance(planes[0], jax.core.Tracer):
+            planes = tuple(
+                _pool_lay_batch(
+                    [
+                        (role, a, caps.row)
+                        for role, a in zip(("n0", "n1", "d0", "d1"), planes)
+                    ]
+                )
+            )
     return _jagged_round_zone(
         *planes,
         _row_counts_operand(layer.row_counts),

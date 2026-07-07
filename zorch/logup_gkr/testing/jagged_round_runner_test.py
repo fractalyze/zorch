@@ -28,12 +28,10 @@ from zorch.logup_gkr._jagged_types import (
     _Planes,
 )
 from zorch.logup_gkr.circuit import JaggedGkrLayer
-from zorch.logup_gkr.jagged_prover import (
-    _run_jagged_rounds,
-    _run_jagged_rounds_reference,
-)
+from zorch.logup_gkr.jagged_prover import _run_jagged_rounds
 from zorch.logup_gkr.prover import logup_combine
 from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
+from zorch.logup_gkr.testing._jagged_reference import _run_jagged_rounds_reference
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_inv_vandermonde
 from zorch.testkit.random_field import rand_ext_field, rand_field

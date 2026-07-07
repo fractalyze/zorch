@@ -359,7 +359,7 @@ class BoundaryRoundCompositeTest(absltest.TestCase):
         got_leaves = jax.tree_util.tree_leaves(got)
         want_leaves = jax.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
-        for g, w in zip(got_leaves, want_leaves):
+        for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
                 bool(jnp.all(g == w)), "marked boundary round diverged from eager"
             )
@@ -389,7 +389,7 @@ class FirstRoundCompositeTest(absltest.TestCase):
         got_leaves = jax.tree_util.tree_leaves(got)
         want_leaves = jax.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
-        for g, w in zip(got_leaves, want_leaves):
+        for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
                 bool(jnp.all(g == w)), "marked first round diverged from eager"
             )
@@ -407,7 +407,7 @@ class FirstRoundCompositeTest(absltest.TestCase):
         got_leaves = jax.tree_util.tree_leaves(got)
         want_leaves = jax.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
-        for g, w in zip(got_leaves, want_leaves):
+        for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
                 bool(jnp.all(g == w)), "no-re-pad first round diverged from eager"
             )
@@ -435,7 +435,7 @@ class FinalRoundCompositeTest(absltest.TestCase):
         want = _fix_last(planes, alpha)
         got = _composite_fix_last(planes, alpha)
         self.assertEqual(len(got), len(want))
-        for g, w in zip(got, want):
+        for g, w in zip(got, want, strict=True):
             self.assertTrue(
                 bool(jnp.all(g == w)), "marked final round diverged from eager"
             )
