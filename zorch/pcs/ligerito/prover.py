@@ -22,11 +22,14 @@ The final level sends the folded residual in the clear; its proximity ties the
 residual to the last committed matrix directly (no sumcheck needed), and the
 sumcheck's terminal claim closes against `Σ_x residual(x)·B(x)`.
 
-The commit encodes `mle_evals_to_coeffs(matrix)` (not the matrix directly): that
-coeff transform cancels the `TensorCode` seam's `coeffs_to_evals`, so both the
-proximity RHS and the value check read as clean `eval_mle`s of the *eval-basis*
-witness — the whole recursion stays in one basis (design note: the seam identity
-`encode(w)[s] == eval_mle(coeffs_to_evals(w), eval_point(s))`).
+The commit basis — the `(pre, expand)` pair fixing how a codeword coordinate
+reads back as a point-eval of the committed row — is a `CommitBasis`
+(`ligerito/basis.py`), selected by `LigeritoConfig.monomial_commit`. The default
+`EVAL_BASIS` encodes `mle_evals_to_coeffs(matrix)`, cancelling the `TensorCode`
+seam's `coeffs_to_evals` so both the proximity RHS and the value check read as
+clean `eval_mle`s of the *eval-basis* witness (`encode(w)[s] ==
+eval_mle(coeffs_to_evals(w), eval_point(s))`); `MONOMIAL_BASIS` is the raw-lane
+(coefficient) convention a byte-fixed consumer needs (flock, #32).
 
 Reuses `pcs/basefold`'s staggered partial-Lagrange batching for the per-level
 `α` weights and `pcs/fold`'s query machinery (`open_rows`). Every transcript
@@ -52,11 +55,11 @@ from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
 from zorch.pcs.fold import open_rows
+from zorch.pcs.ligerito.basis import EVAL_BASIS, CommitBasis, select_commit_basis
 from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.sumcheck.prover import CompressedProductRound, SumcheckRound
 from zorch.sumcheck.prover import fold as sc_fold
 from zorch.transcript import Transcript
@@ -78,16 +81,21 @@ _COMPRESSED_ROUND = CompressedProductRound()
 
 # Jitted commit body, keyed on code + tree + interleave by value (#214): commit
 # never reads the query count, so provers differing only in `queries` reuse this
-# compiled function rather than re-tracing.
-@partial(jax.jit, static_argnames=("log_interleave", "code", "tree"))
+# compiled function rather than re-tracing. `basis` is static too — its `.pre` is
+# the encode pre-transform (the singletons are identity-stable keys).
+@partial(jax.jit, static_argnames=("log_interleave", "code", "tree", "basis"))
 def _commit(
-    witness: Array, log_interleave: int, code: TensorCode, tree: MerkleTree
+    witness: Array,
+    log_interleave: int,
+    code: TensorCode,
+    tree: MerkleTree,
+    basis: CommitBasis = EVAL_BASIS,
 ) -> CommittedMatrix:
-    """Ligero-commit the eval-basis `witness` as a matrix whose interleave lanes
-    are its high `log_interleave` variables and whose message (encoded) axis is
-    the low ones. Encodes `mle_evals_to_coeffs(matrix)` so the codeword coordinate
-    at position `s` is a clean `eval_mle(., eval_point(s))` of the eval-basis
-    message (the seam's `coeffs_to_evals` is cancelled by this `evals_to_coeffs`)."""
+    """Ligero-commit the `witness` as a matrix whose interleave lanes are its high
+    `log_interleave` variables and whose message (encoded) axis is the low ones,
+    encoding `basis.pre(matrix)` so a codeword coordinate reads back as
+    `<row, basis.expand(eval_point(s))>` (see `zorch.pcs.ligerito.basis`). Reads
+    only `basis.pre`; the paired `basis.expand` is the open/verify side."""
     kappa = 1 << log_interleave
     rho = witness.shape[0] // kappa
     if code.message_len != rho:
@@ -96,7 +104,7 @@ def _commit(
             f"{rho} (= 2^(vars - interleave))"
         )
     matrix = witness.reshape(kappa, rho)
-    cm, _ = commit_matrix(code, tree, matrix, pre=mle_evals_to_coeffs)
+    cm, _ = commit_matrix(code, tree, matrix, pre=basis.pre)
     return cm
 
 
@@ -143,7 +151,8 @@ class LigeritoProver:
             )
         k0 = self.config.fold_ks[0]
         code0 = self._code(0, 1 << (num_vars - k0))
-        initial = _commit(f, k0, code0, self.tree)
+        basis = select_commit_basis(self.config.monomial_commit)
+        initial = _commit(f, k0, code0, self.tree, basis=basis)
         return initial.root, LigeritoProverData(f=f, initial=initial)
 
     def open(
@@ -162,30 +171,55 @@ class LigeritoProver:
                 f"point dimension {z.shape[0]} must equal the variable count "
                 f"{self.config.num_vars}"
             )
-        return _open(self, prover_data, z, transcript)
+        one = jnp.ones((), z.dtype)
+        B = expand_eq_to_hypercube(z, one)
+        value = (prover_data.f * B).sum()  # f(z) = <f, eq(z)>; reuse B
+        proof, t = _open(self, prover_data, z, B, value, transcript)
+        return value, proof, t
+
+    def open_with_basis(
+        self,
+        prover_data: LigeritoProverData,
+        basis: Array,
+        value: Array,
+        transcript: Transcript,
+    ) -> tuple[LigeritoProof, Transcript]:
+        """Open the batched claim `<f, basis> = value` for a RAW hypercube basis
+        instead of a point — the entry of outer protocols whose eval-claims
+        arrive as an already-batched basis vector (flock's
+        `recursive_prover_with_basis`). No point exists, so the choreography's
+        `bind_statement` receives `point=None` and must bind the statement
+        another way (the native binding refuses)."""
+        if basis.shape[0] != 1 << self.config.num_vars:
+            raise ValueError(
+                f"basis length {basis.shape[0]} must be 2^{self.config.num_vars}"
+            )
+        return _open(self, prover_data, None, basis, value, transcript)
 
 
 def _open(
     prover: LigeritoProver,
     pd: LigeritoProverData,
-    z: Array,
+    z: Array | None,
+    B: Array,
+    value: Array,
     transcript: Transcript,
-) -> tuple[Array, LigeritoProof, Transcript]:
+) -> tuple[LigeritoProof, Transcript]:
     cfg = prover.config
     chor = prover.choreography
-    dtype = z.dtype
+    dtype = B.dtype
     one = jnp.ones((), dtype)
     round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
+    basis = select_commit_basis(cfg.monomial_commit)
 
     # The continuous sumcheck state: witness W (folds) and basis B (glued +
-    # folds). B starts as the value basis eq(z). The prover only emits round
-    # messages and folds — it never tracks the running claim (the verifier
-    # reduces and checks it); `value = f(z)` is the opened value it returns.
+    # folds). B starts as the statement's basis — eq(z) under `open`, the raw
+    # vector under `open_with_basis`. The prover only emits round messages and
+    # folds — it never tracks the running claim (the verifier reduces and
+    # checks it).
     W = pd.f
-    B = expand_eq_to_hypercube(z, one)
-    value = (pd.f * B).sum()  # f(z) = <f, eq(z)>; reuse B rather than rebuild eq(z)
 
-    # Bind the statement before any challenge.
+    # Bind the statement before any challenge (z is None under the basis entry).
     t = chor.bind_statement(transcript, pd.initial.root, z, value)
 
     sumcheck_messages: list[Array] = []
@@ -240,7 +274,7 @@ def _open(
         if not is_final:
             k_next = cfg.fold_ks[j + 1]
             code_next = prover._code(j + 1, 1 << (num_vars - k_next))
-            nxt = _commit(W, k_next, code_next, prover.tree)
+            nxt = _commit(W, k_next, code_next, prover.tree, basis=basis)
             t = chor.observe_root(t, nxt.root)
             recursive_roots.append(nxt.root)
             # --- OOD binding of the fresh commit: glue the eval-claim at a
@@ -288,7 +322,7 @@ def _open(
         )
         alpha = alpha[: cfg.queries[j]]  # (Q,) partial-Lagrange weights
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
-        eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)  # (Q, 2^nv)
+        eqps = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
         if eager:
             t = emit(t, W, b_new)
@@ -306,7 +340,7 @@ def _open(
         ood_values=ood_values,
         pow_witnesses=pow_witnesses,
     )
-    return value, proof, t
+    return proof, t
 
 
 if TYPE_CHECKING:

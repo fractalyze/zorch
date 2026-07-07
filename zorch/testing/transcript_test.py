@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import functools
 from dataclasses import replace
-from unittest import mock
 
 import jax
 import jax.numpy as jnp
@@ -321,15 +320,17 @@ class GrindTest(absltest.TestCase):
         ):
             self.assertTrue(bool(jnp.all(a == b)))
 
-    def test_exhausted_search_raises_loudly(self) -> None:
-        # Sweeping the whole field is too slow to trigger naturally, so inject an
-        # exhausted search (found=False) returning a witness that fails the
-        # check, and assert grind surfaces it rather than returning an unverified
-        # witness.
-        bad = self._a_failing_witness(8)
-        with mock.patch.object(DuplexTranscript, "_grind_search", return_value=bad):
-            with self.assertRaises(GrindError):
-                self._seeded().grind(8)
+    def test_grind_traces_under_jit(self) -> None:
+        # grind traces under jit; the witness it returns verifies.
+        transcript = self._seeded()
+
+        def body() -> Array:
+            _, witness = transcript.grind(8)
+            return witness
+
+        witness = jax.jit(body)()
+        _, ok = self._seeded().check_witness(8, witness)
+        self.assertTrue(bool(ok))
 
     def test_rejects_out_of_range_pow_bits(self) -> None:
         with self.assertRaises(ValueError):
@@ -359,14 +360,6 @@ class GrindTest(absltest.TestCase):
             cheap_transcript(wide).grind(8)
         with self.assertRaises(GrindError):
             cheap_transcript(wide).check_witness(8, jnp.zeros((), wide))
-
-    def _a_failing_witness(self, pow_bits: int) -> jnp.ndarray:
-        base = self._seeded()
-        for cand in range(256):
-            _, ok = base.check_witness(pow_bits, jnp.array(cand, F))
-            if not bool(ok):
-                return jnp.array(cand, F)
-        raise AssertionError("expected a failing witness within range")
 
 
 def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]:

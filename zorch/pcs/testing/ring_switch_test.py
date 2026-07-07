@@ -1,0 +1,182 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+"""Ring-switch reduction: bit kernels against pure-numpy bit-loop oracles, the
+u/v duality identity that makes the reduction sound, and the succinct verifier
+evaluation against the dense materialize-and-fold path.
+
+The oracles never touch the kernels' lane algebra: they re-derive every bit
+from the numpy byte buffer and accumulate with host XOR, so a lane-order or
+reshape bug in the implementation cannot cancel itself out in the comparison.
+The duality and dense-vs-succinct checks run on random *non-eq* tensors too —
+the identities are bilinear, so random vectors are the stronger test.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+import zk_dtypes
+from absl.testing import absltest, parameterized
+from jax import Array
+
+from zorch.pcs.ring_switch import (
+    RingSwitch,
+    bit_slice_evals,
+    eval_rs_eq,
+    field_bit_width,
+    inner_product,
+    reduce_bit_claim,
+    rs_eq_ind,
+    tensor_algebra_transpose,
+)
+from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.poly.multilinear import eval_mle
+
+FIELDS = {
+    "ghash": zk_dtypes.binary_field_ghash,
+    "tower_t7": zk_dtypes.binary_field_t7,
+    "tower_t6": zk_dtypes.binary_field_t6,  # W=64: keeps the kernels width-generic
+}
+
+
+def _rand(seed: int, shape: tuple[int, ...], dtype: Any) -> Array:
+    """Uniform field elements drawn as raw storage bytes (every bit pattern is
+    an element of a binary field)."""
+    lanes = np.dtype(dtype).itemsize // 4
+    raw = np.random.default_rng(seed).integers(
+        0, 1 << 32, size=(*shape, lanes), dtype=np.uint32
+    )
+    return jnp.asarray(raw.view(np.dtype(dtype)).reshape(shape))
+
+
+def _np_bits(x: Array) -> np.ndarray:
+    """(n,) field -> (n, W) 0/1 via the numpy byte buffer, little-endian."""
+    b = np.asarray(x).view(np.uint8)
+    return np.unpackbits(b.reshape(x.shape[0], -1), axis=1, bitorder="little")
+
+
+def _np_lanes(x: Array) -> np.ndarray:
+    flat = np.asarray(x).reshape(-1)  # 0-d (scalar claims) can't view in place
+    return flat.view(np.uint32).reshape(*x.shape, -1)
+
+
+class RingSwitchKernelsTest(parameterized.TestCase):
+    """Each kernel against a from-scratch numpy bit loop."""
+
+    @parameterized.named_parameters(FIELDS.items())
+    def test_bit_slice_evals_matches_bit_loop(self, dtype: Any) -> None:
+        w = field_bit_width(dtype)
+        witness, tensor = _rand(1, (8,), dtype), _rand(2, (8,), dtype)
+        bits, t_lanes = _np_bits(witness), _np_lanes(tensor)
+        want = np.zeros((w, t_lanes.shape[-1]), dtype=np.uint32)
+        for i in range(8):
+            for r in range(w):
+                if bits[i, r]:
+                    want[r] ^= t_lanes[i]
+        got = bit_slice_evals(witness, tensor)
+        np.testing.assert_array_equal(_np_lanes(got), want)
+
+    @parameterized.named_parameters(FIELDS.items())
+    def test_rs_eq_ind_matches_bit_loop(self, dtype: Any) -> None:
+        w = field_bit_width(dtype)
+        tensor, eq_r = _rand(3, (8,), dtype), _rand(4, (w,), dtype)
+        bits, eq_lanes = _np_bits(tensor), _np_lanes(eq_r)
+        want = np.zeros((8, eq_lanes.shape[-1]), dtype=np.uint32)
+        for i in range(8):
+            for b in range(w):
+                if bits[i, b]:
+                    want[i] ^= eq_lanes[b]
+        got = rs_eq_ind(tensor, eq_r)
+        np.testing.assert_array_equal(_np_lanes(got), want)
+
+    @parameterized.named_parameters(FIELDS.items())
+    def test_transpose_is_the_bit_matrix_transpose(self, dtype: Any) -> None:
+        w = field_bit_width(dtype)
+        v = _rand(5, (w,), dtype)
+        got = tensor_algebra_transpose(v)
+        np.testing.assert_array_equal(_np_bits(got), _np_bits(v).T)
+        back = tensor_algebra_transpose(got)
+        np.testing.assert_array_equal(_np_lanes(back), _np_lanes(v))
+
+    def test_transpose_wrong_width_raises(self) -> None:
+        dtype = zk_dtypes.binary_field_ghash
+        with self.assertRaisesRegex(ValueError, "tensor-algebra element"):
+            tensor_algebra_transpose(_rand(8, (64,), dtype))  # W=128 field
+
+
+class RingSwitchReductionTest(parameterized.TestCase):
+    """The identity that makes the reduction work: both readings of
+    `Σ_i tensor[i] ⊗ witness[i]` agree after the vertical fold, i.e.
+
+        Σ_i witness[i] · rs_eq_ind[i]  ==  ⟨transpose(s_hat_v), eq(r'')⟩
+
+    for *arbitrary* tensor and eq vectors (bilinearity — no eq structure
+    assumed), in every supported representation.
+    """
+
+    @parameterized.named_parameters(FIELDS.items())
+    def test_uv_duality(self, dtype: Any) -> None:
+        w = field_bit_width(dtype)
+        witness = _rand(11, (16,), dtype)
+        tensor = _rand(12, (16,), dtype)
+        eq_r = _rand(13, (w,), dtype)
+        rs = reduce_bit_claim(bit_slice_evals(witness, tensor), tensor, eq_r)
+        self.assertIsInstance(rs, RingSwitch)
+        lhs = inner_product(witness, rs.rs_eq_ind)
+        np.testing.assert_array_equal(_np_lanes(lhs), _np_lanes(rs.claim))
+
+    def test_result_crosses_a_jit_boundary(self) -> None:
+        """`RingSwitch` is a registered pytree: a jitted reduction can return it,
+        and the result matches the eager path."""
+        dtype = zk_dtypes.binary_field_ghash
+        w = field_bit_width(dtype)
+        s_hat = bit_slice_evals(_rand(11, (16,), dtype), _rand(12, (16,), dtype))
+        args = s_hat, _rand(12, (16,), dtype), _rand(13, (w,), dtype)
+        eager, jitted = reduce_bit_claim(*args), jax.jit(reduce_bit_claim)(*args)
+        leaves, treedef = jax.tree_util.tree_flatten(eager)
+        self.assertLen(leaves, 3)
+        self.assertEqual(treedef, jax.tree_util.tree_flatten(jitted)[1])
+        for field in ("s_hat_v", "rs_eq_ind", "claim"):
+            np.testing.assert_array_equal(
+                _np_lanes(getattr(jitted, field)), _np_lanes(getattr(eager, field))
+            )
+
+
+class EvalRsEqTest(parameterized.TestCase):
+    """Succinct verifier path vs dense: materialize `rs_eq_ind` from the eq
+    tensor of `z` and fold it at `query` with `zorch.poly`'s MLE evaluator,
+    then compare with `eval_rs_eq`. The two dense-side helpers share one
+    variable-order convention (`point[0]` = MSB), and the succinct side is
+    order-blind — each step multiplies by `1 + z_i + q_i` in the commutative
+    tensor algebra — so both sides pair `z_i` with `q_i` consistently."""
+
+    @parameterized.named_parameters(FIELDS.items())
+    def test_matches_dense_fold(self, dtype: Any) -> None:
+        w = field_bit_width(dtype)
+        ell = 3
+        z_vals = _rand(21, (ell,), dtype)
+        query = _rand(22, (ell,), dtype)
+        eq_r = _rand(23, (w,), dtype)
+        eq_z = expand_eq_to_hypercube(z_vals, jnp.ones((), dtype))
+        dense = eval_mle(rs_eq_ind(eq_z, eq_r), query)
+        succinct = eval_rs_eq(z_vals, query, eq_r)
+        np.testing.assert_array_equal(_np_lanes(dense), _np_lanes(succinct))
+
+    def test_point_length_mismatch_raises(self) -> None:
+        dtype = zk_dtypes.binary_field_ghash
+        with self.assertRaisesRegex(ValueError, "length mismatch"):
+            eval_rs_eq(
+                _rand(1, (2,), dtype), _rand(2, (3,), dtype), _rand(3, (128,), dtype)
+            )
+
+
+class FieldBitWidthTest(absltest.TestCase):
+    def test_sub_lane_field_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "multiple of 32"):
+            field_bit_width(zk_dtypes.binary_field_t4)  # 16-bit
+
+
+if __name__ == "__main__":
+    absltest.main()
