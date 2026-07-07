@@ -23,7 +23,6 @@ from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix
 from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
-    SPONGE_HASH_MARKER,
     Poseidon2,
 )
 from zorch.hash.poseidon2.testing.koalabear16 import (
@@ -31,7 +30,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 
 
 def _non_standard_perm() -> Poseidon2:

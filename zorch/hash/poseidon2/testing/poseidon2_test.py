@@ -14,7 +14,6 @@ from zk_dtypes import koalabear_mont as F
 from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
     POSEIDON2_MARKER_VERSION,
-    SPONGE_HASH_MARKER,
     Poseidon2,
     _permute_body,
 )
@@ -24,7 +23,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import Sponge, SpongeParams, SpongeType
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams, SpongeType
 from zorch.testkit.jit_cache import assert_single_trace
 
 
