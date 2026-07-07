@@ -26,7 +26,7 @@ class SqrtSpaceTest(absltest.TestCase):
             _, _, ref = prove_product(p, cheap_transcript(KB))
             _, _, got = prove_sqrt_space(p, cheap_transcript(KB))
             self.assertLen(got, l)
-            for i, (a, b) in enumerate(zip(ref, got)):
+            for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
                     bool(jnp.array_equal(a, b)), msg=f"d={d} l={l} round {i}"
                 )

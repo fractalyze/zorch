@@ -26,7 +26,7 @@ class SmallValueTest(absltest.TestCase):
             _, _, ref = prove_eq_poly(p, w, cheap_transcript(KB))
             _, _, got = prove_eq_poly_small_value(p, w, l_0, cheap_transcript(KB))
             self.assertLen(got, l)
-            for i, (a, b) in enumerate(zip(ref, got)):
+            for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
                     bool(jnp.array_equal(a, b)), msg=f"d={d} l={l} l_0={l_0} round {i}"
                 )

@@ -74,6 +74,13 @@ class DomainTest(absltest.TestCase):
             point.append(r)
         self.assertTrue(bool(claim == jnp.prod(state[:, 0])))
 
+    def test_product_coeffs_single_factor(self) -> None:
+        # m=1 is degree 1 (U_1 = [∞, 0]) → 2 coeffs [s(0), slope]; p0=1..4, p1=5..8
+        # give s(0)=Σp0=10, s(1)=Σp1=26, slope=16.
+        p = jnp.arange(1, 9, dtype=KB).reshape(1, 8)
+        got = product_round_coeffs(p)
+        self.assertTrue(bool(jnp.array_equal(got, jnp.array([10, 16], dtype=KB))))
+
 
 if __name__ == "__main__":
     absltest.main()

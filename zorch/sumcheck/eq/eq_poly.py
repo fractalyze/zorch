@@ -175,8 +175,12 @@ def prove_eq_poly(
     transcript, and the per-round messages (each sᵢ over Û_d).
     EqPolyRound._round_coeffs gives the coefficient wire form for
     verifier.CoeffsSumcheckRound."""
+    rounds = log2_strict_usize(p_initial.shape[1])
+    if w.shape[0] != rounds:
+        raise ValueError(
+            f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
+        )
     rnd = EqPolyRound(p_initial.shape[0], w)
     state: EqPolyState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
-    rounds = log2_strict_usize(p_initial.shape[1])
     (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
     return p_final, transcript, msgs

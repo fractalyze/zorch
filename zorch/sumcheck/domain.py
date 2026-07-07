@@ -100,8 +100,10 @@ def extend_to_round_domain(
     dropped, when skip_one). p(∞) is the slope p(1)−p(0);
     p(u) = p(0) + u·(p(1)−p(0)). The leading axis indexes the domain."""
     diff = p1 - p0
+    if d == 1:  # U_1 = [∞, 0]: u=1 is out of range {0..d−1}, so p1 is not a node
+        return jnp.stack([diff, p0])
     base = jnp.stack([diff, p0]) if skip_one else jnp.stack([diff, p0, p1])
-    if d <= 2:
+    if d == 2:
         return base
     # Python-int multiplier avoids a field-dtype iota (unsupported in the fork).
     rest = jnp.stack([p0 + diff * u for u in range(2, d)], axis=0)
