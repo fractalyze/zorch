@@ -291,11 +291,11 @@ SUMCHECK_MARKER_VERSION = 1
 # challenge, which arrives as one operand whose dtype already carries base vs
 # extension.
 SUMCHECK_ROUND_MARKER = "zorch.sumcheck.round"
-# Version 2 (xla#179 device-derived schedule): the jagged phases dropped the
-# explicit `gather`/`col_index`/`pair_index` operands for `row_counts` +
-# the round index in `live[2]`; a v1 consumer fails recognition loudly
-# rather than silently mis-parsing the new operand layout.
-SUMCHECK_ROUND_MARKER_VERSION = 2
+# Version 1: this marker never shipped, and its producer (here), the zkx
+# `SumcheckRecognizer` (`kSumcheckRoundCompositeVersion`), and the emitters are
+# pinned together, so the version is the initial one and moves only on a future
+# cross-release ABI break. Keep in lockstep with the zkx recognizer's constant.
+SUMCHECK_ROUND_MARKER_VERSION = 1
 
 
 def prove(
