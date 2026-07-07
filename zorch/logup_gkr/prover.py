@@ -46,7 +46,13 @@ from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.round import Round
-from zorch.sumcheck.prover import RoundMsg, factors_on_domain, fold, prove
+from zorch.sumcheck.prover import (
+    RoundMsg,
+    factors_on_domain,
+    fold,
+    prove,
+    split_pairs,
+)
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -72,7 +78,11 @@ class LogupSummand:
     """The LogUp sumcheck summand shared by the dense round (value-form) and the
     jagged round (coeff-form): the combine `eq*(lam*(n0*d1+n1*d0)+d0*d1)` over
     [eq, n0, d1, n1, d0], its loop-invariant scalar (lam), and its degree. Single
-    source of the combine math the verifier oracle also calls."""
+    source of the combine math the verifier oracle also calls. For the jagged
+    engine it also owns the two GruenSummand slots — `paired_evals` (the
+    materialized evaluations at the summand's points) and `correct` (the
+    padding correction) — so a jagged round body reads evaluate → correct →
+    assemble with only this class carrying protocol content."""
 
     DEGREE: int = 3  # eq (deg1) * (lam*cross + d0*d1) (deg2)
     NUM_FACTORS: int = 5  # [eq, n0, d1, n1, d0]
@@ -104,6 +114,66 @@ class LogupSummand:
         never reads this."""
         one = jnp.ones((), dtype)
         return (one / jnp.array(2, dtype),)
+
+    def paired_evals(
+        self, n0: Array, n1: Array, d0: Array, d1: Array, eq_0: Array, eq_1: Array
+    ) -> tuple[Array, Array, Array]:
+        """The jagged round's materialized evaluations — the GruenSummand
+        evals slot: ``(s(0), 8*s(1/2), eq mass)`` over the stride-2 pairs.
+
+        s(0) reads the even elements at their eq weight; the u=1/2 sum works
+        on doubled values (``e0 + e1 = 2*e(1/2)`` per factor, likewise eq) so
+        no division enters the kernel — `correct` rescales. Both points go
+        through `combine` so the summand cannot drift from the verifier
+        oracle's."""
+        scalars = self.combine_scalars()
+        (n0_0, n0_1), (n1_0, n1_1) = split_pairs(n0), split_pairs(n1)
+        (d0_0, d0_1), (d1_0, d1_1) = split_pairs(d0), split_pairs(d1)
+        eval_zero = jnp.sum(self.combine(scalars, eq_0, n0_0, d1_0, n1_0, d0_0))
+        eq_h = eq_0 + eq_1
+        eval_half = jnp.sum(
+            self.combine(
+                scalars,
+                eq_h,
+                n0_0 + n0_1,
+                d1_0 + d1_1,
+                n1_0 + n1_1,
+                d0_0 + d0_1,
+            )
+        )
+        return eval_zero, eval_half, jnp.sum(eq_h)
+
+    def correct(
+        self,
+        eval_zero: Array,
+        eval_half: Array,
+        eq_sum: Array,
+        eq_adj: Array,
+        pad_adj: Array,
+        z_cur: Array,
+    ) -> tuple[Array, Array]:
+        """The padding correction — the GruenSummand correction slot: add the
+        non-materialized positions' contribution back in closed form.
+
+        Every virtual position holds the fold-neutral fraction (n=0, d=1),
+        whose summand collapses to just its eq weight; the eq weights of the
+        full remaining hypercube sum to ``pad_adj``, so the virtual mass is
+        ``pad_adj - eq_sum``. At u=0 it carries the current variable's eq
+        factor ``(1 - z_cur)``; at the doubled u=1/2 scale each virtual pair
+        contributes ``den_h = 4`` at weight ``eq_h = eq_rest``, and the
+        doubled products overcount s(1/2) by 8. ``eq_adj`` is the row-eq
+        residual scalar once the row variables are exhausted (1 before
+        that)."""
+        dtype = z_cur.dtype
+        one = jnp.ones((), dtype)
+        correction = pad_adj - eq_sum
+        s_zero = (eval_zero + correction * (one - z_cur)) * eq_adj
+        s_half = (
+            (eval_half + correction * jnp.array(4, dtype))
+            / jnp.array(8, dtype)
+            * eq_adj
+        )
+        return s_zero, s_half
 
 
 def fold_carry(
