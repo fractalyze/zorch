@@ -1,13 +1,12 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""SqrtSpace sumcheck (Algorithm 2): a product sumcheck that proves identical round
-polynomials to the linear-time prover while holding only O(√N) folded state.
+"""SqrtSpace sumcheck (Algorithm 2): a product sumcheck proving the same round
+polynomials as the linear-time prover while holding only O(√N) folded state.
 
-The first l/2 rounds never fold the factors. Instead they keep the running
-eq(r[<i], ·) table and, each round, refold the factors over the bound prefix on
-the fly (Formula 10) — √-space in exchange for recompute. The remaining rounds are
-an ordinary product sumcheck (ProductRound) over the state folded down at the
-phase boundary. prove_sqrt_space runs both; its messages match prove_product
-on the same challenges (testing/sqrt_space_test.py).
+The first l/2 rounds never fold the factors — they keep the running eq(r[<i], ·)
+table and refold over the bound prefix on the fly (Formula 10, √-space for
+recompute). The tail is a plain product sumcheck (product_round_poly + fold) over
+the state folded down at the phase boundary. Messages match a linear-time product
+prover on the same challenges (testing/sqrt_space_test.py).
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from jax import Array
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import ProductRound, product_round_poly
+from zorch.sumcheck.domain import fold_stacked, product_round_poly
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -64,9 +63,12 @@ def prove_sqrt_space(
     state: SqrtSpaceState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
     state, transcript, phase1 = fold_rounds(SqrtSpaceRound(), state, transcript, l_half)
 
-    # Fold the factors down over the whole bound prefix — the phase-2 start state.
+    # Fold the factors down over the bound prefix, then a plain product sumcheck.
     folded = compute_folded_evaluations(*state)
-    folded, transcript, phase2 = fold_rounds(
-        ProductRound(), folded, transcript, l - l_half
-    )
+    phase2 = []
+    for _ in range(l - l_half):
+        msg = product_round_poly(folded)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        folded = fold_stacked(folded, r[0])
+        phase2.append(msg)
     return folded, transcript, phase1 + phase2

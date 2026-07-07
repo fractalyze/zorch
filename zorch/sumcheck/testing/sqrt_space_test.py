@@ -5,15 +5,29 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.sumcheck.domain import prove_product
+from zorch.sumcheck.domain import fold_stacked, product_round_poly
 from zorch.sumcheck.sqrt_space import prove_sqrt_space
 from zorch.testkit.transcript import cheap_transcript
+from zorch.transcript import Transcript
+from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
 
 
 def _stacked(d: int, l: int) -> jnp.ndarray:
     return jnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
+
+
+def _prove_product(p: jnp.ndarray, transcript: Transcript) -> list[jnp.ndarray]:
+    """Reference linear-time product sumcheck: fold over the product round message.
+    SqrtSpace must reproduce these messages exactly."""
+    msgs = []
+    for _ in range(log2_strict_usize(p.shape[1])):
+        msg = product_round_poly(p)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        p = fold_stacked(p, r[0])
+        msgs.append(msg)
+    return msgs
 
 
 class SqrtSpaceTest(absltest.TestCase):
@@ -23,7 +37,7 @@ class SqrtSpaceTest(absltest.TestCase):
         # so an independent run from the same seed suffices to compare.
         for d, l in [(2, 4), (3, 4), (2, 5), (2, 6)]:
             p = _stacked(d, l)
-            _, _, ref = prove_product(p, cheap_transcript(KB))
+            ref = _prove_product(p, cheap_transcript(KB))
             _, _, got = prove_sqrt_space(p, cheap_transcript(KB))
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):

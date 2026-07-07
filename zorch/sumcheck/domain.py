@@ -7,8 +7,8 @@ it at and owns the map from those samples to coefficients: a finite node set —
 Gruen set {0, 1, *extra, eq_root(z)}, or the naturals — optionally led by the value
 at infinity (the leading coefficient, cheap for a product since it is the product of
 the factor slopes). extend_to_round_domain lifts a linear pair onto the Û_d sample
-domain; product_round_poly / product_round_coeffs build the baseline product round;
-ProductRound / prove_product are the product sumcheck (Algorithm 1).
+domain; product_round_poly / product_round_coeffs build a product round message over
+it (the prover Rounds that emit them live in sqrt_space).
 """
 
 from __future__ import annotations
@@ -25,10 +25,6 @@ from zorch.poly.univariate import (
     compute_inv_vandermonde,
     compute_lagrange_basis,
 )
-from zorch.prove import fold_rounds
-from zorch.round import Round
-from zorch.transcript import Transcript
-from zorch.utils.bits import log2_strict_usize
 
 
 @cache
@@ -141,24 +137,3 @@ def fold_stacked(stacked: Array, r: Array) -> Array:
     pairs = jnp.reshape(stacked, (stacked.shape[0], 2, -1))
     p0 = pairs[:, 0, :]
     return (pairs[:, 1, :] - p0) * r + p0
-
-
-class ProductRound(Round):
-    """Product sumcheck round: send Πₖ fₖ over Û_d, fold every factor at the
-    challenge. product_round_coeffs gives the same round in the coefficient wire
-    form for verifier.CoeffsSumcheckRound."""
-
-    def __call__(
-        self, stacked: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array]:
-        msg = product_round_poly(stacked)
-        transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold_stacked(stacked, r[0]), transcript, msg
-
-
-def prove_product(
-    p_initial: Array, transcript: Transcript
-) -> tuple[Array, Transcript, list[Array]]:
-    """Linear-time product sumcheck over all l variables, Û_d messages."""
-    rounds = log2_strict_usize(p_initial.shape[1])
-    return fold_rounds(ProductRound(), p_initial, transcript, rounds)
