@@ -16,6 +16,7 @@ from jax import Array
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
+    _LAYER_BUF_POOL,
     _ROUND_KERNEL_CACHE,
     RoundWidthCaps,
     _InterpConsts,
@@ -223,6 +224,33 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         fresh = {k[0] for k in set(_ROUND_KERNEL_CACHE) - before}
         self.assertIn("row_block", fresh)
         self.assertIn("int_block", fresh)
+
+    def test_layer_pool_donates_in_place(self) -> None:
+        # The capped concrete path lays each layer into pooled, DONATED
+        # cap-wide buffers. Across two proves the pool entry must keep the
+        # same device allocation -- a silent donation failure would copy per
+        # layer, reintroducing the cap-wide materialization the pool removes,
+        # and the byte gates cannot see that regression (the values match
+        # either way).
+        layer = random_jagged_layer(29, (3, 1, 5, 2))
+        lam, z = rand_field(31, (), KB), rand_field(32, (5,), KB)
+        state, _, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
+        caps = self._caps(layer, nrv, niv, slack=True)
+        sched = _JaggedSchedule(
+            _row_counts_operand(layer.row_counts),
+            _round_live_meta(layer.row_counts, nrv),
+            None,
+            _InterpConsts(naturals, inv_vand),
+            nrv,
+            niv,
+            1,
+            caps,
+        )
+        _run_jagged_rounds(state, sched, cheap_transcript(KB))
+        key = ("n0", caps.row, state.planes.n0.dtype)
+        ptr = _LAYER_BUF_POOL[key].unsafe_buffer_pointer()
+        _run_jagged_rounds(state, sched, cheap_transcript(KB))
+        self.assertEqual(ptr, _LAYER_BUF_POOL[key].unsafe_buffer_pointer())
 
     def test_matches_reference_multi_limb_ef(self) -> None:
         # koalabearx4 challenges (four squeezes reinterpreted) through the loop.

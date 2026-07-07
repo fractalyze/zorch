@@ -383,6 +383,49 @@ def _bind_lsb(arr: Array, r: Array) -> Array:
     return fold_pair(arr[0::2], arr[1::2], r)
 
 
+# Layer-entry donated cap buffers (xla#179 pad donation). Under a machine
+# cap the entry pad materializes FRESH cap-wide buffers every layer -- an
+# alloc + zero-fill + prefix copy per plane/eq table, ~2x cap-width writes,
+# the top GPU item of the warm decoupled prove (wrapped_concatenate +
+# wrapped_broadcast at a cap that is ~19x shard17's live prefix). The pool
+# instead holds ONE persistent cap-wide array per (role, width, dtype); each
+# layer donates it back to `_lay_prefix`, which writes only the live prefix
+# in place. The tail keeps the PREVIOUS layer's bytes: the capped-round
+# contract masks every read by the `live` operand and resolves dead slots
+# through the sentinel neutral blend, so the tail is never read as data --
+# the old pad's zero tail was deterministic filler, not a consumed value.
+# Byte-gated by the runner reference test (which reuses the pool across
+# layouts, so stale tails are exercised) and the shard golden. Only the
+# concrete (non-traced) capped path pools; the traced whole-layer program is
+# untouched.
+_LAYER_BUF_POOL: dict[tuple[str, int, Any], Array] = {}
+
+
+@partial(jax.jit, donate_argnums=(0,))
+def _lay_prefix(dst: Array, src: Array) -> Array:
+    """Write `src` into `dst`'s prefix in place (`dst` donated: the result
+    aliases its memory -- no fresh cap-wide buffer, no tail write). Compiled
+    once per (cap, natural width, dtype): the same tiny per-natural-width
+    executable class as the eager pads it replaces."""
+    return jax.lax.dynamic_update_slice(dst, src, (0,))
+
+
+def _pool_lay(role: str, src: Array, width: int) -> Array:
+    """The pooled, donated form of the concrete capped path's
+    `_pad_to_width(src, width, 0)` / `_resize_zero` layer-entry lay-in.
+    `role` keys the pool entry: two planes share a width/dtype and each must
+    own its buffer -- one shared buffer would be donated twice per layer."""
+    if src.shape[0] == width:
+        return src
+    key = (role, width, src.dtype)
+    buf = _LAYER_BUF_POOL.get(key)
+    if buf is None:
+        buf = jnp.zeros((width,), src.dtype)
+    out = _lay_prefix(buf, src)
+    _LAYER_BUF_POOL[key] = out
+    return out
+
+
 def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:
     """The virtual (non-materialized) mass a round adds back in closed form.
 
@@ -2383,14 +2426,27 @@ def _run_jagged_rounds(
                 f"interaction cap {caps.interaction} cannot hold the layer's "
                 f"interaction-eq table ({eq_int.shape[0]})"
             )
-        planes = _Planes(
-            *(
-                _pad_to_width(a, caps.row, 0)
-                for a in (planes.n0, planes.n1, planes.d0, planes.d1)
+        if not isinstance(planes.n0, jax.core.Tracer):
+            # Concrete (decoupled) path: lay each layer into the pooled,
+            # donated cap buffers -- prefix-only in-place writes instead of
+            # fresh cap-wide materializations (see _LAYER_BUF_POOL).
+            planes = _Planes(
+                *(
+                    _pool_lay(f, getattr(planes, f), caps.row)
+                    for f in ("n0", "n1", "d0", "d1")
+                )
             )
-        )
-        eq_row = _pad_to_width(eq_row, caps.eq_row, 0)
-        eq_int = _pad_to_width(eq_int, caps.interaction, 0)
+            eq_row = _pool_lay("eq_row", eq_row, caps.eq_row)
+            eq_int = _pool_lay("eq_int", eq_int, caps.interaction)
+        else:
+            planes = _Planes(
+                *(
+                    _pad_to_width(a, caps.row, 0)
+                    for a in (planes.n0, planes.n1, planes.d0, planes.d1)
+                )
+            )
+            eq_row = _pad_to_width(eq_row, caps.eq_row, 0)
+            eq_int = _pad_to_width(eq_int, caps.interaction, 0)
     # The dispatch and marked kernels share signatures, so select one per round.
     # Both routes emit the `zorch.sumcheck.round` marker (the dispatch inside its
     # exported binary): a recognizing emitter fuses each round, and an unclaimed
@@ -2560,9 +2616,17 @@ def _run_jagged_rounds(
             # layout, 2^(niv+1) slots, fits in the row cap). `eq_int` itself
             # rides through the handoff unchanged, at its own width, for the
             # interaction rounds below.
-            eq_boundary = (
-                _resize_zero(eq_int, caps.row // 2) if caps is not None else eq_int
-            )
+            if caps is None:
+                eq_boundary = eq_int
+            elif isinstance(eq_int, jax.core.Tracer):
+                eq_boundary = _resize_zero(eq_int, caps.row // 2)
+            else:
+                # Pooled lay-in of the live prefix (concrete path): the old
+                # `_resize_zero` wrote a fresh caps.row//2 buffer that is
+                # mostly zero tail at a wide cap.
+                half = caps.row // 2
+                src = eq_int if eq_int.shape[0] <= half else eq_int[:half]
+                eq_boundary = _pool_lay("eq_boundary", src, half)
             poly, planes, _ = fix_boundary(
                 planes, eq_boundary, prev_r, scalars, consts, live
             )
