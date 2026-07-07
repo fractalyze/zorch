@@ -81,3 +81,22 @@ def expand_eq_to_hypercube(x: Array, scalar: Array) -> Array:
     for j in range(x.shape[0]):
         state = expand_hypercube_step(state, x[j])
     return state
+
+
+def expand_monomial_step(state: Array, coord: Array) -> Array:
+    """(2^k,) -> (2^{k+1},): add a new variable as the LSB, monomial basis.
+    result[2j] = state[j], result[2j+1] = state[j]·coord — the ⊗(1, coord)
+    factor, where `expand_hypercube_step` is ⊗(1-coord, coord)."""
+    return jnp.column_stack([state, state * coord]).flatten()
+
+
+def expand_monomial_to_hypercube(x: Array, scalar: Array) -> Array:
+    """scalar·Π_{i: w_i=1} x_i for all w in {0,1}^n — the monomial
+    (coefficient-basis) dual of `expand_eq_to_hypercube`, same (2^n,) shape and
+    MSB-first indexing (w[0] binds x[0]). `<coeffs, expand_monomial(x)>` is the
+    monomial-basis evaluation at x, as `<evals, expand_eq(x)>` is the eval-basis
+    one."""
+    state = jnp.atleast_1d(scalar)
+    for j in range(x.shape[0]):
+        state = expand_monomial_step(state, x[j])
+    return state
