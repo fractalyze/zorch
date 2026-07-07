@@ -32,7 +32,7 @@ from zorch.hash.poseidon.linear import apply_dense_mds
 from zorch.hash.poseidon.params import PoseidonParams
 
 if TYPE_CHECKING:
-    from zorch.hash.permutation import FusedPermutation, Permutation
+    from zorch.hash.permutation import Permutation
 
 POSEIDON_MARKER = "zorch.poseidon"
 # Marker revision riding as `composite.version`. zkx recognizes the marker by
@@ -81,9 +81,9 @@ class Poseidon:
             )
         return _permute_body(self, state)
 
-    # -- FusedPermutation seam: this permutation's fused-region ABI, so a consumer
-    # (e.g. `Sponge`) can wrap a whole computation over it as one `fused_region`
-    # without knowing the operand layout. Sponge-agnostic — names no construction.
+    # -- Fused-region ABI (Permutation seam): so a consumer (e.g. `Sponge`) can
+    # wrap a whole computation over this permutation as one `fused_region` without
+    # knowing the operand layout. Sponge-agnostic — names no construction.
 
     def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
         """The classic-Poseidon ABI operands `(leading, round_constants)` (the
@@ -190,5 +190,3 @@ def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[Permutation] = Poseidon
-    # A dedicated-fusion permutation also satisfies the fused-region ABI seam.
-    _f: type[FusedPermutation] = Poseidon

@@ -17,6 +17,17 @@ class _Id:
     def permute(self, state: Array) -> Array:
         return state
 
+    # Inert fused-region ABI — required by the seam, never called for a non-fused
+    # permutation (`has_dedicated_fusion` False).
+    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
+        return (leading,)
+
+    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
+        return self.permute(state)
+
+    def fusion_attrs(self) -> dict[str, object]:
+        return {}
+
 
 class PermutationProtocolTest(absltest.TestCase):
     def test_duck_typed_impl_satisfies_protocol(self) -> None:

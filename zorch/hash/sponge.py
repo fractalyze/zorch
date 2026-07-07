@@ -2,18 +2,18 @@
 
 `Sponge.hash(input, sponge_type=...)` absorbs the input in `rate`-sized blocks
 and squeezes the first `out` lanes. `sponge_type` (`SpongeType`) selects the
-construction — `OVERWRITE` (default; Plonky3 PaddingFreeSponge, the Merkle leaf
-hasher) or `CHAINED` (Merkle-Damgard) — as a `_MODES` registry row, so a new
+construction — `PADDING_FREE` (default; Plonky3 PaddingFreeSponge, the Merkle
+leaf hasher) or `CHAINED` (Merkle-Damgard) — as a `_MODES` registry row, so a new
 construction adds a member + a row, never a method.
 
 Width comes from `permutation.width`; `rate` and `out` are the free parameters on
-`SpongeParams` (capacity = width - rate), like `Poseidon2Params`. A permutation
-exposing the fusion seam (`FusedPermutation`) lets this module wrap the whole
+`SpongeParams` (capacity = width - rate), like `Poseidon2Params`. A dedicated-
+fusion permutation (`has_dedicated_fusion`) lets this module wrap the whole
 absorb as one `zorch.sponge_hash` region the vendor expands into a single
 register-resident kernel — the construction is assembled here, over the
-permutation's ABI; a bare permutation runs the `while_loop` absorb over its
-`permute`. Both read the absorb length at runtime, so a concrete and a symbolic
-(shape-poly export) `n` lower the same way — one path, no static-`n` special case.
+permutation's fused-region ABI; a non-fused permutation runs the `while_loop`
+absorb over its `permute`. Both read the absorb length at runtime, so a concrete
+and a symbolic (shape-poly export) `n` lower the same way — no static-`n` case.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from zorch.fusion import fused_region
-from zorch.hash.permutation import FusedPermutation, Permutation
+from zorch.hash.permutation import Permutation
 
 
 class SpongeType(enum.Enum):
@@ -36,7 +36,7 @@ class SpongeType(enum.Enum):
     construction is a new member + one registry row — no new method on `Sponge`
     and nothing on any permutation (which stays sponge-agnostic)."""
 
-    OVERWRITE = "overwrite"  # Plonky3 PaddingFreeSponge (default)
+    PADDING_FREE = "padding_free"  # Plonky3 PaddingFreeSponge (default)
     CHAINED = "chained"  # Merkle-Damgard (zisk-zorch's linear hash)
 
 
@@ -94,7 +94,7 @@ class _Mode:
 
 
 _MODES: dict[SpongeType, _Mode] = {
-    SpongeType.OVERWRITE: _Mode(
+    SpongeType.PADDING_FREE: _Mode(
         tail_fill=_keep_prior,
         set_capacity=_carry_capacity,
         fills_capacity=False,
@@ -146,21 +146,20 @@ def _absorb(
 
 
 def _fused_hash(
-    perm: FusedPermutation,
+    perm: Permutation,
     input: Array,
     rate: int,
     out: int,
     sponge_type: SpongeType,
 ) -> Array:
-    """Absorb + squeeze as ONE `zorch.sponge_hash` region over a permutation that
-    exposes the fusion seam — the whole sponge construction, owned here (not on
-    the permutation). The decomposition rebuilds a const-free `permute` from the
-    region's ABI operands — a `lax.composite` lifts closed-over consts to leading
-    operands and would break the emitter ABI — then runs the shared `_absorb`, so
-    the region's fallback HLO is byte-identical to the generic path. Only the
-    dedicated permutation marks it (the vendor expands the marker into one
-    register-resident kernel); a generic one runs the absorb raw so the whole
-    sponge stays one LoopFusion, not a loop of per-permute composites.
+    """Absorb + squeeze as ONE `zorch.sponge_hash` region over a dedicated-fusion
+    permutation — the whole sponge construction, owned here (not on the
+    permutation). The decomposition rebuilds a const-free `permute` from the
+    region's ABI operands (a `lax.composite` lifts closed-over consts to leading
+    operands and would break the emitter ABI), then runs the shared `_absorb`, so
+    the region's fallback HLO is byte-identical to the generic `_absorb` path. The
+    vendor expands the marker into one register-resident kernel. Caller gates on
+    `has_dedicated_fusion` — a non-fused permutation runs the generic absorb.
     """
     operands = perm.fusion_operands(input)
 
@@ -175,8 +174,6 @@ def _fused_hash(
             sponge_type,
         )
 
-    if not perm.has_dedicated_fusion:
-        return sponge(*operands)
     # The permutation's identifying attrs plus this sponge's shape: `rate` /
     # `digest_elems` and, for a capacity-chaining construction, the `chained`
     # discriminator the vendor kernel selects on (int — composite bool attrs have
@@ -224,12 +221,12 @@ class Sponge:
     """Sponge hash over a fixed-width Permutation.
 
     `hash(input, sponge_type=...)` is the one entry point; `sponge_type`
-    (`SpongeType`) selects the construction — `OVERWRITE` (default, Plonky3
+    (`SpongeType`) selects the construction — `PADDING_FREE` (default, Plonky3
     padding-free) or `CHAINED` (Merkle-Damgard) — and a new construction is a new
     `SpongeType` + `_MODES` row, not a new method. One call = one function, the
     unit that lowers to one fused `zorch.sponge_hash` kernel. The permutation
-    supplies only its arithmetic — `permute`, and (a `FusedPermutation`) its
-    fused-region ABI; the sponge construction lives here, not on the permutation.
+    supplies only its arithmetic — `permute` and its fused-region ABI; the sponge
+    construction lives here, not on the permutation.
     """
 
     def __init__(self, permutation: Permutation, params: SpongeParams) -> None:
@@ -274,17 +271,17 @@ class Sponge:
         return self._permutation.dtype
 
     def hash(
-        self, input: Array, sponge_type: SpongeType = SpongeType.OVERWRITE
+        self, input: Array, sponge_type: SpongeType = SpongeType.PADDING_FREE
     ) -> Array:
         """Absorb `input` (1-D) and squeeze the first `out` lanes: (n,) -> (out,).
 
-        `sponge_type` picks the construction (default `OVERWRITE`, the Plonky3
+        `sponge_type` picks the construction (default `PADDING_FREE`, the Plonky3
         padding-free sponge; `CHAINED` is the Merkle-Damgard hash — see
-        `SpongeType`). A permutation that exposes a dedicated `sponge_hash` (the
-        fusion path) absorbs the whole input as one `zorch.sponge_hash` region the
-        vendor expands into a single register-resident kernel; a generic
-        permutation runs the `while_loop` absorb. Both read the absorb length at
-        runtime, so a symbolic `n` (shape-poly export) lowers like a concrete one.
+        `SpongeType`). A dedicated-fusion permutation (`has_dedicated_fusion`)
+        absorbs the whole input as one `zorch.sponge_hash` region the vendor
+        expands into a single register-resident kernel; a non-fused permutation
+        runs the `while_loop` absorb. Both read the absorb length at runtime, so a
+        symbolic `n` (shape-poly export) lowers like a concrete one.
         """
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
@@ -309,7 +306,7 @@ class Sponge:
         # sponge's, the ABI the permutation's); a bare permutation runs the
         # generic `while_loop` absorb over its `permute`.
         perm = self._permutation
-        if isinstance(perm, FusedPermutation):
+        if perm.has_dedicated_fusion:
             return _fused_hash(perm, input, self.rate, self.out, sponge_type)
         state = jnp.zeros(perm.width, dtype=input.dtype)
         return _absorb(input, state, self.rate, self.out, perm.permute, sponge_type)

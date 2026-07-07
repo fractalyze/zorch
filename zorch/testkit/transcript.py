@@ -54,6 +54,18 @@ class CheapPermutation:
         mixed = state * state * state
         return mixed + jnp.sum(mixed)
 
+    # Inert fused-region ABI. CheapPermutation is non-fused
+    # (`has_dedicated_fusion` False), so `Sponge` never calls these — but the
+    # `Permutation` seam requires them, so provide conformant stubs.
+    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
+        return (leading,)
+
+    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
+        return self.permute(state)
+
+    def fusion_attrs(self) -> dict[str, Any]:
+        return {}
+
 
 def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTranscript:
     """A fresh `DuplexTranscript` over `CheapPermutation` for tests — a real sponge

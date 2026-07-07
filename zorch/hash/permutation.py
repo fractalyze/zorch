@@ -40,21 +40,15 @@ class Permutation(Protocol):
         """
         ...
 
-
-@runtime_checkable
-class FusedPermutation(Permutation, Protocol):
-    """A permutation that exposes its fused-region ABI, so a consumer can wrap a
-    whole computation built from it — an `absorb`/`squeeze`, a compression — as
-    ONE `fused_region` in this permutation's ABI without knowing the operand
-    layout. The three primitives below are the seam; the consumer (e.g. `Sponge`)
-    owns the region's marker name and its own attributes, the permutation owns
-    only its arithmetic. A permutation without a dedicated fusion need not
-    implement this; consumers fall back to iterating `permute`.
-
-    The invariant that ties the three together:
-    ``permute_from_operands(state, *fusion_operands(x)[1:])`` runs this
-    permutation on ``state`` (marker-free), and ``fusion_operands(x)[0] is x``.
-    """
+    # -- Fused-region ABI. A consumer (e.g. `Sponge`) wraps a whole computation
+    # built from this permutation — an `absorb`/`squeeze`, a compression — as ONE
+    # `fused_region` in this permutation's ABI without knowing the operand layout:
+    # the consumer owns the region's marker name and its own attributes, the
+    # permutation owns only its arithmetic. These are exercised only on the
+    # dedicated path (`has_dedicated_fusion`); a non-fused permutation supplies
+    # inert conformant stubs (consumers iterate `permute` for it). The invariant:
+    # ``permute_from_operands(state, *fusion_operands(x)[1:])`` runs the
+    # permutation on ``state`` (marker-free), and ``fusion_operands(x)[0] is x``.
 
     def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
         """The composite operands ``(leading, *constants)`` — the region's ABI.
