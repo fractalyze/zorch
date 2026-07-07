@@ -106,32 +106,19 @@ class Poseidon2:
             )
         return _permute_body(self, state)
 
-    def overwrite_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Padding-free overwrite sponge (Plonky3 PaddingFreeSponge) — a short
-        final block overwrites only its own lanes, the capacity carries forward.
-        Absorb+squeeze as ONE `sponge_hash` region (fused kernel, state
-        register-resident) — byte-identical to `Sponge.hash`. Only the dedicated
-        (M4-structured) path emits the marker; a generic permutation runs the
-        inline absorb. Lowers under symbolic `len(input)` for export."""
+    def sponge_hash(
+        self, input: Array, rate: int, out: int, chained: bool = False
+    ) -> Array:
+        """Fusion hook for `Sponge` — absorb+squeeze as ONE `zorch.sponge_hash`
+        region the vendor expands into a register-resident kernel. `chained`
+        picks the Merkle-Damgard construction over the padding-free overwrite one
+        (both share the marker; see `Sponge.hash` / `Sponge.linear_hash` for the
+        public API and the semantics). Only the dedicated (M4-structured) path
+        emits the marker; a generic permutation runs the inline absorb. Lowers
+        under symbolic `len(input)` for export."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
-        return _sponge_hash_body(self, input, rate, out)
-
-    def chained_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Chained (Merkle-Damgard) hash — a short final block is zero-padded, and
-        each block carries the prior block's digest (`state[:out]`) in the
-        capacity lanes before permuting. The digest fills the whole capacity, so
-        `rate + out == width`. Same fused `sponge_hash` region as `overwrite_hash`
-        (marked `chained`) and the same shared absorb, so it lowers under a
-        symbolic `len(input)` too."""
-        if input.ndim != 1:
-            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
-        if rate + out != self.width:
-            raise ValueError(
-                f"chained hash needs rate + out == width (the digest fills the "
-                f"capacity), got {rate} + {out} != {self.width}"
-            )
-        return _sponge_hash_body(self, input, rate, out, chained=True)
+        return _sponge_hash_body(self, input, rate, out, chained=chained)
 
 
 def _permutation_body(

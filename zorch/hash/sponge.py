@@ -158,11 +158,19 @@ class SpongeParams:
 
 
 class Sponge:
-    """Padding-free, overwrite-mode sponge over a fixed-width Permutation.
+    """Sponge hash over a fixed-width Permutation, in two constructions:
 
-    hash = overwrite state[:rate] with each input block -> permute (repeat) ->
-    first `out` lanes. One call is one function — the unit that lowers to one
-    fused kernel.
+    - `hash`        — padding-free overwrite sponge (Plonky3 PaddingFreeSponge):
+                      overwrite state[:rate] per block, permute, squeeze [:out].
+    - `linear_hash` — chained (Merkle-Damgard): zero-pad a short block and carry
+                      the prior block's digest in the capacity (rate + out ==
+                      width).
+
+    Both are one call = one function, the unit that lowers to one fused kernel
+    (the shared `zorch.sponge_hash` region; `linear_hash` marks it `chained`).
+    The permutation supplies its own arithmetic (`permute`) and, where it has a
+    dedicated fusion, the `sponge_hash` marker emitter; the construction lives
+    here, not on the permutation.
     """
 
     def __init__(self, permutation: Permutation, params: SpongeParams) -> None:
@@ -206,16 +214,13 @@ class Sponge:
         """The base field the sponge absorbs and squeezes (the permutation's)."""
         return self._permutation.dtype
 
-    def hash(self, input: Array) -> Array:
-        """Absorb `input` (1-D) and squeeze: (n,) over dtype -> (out,).
-
-        A permutation that exposes a dedicated `sponge_hash` (the poseidon2
-        fusion path) absorbs the whole input as one `zorch.sponge_hash`
-        region the vendor expands into a single register-resident kernel; a
-        generic permutation runs the `while_loop` absorb. Both read the absorb
-        length at runtime, so a symbolic `n` (shape-poly export) lowers exactly
-        like a concrete one — one path, no static-`n` special case.
-        """
+    def _run(self, input: Array, *, chained: bool) -> Array:
+        """Shared body of `hash` / `linear_hash`. A permutation that exposes a
+        dedicated `sponge_hash` (the fusion path) absorbs the whole input as one
+        `zorch.sponge_hash` region the vendor expands into a single
+        register-resident kernel; a generic permutation runs the `while_loop`
+        absorb. Both read the absorb length at runtime, so a symbolic `n`
+        (shape-poly export) lowers exactly like a concrete one."""
         if input.ndim != 1:
             raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
         # Otherwise a mismatch surfaces deep in the absorb (input mixed with the
@@ -224,10 +229,29 @@ class Sponge:
             raise TypeError(
                 f"input dtype {input.dtype} must match the sponge field {self.dtype}"
             )
-        fused = getattr(self._permutation, "overwrite_hash", None)
+        fused = getattr(self._permutation, "sponge_hash", None)
         if fused is not None:
-            return fused(input, self.rate, self.out)
+            return fused(input, self.rate, self.out, chained=chained)
         state = jnp.zeros(self._permutation.width, dtype=input.dtype)
-        return _absorb_overwrite(
-            input, state, self.rate, self.out, self._permutation.permute
-        )
+        absorb = _absorb_chained if chained else _absorb_overwrite
+        return absorb(input, state, self.rate, self.out, self._permutation.permute)
+
+    def hash(self, input: Array) -> Array:
+        """Padding-free overwrite sponge (Plonky3 PaddingFreeSponge): a short
+        final block overwrites only its own lanes; the capacity carries forward.
+        Absorb `input` (1-D) and squeeze the first `out` lanes: (n,) -> (out,)."""
+        return self._run(input, chained=False)
+
+    def linear_hash(self, input: Array) -> Array:
+        """Chained (Merkle-Damgard) hash: a short final block is zero-padded, and
+        each block carries the prior block's digest (`state[:out]`) in the
+        capacity lanes before permuting. The digest fills the whole capacity, so
+        `rate + out == width`. Same fused `sponge_hash` region as `hash` (marked
+        `chained`), from the same shared absorb."""
+        if self.rate + self.out != self._permutation.width:
+            raise ValueError(
+                f"linear (chained) hash needs rate + out == width (the digest "
+                f"fills the capacity), got {self.rate} + {self.out} != "
+                f"{self._permutation.width}"
+            )
+        return self._run(input, chained=True)
