@@ -49,11 +49,13 @@ def eval_eq(w: Array, x: Array) -> Array:
     return jnp.prod(eq_factor(w, x), axis=-1)
 
 
-def expand_hypercube_step(state: Array, coord: Array) -> Array:
-    """(2^k,) -> (2^{k+1},): add a new variable as the LSB. result[2j] =
-    state[j]·(1-coord), result[2j+1] = state[j]·coord."""
+def expand_hypercube_step(state: Array, coord: Array, *, msb: bool = False) -> Array:
+    """(2ᵏ,) -> (2ᵏ⁺¹,): add a new variable's (1-coord)/coord split — LSB (default)
+    interleaves the shares, msb=True concatenates [low, high]."""
     high = state * coord
     low = state - high
+    if msb:
+        return jnp.concatenate([low, high])
     return jnp.column_stack([low, high]).flatten()
 
 
