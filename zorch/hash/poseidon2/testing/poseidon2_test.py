@@ -146,7 +146,9 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         )
 
 
-def _ref_chained(perm: Poseidon2, x: jnp.ndarray, rate: int, out: int):
+def _ref_chained(
+    perm: Poseidon2, x: jnp.ndarray, rate: int, out: int
+) -> jnp.ndarray:
     """Independent Merkle-Damgard reference: explicit per-block unroll (zero-pad a
     short final block; chain the prior digest state[:out] into capacity
     [rate:rate+out]). Cross-checks Sponge.linear_hash's shared while_loop absorb."""

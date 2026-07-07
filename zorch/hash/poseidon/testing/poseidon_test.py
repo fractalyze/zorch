@@ -186,7 +186,9 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertIn("mds = dense<[2, 3, 1, 1, 2, 3, 3, 1, 2]> : tensor<9xi64>", txt)
 
 
-def _ref_chained(p: Poseidon, x: jnp.ndarray, rate: int, out: int):
+def _ref_chained(
+    p: Poseidon, x: jnp.ndarray, rate: int, out: int
+) -> jnp.ndarray:
     """Independent Merkle-Damgard reference (zero-pad short block; chain the prior
     digest state[:out] into capacity [rate:rate+out]). Classic-Poseidon mirror of
     the Poseidon2 chained test — pins the reusability win (chained over any
