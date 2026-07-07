@@ -44,17 +44,25 @@ class SumcheckRound(Round):
         if self.degree < 1:
             raise ValueError("degree must be >= 1")
 
-    def __call__(
-        self, claim: Array, msg: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array, Array]:
+    def check_reduce(self, claim: Array, msg: Array, r: Array) -> tuple[Array, Array]:
+        """The round identity + claim reduction alone, for an externally
+        sampled challenge — the dual of `prover.SumcheckRound.round_poly`,
+        so a driver whose choreography owns the Fiat-Shamir hop still routes
+        the round math through one definition. Returns `(reduced, ok)`."""
         if msg.shape[0] != self.degree + 1:
             raise ValueError(
                 f"round message must have degree+1={self.degree + 1} evals, "
                 f"got {msg.shape[0]}"
             )
         ok = claim == msg[0] + msg[1]
+        return eval_univariate(msg, r), ok
+
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
         transcript, r = transcript.observe_and_sample(msg, 1)
-        return eval_univariate(msg, r[0]), transcript, r[0], ok
+        reduced, ok = self.check_reduce(claim, msg, r[0])
+        return reduced, transcript, r[0], ok
 
 
 @partial(
@@ -103,9 +111,11 @@ class CompressedCoeffsSumcheckRound(Round):
     check (`ok` is constant true); binding rests on the terminal claim check,
     the trade the compressed form makes for wire size."""
 
-    def __call__(
-        self, claim: Array, msg: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array, Array]:
+    def check_reduce(self, claim: Array, msg: Array, r: Array) -> tuple[Array, Array]:
+        """Reconstruct `c_1` from the claim and reduce, for an externally
+        sampled challenge — mirrors `SumcheckRound.check_reduce`. `ok` is the
+        constant true of the compressed form (the redundancy was spent on the
+        reconstruction)."""
         if msg.shape[0] != 2:
             raise ValueError(
                 f"compressed round message must carry [c_0, c_2], got shape "
@@ -113,9 +123,14 @@ class CompressedCoeffsSumcheckRound(Round):
             )
         c0, c2 = msg[0], msg[1]
         c1 = claim - c0 - c0 - c2  # s(1) - c_0 - c_2, with s(1) = claim - c_0
+        return eval_coeffs(jnp.stack([c0, c1, c2]), r), jnp.bool_(True)
+
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
         transcript, r = transcript.observe_and_sample(msg, 1)
-        reduced = eval_coeffs(jnp.stack([c0, c1, c2]), r[0])
-        return reduced, transcript, r[0], jnp.bool_(True)
+        reduced, ok = self.check_reduce(claim, msg, r[0])
+        return reduced, transcript, r[0], ok
 
 
 if TYPE_CHECKING:
