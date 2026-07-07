@@ -17,8 +17,8 @@ from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import (
     _DEGREE,
     _LAYER_BUF_POOL,
-    _ROUND_KERNEL_CACHE,
     RoundWidthCaps,
+    _int_block_zone,
     _InterpConsts,
     _JaggedSchedule,
     _JaggedState,
@@ -26,6 +26,7 @@ from zorch.logup_gkr.jagged_prover import (
     _round_live_meta,
     _round_metadata,
     _round_out_pairs,
+    _row_block_zone,
     _row_counts_operand,
     _run_jagged_rounds,
     _run_jagged_rounds_reference,
@@ -210,20 +211,51 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
 
     def test_multi_round_blocks_fire(self) -> None:
         # nrv=3 gives a 2-round row stretch and niv=3 a 2-round dense stretch,
-        # so the k=2 block binaries cover BOTH uniform mid stretches on the
+        # so the k=2 block zones cover BOTH uniform mid stretches on the
         # capped export legs — and the full reference byte-gate runs on the
-        # same call. The cache-key diff guards against the block branches
+        # same call. The jit-cache growth guards against the block branches
         # silently never firing while the single-round path keeps the bytes
         # green (a block that never dispatches is dead perf work, not a
         # correctness failure the reference match could see).
-        before = set(_ROUND_KERNEL_CACHE)
+        row_before = _row_block_zone._cache_size()
+        int_before = _int_block_zone._cache_size()
         layer = random_jagged_layer(23, (3, 1, 5, 2, 1, 1, 2, 4))
-        self._check_round_runner(
-            layer, rand_field(27, (), KB), rand_field(28, (6,), KB)
+        lam, z = rand_field(27, (), KB), rand_field(28, (6,), KB)
+        self._check_round_runner(layer, lam, z)
+        self.assertGreater(_row_block_zone._cache_size(), row_before)
+        self.assertGreater(_int_block_zone._cache_size(), int_before)
+        # Back-to-back capped-export proves on ONE layout: the second run
+        # donates the pool buffers the first run left behind, so a stale pool
+        # reference (a donated array handed out or held) raises here — the
+        # ownership regression the single-run legs cannot see.
+        state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
+        caps = self._caps(layer, nrv, niv, slack=True)
+        ref_sched = _JaggedSchedule(
+            _row_counts_operand(layer.row_counts),
+            _round_live_meta(layer.row_counts, nrv),
+            _round_out_pairs(layer.row_counts, nrv),
+            _InterpConsts(naturals, inv_vand),
+            nrv,
+            niv,
+            1,
+            meta=meta,
         )
-        fresh = {k[0] for k in set(_ROUND_KERNEL_CACHE) - before}
-        self.assertIn("row_block", fresh)
-        self.assertIn("int_block", fresh)
+        ref = _run_jagged_rounds_reference(state, ref_sched, cheap_transcript(KB))
+        fixed = _JaggedSchedule(
+            _row_counts_operand(layer.row_counts),
+            _round_live_meta(layer.row_counts, nrv),
+            None,
+            _InterpConsts(naturals, inv_vand),
+            nrv,
+            niv,
+            1,
+            caps,
+        )
+        for i in range(2):
+            got = _run_jagged_rounds(
+                state, fixed, cheap_transcript(KB), export_dispatch=True
+            )
+            self._assert_matches_reference(ref, got, f"blocks-donation-run{i}")
 
     def test_layer_pool_donates_in_place(self) -> None:
         # The capped concrete path lays each layer into pooled, DONATED
