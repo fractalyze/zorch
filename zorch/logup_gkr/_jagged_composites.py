@@ -43,7 +43,7 @@ from zorch.sumcheck.prover import (
 # to the eager body. All five round bodies are marked: first (round 0, jagged),
 # mid row (jagged), boundary (the row->interaction handoff), mid interaction
 # (dense), and final (the `_fix_last` fold) -- selected by `_run_jagged_rounds`
-# / `_finalize_layer` on both the traced and export-dispatch routes.
+# / `_finalize_layer` per round.
 
 
 def _round_composite_dense_decomp(

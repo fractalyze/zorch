@@ -1,11 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """The per-round Fiat-Shamir hop + scalar reduce: observe the round
 poly, squeeze the challenge, fold the claim/pad scalars, and slice the
-next eval-point coordinate -- one fused zone per hop on the eager path."""
+next eval-point coordinate -- traced into the whole-layer jit, one fused
+region per round."""
 
 from __future__ import annotations
 
-from functools import partial
 from typing import Any
 
 import jax
@@ -89,40 +89,3 @@ def _fs_reduce(
         raw, poly, pad_adj, z_cur, one, eval_point, pos, dtype
     )
     return transcript, r, claim, pad_adj, z_next, pos_next
-
-
-# Fixed eval_point width for the FS-hop zone below: the recognizer bounds
-# num_vars at 62, so 64 covers every layer, and one padded width keeps the
-# zone's compile key layer-invariant (the pad tail is never read — the
-# dynamic_index rides `pos`, which always points into the live prefix).
-_FS_EVAL_POINT_CAP = 64
-
-# The export path's per-round FS hop, hoisted into a module-level jit zone (the
-# `_composite.py`-recommended pattern, mirroring poseidon2's `_permute_body`):
-# called eagerly between round binaries, the bare `_fs_reduce` re-traces the
-# `zorch.duplex_fs` composite's Python body EVERY round and enqueues
-# `_reduce_body`'s ~15 element ops one dispatch at a time — measured as the
-# dominant host wall of the warm decoupled prove (~330 rounds/shard). The zone
-# collapses each hop to one cached-executable dispatch. Keyed by operand
-# shapes (eval_point length varies per layer) plus the static squeeze count and
-# dtype. jit is byte-transparent, so the transcript stream is unchanged.
-_fs_reduce_zone = partial(jax.jit, static_argnums=(6, 7))(_fs_reduce)
-
-
-def _fs_reduce_dispatch(
-    poly: Array,
-    transcript: DuplexTranscript,
-    pad_adj: Array,
-    z_cur: Array,
-    eval_point: Array,
-    pos: Array,
-    n: int,
-    dtype: Any,
-) -> tuple[DuplexTranscript, Array, Array, Array, Array, Array]:
-    """Route the FS hop through the jit zone on the eager/export path; under an
-    outer trace call the plain body so it keeps fusing into the whole-layer
-    program exactly as before (the zone would inline there anyway, but staying
-    out preserves the traced path's structure byte-for-byte by construction)."""
-    if isinstance(poly, jax.core.Tracer):
-        return _fs_reduce(poly, transcript, pad_adj, z_cur, eval_point, pos, n, dtype)
-    return _fs_reduce_zone(poly, transcript, pad_adj, z_cur, eval_point, pos, n, dtype)

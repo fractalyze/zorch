@@ -38,18 +38,18 @@ def _resize_zero(arr: Array, width: int) -> Array:
 # Layer-entry donated cap buffers (xla#179 pad donation). Under a machine
 # cap the entry pad materializes FRESH cap-wide buffers every layer -- an
 # alloc + zero-fill + prefix copy per plane/eq table, ~2x cap-width writes,
-# the top GPU item of the warm decoupled prove (wrapped_concatenate +
-# wrapped_broadcast at a cap that is ~19x shard17's live prefix). The pool
-# instead holds ONE persistent cap-wide array per (role, width, dtype); each
-# layer donates it back to `_lay_prefix_many`, which writes only the live
-# prefix in place. The tail keeps the PREVIOUS layer's bytes: the capped-round
-# contract masks every read by the `live` operand and resolves dead slots
-# through the sentinel neutral blend, so the tail is never read as data --
-# the old pad's zero tail was deterministic filler, not a consumed value.
-# Byte-gated by the runner reference test (which reuses the pool across
-# layouts, so stale tails are exercised) and the shard golden. Only the
-# concrete (non-traced) capped path pools; the traced whole-layer program is
-# untouched.
+# a top GPU item of the warm prove (wrapped_concatenate + wrapped_broadcast at
+# a cap that is ~19x shard17's live prefix). The pool instead holds ONE
+# persistent cap-wide array per (role, width, dtype); the zone donates it back
+# via `_lay_prefix_many` (in `_jagged_round_via_zone`, before the trace),
+# which writes only the live prefix in place. The tail keeps the PREVIOUS
+# layer's bytes: the capped-round contract masks every read by the `live`
+# operand and resolves dead slots through the sentinel neutral blend, so the
+# tail is never read as data -- the old pad's zero tail was deterministic
+# filler, not a consumed value. Byte-gated by the runner reference test (which
+# reuses the pool across layouts, so stale tails are exercised) and the shard
+# golden. The pre-lay is concrete (outside the trace); the whole-layer program
+# it feeds is untouched.
 _LAYER_BUF_POOL: dict[tuple[str, int, Any], Array] = {}
 
 

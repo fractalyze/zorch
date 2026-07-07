@@ -1,10 +1,9 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """`_run_jagged_rounds` (the host loop threading one compute + FS hop per round,
 traced into the whole-layer jit) is byte-identical to the unrolled
-`_run_jagged_rounds_reference` oracle, on every row/interaction/edge layout --
-and so is its `export_dispatch=True` decoupled path (one cached `jax.export`
-binary host-relaunched at the halving size). The oracle is kept in-tree
-precisely for this gate."""
+`_run_jagged_rounds_reference` oracle, on every row/interaction/edge layout and
+under the fixed-width caps. The oracle is kept in-tree precisely for this
+gate."""
 from __future__ import annotations
 
 import jax
@@ -13,7 +12,7 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from jax import Array
 
-from zorch.logup_gkr._jagged_buffers import _LAYER_BUF_POOL
+from zorch.logup_gkr._jagged_buffers import _LAYER_BUF_POOL, _pool_lay_batch
 from zorch.logup_gkr._jagged_schedule import (
     _round_live_meta,
     _round_metadata,
@@ -113,20 +112,11 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             cheap_transcript(KB)
         )
         self._assert_matches_reference(ref, got, "jit")
-        # The export-dispatch path (one cached `jax.export` binary host-relaunched
-        # at the halving size, run decoupled from any outer jit) must also
-        # byte-match the reference: called eagerly here the operands are concrete
-        # arrays, so `_dispatch_*` actually exports and calls the symbolic binary
-        # rather than falling back to the eager kernel under a tracer.
-        got_export = _run_jagged_rounds(
-            state, sched, cheap_transcript(KB), export_dispatch=True
-        )
-        self._assert_matches_reference(ref, got_export, "export")
         # The fixed-width route (xla#179 size-invariance): every round runs at
         # the capped widths with the live prefix tracked by the `live` operand,
         # so one kernel shape serves all rounds/layers/shards. Both a slack cap
         # (real padding on every buffer) and the exact-fit cap (empty pads) must
-        # reproduce the reference bit-for-bit, on both routes.
+        # reproduce the reference bit-for-bit under the whole-layer jit.
         for slack in (True, False):
             caps = self._caps(layer, nrv, niv, slack=slack)
             fixed_sched = _JaggedSchedule(
@@ -140,12 +130,10 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
                 caps,
             )
             label = "fixed-slack" if slack else "fixed-tight"
-            got_fixed = _run_jagged_rounds(state, fixed_sched, cheap_transcript(KB))
-            self._assert_matches_reference(ref, got_fixed, label)
-            got_fixed_export = _run_jagged_rounds(
-                state, fixed_sched, cheap_transcript(KB), export_dispatch=True
+            got_fixed = jax.jit(lambda tr: _run_jagged_rounds(state, fixed_sched, tr))(
+                cheap_transcript(KB)
             )
-            self._assert_matches_reference(ref, got_fixed_export, label + "+export")
+            self._assert_matches_reference(ref, got_fixed, label)
 
     @staticmethod
     def _caps(
@@ -222,30 +210,18 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         )
 
     def test_layer_pool_donates_in_place(self) -> None:
-        # The capped concrete path lays each layer into pooled, DONATED
-        # cap-wide buffers. Across two proves the pool entry must keep the
-        # same device allocation -- a silent donation failure would copy per
-        # layer, reintroducing the cap-wide materialization the pool removes,
-        # and the byte gates cannot see that regression (the values match
-        # either way).
-        layer = random_jagged_layer(29, (3, 1, 5, 2))
-        lam, z = rand_field(31, (), KB), rand_field(32, (5,), KB)
-        state, _, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
-        caps = self._caps(layer, nrv, niv, slack=True)
-        sched = _JaggedSchedule(
-            _row_counts_operand(layer.row_counts),
-            _round_live_meta(layer.row_counts, nrv),
-            None,
-            _InterpConsts(naturals, inv_vand),
-            nrv,
-            niv,
-            1,
-            caps,
-        )
-        _run_jagged_rounds(state, sched, cheap_transcript(KB))
-        key = ("n0", caps.row, state.planes.n0.dtype)
+        # The layer-entry lay-in (`_pool_lay_batch`, which the zone runs to
+        # pre-lay each layer's planes) writes into pooled, DONATED cap-wide
+        # buffers. Across two lay-ins the pool entry must keep the same device
+        # allocation -- a silent donation failure would copy per layer,
+        # reintroducing the cap-wide materialization the pool removes, and the
+        # byte gates cannot see that regression (the values match either way).
+        width = 36
+        src = rand_field(31, (12,), KB)
+        key = ("n0", width, src.dtype)
+        _pool_lay_batch([("n0", src, width)])
         ptr = _LAYER_BUF_POOL[key].unsafe_buffer_pointer()
-        _run_jagged_rounds(state, sched, cheap_transcript(KB))
+        _pool_lay_batch([("n0", src, width)])
         self.assertEqual(ptr, _LAYER_BUF_POOL[key].unsafe_buffer_pointer())
 
     def test_matches_reference_multi_limb_ef(self) -> None:
