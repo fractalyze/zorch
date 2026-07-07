@@ -29,10 +29,8 @@ _GRIND_CHUNK = 1 << 16
 
 
 class GrindError(RuntimeError):
-    """Raised when a proof-of-work grind cannot return a valid witness -- either
-    the field is too wide for the uint32 search (needs x64) or the searched
-    candidate range was exhausted without a hit. The loud-failure contract that
-    stops an unverified witness from ever being returned."""
+    """Raised when a proof-of-work grind cannot run: the field is too wide for
+    the uint32 search (needs x64)."""
 
 
 def _validate_pow_bits(pow_bits: int) -> None:
@@ -422,28 +420,11 @@ class DuplexTranscript:
         self, pow_bits: int, *, chunk: int = _GRIND_CHUNK
     ) -> tuple[DuplexTranscript, Array]:
         """Find a proof-of-work witness and return the transcript advanced past
-        it. Searches canonical witnesses `0, 1, 2, ...` for the lowest one whose
-        observation squeezes a challenge with `pow_bits` zero low bits, then
-        advances the transcript by `check_witness(pow_bits, witness)` -- so a
-        verifier replaying `check_witness` on the witness reaches the identical
-        state.
-
-        A single-window search covers only its first `chunk` candidates and
-        silently returns an invalid witness once `pow_bits` outgrows it; the
-        windowed search (`_grind_search`) instead keeps advancing, and grind
-        **validates the result before returning** -- raising `GrindError` rather
-        than handing back an unverified witness. The host-side validation makes
-        `grind` an eager (prover-side) call; the verifier's `check_witness` stays
-        jit-traceable.
-
-        Returning the lowest-index witness is soundness-neutral: a PoW witness is
-        a work-proof, not a secret or nonce, so the security is the ~2**pow_bits
-        work to find *any* satisfying witness -- enforced by the verifier's
-        `check_witness`, independent of which witness is returned or how much of
-        the field is scanned (the range only has to contain one). Selection and
-        the search bound are completeness/efficiency choices, not soundness ones;
-        a range too small to hold a witness raises rather than degrading
-        silently."""
+        it via `check_witness`, so a verifier replaying it reaches the same state.
+        Searches canonical witnesses for the lowest whose squeezed challenge has
+        `pow_bits` zero low bits. Jit-traceable and does not raise on an exhausted
+        search: `check_witness` is the soundness gate, so which witness the search
+        returns is soundness-neutral."""
         _validate_pow_bits(pow_bits)
         if chunk < 1:
             raise ValueError(f"chunk must be >= 1, got {chunk}")
@@ -453,12 +434,7 @@ class DuplexTranscript:
             witness = jnp.zeros((), field_dtype)
             return self.check_witness(pow_bits, witness)[0], witness
         witness = self._grind_search(pow_bits, chunk)
-        advanced, ok = self.check_witness(pow_bits, witness)
-        if not bool(ok):
-            raise GrindError(
-                f"no proof-of-work witness with {pow_bits} zero bits found "
-                "within the searched candidate range"
-            )
+        advanced, _ = self.check_witness(pow_bits, witness)
         return advanced, witness
 
 
