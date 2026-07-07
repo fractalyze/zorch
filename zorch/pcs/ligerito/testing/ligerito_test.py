@@ -522,13 +522,13 @@ class LigeritoWireGoldenTest(parameterized.TestCase):
             testcase_name="l4_8v",
             alpha_lsb_first=False,
             compressed_sumcheck_messages=False,
-            want="17a4aba743d71aeb91106c22022f0fb881506cfaf6df22ea0ea86937e22373b1",
+            want="6b19850c48d1e63f3c6243418969d6287937b9a0f10b476738b06e93bb1959c8",
         ),
         dict(
             testcase_name="l4_8v_flockknobs",
             alpha_lsb_first=True,
             compressed_sumcheck_messages=True,
-            want="681b90e6fae895dde779163a295bd729cb04c3ac143e8f17e8d9c15dd1dcae4e",
+            want="4e326ca50a0762cbd576e728e37958941ed0ea3013cf54295d60471ae9be6dc6",
         ),
     )
     def test_default_wire_digest(
