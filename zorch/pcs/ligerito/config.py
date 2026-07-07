@@ -67,6 +67,18 @@ class LigeritoConfig:
         compressed coefficients `[c_0, c_2]` with the linear coefficient
         reconstructed from the running claim (`CompressedProductRound`). Another
         wire-convention knob: both sides derive from it, only the bytes change.
+    monomial_commit: the committed matrix's basis. False = each level encodes
+        `mle_evals_to_coeffs(matrix)`, so a codeword coordinate is a clean
+        `eval_mle` of the eval-basis witness and the proximity glue expands
+        eval-points with `eq`. True = each level encodes the bit-reversed raw
+        matrix (both axes), the coefficient-basis convention of wire formats
+        that commit the witness's raw lanes (flock's `ligero_commit`): the
+        codeword coordinate becomes the monomial-basis evaluation
+        `<slice, expand_monomial(reversed(eval_point(s)))>`, the proximity glue
+        expands monomially, and the verifier's lane weights bit-reverse (eq of
+        the reversed fold challenges). Prover and verifier both derive from it;
+        the recursion's algebra is the same up to the basis change, only the
+        committed and glued bytes differ.
     """
 
     num_vars: int
@@ -76,6 +88,7 @@ class LigeritoConfig:
     ood_samples: tuple[int, ...] = ()
     alpha_lsb_first: bool = False
     compressed_sumcheck_messages: bool = False
+    monomial_commit: bool = False
 
     def __post_init__(self) -> None:
         if not self.fold_ks:

@@ -59,12 +59,20 @@ class LigeritoChoreography:
         return False
 
     def bind_statement(
-        self, transcript: TranscriptT, root: Array, point: Array, value: Array
+        self, transcript: TranscriptT, root: Array, point: Array | None, value: Array
     ) -> TranscriptT:
         """Bind the opening statement before any challenge. Default binds all
         of (root, point, value) in that order; a consumer whose outer protocol
-        already binds the point (flock: through the basis) overrides."""
+        already binds the point (flock: through the basis) overrides. `point`
+        is None under the raw-basis entries (`open_with_basis`), where no point
+        exists — the native binding refuses rather than silently bind less."""
         transcript = transcript.observe(root)
+        if point is None:
+            raise ValueError(
+                "the native statement binding observes the opening point, but "
+                "the raw-basis entry carries none — a basis-entry consumer "
+                "must override bind_statement (the basis binds the statement)"
+            )
         transcript = transcript.observe(point)
         return transcript.observe(value)
 

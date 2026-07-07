@@ -358,6 +358,71 @@ class LigeritoChoreographyTest(parameterized.TestCase):
         self.assertEqual(s_open.tolist(), s_verify.tolist())
 
 
+class LigeritoBasisConventionTest(parameterized.TestCase):
+    """Round-trips of the coefficient-basis conventions: the `monomial_commit`
+    knob (bit-reversed raw commit + monomial proximity expansion + reversed
+    lane weights) and the raw-basis entries (`open_with_basis` /
+    `verify_with_basis`, driven through a choreography that binds no point),
+    separately and combined."""
+
+    @parameterized.named_parameters(
+        dict(testcase_name="monomial_point_entry", monomial=True, basis_entry=False),
+        dict(testcase_name="eval_basis_entry", monomial=False, basis_entry=True),
+        dict(testcase_name="monomial_basis_entry", monomial=True, basis_entry=True),
+    )
+    def test_round_trip(self, monomial: bool, basis_entry: bool) -> None:
+        cfg = LigeritoConfig(
+            num_vars=6,
+            fold_ks=(2, 1),
+            log_inv_rates=(1, 1),
+            queries=(4, 3),
+            ood_samples=(1,),
+            alpha_lsb_first=True,
+            compressed_sumcheck_messages=True,
+            monomial_commit=monomial,
+        )
+        chor = (
+            _FlockShapedChoreography(fold_bits=(1, 0), query_bits=(0, 1))
+            if basis_entry
+            else LigeritoChoreography()
+        )
+        _, _, tree = koalabear16_merkle()
+        prover = LigeritoProver(_make_code, tree, cfg, chor)
+        verifier = LigeritoVerifier(_make_code, tree, cfg, chor)
+        f = _rand_ef(3, (1 << cfg.num_vars,))
+        root, pdata = prover.commit([f])
+        if basis_entry:
+            # A RAW basis (not an eq expansion) — the batched-claim shape the
+            # entry exists for.
+            basis = _rand_ef(4, (1 << cfg.num_vars,))
+            value = (f * basis).sum()
+            proof, t_open = prover.open_with_basis(pdata, basis, value, _transcript())
+            ok, t_verify = verifier.verify_with_basis(
+                root, basis, value, proof, _transcript()
+            )
+        else:
+            z = _rand_ef(4, (cfg.num_vars,))
+            value, proof, t_open = prover.open(pdata, [z], _transcript())
+            self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
+            ok, t_verify = verifier.verify(root, [z], value, proof, _transcript())
+        self.assertTrue(bool(ok))
+        _, s_open = t_open.sample()
+        _, s_verify = t_verify.sample()
+        self.assertEqual(s_open.tolist(), s_verify.tolist())
+
+    def test_native_binding_refuses_basis_entry(self) -> None:
+        cfg = LigeritoConfig(
+            num_vars=4, fold_ks=(1, 1), log_inv_rates=(1, 1), queries=(4, 4)
+        )
+        _, _, tree = koalabear16_merkle()
+        prover = LigeritoProver(_make_code, tree, cfg)
+        f = _rand_ef(5, (1 << cfg.num_vars,))
+        _, pdata = prover.commit([f])
+        basis = _rand_ef(6, (1 << cfg.num_vars,))
+        with self.assertRaisesRegex(ValueError, "basis binds the statement"):
+            prover.open_with_basis(pdata, basis, (f * basis).sum(), _transcript())
+
+
 # L=2 with one OOD block and grinds on both schedules — the smallest config
 # whose eager wire carries every extra: [initial, post-fold, OOD intro,
 # induce, terminal] messages plus a fold witness and two query witnesses.
