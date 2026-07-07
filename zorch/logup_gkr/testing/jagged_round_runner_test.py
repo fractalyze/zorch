@@ -13,20 +13,24 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from jax import Array
 
-from zorch.logup_gkr.circuit import JaggedGkrLayer
-from zorch.logup_gkr.jagged_prover import (
+from zorch.logup_gkr._jagged_buffers import _LAYER_BUF_POOL
+from zorch.logup_gkr._jagged_export import _ROUND_KERNEL_CACHE
+from zorch.logup_gkr._jagged_schedule import (
+    _round_live_meta,
+    _round_metadata,
+    _round_out_pairs,
+    _row_counts_operand,
+)
+from zorch.logup_gkr._jagged_types import (
     _DEGREE,
-    _LAYER_BUF_POOL,
-    _ROUND_KERNEL_CACHE,
     RoundWidthCaps,
     _InterpConsts,
     _JaggedSchedule,
     _JaggedState,
     _Planes,
-    _round_live_meta,
-    _round_metadata,
-    _round_out_pairs,
-    _row_counts_operand,
+)
+from zorch.logup_gkr.circuit import JaggedGkrLayer
+from zorch.logup_gkr.jagged_prover import (
     _run_jagged_rounds,
     _run_jagged_rounds_reference,
 )

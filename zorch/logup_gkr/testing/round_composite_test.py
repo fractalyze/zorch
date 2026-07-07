@@ -15,25 +15,31 @@ import numpy as np
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.logup_gkr.jagged_prover import (
+from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
     _composite_fix_and_sum_row,
     _composite_fix_last,
     _composite_sum_as_poly_row,
+)
+from zorch.logup_gkr._jagged_rounds import (
     _fix_and_sum_boundary,
     _fix_and_sum_int,
     _fix_and_sum_row,
     _fix_last,
-    _InterpConsts,
-    _Planes,
     _round_interp_constants,
+    _round_poly_row,
+)
+from zorch.logup_gkr._jagged_schedule import (
     _round_live_meta,
     _round_metadata,
     _round_out_pairs,
-    _round_poly_row,
-    _RoundScalars,
     _row_counts_operand,
+)
+from zorch.logup_gkr._jagged_types import (
+    _InterpConsts,
+    _Planes,
+    _RoundScalars,
 )
 from zorch.logup_gkr.testing import random_jagged_layer
 from zorch.poly.eq import expand_eq_to_hypercube

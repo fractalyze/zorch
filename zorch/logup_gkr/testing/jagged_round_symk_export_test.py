@@ -34,15 +34,17 @@ from jax import Array, export
 from zk_dtypes import koalabear_mont as KB
 from zk_dtypes import koalabearx4_mont as EF
 
-from zorch.logup_gkr.jagged_prover import (
-    _DEGREE,
+from zorch.logup_gkr._jagged_rounds import (
     _fix_and_sum_int,
     _fix_and_sum_row,
-    _InterpConsts,
-    _Planes,
-    _round_metadata,
     _round_poly_int,
     _round_poly_row,
+)
+from zorch.logup_gkr._jagged_schedule import _round_metadata
+from zorch.logup_gkr._jagged_types import (
+    _DEGREE,
+    _InterpConsts,
+    _Planes,
     _RoundScalars,
 )
 from zorch.logup_gkr.testing import random_jagged_layer
