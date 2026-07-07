@@ -1027,11 +1027,30 @@ def _jagged_round_via_zone(
     niv = layer.num_batch_variables
     eval_point = carry[2]
     nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
-    return _jagged_round_zone(
+    planes = (
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
+    )
+    # Under caps, lay the planes into the pooled cap-width buffers BEFORE the
+    # zone: the whole-layer program then keys on the cap shape -- one compile
+    # per nrv class, reused across every layer, pass, AND shard -- instead of
+    # on the exact per-layer/per-shard plane widths. The in-trace
+    # `_pad_to_width` no-ops on an already-cap-width operand, so the zone body
+    # is unchanged. Concrete path only: a tracer means an outer trace owns the
+    # layout (and pooling would donate a traced value).
+    if caps is not None and not isinstance(planes[0], jax.core.Tracer):
+        planes = tuple(
+            _pool_lay_batch(
+                [
+                    (role, a, caps.row)
+                    for role, a in zip(("n0", "n1", "d0", "d1"), planes)
+                ]
+            )
+        )
+    return _jagged_round_zone(
+        *planes,
         _row_counts_operand(layer.row_counts),
         _round_live_meta(layer.row_counts, nrv),
         niv,
