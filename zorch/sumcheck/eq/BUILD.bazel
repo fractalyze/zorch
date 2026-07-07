@@ -1,25 +1,24 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
-# Sumcheck prover + verifier rounds, and the multilinear sumcheck scan driver
-# (`prove`, with the register-resident `zorch.sumcheck` marker).
+# EqPoly sumcheck variants: EqPolySC (Algorithm 5), the small-value optimization
+# (Algorithm 6), and its accumulator pre-computation (Procedure 9). Built on the
+# generic sumcheck domain + sqrt-space engine in the parent package.
 py_library(
-    name = "sumcheck",
+    name = "eq",
     srcs = [
         "__init__.py",
-        "domain.py",
-        "gruen.py",
-        "prover.py",
-        "sqrt_space.py",
-        "verifier.py",
+        "accumulators.py",
+        "eq_poly.py",
+        "small_value.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "//zorch:fusion",
         "//zorch:prove",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/poly",
+        "//zorch/sumcheck",
         "//zorch/utils:bits",
         requirement("jax"),
     ],

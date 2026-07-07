@@ -7,7 +7,7 @@ from absl.testing import absltest
 
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.sumcheck.domain import product_round_poly
-from zorch.sumcheck.eq_poly import (
+from zorch.sumcheck.eq.eq_poly import (
     EqPolyRound,
     _split_pairs,
     compute_eq_evaluations,

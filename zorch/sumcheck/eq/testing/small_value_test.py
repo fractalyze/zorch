@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.sumcheck.eq_poly import prove_eq_poly
-from zorch.sumcheck.small_value import prove_eq_poly_small_value
+from zorch.sumcheck.eq.eq_poly import prove_eq_poly
+from zorch.sumcheck.eq.small_value import prove_eq_poly_small_value
 from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont

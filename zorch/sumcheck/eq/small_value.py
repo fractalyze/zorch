@@ -22,9 +22,9 @@ from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_st
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.accumulators import precompute_accumulators
 from zorch.sumcheck.domain import fold_stacked, product_round_poly
-from zorch.sumcheck.eq_poly import EqPolyRound, sumcheck_poly_from_t
+from zorch.sumcheck.eq.accumulators import precompute_accumulators
+from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
 from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize

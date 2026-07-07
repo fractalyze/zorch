@@ -27,19 +27,6 @@ py_test(
 )
 
 py_test(
-    name = "eq_poly_test",
-    size = "small",
-    srcs = ["eq_poly_test.py"],
-    deps = [
-        "//zorch/sumcheck",
-        "//zorch/testkit:transcript",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
     name = "sqrt_space_test",
     size = "small",
     srcs = ["sqrt_space_test.py"],
@@ -56,19 +43,6 @@ py_test(
     name = "domain_test",
     size = "small",
     srcs = ["domain_test.py"],
-    deps = [
-        "//zorch/sumcheck",
-        "//zorch/testkit:transcript",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "small_value_test",
-    size = "small",
-    srcs = ["small_value_test.py"],
     deps = [
         "//zorch/sumcheck",
         "//zorch/testkit:transcript",
