@@ -22,7 +22,7 @@ from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.fold import sample_distinct_positions
-from zorch.pcs.ligerito.choreography import FsChoreography
+from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import LigeritoProver, LigeritoProverData
 from zorch.pcs.ligerito.verifier import LigeritoVerifier
@@ -270,7 +270,7 @@ class LigeritoTamperTest(parameterized.TestCase):
 
 
 @dataclasses.dataclass(frozen=True)
-class _FlockShapedChoreography(FsChoreography):
+class _FlockShapedChoreography(LigeritoChoreography):
     """flock `pcs::ligerito`'s FS shape over the generic transcript: claim+root
     statement binding (the point rides the outer basis), eager message
     emission, tapered per-fold PoW, unconditional per-level query PoW (0 bits
@@ -448,7 +448,7 @@ class LigeritoWireGoldenTest(parameterized.TestCase):
     """Byte-pin of the default (zorch-native) wire: the digest covers the
     opened value, every proof leaf, and a post-open / post-verify squeeze from
     each side's transcript, so ANY reordered or reframed Fiat-Shamir
-    interaction moves it. Captured before the `FsChoreography` seam landed —
+    interaction moves it. Captured before the `LigeritoChoreography` seam landed —
     the default choreography must keep these bytes forever; regenerate only
     for an intentional wire change."""
 

@@ -30,7 +30,7 @@ witness — the whole recursion stays in one basis (design note: the seam identi
 
 Reuses `pcs/basefold`'s staggered partial-Lagrange batching for the per-level
 `α` weights and `pcs/fold`'s query machinery (`open_rows`). Every transcript
-interaction routes through the `FsChoreography` seam (statement binding, round
+interaction routes through the `LigeritoChoreography` seam (statement binding, round
 hops, root/residual framing, query sampling), so a byte-fixed consumer swaps
 the wire without touching the recursion. Code-generic over a `TensorCode`; the
 multiplicative Reed-Solomon instantiation is the de-risk vehicle
@@ -52,7 +52,7 @@ from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
 from zorch.pcs.fold import open_rows
-from zorch.pcs.ligerito.choreography import FsChoreography
+from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -120,7 +120,7 @@ class LigeritoProver:
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
-    choreography: FsChoreography = FsChoreography()
+    choreography: LigeritoChoreography = LigeritoChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -194,13 +194,27 @@ def _open(
     ood_values: list[Array] = []
     pow_witnesses: list[Array] = []
 
+    # Under the eager policy each state's message is emitted (absorbed + put on
+    # the wire) the moment the state forms; under the lazy default the round
+    # message rides `fold_challenge`'s fused hop instead. The round poly is a
+    # full pass over the state, so the policy gates WHICH point computes it —
+    # never both.
     eager = chor.eager_messages
+
+    def emit(t: Transcript, witness: Array, basis: Array) -> Transcript:
+        msg = round_._round_poly([witness, basis])
+        sumcheck_messages.append(msg)
+        return chor.observe_message(t, msg)
+
+    def grind(t: Transcript, bits: int | None) -> Transcript:
+        if bits is None:
+            return t
+        t, witness = chor.grind(t, bits)
+        pow_witnesses.append(witness)
+        return t
+
     if eager:
-        # Eager emission: the initial state's message, absorbed the moment the
-        # sumcheck starts (each later state's follows right after it forms).
-        msg0 = round_._round_poly([W, B])
-        t = chor.observe_message(t, msg0)
-        sumcheck_messages.append(msg0)
+        t = emit(t, W, B)
 
     current = pd.initial  # M_j
     num_vars = cfg.num_vars
@@ -212,18 +226,13 @@ def _open(
             if not eager:
                 msg = round_._round_poly([W, B])
                 sumcheck_messages.append(msg)
-            bits = chor.fold_grind_bits(j, i)
-            if bits is not None:
-                t, w = chor.grind(t, bits)
-                pow_witnesses.append(w)
+            t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
             W, B = sc_fold([W, B], r)
             if eager:
-                # The freshly folded state's message — the terminal residual
-                # state's included (the verifier recomputes it in the clear).
-                nxt_msg = round_._round_poly([W, B])
-                t = chor.observe_message(t, nxt_msg)
-                sumcheck_messages.append(nxt_msg)
+                # The freshly folded state's — the terminal residual state's
+                # included (the verifier recomputes that one in the clear).
+                t = emit(t, W, B)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---
@@ -245,9 +254,7 @@ def _open(
                 t = t.observe(y)
                 ood_values.append(y)
                 if eager:
-                    m = round_._round_poly([W, b_ood])
-                    t = chor.observe_message(t, m)
-                    sumcheck_messages.append(m)
+                    t = emit(t, W, b_ood)
                 t, sep = t.sample()
                 sep = sep.reshape(())
                 B = B + sep * b_ood
@@ -260,10 +267,7 @@ def _open(
         # M_j's message (encoded) axis is exactly the post-fold witness, so its
         # message length is 2^num_vars — rebuild the same code the commit used.
         code_j = prover._code(j, 1 << num_vars)
-        qbits = chor.query_grind_bits(j)
-        if qbits is not None:
-            t, w = chor.grind(t, qbits)
-            pow_witnesses.append(w)
+        t = grind(t, chor.query_grind_bits(j))
         t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = open_rows(
             prover.tree, current.leaves, current.digest_layers, positions
@@ -287,9 +291,7 @@ def _open(
         eqps = jax.vmap(lambda p: expand_eq_to_hypercube(p, one))(points_s)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
         if eager:
-            m = round_._round_poly([W, b_new])
-            t = chor.observe_message(t, m)
-            sumcheck_messages.append(m)
+            t = emit(t, W, b_new)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new

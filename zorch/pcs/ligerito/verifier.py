@@ -26,7 +26,7 @@ from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
 from zorch.pcs.fold import from_base_field, verify_openings
-from zorch.pcs.ligerito.choreography import FsChoreography
+from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -56,7 +56,7 @@ class LigeritoVerifier:
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
-    choreography: FsChoreography = FsChoreography()
+    choreography: LigeritoChoreography = LigeritoChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -133,10 +133,23 @@ def _verify(
 
     roots = [commitment] + list(proof.recursive_roots)  # root of M_j = roots[j]
     residual = proof.final_residual
-    msg_idx = 0
-    ood_idx = 0
-    wit_idx = 0
+    msgs = iter(proof.sumcheck_messages)
+    oods = iter(proof.ood_values)
+    wits = iter(proof.pow_witnesses)
     num_vars = cfg.num_vars
+
+    def take(t: Transcript) -> tuple[Transcript, Array]:
+        """The next eager emission off the wire, absorbed like the prover did."""
+        m = next(msgs)
+        return chor.observe_message(t, m), m
+
+    def check_grind(t: Transcript, bits: int | None) -> Transcript:
+        nonlocal ok
+        if bits is None:
+            return t
+        t, ok_grind = chor.check_grind(t, bits, next(wits))
+        ok = ok & ok_grind
+        return t
 
     # Under the eager policy `cur` tracks the current round's message as the
     # prover emitted it: read off the proof after every fold, recombined
@@ -144,25 +157,16 @@ def _verify(
     # each round checks against the same combined message the lazy wire would
     # have carried whole.
     eager = chor.eager_messages
-    cur = proof.sumcheck_messages[0] if eager else None
+    cur: Array | None = None
     if eager:
-        msg_idx = 1
-        t = chor.observe_message(t, proof.sumcheck_messages[0])
+        t, cur = take(t)
 
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         challenges = []
         for i in range(k_j):
-            if cur is not None:
-                msg = cur
-            else:
-                msg = proof.sumcheck_messages[msg_idx]
-                msg_idx += 1
-            bits = chor.fold_grind_bits(j, i)
-            if bits is not None:
-                t, ok_grind = chor.check_grind(t, bits, proof.pow_witnesses[wit_idx])
-                wit_idx += 1
-                ok = ok & ok_grind
+            msg = cur if cur is not None else next(msgs)
+            t = check_grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, None if eager else msg, j, i)
             claim, ok_round = round_.check_reduce(claim, msg, r)
             ok = ok & ok_round
@@ -171,9 +175,7 @@ def _verify(
             B = sc_fold([B], r)[0]
             challenges.append(r)
             if eager:
-                cur = proof.sumcheck_messages[msg_idx]
-                msg_idx += 1
-                t = chor.observe_message(t, cur)
+                t, cur = take(t)
         num_vars -= k_j
         eqc = expand_eq_to_hypercube(jnp.stack(challenges), one)  # (kappa_j,)
         kappa_j = 1 << k_j
@@ -187,13 +189,10 @@ def _verify(
             for _ in range(cfg.ood_count(j)):
                 t, zs = t.sample(num_vars)
                 b_ood = expand_eq_to_hypercube(zs.astype(dtype), one)
-                y = proof.ood_values[ood_idx]
-                ood_idx += 1
+                y = next(oods)
                 t = t.observe(y)
                 if cur is not None:
-                    m = proof.sumcheck_messages[msg_idx]
-                    msg_idx += 1
-                    t = chor.observe_message(t, m)
+                    t, m = take(t)
                 t, sep = t.sample()
                 sep = sep.reshape(())
                 B = B + sep * b_ood
@@ -204,11 +203,7 @@ def _verify(
             t = chor.observe_residual(t, residual)
 
         code_j = verifier._code(j, 1 << num_vars)
-        qbits = chor.query_grind_bits(j)
-        if qbits is not None:
-            t, ok_grind = chor.check_grind(t, qbits, proof.pow_witnesses[wit_idx])
-            wit_idx += 1
-            ok = ok & ok_grind
+        t = check_grind(t, chor.query_grind_bits(j))
         t, positions = chor.sample_queries(t, code_j.block_len, cfg.queries[j])
         opening = proof.component_openings[j]
         ok = ok & verify_openings(verifier.tree, [(roots[j], positions, opening)])
@@ -244,9 +239,7 @@ def _verify(
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
         h_new = (alpha * v).sum()
         if cur is not None:
-            m = proof.sumcheck_messages[msg_idx]
-            msg_idx += 1
-            t = chor.observe_message(t, m)
+            t, m = take(t)
         t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new

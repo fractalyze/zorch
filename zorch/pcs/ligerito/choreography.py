@@ -8,7 +8,7 @@ point, the other binds only the claim; one grinds a proof-of-work between a
 round message and its challenge; one observes each state's round message the
 moment the state forms, the other fuses observe+sample at round start; one
 derives query indices by rejection sampling instead of a plain reduction.
-`FsChoreography` owns exactly those choices as overridable hooks operating on
+`LigeritoChoreography` owns exactly those choices as overridable hooks operating on
 the generic `Transcript`, with zorch's native wire as the default behavior —
 the `alpha_lsb_first` / `compressed_sumcheck_messages` config-knob philosophy
 (one definition, both sides derive) lifted from data to behavior, for a
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class FsChoreography:
+class LigeritoChoreography:
     """zorch's native Ligerito wire as an overridable choreography. Stateless —
     a consumer subclasses and overrides only its deltas."""
 

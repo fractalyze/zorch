@@ -161,7 +161,7 @@ class LigeritoProof:
         schedule order (empty when `ood_samples` is `()`). Claimed, not proven
         here — each is glued into the running sumcheck, which enforces it.
     pow_witnesses: proof-of-work witnesses, one per grind the choreography
-        schedules (`FsChoreography.fold_grind_bits` / `query_grind_bits`), in
+        schedules (`LigeritoChoreography.fold_grind_bits` / `query_grind_bits`), in
         schedule order (empty under the default no-grinding choreography).
     """
 
