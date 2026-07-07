@@ -221,9 +221,18 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         self._check_round_runner(
             layer, rand_field(27, (), KB), rand_field(28, (6,), KB)
         )
-        fresh = {k[0] for k in set(_ROUND_KERNEL_CACHE) - before}
+        fresh_keys = set(_ROUND_KERNEL_CACHE) - before
+        fresh = {k[0] for k in fresh_keys}
         self.assertIn("row_block", fresh)
         self.assertIn("int_block", fresh)
+        # niv=3 exceeds the largest fitting block here (k=2), so the boundary
+        # block fires with final=False and a dense continuation follows; the
+        # layer head must ride a first=True row block (round 0 folded in).
+        self.assertIn("boundary_block", fresh)
+        self.assertTrue(
+            any(k[0] == "row_block" and k[2] is True for k in fresh_keys),
+            "no first=True row block fired (round 0 not folded into a block)",
+        )
 
     def test_layer_pool_donates_in_place(self) -> None:
         # The capped concrete path lays each layer into pooled, DONATED

@@ -1905,7 +1905,10 @@ def _dispatch_fix_and_sum_row(
 # binary census O(1): one binary per (phase, K, dtype-mix) -- never per shard,
 # layer, or position. Under the fixed caps every operand shape is
 # round-invariant, which is exactly what lets one K-block serve every stretch.
-_ROUND_BLOCK_SIZES = (8, 4, 2)
+# 1 stays in the ladder so no stretch tail ever falls back to a single round
+# plus its separate FS-zone dispatch -- a k=1 block is still one executable
+# where the single-round path is two.
+_ROUND_BLOCK_SIZES = (8, 4, 2, 1)
 
 
 def _row_live_block(live: list[Array], start: int, k: int) -> Array:
@@ -1950,6 +1953,7 @@ def _dispatch_row_block(
     eval_point: Array,
     pos: Array,
     challenge_limbs: int,
+    first: bool = False,
 ) -> tuple[
     Array, Array, _Planes, Array, DuplexTranscript, Array, Array, Array, Array, Array
 ]:
@@ -1958,6 +1962,11 @@ def _dispatch_row_block(
     challenge chained in-trace -- through ONE cached binary. Only the capped
     (width-preserving, `out_pairs is None`) route exists in block form: the
     exact layout changes width per round, so it keeps the single-round path.
+
+    `first` makes iteration 0 the layer's round 0 (`sum_as_poly`, no fold, no
+    eq_row change; `alpha` rides unused into the binary), so the round-0
+    single AND its FS-zone dispatch fold into the block -- one executable per
+    layer head instead of three.
 
     The transcript crosses the boundary as its five `DuplexState` leaves (the
     permutation / rate / fs metadata is baked into the trace and carried in
@@ -1981,6 +1990,7 @@ def _dispatch_row_block(
     key = (
         "row_block",
         k,
+        first,
         tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
         row_counts.shape,
         eq_int.shape,
@@ -2054,9 +2064,15 @@ def _dispatch_row_block(
             # iteration rebuilds the scalars bundle around the moving trio.
             for i in range(k):
                 sci = _RoundScalars(sc.eq_adj, pad_adj, z_cur, claim, sc.lam)
-                poly, pl, er = _composite_fix_and_sum_row(
-                    pl, er, prev, rc, ei, sci, consts, lv[i], None
-                )
+                if first and i == 0:
+                    # The layer's round 0: bare sum, no fold, eq_row untouched.
+                    poly, pl = _composite_sum_as_poly_row(
+                        pl, rc, er, ei, sci, consts, lv[i], None
+                    )
+                else:
+                    poly, pl, er = _composite_fix_and_sum_row(
+                        pl, er, prev, rc, ei, sci, consts, lv[i], None
+                    )
                 t, r, claim, pad_adj, z_cur, po = _fs_reduce(
                     poly, t, pad_adj, z_cur, ep, po, challenge_limbs, dtype
                 )
@@ -2216,6 +2232,182 @@ def _dispatch_int_block(
     )
 
 
+def _dispatch_boundary_block(
+    planes: _Planes,
+    eq_boundary: Array,
+    eq_int: Array,
+    alpha: Array,
+    scalars: _RoundScalars,
+    consts: _InterpConsts,
+    live_block: Array,
+    transcript: DuplexTranscript,
+    eval_point: Array,
+    pos: Array,
+    challenge_limbs: int,
+    final: bool,
+) -> tuple[
+    Array,
+    Array,
+    _Planes,
+    Array,
+    DuplexTranscript,
+    Array,
+    Array,
+    Array,
+    Array,
+    Array,
+    tuple[Array, Array, Array, Array] | None,
+]:
+    """Dispatch the row->interaction handoff plus `k-1` dense rounds through
+    ONE cached binary: iteration 0 is the boundary round (bind the last row
+    challenge over the still-unfolded `eq_boundary`, then resize the halved
+    state down to the interaction cap in-trace), iterations 1.. are
+    `fix_and_sum_int`, each with its `_fs_reduce` FS hop chained in-trace.
+    With `final` (the block reaches the layer's last round) the tail also
+    folds `fix_last`, returning the four pair openings -- the whole
+    boundary+dense stretch of a typical layer collapses to one executable.
+
+    `live_block` rows halve from the handoff's `1 << (niv-1)` pairs exactly
+    like the loop's per-round `_dense_live_operand` sequence."""
+    k = live_block.shape[0]
+    state_ops = _state_leaves(transcript.state)
+    operands = (
+        planes,
+        eq_boundary,
+        eq_int,
+        alpha,
+        scalars,
+        live_block,
+        state_ops,
+        eval_point,
+        pos,
+    )
+    key = (
+        "boundary_block",
+        k,
+        final,
+        tuple(leaf.dtype for leaf in jax.tree_util.tree_leaves(operands)),
+        planes.n0.shape,
+        eq_boundary.shape,
+        eq_int.shape,
+        eval_point.shape,
+        tuple(leaf.shape for leaf in state_ops),
+        consts.naturals.shape[0],
+        consts.naturals.dtype,
+        _block_fs_key(transcript, challenge_limbs),
+    )
+
+    def build() -> export.Exported:
+        # Concrete shapes, not the singles' symbolic dims: the in-trace
+        # resize to the interaction cap compares the plane width against a
+        # concrete cap, which shape polymorphism cannot decide -- and under
+        # the fixed caps a symbol would bind exactly one size anyway, so the
+        # census is identical (the shapes join the cache key above).
+        abst = (
+            _Planes(
+                *(
+                    jax.ShapeDtypeStruct(
+                        getattr(planes, f).shape, getattr(planes, f).dtype
+                    )
+                    for f in ("n0", "n1", "d0", "d1")
+                )
+            ),
+            jax.ShapeDtypeStruct(eq_boundary.shape, eq_boundary.dtype),
+            jax.ShapeDtypeStruct(eq_int.shape, eq_int.dtype),
+            jax.ShapeDtypeStruct((), alpha.dtype),
+            _abst_scalars(scalars),
+            jax.ShapeDtypeStruct(live_block.shape, live_block.dtype),
+            tuple(jax.ShapeDtypeStruct(s.shape, s.dtype) for s in state_ops),
+            jax.ShapeDtypeStruct(eval_point.shape, eval_point.dtype),
+            jax.ShapeDtypeStruct(pos.shape, pos.dtype),
+        )
+        template = transcript
+
+        def fn(
+            pl: _Planes,
+            eb: Array,
+            ei: Array,
+            al: Array,
+            sc: _RoundScalars,
+            lv: Array,
+            st: tuple[Array, Array, Array, Array, Array],
+            ep: Array,
+            po: Array,
+        ) -> tuple[Any, ...]:
+            t = replace(template, state=DuplexState(*st))
+            dtype = sc.claim.dtype
+            pad_adj, z_cur, claim = sc.pad_adj, sc.z_cur, sc.claim
+            interaction = ei.shape[0]
+            prev = al
+            polys: list[Array] = []
+            rs: list[Array] = []
+            for i in range(k):
+                sci = _RoundScalars(sc.eq_adj, pad_adj, z_cur, claim, sc.lam)
+                if i == 0:
+                    poly, pl, _ = _composite_fix_and_sum_boundary(
+                        pl, eb, prev, sci, consts, lv[i]
+                    )
+                    # The handoff halves [row] -> [row // 2]; the dense
+                    # rounds run at the interaction cap, so resize in-trace
+                    # (the live 2^niv prefix always survives -- the same
+                    # contract as the single-round loop's resize).
+                    pl = _Planes(
+                        *(
+                            _resize_zero(a, interaction)
+                            for a in (pl.n0, pl.n1, pl.d0, pl.d1)
+                        )
+                    )
+                else:
+                    poly, pl, ei = _composite_fix_and_sum_dense(
+                        pl, ei, prev, sci, consts, lv[i]
+                    )
+                t, r, claim, pad_adj, z_cur, po = _fs_reduce(
+                    poly, t, pad_adj, z_cur, ep, po, challenge_limbs, dtype
+                )
+                polys.append(poly)
+                rs.append(r)
+                prev = r
+            outs: list[Any] = [
+                jnp.stack(polys),
+                jnp.stack(rs),
+                pl,
+                ei,
+                _state_leaves(t.state),
+                claim,
+                pad_adj,
+                z_cur,
+                po,
+                prev,
+            ]
+            if final:
+                head = _Planes(*(a[:2] for a in (pl.n0, pl.n1, pl.d0, pl.d1)))
+                outs.extend(_composite_fix_last(head, prev))
+            return tuple(outs)
+
+        return export.export(jax.jit(fn))(*abst)
+
+    out = _round_dispatch(key, operands, build, disk=False)
+    if final:
+        (polys, rs, pl, ei, st, claim, pad_adj, z_cur, po, prev, f0, f1, f2, f3) = out
+        openings: tuple[Array, Array, Array, Array] | None = (f0, f1, f2, f3)
+    else:
+        polys, rs, pl, ei, st, claim, pad_adj, z_cur, po, prev = out
+        openings = None
+    return (
+        polys,
+        rs,
+        pl,
+        ei,
+        replace(transcript, state=DuplexState(*st)),
+        claim,
+        pad_adj,
+        z_cur,
+        po,
+        prev,
+        openings,
+    )
+
+
 def _fold_scalars(
     poly: Array, r: Array, pad_adj: Array, z: Array, one: Array
 ) -> tuple[Array, Array]:
@@ -2329,10 +2521,18 @@ def _fs_reduce_dispatch(
 # the tail slices it down before the final marker -- the final ABI stays the
 # exact (2,) planes.
 def _finalize_layer(
-    planes: _Planes, alpha: Array, chal: list[Array], poly: list[Array]
+    planes: _Planes,
+    alpha: Array,
+    chal: list[Array],
+    poly: list[Array],
+    openings: tuple[Array, Array, Array, Array] | None = None,
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
-    head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
-    fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
+    if openings is not None:
+        # A final boundary block already folded fix_last in-trace.
+        fn0, fn1, fd0, fd1 = openings
+    else:
+        head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
+        fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
     if all(c.ndim == 0 for c in chal):
         # Per-round entries only (the traced and single-round paths): the
         # original one-stack structure, byte-for-byte.
@@ -2501,10 +2701,12 @@ def _run_jagged_rounds(
         else ()
     )
     rnd = 0
+    openings: tuple[Array, Array, Array, Array] | None = None
     while rnd < nrv + niv:
-        if block_sizes and 1 <= rnd < nrv:
-            # Greedy row blocks over the uniform mid stretch [1, nrv): K
-            # rounds per bind, challenge chained inside the binary.
+        if block_sizes and rnd < nrv:
+            # Greedy row blocks over [0, nrv): K rounds per bind, challenge
+            # chained inside the binary; a block starting at 0 folds the
+            # layer's round 0 (sum, no fold) in as its first iteration.
             k = next((n for n in block_sizes if rnd + n <= nrv), 0)
             if k:
                 scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
@@ -2532,6 +2734,7 @@ def _run_jagged_rounds(
                     eval_point,
                     pos,
                     challenge_limbs,
+                    first=rnd == 0,
                 )
                 polys.append(poly)
                 challenges.append(r)
@@ -2543,10 +2746,55 @@ def _run_jagged_rounds(
                     pad_adj = one
                 rnd += k
                 continue
+        if block_sizes and rnd == nrv and niv > 0:
+            # The boundary handoff plus the dense stretch through one
+            # binary; when it reaches the layer's last round it also folds
+            # fix_last, handing the pair openings to _finalize_layer.
+            k = next((n for n in block_sizes if n <= niv), 0)
+            if k:
+                # caps is not None on every block path (block_sizes guard),
+                # so the boundary eq operand comes from the pool like the
+                # single-round path's concrete branch below.
+                half = caps.row // 2  # type: ignore[union-attr]
+                src = eq_int if eq_int.shape[0] <= half else eq_int[:half]
+                scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
+                (
+                    poly,
+                    r,
+                    planes,
+                    eq_int,
+                    transcript,
+                    claim,
+                    pad_adj,
+                    z_cur,
+                    pos,
+                    prev_r,
+                    opens,
+                ) = _dispatch_boundary_block(
+                    planes,
+                    _pool_lay("eq_boundary", src, half),
+                    eq_int,
+                    prev_r,
+                    scalars,
+                    consts,
+                    _dense_live_block(1 << (niv - 1), k),
+                    transcript,
+                    eval_point,
+                    pos,
+                    challenge_limbs,
+                    final=k == niv,
+                )
+                if opens is not None:
+                    openings = opens
+                polys.append(poly)
+                challenges.append(r)
+                rnd += k
+                continue
         if block_sizes and nrv < rnd:
-            # Greedy dense blocks over (nrv, nrv+niv): the first covered
-            # round folds `1 << (niv - 1 - (rnd - nrv))` pairs, halving per
-            # round inside the block.
+            # Greedy dense continuation past a partial boundary block (only
+            # when the dense stretch outruns the largest block): the first
+            # covered round folds `1 << (niv - 1 - (rnd - nrv))` pairs,
+            # halving per round inside the block.
             k = next((n for n in block_sizes if rnd + n <= nrv + niv), 0)
             if k:
                 scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
@@ -2664,7 +2912,7 @@ def _run_jagged_rounds(
         rnd += 1
 
     fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
-        planes, prev_r, challenges, polys
+        planes, prev_r, challenges, polys, openings
     )
     return (
         stacked_challenges,
