@@ -151,6 +151,7 @@ class LigeritoConfig:
         "final_residual",
         "ood_values",
         "pow_witnesses",
+        "component_positions",
     ],
     meta_fields=[],
 )
@@ -176,6 +177,12 @@ class LigeritoProof:
     pow_witnesses: proof-of-work witnesses, one per grind the choreography
         schedules (`LigeritoChoreography.fold_grind_bits` / `query_grind_bits`), in
         schedule order (empty under the default no-grinding choreography).
+    component_positions: the sampled query positions of each `component_openings`
+        entry (one sorted int32 array per committed level, ascending distinct).
+        The verifier re-derives these from the transcript, so they are redundant
+        for verification — carried so a consumer can serialize a deduplicated
+        multi-proof (e.g. flock's octopus) whose layout is positional and thus
+        not recoverable from the per-query `Opening.path` alone.
     """
 
     sumcheck_messages: list[Array]
@@ -184,3 +191,4 @@ class LigeritoProof:
     final_residual: Array
     ood_values: list[Array] = field(default_factory=list)
     pow_witnesses: list[Array] = field(default_factory=list)
+    component_positions: list[Array] = field(default_factory=list)
