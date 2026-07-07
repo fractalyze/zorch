@@ -17,11 +17,13 @@ py_test(
         "//zorch/commit:merkle",
         "//zorch/commit/testing:koalabear16",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/pcs:fold",
         "//zorch/pcs/ligerito",
         "//zorch/poly",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
+        requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
