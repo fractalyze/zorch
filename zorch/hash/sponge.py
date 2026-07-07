@@ -37,7 +37,7 @@ class SpongeType(enum.Enum):
     and nothing on any permutation (which stays sponge-agnostic)."""
 
     PADDING_FREE = "padding_free"  # Plonky3 PaddingFreeSponge (default)
-    CHAINED = "chained"  # Merkle-Damgard (zisk-zorch's linear hash)
+    CHAINED = "chained"  # the Merkle-Damgard construction
 
 
 # Permutation-agnostic sponge-hash marker: absorb + squeeze as ONE region the
