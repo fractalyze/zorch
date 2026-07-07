@@ -191,6 +191,7 @@ def _open(
     sumcheck_messages: list[Array] = []
     recursive_roots: list[Array] = []
     component_openings: list[Opening] = []
+    ood_values: list[Array] = []
 
     current = pd.initial  # M_j
     num_vars = cfg.num_vars
@@ -212,6 +213,19 @@ def _open(
             nxt = _commit(W, k_next, code_next, prover.tree)
             t = chor.observe_root(t, nxt.root)
             recursive_roots.append(nxt.root)
+            # --- OOD binding of the fresh commit: glue the eval-claim at a
+            # sampled out-of-domain point into the running sumcheck, exactly
+            # like induce but with a transcript-drawn basis and a claimed
+            # (observed) value. The claim side is verifier-tracked. ---
+            for _ in range(cfg.ood_count(j)):
+                t, zs = t.sample(num_vars)
+                b_ood = expand_eq_to_hypercube(zs.astype(dtype), one)
+                y = (W * b_ood).sum()
+                t = t.observe(y)
+                ood_values.append(y)
+                t, sep = t.sample()
+                sep = sep.reshape(())
+                B = B + sep * b_ood
         else:
             # Bind the in-clear residual before sampling the final level's queries
             # (the IOPP terminal binding — queries depend on it; verify mirrors).
@@ -254,7 +268,7 @@ def _open(
         recursive_roots=recursive_roots,
         component_openings=component_openings,
         final_residual=residual,
-        ood_values=[],
+        ood_values=ood_values,
     )
     return value, proof, t
 

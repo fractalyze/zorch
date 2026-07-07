@@ -111,6 +111,15 @@ class LigeritoTest(parameterized.TestCase):
             rates=(3, 2, 1, 1),
             queries=(6, 4, 4, 2),
         ),
+        # OOD binding blocks per recursive commit (mixed counts, including 0).
+        dict(
+            testcase_name="l3_6v_ood",
+            num_vars=6,
+            fold_ks=(1, 1, 1),
+            rates=(1, 1, 1),
+            queries=(4, 4, 4),
+            ood_samples=(2, 0),
+        ),
         # LSB-first alpha orientation; queries=6 is non-power-of-two, so the
         # glue weights are a genuinely different set than the MSB-first default.
         dict(
@@ -142,12 +151,14 @@ class LigeritoTest(parameterized.TestCase):
         queries: tuple[int, ...],
         alpha_lsb_first: bool = False,
         compressed_sumcheck_messages: bool = False,
+        ood_samples: tuple[int, ...] = (),
     ) -> None:
         cfg = LigeritoConfig(
             num_vars=num_vars,
             fold_ks=fold_ks,
             log_inv_rates=rates,
             queries=queries,
+            ood_samples=ood_samples,
             alpha_lsb_first=alpha_lsb_first,
             compressed_sumcheck_messages=compressed_sumcheck_messages,
         )
@@ -160,9 +171,14 @@ class LigeritoTest(parameterized.TestCase):
 
 
 # A recursive config (L=2) with a residual — exercises every proof component the
-# tamper cases below poke: recursive root, opened rows, residual, sumcheck msg.
+# tamper cases below poke: recursive root, opened rows, residual, sumcheck msg,
+# OOD value.
 _TAMPER_CFG = LigeritoConfig(
-    num_vars=4, fold_ks=(1, 1), log_inv_rates=(1, 1), queries=(4, 4)
+    num_vars=4,
+    fold_ks=(1, 1),
+    log_inv_rates=(1, 1),
+    queries=(4, 4),
+    ood_samples=(1,),
 )
 
 
@@ -228,6 +244,27 @@ class LigeritoTamperTest(parameterized.TestCase):
         verifier, root, z, value, proof = self._open()
         self._reject(verifier, root, z, value + jnp.array(1, EF), proof)
 
+    def test_rejects_tampered_ood_value(self) -> None:
+        # A shifted OOD claim desyncs the glued claim from the basis; the next
+        # round's s(0)+s(1) == claim link breaks.
+        verifier, root, z, value, proof = self._open()
+        oods = list(proof.ood_values)
+        oods[0] = oods[0] + jnp.array(1, EF)
+        self._reject(
+            verifier, root, z, value, dataclasses.replace(proof, ood_values=oods)
+        )
+
+    def test_rejects_missing_ood_value(self) -> None:
+        verifier, root, z, value, proof = self._open()
+        with self.assertRaisesRegex(ValueError, "OOD values"):
+            verifier.verify(
+                root,
+                [z],
+                value,
+                dataclasses.replace(proof, ood_values=[]),
+                _transcript(),
+            )
+
 
 class LigeritoWireGoldenTest(parameterized.TestCase):
     """Byte-pin of the default (zorch-native) wire: the digest covers the
@@ -286,6 +323,26 @@ class LigeritoConfigTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "positive"):
             LigeritoConfig(
                 num_vars=4, fold_ks=(0, 1), log_inv_rates=(1, 1), queries=(4, 4)
+            )
+
+    def test_rejects_wrong_ood_samples_length(self) -> None:
+        with self.assertRaisesRegex(ValueError, "ood_samples"):
+            LigeritoConfig(
+                num_vars=4,
+                fold_ks=(1, 1),
+                log_inv_rates=(1, 1),
+                queries=(4, 4),
+                ood_samples=(1, 1),
+            )
+
+    def test_rejects_negative_ood_samples(self) -> None:
+        with self.assertRaisesRegex(ValueError, "non-negative"):
+            LigeritoConfig(
+                num_vars=4,
+                fold_ks=(1, 1),
+                log_inv_rates=(1, 1),
+                queries=(4, 4),
+                ood_samples=(-1,),
             )
 
 

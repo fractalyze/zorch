@@ -49,8 +49,14 @@ class LigeritoConfig:
         `M_j`'s rate; see the prover for the exact map).
     queries: opened-row count per committed matrix; `len == len(fold_ks)`.
         Placeholder counts, not soundness-calibrated (like Ligero/BaseFold).
-    ood_samples: out-of-domain binding samples per level; `()` means no OOD (the
-        RS de-risk gate default — flock uses OOD for soundness, calibrated later).
+    ood_samples: out-of-domain binding blocks per recursive commit:
+        `ood_samples[j]` blocks run right after M_{j+1}'s root is observed (the
+        end of level `j`), each sampling a fresh point `z_ood` of the folded
+        witness's arity, gluing its eval-claim `(eq(z_ood), W(z_ood))` into the
+        running sumcheck with a separation challenge — binding the just-made
+        commitment at a point outside the query domain. `len == num_levels - 1`
+        (the final level commits nothing), or `()` for none (the RS de-risk
+        default — flock uses OOD for soundness, calibrated later).
     alpha_lsb_first: index orientation of the per-level partial-Lagrange batching
         weights (the query-claim glue's alpha). False = the native MSB-first
         expansion; True = LSB-first (challenge `j` <-> table bit `j`), for wire
@@ -90,10 +96,33 @@ class LigeritoConfig:
                 "fold_ks, log_inv_rates, queries must be the same length; got "
                 f"{len(self.fold_ks)}/{len(self.log_inv_rates)}/{len(self.queries)}"
             )
+        if self.ood_samples:
+            if len(self.ood_samples) != self.num_levels - 1:
+                raise ValueError(
+                    "ood_samples binds one entry per recursive commit "
+                    f"(M_1..M_{self.num_levels - 1}); expected "
+                    f"{self.num_levels - 1} entries, got {len(self.ood_samples)}"
+                )
+            if any(n < 0 for n in self.ood_samples):
+                raise ValueError(
+                    f"ood_samples must be non-negative; got {self.ood_samples}"
+                )
 
     @property
     def num_levels(self) -> int:
         return len(self.fold_ks)
+
+    @property
+    def total_ood(self) -> int:
+        """OOD eval-claims across the whole open (`ood_values`'s wire length)."""
+        return sum(self.ood_samples)
+
+    def ood_count(self, level: int) -> int:
+        """OOD blocks run after level `level`'s recursive commit (0 when unset
+        or final — the final level commits nothing)."""
+        if not self.ood_samples or level >= self.num_levels - 1:
+            return 0
+        return self.ood_samples[level]
 
     @property
     def residual_vars(self) -> int:
@@ -127,7 +156,9 @@ class LigeritoProof:
         sampled query positions — the proximity left-hand side `<X[s], r_col>`.
     final_residual: the plaintext folded witness of the final level; the verifier
         replays the batched sumcheck's terminal claim against it.
-    ood_values: out-of-domain claim values (empty when `ood_samples` is `()`).
+    ood_values: the claimed out-of-domain evaluations, one per OOD block in
+        schedule order (empty when `ood_samples` is `()`). Claimed, not proven
+        here — each is glued into the running sumcheck, which enforces it.
     """
 
     sumcheck_messages: list[Array]

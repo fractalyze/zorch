@@ -92,6 +92,11 @@ class LigeritoVerifier:
                 f"malformed proof: expected {cfg.num_levels} component openings, "
                 f"got {len(proof.component_openings)}"
             )
+        if len(proof.ood_values) != cfg.total_ood:
+            raise ValueError(
+                f"malformed proof: expected {cfg.total_ood} OOD values, "
+                f"got {len(proof.ood_values)}"
+            )
         return _verify(self, commitment, z, value, proof, transcript)
 
 
@@ -118,6 +123,7 @@ def _verify(
     roots = [commitment] + list(proof.recursive_roots)  # root of M_j = roots[j]
     residual = proof.final_residual
     msg_idx = 0
+    ood_idx = 0
     num_vars = cfg.num_vars
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
@@ -139,6 +145,19 @@ def _verify(
 
         if not is_final:
             t = chor.observe_root(t, roots[j + 1])
+            # OOD binding (mirror the prover): rebuild the drawn basis, take the
+            # claimed value off the proof, and glue both into basis and claim —
+            # the claim's honesty is enforced by the continuing sumcheck.
+            for _ in range(cfg.ood_count(j)):
+                t, zs = t.sample(num_vars)
+                b_ood = expand_eq_to_hypercube(zs.astype(dtype), one)
+                y = proof.ood_values[ood_idx]
+                ood_idx += 1
+                t = t.observe(y)
+                t, sep = t.sample()
+                sep = sep.reshape(())
+                B = B + sep * b_ood
+                claim = claim + sep * y
         else:
             t = chor.observe_residual(t, residual)
 
