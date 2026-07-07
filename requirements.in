@@ -13,10 +13,10 @@
 # frontend, which requires zk_dtypes >= 0.0.8.
 absl-py
 numpy
-jax==0.10.0.dev20260707115835
-jaxlib==0.10.0.dev20260707115835
-jax-cuda12-pjrt==0.10.0.dev20260707115835
-jax-cuda12-plugin==0.10.0.dev20260707115835
+jax==0.10.0.dev20260707215955
+jaxlib==0.10.0.dev20260707215955
+jax-cuda12-pjrt==0.10.0.dev20260707215955
+jax-cuda12-plugin==0.10.0.dev20260707215955
 zk-dtypes==0.0.8
 
 # Benchmark harness (shared across fractalyze repos); used only by the
