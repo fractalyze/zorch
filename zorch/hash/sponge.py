@@ -114,8 +114,13 @@ def _absorb_overwrite(
     forward. The fallback for a permutation with no dedicated sponge kernel, and
     the body of the `sponge_hash` marker — shared so the two cannot drift."""
     return _absorb(
-        input, state, rate, out, permute,
-        tail_fill=_keep_prior, set_capacity=_carry_capacity,
+        input,
+        state,
+        rate,
+        out,
+        permute,
+        tail_fill=_keep_prior,
+        set_capacity=_carry_capacity,
     )
 
 
@@ -131,8 +136,13 @@ def _absorb_chained(
     ``[rate:rate+out]``. The digest fills the whole capacity, so requires
     ``rate + out == width`` (validated by the caller)."""
     return _absorb(
-        input, state, rate, out, permute,
-        tail_fill=_zero_pad, set_capacity=_chain_digest,
+        input,
+        state,
+        rate,
+        out,
+        permute,
+        tail_fill=_zero_pad,
+        set_capacity=_chain_digest,
     )
 
 

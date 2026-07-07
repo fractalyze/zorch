@@ -146,9 +146,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         )
 
 
-def _ref_chained(
-    perm: Poseidon2, x: jnp.ndarray, rate: int, out: int
-) -> jnp.ndarray:
+def _ref_chained(perm: Poseidon2, x: jnp.ndarray, rate: int, out: int) -> jnp.ndarray:
     """Independent Merkle-Damgard reference: explicit per-block unroll (zero-pad a
     short final block; chain the prior digest state[:out] into capacity
     [rate:rate+out]). Cross-checks Sponge.linear_hash's shared while_loop absorb."""
@@ -191,11 +189,7 @@ class Poseidon2ChainedHashTest(absltest.TestCase):
         # for-loop raised NotImplementedError here.
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         (n,) = export.symbolic_shape("n")
-        txt = (
-            jax.jit(s.linear_hash)
-            .lower(jax.ShapeDtypeStruct((n,), F))
-            .as_text()
-        )
+        txt = jax.jit(s.linear_hash).lower(jax.ShapeDtypeStruct((n,), F)).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
 
 
