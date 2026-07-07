@@ -15,6 +15,7 @@ this — each implementation carries it (`Poseidon2`, `CheapPermutation`).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from jax import Array
@@ -40,32 +41,28 @@ class Permutation(Protocol):
         """
         ...
 
-    # -- Fused-region ABI. A consumer (e.g. `Sponge`) wraps a whole computation
-    # built from this permutation — an `absorb`/`squeeze`, a compression — as ONE
-    # `fused_region` in this permutation's ABI without knowing the operand layout:
-    # the consumer owns the region's marker name and its own attributes, the
-    # permutation owns only its arithmetic. These are exercised only on the
-    # dedicated path (`has_dedicated_fusion`); a non-fused permutation supplies
-    # inert conformant stubs (consumers iterate `permute` for it). The invariant:
-    # ``permute_from_operands(state, *fusion_operands(x)[1:])`` runs the
-    # permutation on ``state`` (marker-free), and ``fusion_operands(x)[0] is x``.
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        """The pieces to wrap a whole computation over this permutation — an
+        `absorb`/`squeeze`, a compression — as ONE `fused_region` in this
+        permutation's ABI, without the consumer (e.g. `Sponge`) knowing the
+        operand layout. Returns ``(operands, permute_from_operands, attrs)``:
 
-    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
-        """The composite operands ``(leading, *constants)`` — the region's ABI.
-        ``leading`` is the caller's data (a sponge input, a state); the rest are
-        this permutation's constants (round constants), passed explicitly so a
-        `lax.composite` does not lift them to leading operands and break the ABI.
+        - ``operands`` = the composite operands ``(leading, *constants)``;
+          ``leading`` is the caller's data, the rest this permutation's round
+          constants, passed explicitly so a `lax.composite` cannot lift them to
+          leading operands and break the emitter ABI.
+        - ``permute_from_operands(state, *constants)`` runs the permutation on
+          ``state`` from those constant operands — a const-free straight-line
+          body, the decomposition the `fused_region` runs.
+        - ``attrs`` = identifying `composite.attributes` (a ``permutation``
+          discriminator plus the shape the recognizer reads); the consumer owns
+          the marker name and its own attributes.
+
+        Invariant: ``operands[0] is leading`` and
+        ``permute_from_operands(s, *operands[1:])`` runs the permutation on ``s``
+        marker-free. Meaningful only on the dedicated path
+        (`has_dedicated_fusion`); a non-fused permutation returns an inert spec.
         """
-        ...
-
-    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
-        """Run the permutation on ``state`` given the constant operands (the tail
-        of `fusion_operands`), as a straight-line body with no captured consts —
-        the decomposition a `fused_region` runs."""
-        ...
-
-    def fusion_attrs(self) -> dict[str, Any]:
-        """This permutation's identifying `composite.attributes` (a `permutation`
-        discriminator plus the shape the vendor recognizer reads). Meaningful only
-        on the dedicated path (`has_dedicated_fusion`)."""
         ...

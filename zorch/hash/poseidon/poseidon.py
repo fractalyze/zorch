@@ -19,6 +19,7 @@ only), then `full_rounds/2` full rounds — and the dense MDS runs every round.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -85,22 +86,18 @@ class Poseidon:
     # wrap a whole computation over this permutation as one `fused_region` without
     # knowing the operand layout. Sponge-agnostic — names no construction.
 
-    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
-        """The classic-Poseidon ABI operands `(leading, round_constants)` (the
-        round constants flattened row-major)."""
-        return (leading, self._p.round_constants.reshape(-1))
-
-    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
-        """Run the permute on `state` from the ABI round-constant operand (the
-        tail of `fusion_operands`) — the straight-line, const-free decomposition a
-        `fused_region` runs."""
-        return _permute_from_rc(self, state, *operands)
-
-    def fusion_attrs(self) -> dict[str, Any]:
-        """Identifying `composite.attributes` for a region built over this
-        permutation: the `permutation` discriminator plus the shape the zkx
-        recognizer reads (`mds` identifies the dense linear layer)."""
-        return {"permutation": "poseidon", **_poseidon_marker_attrs(self)}
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        """See `Permutation.fused_region_spec`. The classic-Poseidon ABI: operands
+        `(leading, round_constants)` (flattened row-major), the full/partial/full
+        dense-MDS decomposition, and attrs whose `mds` identifies the dense linear
+        layer."""
+        return (
+            (leading, self._p.round_constants.reshape(-1)),
+            partial(_permute_from_rc, self),
+            {"permutation": "poseidon", **_poseidon_marker_attrs(self)},
+        )
 
 
 # The classic Poseidon permute on `s` given round constants flattened row-major

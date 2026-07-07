@@ -161,7 +161,7 @@ def _fused_hash(
     vendor expands the marker into one register-resident kernel. Caller gates on
     `has_dedicated_fusion` — a non-fused permutation runs the generic absorb.
     """
-    operands = perm.fusion_operands(input)
+    operands, permute_from_operands, perm_attrs = perm.fused_region_spec(input)
 
     def sponge(inp: Array, *constants: Array, **_attrs: object) -> Array:
         state = jnp.zeros(perm.width, dtype=inp.dtype)
@@ -170,7 +170,7 @@ def _fused_hash(
             state,
             rate,
             out,
-            lambda s: perm.permute_from_operands(s, *constants),
+            lambda s: permute_from_operands(s, *constants),
             sponge_type,
         )
 
@@ -180,7 +180,7 @@ def _fused_hash(
     # no precedent). The marker name/version belong to the sponge, not the
     # permutation, so they live here.
     attrs: dict[str, object] = {
-        **perm.fusion_attrs(),
+        **perm_attrs,
         "rate": rate,
         "digest_elems": out,
     }

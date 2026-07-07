@@ -9,6 +9,7 @@ on the unmarked path (no `zorch.sumcheck` marker).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import jax.numpy as jnp
@@ -55,16 +56,12 @@ class CheapPermutation:
         return mixed + jnp.sum(mixed)
 
     # Inert fused-region ABI. CheapPermutation is non-fused
-    # (`has_dedicated_fusion` False), so `Sponge` never calls these — but the
-    # `Permutation` seam requires them, so provide conformant stubs.
-    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
-        return (leading,)
-
-    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
-        return self.permute(state)
-
-    def fusion_attrs(self) -> dict[str, Any]:
-        return {}
+    # (`has_dedicated_fusion` False), so `Sponge` never calls this — but the
+    # `Permutation` seam requires it, so provide a conformant stub.
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        return (leading,), (lambda state, *ops: self.permute(state)), {}
 
 
 def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTranscript:

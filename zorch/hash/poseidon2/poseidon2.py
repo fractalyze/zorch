@@ -17,6 +17,7 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -104,23 +105,15 @@ class Poseidon2:
     # wrap a whole computation over this permutation as one `fused_region` without
     # knowing the operand layout. Sponge-agnostic — names no construction.
 
-    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
-        """The Poseidon2Fusion ABI operands `(leading, *round_constants)`."""
-        return _abi_operands(self, leading)
-
-    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
-        """Run the permute on `state` from the ABI round-constant operands (the
-        tail of `fusion_operands`) — the straight-line, const-free decomposition a
-        `fused_region` runs."""
-        return _permutation_body(self, state, *operands)
-
-    def fusion_attrs(self) -> dict[str, Any]:
-        """Identifying `composite.attributes` for a region built over this
-        permutation: the `permutation` discriminator plus the shape the zkx
-        recognizer reads (`external_m4` identifies the M4 its kernel implements).
-        Meaningful only on the dedicated (M4-structured) path."""
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        """See `Permutation.fused_region_spec`. The Poseidon2Fusion ABI: operands
+        `(leading, *round_constants)`, the M4-external + internal-diffusion
+        decomposition, and attrs whose `external_m4` identifies the M4 the kernel
+        implements. Meaningful only on the dedicated (M4-structured) path."""
         p = self._p
-        return {
+        attrs: dict[str, Any] = {
             "permutation": "poseidon2",
             "width": self.width,
             "external_rounds": p.external_rounds,
@@ -128,6 +121,7 @@ class Poseidon2:
             "alpha": p.alpha,
             "external_m4": _external_m4_attr(self),
         }
+        return _abi_operands(self, leading), partial(_permutation_body, self), attrs
 
 
 def _permutation_body(

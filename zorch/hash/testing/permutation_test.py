@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import jax.numpy as jnp
 from absl.testing import absltest
 from jax import Array
@@ -19,14 +21,10 @@ class _Id:
 
     # Inert fused-region ABI — required by the seam, never called for a non-fused
     # permutation (`has_dedicated_fusion` False).
-    def fusion_operands(self, leading: Array) -> tuple[Array, ...]:
-        return (leading,)
-
-    def permute_from_operands(self, state: Array, *operands: Array) -> Array:
-        return self.permute(state)
-
-    def fusion_attrs(self) -> dict[str, object]:
-        return {}
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, object]]:
+        return (leading,), (lambda state, *ops: self.permute(state)), {}
 
 
 class PermutationProtocolTest(absltest.TestCase):
