@@ -370,6 +370,177 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertIn("live_width_operand_idx = 2", txt)
         self.assertIn("aux_operand_idxs = [4]", txt)
 
+    def test_start_offset_windows_a_taller_buffer(self) -> None:
+        # A small constrained trace of height h, embedded at row `off` in a
+        # taller (T-row) shared buffer whose other rows are garbage (both the
+        # dead window tail and the rows outside the window entirely); windowing
+        # at (off, window_rows=W) with live_width=h must byte-equal evaluating
+        # the zero-padded window directly — the window slice, not the
+        # surrounding garbage, is what the constraint sees. Cover the boundary
+        # offsets 0 and T-W (the first/last window that fits) plus an interior
+        # one, so dynamic_slice edge/clamp behavior is pinned.
+        h, W, nc, T = 5, 8, 3, 20
+        small = rand_field(9, (h, nc), F)
+        alpha = rand_field(2, (3,), F)
+        # zero-pad rows [h:W) (Montgomery zero is all-zero bytes, a valid
+        # field zero), so the window is the live rows followed by a zero tail.
+        window = jnp.concatenate([small, jnp.zeros((W - h, nc), F)], axis=0)
+        want = constraint_eval(
+            _eval_fn, window, alpha, live_width=jnp.asarray(h, jnp.int32)
+        )
+        for off in (0, 6, T - W):
+            with self.subTest(off=off):
+                head = rand_field(10 + off, (off, nc), F)  # rows before the window
+                # small at [off, off+h); the rest of the buffer is garbage — the
+                # in-window tail [off+h, off+W) is masked by live_width, the rest
+                # is outside the window.
+                tail = rand_field(30 + off, (T - off - h, nc), F)
+                tall = jnp.concatenate([head, small, tail], axis=0)
+                got = constraint_eval(
+                    _eval_fn,
+                    tall,
+                    alpha,
+                    live_width=jnp.asarray(h, jnp.int32),
+                    start_offset=jnp.asarray(off, jnp.int32),
+                    window_rows=W,
+                )
+                self.assertTrue(bool(jnp.array_equal(got, want)), (off, got, want))
+
+    def test_start_offset_attrs_ride_the_composite(self) -> None:
+        h, off, W, nc = 5, 3, 8, 3
+        tall = rand_field(9, (off + W + 2, nc), F)
+        alpha = rand_field(2, (3,), F)
+        txt = (
+            jax.jit(
+                lambda t, a, lw, so: constraint_eval(
+                    _eval_fn,
+                    t,
+                    a,
+                    live_width=lw,
+                    start_offset=so,
+                    window_rows=W,
+                )
+            )
+            .lower(tall, alpha, jnp.int32(h), jnp.int32(off))
+            .as_text()
+        )
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        # start_offset rides right after live_width (operand 2), so its index
+        # is 3; window_rows is a static attribute, not an operand.
+        self.assertIn("live_width_operand_idx = 2", txt)
+        self.assertIn("start_offset_operand_idx = 3", txt)
+        self.assertIn(f"window_rows = {W}", txt)
+
+    def test_start_offset_requires_live_width(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(_eval_fn, rows, alpha, start_offset=0, window_rows=8)
+
+    def test_start_offset_requires_window_rows(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(_eval_fn, rows, alpha, live_width=8, start_offset=0)
+
+    def test_start_offset_rejects_bad_bounds(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        # Valid live_width + window_rows companions on every call, so it is the
+        # bad start_offset — not a missing companion — that each rejects
+        # (parity with test_live_width_rejects_bad_bounds).
+        with self.assertRaises(ValueError):
+            constraint_eval(
+                _eval_fn, rows, alpha, live_width=8, start_offset=-1, window_rows=8
+            )
+        with self.assertRaises(ValueError):
+            constraint_eval(
+                _eval_fn,
+                rows,
+                alpha,
+                live_width=8,
+                start_offset=jnp.array([5], jnp.int32),
+                window_rows=8,
+            )
+        with self.assertRaises(ValueError):
+            # A field scalar is not the s32 wire type zkx validates.
+            constraint_eval(
+                _eval_fn,
+                rows,
+                alpha,
+                live_width=8,
+                start_offset=rand_field(3, (), F),
+                window_rows=8,
+            )
+        with self.assertRaises(ValueError):
+            # A float is not int32; rejected before the jax asarray funnel.
+            constraint_eval(
+                _eval_fn, rows, alpha, live_width=8, start_offset=1.5, window_rows=8
+            )
+
+    def test_window_rows_requires_start_offset(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):
+            # window_rows alone sizes a window that is never sliced — a no-op.
+            constraint_eval(_eval_fn, rows, alpha, live_width=8, window_rows=8)
+
+    def test_window_rows_rejects_bad_values(self) -> None:
+        rows = rand_field(1, (8, 3), F)  # trace height 8
+        alpha = rand_field(2, (3,), F)
+        with self.assertRaises(ValueError):
+            # A float is not the Python int the static slice size / attr needs.
+            constraint_eval(
+                _eval_fn,
+                rows,
+                alpha,
+                live_width=8,
+                start_offset=0,
+                window_rows=8.5,  # type: ignore[arg-type]
+            )
+        # bool (an int subclass), zero, negative, and past the trace height.
+        for bad in (True, 0, -1, 9):
+            with self.subTest(window_rows=bad):
+                with self.assertRaises(ValueError):
+                    constraint_eval(
+                        _eval_fn,
+                        rows,
+                        alpha,
+                        live_width=8,
+                        start_offset=0,
+                        window_rows=bad,
+                    )
+
+    def test_start_offset_operand_order_with_all_optionals(self) -> None:
+        # All optionals present — order is (trace, alpha, live, offset, weights,
+        # aux) — so start_offset lands at 3 and aux shifts to 5. Pins the
+        # dynamic operand-index computation against a reordering regression.
+        h, off, W, nc = 5, 3, 8, 3
+        tall = rand_field(9, (off + W + 2, nc), F)
+        alpha = rand_field(2, (3,), F)
+        weights = rand_field(5, (nc,), F)
+        aux = rand_field(7, (2,), F)
+        txt = (
+            jax.jit(
+                lambda t, a, lw, so, w, x: constraint_eval(
+                    _eval_fn_aux,
+                    t,
+                    a,
+                    live_width=lw,
+                    start_offset=so,
+                    window_rows=W,
+                    column_weights=w,
+                    aux_operands=(x,),
+                )
+            )
+            .lower(tall, alpha, jnp.int32(h), jnp.int32(off), weights, aux)
+            .as_text()
+        )
+        self.assertIn("live_width_operand_idx = 2", txt)
+        self.assertIn("start_offset_operand_idx = 3", txt)
+        self.assertIn(f"window_rows = {W}", txt)
+        self.assertIn("aux_operand_idxs = [5]", txt)
+
 
 if __name__ == "__main__":
     absltest.main()

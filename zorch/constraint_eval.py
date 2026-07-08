@@ -45,12 +45,33 @@ from zorch._composite import composite
 CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
 
+def _scalar_int32_operand(value: Array | int, name: str) -> Array:
+    """Normalize a scalar-int32 operand (`live_width`, `start_offset`): a Python
+    int is converted and range-checked; anything else must already be a scalar
+    int32 (the wire type zkx validates). asarray funnels a non-Array (float,
+    numpy scalar) into the shape/dtype rejection instead of an opaque
+    AttributeError."""
+    if isinstance(value, int):
+        if value < 0:
+            raise ValueError(f"{name} must be non-negative, got {value}")
+        return jnp.asarray(value, jnp.int32)
+    arr = jnp.asarray(value)
+    if arr.shape != () or arr.dtype != jnp.int32:
+        raise ValueError(
+            f"{name} must be a scalar int32 (the wire type zkx validates), "
+            f"got shape {arr.shape} dtype {arr.dtype}"
+        )
+    return arr
+
+
 def constraint_eval(
     eval_fn: Callable[..., Array],
     trace: Array,
     alpha: Array,
     *,
     live_width: Array | int | None = None,
+    start_offset: Array | int | None = None,
+    window_rows: int | None = None,
     column_weights: Array | None = None,
     aux_operands: tuple[Array, ...] = (),
     name: str = CONSTRAINT_EVAL_MARKER,
@@ -71,6 +92,22 @@ def constraint_eval(
     marked and inlined paths. It rides as operand 2 with its index declared in
     `live_width_operand_idx`; zkx hard-errors on a malformed declaration rather
     than silently falling back to the unbounded path.
+
+    `start_offset`, when given, treats `trace` as a TALL shared buffer
+    `[TOTAL_ROWS, num_cols, ...]` and windows it: the decomposition slices the
+    `window_rows`-row window starting at row `start_offset` BEFORE `eval_fn`
+    runs, so the constraint, the α-RLC, the `live_width` mask, and the column
+    dot below all see the window exactly as if it had been passed as `trace`
+    directly. It requires `live_width` (the window's live-height bound) and
+    `window_rows` (a Python `int` — the window's static row count, so the
+    emitted kernel keeps a fixed shape across calls at different offsets). It
+    is a scalar `int32` like `live_width` (a Python int is converted) and
+    rides as the operand immediately after `live_width`, with its index
+    declared in `start_offset_operand_idx` and the window height in the
+    static `window_rows` attribute; a recognizing emitter reads the window in
+    place from the shared buffer without materializing a copy, while the
+    decomposition's `lax.dynamic_slice` keeps the inlined path
+    byte-identical.
 
     `column_weights`, when given, adds a per-row weighted column sum
     `sum_c trace[row, c] * column_weights[c]` to each row's accumulated value —
@@ -104,6 +141,36 @@ def constraint_eval(
         raise ValueError(
             f"alpha must carry at least one coefficient, got {num_constraints}"
         )
+    if start_offset is not None:
+        # Rides immediately after live_width (so it requires one — the
+        # window's live-height bound), and requires window_rows (the static
+        # output height, since it sizes the emitted kernel's fixed shape).
+        # Validate here so a mismatch fails loud, not as a cryptic
+        # dynamic_slice trace error.
+        if live_width is None:
+            raise ValueError("start_offset requires live_width")
+        if window_rows is None:
+            raise ValueError(
+                "start_offset requires window_rows (the static window height)"
+            )
+        # window_rows is a static slice size AND a static attr, so validate it
+        # loud at the seam like the other optionals (bool is an int subclass,
+        # but a bool window height is a bug, not a 0/1 height).
+        if not isinstance(window_rows, int) or isinstance(window_rows, bool):
+            raise ValueError(
+                f"window_rows must be a Python int, got {type(window_rows).__name__}"
+            )
+        if not 0 < window_rows <= trace.shape[0]:
+            raise ValueError(
+                "window_rows must be in 1..the trace height "
+                f"({trace.shape[0]}), got {window_rows}"
+            )
+    elif window_rows is not None:
+        # window_rows alone would size a window that never gets sliced — a silent
+        # no-op. Fail loud, mirroring the other requires-a-companion checks.
+        raise ValueError(
+            "window_rows requires start_offset (it sizes the offset window)"
+        )
     if column_weights is not None:
         # Rides after live_width (so it requires one), keeping the optional
         # order fixed. Validate here so a mismatch fails loud, not as a cryptic
@@ -126,6 +193,7 @@ def constraint_eval(
     # bind them by presence in a known order (live, weights, then aux) rather
     # than by defaulted params, which would mis-bind aux to the weights slot.
     has_live = live_width is not None
+    has_offset = start_offset is not None
     has_weights = column_weights is not None
     n_aux = len(aux_operands)
 
@@ -138,7 +206,7 @@ def constraint_eval(
         # *optional silently drops a surplus operand from the inlined path while
         # the marked kernel still carries it (a marked-vs-inlined divergence);
         # guard loud instead.
-        n_expected = has_live + has_weights + n_aux
+        n_expected = has_live + has_offset + has_weights + n_aux
         if len(optional) != n_expected:
             raise TypeError(
                 f"constraint_eval decomposition expected {n_expected} optional "
@@ -147,8 +215,18 @@ def constraint_eval(
             )
         tail = iter(optional)
         live_width = next(tail) if has_live else None
+        start_offset = next(tail) if has_offset else None
         column_weights = next(tail) if has_weights else None
         aux = tuple(tail)  # the remaining n_aux operands feed the constraint body
+        if start_offset is not None:
+            # trace is the tall shared buffer [TOTAL_ROWS, num_cols(, ...)];
+            # evaluate the constraint on the window_rows-row window (axis 0) at
+            # start_offset. window_rows is static (closed over), not an operand.
+            # Slicing here, before eval_fn runs, keeps everything below (the
+            # constraint, the RLC, the live_width mask, the column dot) identical
+            # whether trace arrived pre-windowed or tall.
+            assert window_rows is not None  # validated above: start_offset requires it
+            trace = lax.dynamic_slice_in_dim(trace, start_offset, window_rows, axis=0)
         constraints = eval_fn(trace, *aux)
         acc = constraints[..., 0] * alpha[..., 0]
         for k in range(1, num_constraints):
@@ -176,21 +254,16 @@ def constraint_eval(
         "alpha_operand_idx": 1,
     }
     if live_width is not None:
-        if isinstance(live_width, int):
-            if live_width < 0:
-                raise ValueError(f"live_width must be non-negative, got {live_width}")
-            live: Array = jnp.asarray(live_width, jnp.int32)
-        else:
-            # asarray funnels any non-Array (float, numpy scalar) into the
-            # shape/dtype rejection below instead of an opaque AttributeError.
-            live = jnp.asarray(live_width)
-            if live.shape != () or live.dtype != jnp.int32:
-                raise ValueError(
-                    "live_width must be a scalar int32 (the wire type zkx "
-                    f"validates), got shape {live.shape} dtype {live.dtype}"
-                )
-        operands += (live,)
+        operands += (_scalar_int32_operand(live_width, "live_width"),)
         attrs["live_width_operand_idx"] = 2
+    if start_offset is not None:
+        operands += (_scalar_int32_operand(start_offset, "start_offset"),)
+        # Computed from len(operands), not hardcoded: start_offset requires
+        # live_width so it lands at 3 today, but this stays correct if the
+        # optional-operand order ever grows a slot between them.
+        attrs["start_offset_operand_idx"] = len(operands) - 1
+        assert window_rows is not None  # validated above: start_offset requires it
+        attrs["window_rows"] = window_rows
     if column_weights is not None:
         # The emitter recognizes it structurally (the rank-1 operand of the
         # body-root dot), so no operand-index attribute is needed.
