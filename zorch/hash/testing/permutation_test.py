@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import jax.numpy as jnp
 from absl.testing import absltest
 from jax import Array
@@ -16,6 +18,12 @@ class _Id:
 
     def permute(self, state: Array) -> Array:
         return state
+
+    # Inert fused-region ABI: non-fused, never called.
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, object]]:
+        return (leading,), (lambda state, *ops: self.permute(state)), {}
 
 
 class PermutationProtocolTest(absltest.TestCase):

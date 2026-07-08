@@ -18,9 +18,9 @@ from zk_dtypes import koalabear_mont as F
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
 from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER, SPONGE_HASH_MARKER
+from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 
 
 def _stack(rows_per_query: int) -> tuple[Sponge, Compression, StridedMerkleTree]:
