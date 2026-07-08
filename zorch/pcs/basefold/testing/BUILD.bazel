@@ -37,6 +37,31 @@ py_test(
 )
 
 py_test(
+    name = "basefold_cadence_test",
+    # medium, not small: dims are tiny (n_pos=16, no multi-batch NTT), but the
+    # end-to-end open+verify rides the EAGER real-poseidon2 Merkle + NTT-fold
+    # composite path (the sibling BasefoldOpenTest is skipped outright over the
+    # same cost), which re-traces enough distinct composite shapes to sit right at
+    # the small (60s) wall — medium keeps it robustly inside budget.
+    size = "medium",
+    srcs = ["basefold_cadence_test.py"],
+    # Real-poseidon2 transcript + Merkle lower to composites CI's published
+    # jaxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
+    tags = ["local_only"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/coding:reed_solomon",
+        "//zorch/commit/testing:koalabear16",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/pcs/basefold",
+        "//zorch/poly",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "kernel_test",
     size = "small",
     srcs = ["kernel_test.py"],

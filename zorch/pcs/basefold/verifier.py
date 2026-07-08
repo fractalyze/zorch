@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import jax
 import jax.numpy as jnp
@@ -37,9 +37,19 @@ from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
 from zorch.pcs.basefold.choreography import BasefoldChoreography
-from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldConfig, BasefoldProof
+from zorch.pcs.basefold.config import (
+    BasefoldCommitment,
+    BasefoldConfig,
+    BasefoldProof,
+    CadenceProof,
+)
 from zorch.pcs.basefold.kernel import SumcheckKernel
-from zorch.pcs.fold import from_base_field, verify_fold_chain, verify_openings
+from zorch.pcs.fold import (
+    from_base_field,
+    lane_combine,
+    verify_fold_chain,
+    verify_openings,
+)
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -133,26 +143,55 @@ class BasefoldVerifier:
         commitment: BasefoldCommitment,
         basis: Array,
         value: Array,
-        proof: BasefoldProof,
+        proof: BasefoldProof | CadenceProof,
         transcript: Transcript,
     ) -> tuple[Array, Transcript]:
         """Verify a RAW-basis open — the dual of `BasefoldProver.open_with_basis`
-        (`bind_statement` receives `point=None`). The native per-round check
-        evaluates the sumcheck message at the opening point's coordinates, which
-        a raw basis lacks, so the native verifier structure has no basis-path
-        replay: symmetric to the prover's deferred basis-path message, the replay
-        is a fail-loud consumer delta. The native binding still refuses
-        `point=None` up front (a basis consumer overrides `bind_statement`)."""
+        (`bind_statement` receives `point=None`), dispatching on the fold schedule
+        exactly as the prover entry does.
+
+        Under a non-native schedule (`row_batch_prefix` / `fold_arities`) this
+        replays the generic cadence (row-batch prefix + multi-arity FRI epochs)
+        against a `CadenceProof`, the symmetric dual of `_open_with_basis_cadence`:
+        `commitment` is the prover's initial codeword root (bound, not observed —
+        the outer protocol committed it), `value` the claimed target the kernel's
+        `reduce_claim`/`verify_final` fold against.
+
+        Under the native uniform schedule the per-round check evaluates the
+        sumcheck message at the opening point's coordinates, which a raw basis
+        lacks, so that path has no basis replay yet — a fail-loud consumer delta
+        (the native binding also refuses `point=None`)."""
         if basis.shape[0] < 2:
             raise ValueError("BaseFold opens over at least one variable, got none")
         num_vars = log2_strict_usize(basis.shape[0])
+        config = self._resolved_config(num_vars)
+        if not config.commits_per_round:
+            if config.row_batch_prefix == 0:
+                raise NotImplementedError(
+                    "non-native cadence verify is wired for a row-batch prefix "
+                    "(row_batch_prefix > 0, the flock shape); the prefix-free "
+                    "multi-arity sub-case commits no post-prefix layer and needs "
+                    "its own bridge — not replayed here"
+                )
+            # The schedule fixes the proof type (dispatch mirrors the prover):
+            # a non-native config carries a `CadenceProof`.
+            return _verify_with_basis_cadence(
+                self,
+                commitment,
+                basis,
+                value,
+                config,
+                cast(CadenceProof, proof),
+                transcript,
+            )
+        # Native single-MLE basis path (deferred, as before): a raw basis lacks
+        # the opening point the native per-round check needs.
         if self.code.message_len != (1 << num_vars):
             raise ValueError(
                 f"basis length {basis.shape[0]} doesn't match message_len "
                 f"{self.code.message_len} (expected 2^num_vars)"
             )
-        self._check_proof_shape(proof, num_vars)
-        _require_native_cadence(self._resolved_config(num_vars))
+        self._check_proof_shape(cast(BasefoldProof, proof), num_vars)
         _require_no_grind(self.choreography, num_vars)
         # Bind the statement via the choreography with point=None (native refuses;
         # a basis consumer binds via the basis). Even a basis consumer then hits
@@ -210,6 +249,179 @@ def _require_no_grind(chor: BasefoldChoreography, num_vars: int) -> None:
             "pow-witness field for the verifier to check_grind against; the "
             "grind-check wire is a deferred consumer delta"
         )
+
+
+def _fold_coset(
+    code: FoldableCode,
+    coset: Array,
+    betas: list[Array],
+    base_level: int,
+    leaf_index: Array,
+) -> Array:
+    """Fold a `[Q, 2^len(betas)]` opened coset down to `[Q]` by `len(betas)`
+    successive binary code folds, from code fold level `base_level` — the
+    verifier's per-epoch refold, the dual of the prover's `code.fold` chain within
+    one epoch. The coset is contiguous (adjacent entries are the code's conjugate
+    pair, the row-batch/multi-arity layout the epoch commits group), so each level
+    reshapes to `[Q, half, 2]` and folds the pair; `leaf_index` [Q] is the coset's
+    index in each layer (unchanged as the width halves), and the pair's landing
+    index in the next layer is `leaf_index*half + j`. Mirrors flock's
+    `fri_fold_coset` assembled from the `FoldableCode` seam."""
+    buf = coset
+    for k, beta in enumerate(betas):
+        q, width = buf.shape
+        half = width // 2
+        pairs = buf.reshape(q, half, 2)
+        lo, hi = pairs[:, :, 0], pairs[:, :, 1]
+        pos = (
+            leaf_index[:, None] * half + jnp.arange(half, dtype=leaf_index.dtype)
+        ).reshape(-1)
+        folded = code.fold_values(
+            lo.reshape(-1), hi.reshape(-1), beta, pos, base_level + k
+        )
+        buf = folded.reshape(q, half)
+    return buf[:, 0]
+
+
+def _verify_with_basis_cadence(
+    verifier: BasefoldVerifier,
+    commitment: BasefoldCommitment,
+    basis: Array,
+    value: Array,
+    config: BasefoldConfig,
+    proof: CadenceProof,
+    transcript: Transcript,
+) -> tuple[Array, Transcript]:
+    """Replay a non-native cadence open (row-batch prefix + multi-arity FRI
+    epochs), the structural dual of `prover._open_with_basis_cadence`. Eager, like
+    the prover's driver — a host-sequential byte-wire replay cannot ride one jit
+    zone. Reuses `pcs.fold`: `lane_combine` for the row-batch, `verify_openings`
+    for the Merkle legs, `code.fold_values` (via `_fold_coset`) for the per-epoch
+    refold; the sumcheck rides the kernel (`reduce_claim` + `verify_final`)."""
+    del basis  # the target rides `value`; a basis consumer that ties the terminal
+    # to the basis overrides `verify_final` to consume it.
+    chor = verifier.choreography
+    kernel = verifier.kernel
+    code = verifier.code
+    tree = verifier.tree
+    num_vars = config.num_vars
+    prefix = config.row_batch_prefix
+    arities = config.fold_arities
+    num_epochs = len(arities)
+    n_pos = code.block_len
+
+    # Shape guard on the CadenceProof, symmetric to `_check_proof_shape` — a short
+    # message / root / layer list would let the replay skip checks silently.
+    expected_roots = (1 if arities else 0) + max(num_epochs - 1, 0)
+    expected_layers = 1 + expected_roots
+    if (
+        len(proof.round_messages) != num_vars
+        or len(proof.commit_roots) != expected_roots
+        or len(proof.layer_openings) != expected_layers
+    ):
+        raise ValueError(
+            f"malformed cadence proof: expected {num_vars} round messages, "
+            f"{expected_roots} commit roots, {expected_layers} layer openings; "
+            f"got {len(proof.round_messages)} / {len(proof.commit_roots)} / "
+            f"{len(proof.layer_openings)}"
+        )
+
+    # Statement bind (mirror the prover: initial root, no point, value). The outer
+    # protocol committed the root, so the cadence does not observe it again here.
+    t = chor.bind_statement(transcript, commitment, None, value)
+
+    # Replay the interleaved sumcheck + observe the commit roots in lockstep with
+    # the prover: absorb each round message, sample the shared challenge, reduce
+    # the running claim, and observe a commit root at the prefix end / each epoch
+    # boundary (all but the last). The kernel owns the claim recurrence.
+    claim = value
+    betas: list[Array] = []
+    root_idx = 0
+    epoch = in_epoch = 0
+    for rnd in range(num_vars):
+        components = proof.round_messages[rnd]
+        msg = chor.round_message(*components)
+        t = chor.observe_message(t, msg)
+        t, r = chor.fold_challenge(t, None, rnd, 0)
+        claim = kernel.reduce_claim(claim, components, r)
+        betas.append(r)
+        if rnd < prefix:
+            if rnd + 1 == prefix and arities:
+                t = chor.observe_root(t, proof.commit_roots[root_idx])
+                root_idx += 1
+        else:
+            in_epoch += 1
+            if in_epoch == arities[epoch]:
+                if epoch + 1 < num_epochs:
+                    t = chor.observe_root(t, proof.commit_roots[root_idx])
+                    root_idx += 1
+                in_epoch = 0
+                epoch += 1
+
+    # Terminal: the kernel checks the prover's final sumcheck value(s) against the
+    # reduced claim and yields the constant the folded codeword must equal (the
+    # sumcheck<->FRI tie). The final codeword is constant, so `all == cw_const`
+    # covers both constancy and the tie.
+    ok, cw_const = kernel.verify_final(claim, proof.final_state)
+    ok = ok & jnp.all(proof.final_codeword == cw_const)
+
+    # Bind the terminal, then sample the shared query positions (mirror prover).
+    t = chor.observe_final(t, proof.final_codeword)
+    t, positions = chor.sample_queries(t, n_pos, config.num_queries)
+    ok = ok & jnp.all(positions == proof.positions)
+
+    # Per-layer folded query indices (mirror the prover's `layer_shifts`): layer 0
+    # the initial commit at the full index, then the post-prefix layer, then one
+    # per committed epoch, each addressed by `positions >> shift`.
+    layer_shifts = [0]
+    if arities:
+        layer_shifts.append(arities[0])
+        cum_a = arities[0]
+        for e in range(num_epochs - 1):
+            layer_shifts.append(cum_a + arities[e + 1])
+            cum_a += arities[e + 1]
+
+    # Merkle: layer 0 rebuilds the initial commitment, each fold layer its commit
+    # root, at the shifted query index — one batched pass per leaf-row width.
+    roots = [commitment, *proof.commit_roots]
+    legs = [
+        (roots[i], positions >> shift, proof.layer_openings[i])
+        for i, shift in enumerate(layer_shifts)
+    ]
+    ok = ok & verify_openings(tree, legs)
+
+    # Fold consistency: the row-batch of the opened initial lanes must sit at the
+    # queried leg of the post-prefix coset; each epoch's coset then folds to the
+    # next epoch's leg, down to the final codeword.
+    q = jnp.arange(positions.shape[0])
+    rb = betas[:prefix]
+    fri = betas[prefix:]
+    prbv = lane_combine(proof.layer_openings[0].row, rb)  # [Q]
+    if not arities:
+        # log_dim == 0: the row-batched value is the terminal at the query index.
+        ok = ok & jnp.all(proof.final_codeword[positions] == prbv)
+        return ok, t
+
+    arity0 = arities[0]
+    post_rb_row = proof.layer_openings[1].row  # [Q, 2^arity0]
+    inner = positions & ((1 << arity0) - 1)
+    ok = ok & jnp.all(post_rb_row[q, inner] == prbv)
+    expected = _fold_coset(code, post_rb_row, fri[:arity0], 0, positions >> arity0)
+
+    cum = arity0
+    for i in range(num_epochs - 1):
+        next_arity = arities[i + 1]
+        layer_row = proof.layer_openings[2 + i].row  # [Q, 2^next_arity]
+        p_at = positions >> cum
+        offset = p_at & ((1 << next_arity) - 1)
+        ok = ok & jnp.all(layer_row[q, offset] == expected)
+        expected = _fold_coset(
+            code, layer_row, fri[cum : cum + next_arity], cum, p_at >> next_arity
+        )
+        cum += next_arity
+
+    ok = ok & jnp.all(proof.final_codeword[positions >> cum] == expected)
+    return ok, t
 
 
 # Jitted verify body: an eager replay interprets each composite op-by-op in
