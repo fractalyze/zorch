@@ -37,6 +37,19 @@ py_test(
 )
 
 py_test(
+    name = "kernel_test",
+    size = "small",
+    srcs = ["kernel_test.py"],
+    deps = [
+        "//zorch/pcs/basefold",
+        "//zorch/poly",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
     name = "choreography_test",
     size = "small",
     srcs = ["choreography_test.py"],

@@ -33,24 +33,6 @@ class RoundMessageTest(absltest.TestCase):
         self.assertTrue(bool(jnp.array_equal(got, jnp.stack([zero_val, one_val]))))
 
 
-class ReduceClaimTest(absltest.TestCase):
-    def test_additive_combine(self) -> None:
-        # native: s(0) + r*s(1) -- NOT the affine (1-r)*s(0) + r*s(1) bind.
-        chor = BasefoldChoreography()
-        msg = jnp.stack([F(3), F(5)])
-        r = F(2)
-        got = chor.reduce_claim(F(0), msg, r)
-        self.assertEqual(got.tolist(), (F(3) + r * F(5)).tolist())
-
-    def test_ignores_running_claim(self) -> None:
-        chor = BasefoldChoreography()
-        msg = jnp.stack([F(3), F(5)])
-        r = F(2)
-        a = chor.reduce_claim(F(0), msg, r)
-        b = chor.reduce_claim(F(99), msg, r)
-        self.assertEqual(a.tolist(), b.tolist())
-
-
 class ObserveFinalTest(absltest.TestCase):
     def test_observes_whole_final_poly(self) -> None:
         chor = BasefoldChoreography()

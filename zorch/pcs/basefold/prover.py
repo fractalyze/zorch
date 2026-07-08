@@ -43,8 +43,9 @@ from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
 from zorch.pcs.basefold.choreography import BasefoldChoreography
 from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldConfig, BasefoldProof
+from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.fold import open_rows, to_base_field
-from zorch.poly.multilinear import eval_mle, mle_fold
+from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.transcript import Transcript
@@ -76,67 +77,45 @@ class BasefoldProverData:
     widths: tuple[int, ...]
 
 
-def _sumcheck_msg(mle: Array, claim: Array, zs: Array) -> tuple[Array, Array]:
-    """The degree-1 sumcheck message `(s(0), s(1))` for the variable bound this
-    round (`zs[-1]`), from the running MLE and claim. `mle_fold(., 0)` fixes the
-    bound variable to 0 (the additive fold coincides with the multilinear
-    partial-eval at beta=0), so zero_val is the sumcheck s(0); one_val is
-    recovered from the running claim. The zorch-native (point-driven) message
-    form — the basis entry's `(u0, u2)` product form is a consumer delta."""
-    zero_mle = mle_fold(mle, jnp.zeros((), zs.dtype))
-    rest = zs[:-1]
-    zero_val = eval_mle(zero_mle, rest) if rest.shape[0] > 0 else zero_mle[0]
-    one_val = (claim - zero_val) / zs[-1] + zero_val
-    return zero_val, one_val
+# (codeword, opaque kernel round state, level) — the kernel owns the state's
+# shape (native: running MLE + claim + unbound z suffix); `level` counts the
+# round so the choreography's per-round grind schedule can key on it.
+_OpenCarry = tuple[Array, tuple, int]
 
-
-# (codeword, running MLE, running claim, unbound z suffix | None, level) — the
-# suffix shrinks with the MLE, `level` counts the round so the choreography's
-# per-round grind schedule can key on it. `zs is None` is the raw-basis entry
-# (`open_with_basis`), where no point exists.
-_OpenCarry = tuple[Array, Array, Array, "Array | None", int]
-
-# One round's collected artifacts: the sumcheck message pieces, the pre-fold
-# commit root (proof wire), the committed pair-leaves + digest layers (query
-# phase), and this round's grind witness (None unless scheduled).
-_RoundMsg = tuple[tuple[Array, Array], Array, Array, list[Array], "Array | None"]
+# One round's collected artifacts: the raw sumcheck message components (proof
+# wire), the pre-fold commit root (proof wire), the committed pair-leaves +
+# digest layers (query phase), and this round's grind witness (None unless
+# scheduled).
+_RoundMsg = tuple[tuple, Array, Array, list[Array], "Array | None"]
 
 
 @dataclass(frozen=True)
 class _SumcheckPairFoldRound(Round):
-    """One interleaved-sumcheck round of the batch open, driven by the
-    choreography. Emit the round message (`round_message` + `observe_message`),
-    commit the pre-fold conjugate-pair leaves and observe the root through
-    `observe_root` (decoupled from the fold — unlike `PreFoldPairCommitRound`,
-    which couples commit+observe+fold — so a consumer can reframe the root, e.g.
-    a truncated-root hash), grind if the schedule says so, sample the shared
-    challenge β, then fold the codeword *and* the MLE and reduce the running
-    claim by that same β. The default choreography reproduces the native wire:
-    `observe(msg) → observe(root) → sample(β)` with a pass-through message and
-    root. msg = (sumcheck message, root, pre-fold leaves, digest layers,
-    grind witness)."""
+    """One interleaved-sumcheck round of the batch open, driven by the kernel +
+    choreography. Ask the kernel for the round-message components, frame them
+    (`round_message`) and emit (`observe_message`), commit the pre-fold
+    conjugate-pair leaves and observe the root through `observe_root` (decoupled
+    from the fold — unlike `PreFoldPairCommitRound`, which couples
+    commit+observe+fold — so a consumer can reframe the root, e.g. a
+    truncated-root hash), grind if the schedule says so, sample the shared
+    challenge β, then fold the codeword by `code.fold` and the sumcheck state by
+    the kernel using that same β. The default kernel+choreography reproduce the
+    native wire: `observe(msg) → observe(root) → sample(β)` with a pass-through
+    message and root. msg = (message components, root, pre-fold leaves, digest
+    layers, grind witness)."""
 
     code: FoldableCode
     tree: MerkleTree
     choreography: BasefoldChoreography
+    kernel: SumcheckKernel
 
     def __call__(
         self, carry: _OpenCarry, transcript: Transcript
     ) -> tuple[_OpenCarry, Transcript, _RoundMsg]:
-        cw, mle, claim, zs, level = carry
+        cw, state, level = carry
         chor = self.choreography
-        if zs is None:
-            # The raw-basis entry (`open_with_basis`) has no point, so the
-            # native point-driven message cannot be formed. The basis wire's
-            # message (a product form over (mle, basis)) is a consumer delta,
-            # wired with that consumer; the native path always has a point.
-            raise NotImplementedError(
-                "open_with_basis's basis-path message is not wired here: the "
-                "native driver forms (s(0), s(1)) from the opening point; a "
-                "basis consumer supplies its own message form from (mle, basis)"
-            )
-        zero_val, one_val = _sumcheck_msg(mle, claim, zs)
-        msg = chor.round_message(zero_val, one_val)
+        components = self.kernel.message(state)
+        msg = chor.round_message(*components)
         t = chor.observe_message(transcript, msg)
         # Pre-fold pair commit, decoupled so the root observe routes through the
         # choreography (native `observe_root` is a pass-through `observe`).
@@ -152,12 +131,11 @@ class _SumcheckPairFoldRound(Round):
         t, beta = t.sample()
         beta = beta.reshape(())
         cw = self.code.fold(cw, beta)
-        mle = mle_fold(mle, beta)
-        claim = zero_val + beta * one_val
+        state = self.kernel.fold(state, components, beta)
         return (
-            (cw, mle, claim, zs[:-1], level + 1),
+            (cw, state, level + 1),
             t,
-            ((zero_val, one_val), root, leaves, digest_layers, witness),
+            (components, root, leaves, digest_layers, witness),
         )
 
 
@@ -175,6 +153,7 @@ class BasefoldProver:
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
     choreography: BasefoldChoreography = BasefoldChoreography()
+    kernel: SumcheckKernel = SumcheckKernel()
     config: BasefoldConfig | None = None
 
     def _resolved_config(self, num_vars: int) -> BasefoldConfig:
@@ -324,14 +303,17 @@ def _fold_and_query(
     claim; `zs` is the opening-point suffix (None under the basis entry);
     `component_pds` are the committed matrices opened at the query positions."""
     chor = prover.choreography
+    kernel = prover.kernel
     num_vars = config.num_vars
 
     # Interleaved sumcheck + pre-fold pair-leaf FRI fold, num_vars rounds. Every
     # round commits its pre-fold layer; the final folded codeword (length
-    # `blowup`) is the cleartext final poly.
-    carry: _OpenCarry = (cw, mle, claim, zs, 0)
+    # `blowup`) is the cleartext final poly. The kernel owns the round state's
+    # shape (native: the MLE + running claim + unbound point suffix).
+    state = kernel.initial_state(mle, zs, claim)
+    carry: _OpenCarry = (cw, state, 0)
     carry, t, msgs = fold_rounds(
-        _SumcheckPairFoldRound(prover.code, prover.tree, chor),
+        _SumcheckPairFoldRound(prover.code, prover.tree, chor, kernel),
         carry,
         transcript,
         num_vars,

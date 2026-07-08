@@ -8,6 +8,7 @@ py_library(
         "batching.py",
         "choreography.py",
         "config.py",
+        "kernel.py",
         "prover.py",
         "verifier.py",
     ],
