@@ -130,6 +130,15 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
                 cheap_transcript(KB)
             )
             self._assert_matches_reference(ref, got_fixed, label)
+            # Wide-shard memory fix (#254): rolling the uniform row phase into a
+            # lax.scan (bounded loop carry vs co-resident unrolled rounds) must be
+            # byte-identical to the unrolled capped path.
+            got_scan = jax.jit(
+                lambda tr: _run_jagged_rounds(
+                    state, fixed_sched, tr, force_row_scan=True
+                )
+            )(cheap_transcript(KB))
+            self._assert_matches_reference(ref, got_scan, label + "-rowscan")
 
     @staticmethod
     def _caps(

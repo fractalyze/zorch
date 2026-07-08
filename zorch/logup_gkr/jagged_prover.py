@@ -232,21 +232,35 @@ def _prove_jagged_layer_from_ops(
 # round buffers leave the fully-folded state as the live length-2 prefix, so
 # the tail slices it down before the final marker -- the final ABI stays the
 # exact (2,) planes.
+# Roll the row-phase rounds into a `lax.scan` once the row cap is at least this
+# wide. A wide shard (rsp shard0/1/2, cap ~77.6M elems) unrolled co-residents its
+# ~nrv capped `_Planes` buffers into a >20 GB XLA temp arena and OOMs a 32 GB card
+# (sp1-zorch#254); the scan makes the round working set the loop carry, allocated
+# once. A narrow shard (rsp shard17, cap ~4M) stays unrolled -- no scan, no perf
+# regression where the unrolled arena already fit.
+_ROW_SCAN_CAP = 1 << 24
+
+
 def _finalize_layer(
     planes: _Planes,
     alpha: Array,
-    chal: list[Array],
-    poly: list[Array],
+    chal: Array,
+    poly: Array,
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
+    """`chal`/`poly` are the per-round challenges/round-polys already stacked in
+    round order; the bound point is the challenges reversed (LSB-first binding
+    makes the last challenge the MSB)."""
     head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
     fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
-    return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
+    return fn0, fn1, fd0, fd1, chal[::-1], poly
 
 
 def _run_jagged_rounds(
     state: _JaggedState,
     sched: _JaggedSchedule,
     transcript: Transcript,
+    *,
+    force_row_scan: bool = False,
 ) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
     """The per-layer device-FS sumcheck host loop: one fold-then-compute per round
     at the round's real (halving) state size, the Fiat-Shamir hop + reduce folded in
@@ -332,84 +346,210 @@ def _run_jagged_rounds(
     # GPU before each bind, which serializes the bind pipeline -- net slower).
     pos = jnp.asarray(eval_point.shape[0] - 1, jnp.int32)
     z_cur = jnp.take(eval_point, -1)
-    for rnd in range(nrv + niv):
-        scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
-        dtype = claim.dtype
-        if rnd == 0:
-            out_pairs = None if sched.out_pairs is None else sched.out_pairs[0]
-            poly, planes = sum0(
-                planes,
-                row_counts,
-                eq_row,
-                eq_int,
-                scalars,
-                consts,
-                sched.live[0],
-                out_pairs,
-            )
-        elif rnd < nrv:
-            out_pairs = None if sched.out_pairs is None else sched.out_pairs[rnd]
+    dtype = claim.dtype
+
+    def _fs(
+        poly: Array,
+        transcript: DuplexTranscript,
+        pad_adj: Array,
+        z_cur: Array,
+        pos: Array,
+    ) -> tuple[DuplexTranscript, Array, Array, Array, Array, Array]:
+        # Device FS hop + reduce -- traced into the whole-layer jit (one fused
+        # region per round). Slices the next z_cur via the decremented `pos`,
+        # riding the fold's dispatch instead of a standalone gather.
+        return _fs_reduce(
+            poly, transcript, pad_adj, z_cur, eval_point, pos, challenge_limbs, dtype
+        )
+
+    # Round 0 binds nothing yet: the bare row poly, no fold.
+    out_pairs = None if sched.out_pairs is None else sched.out_pairs[0]
+    poly, planes = sum0(
+        planes,
+        row_counts,
+        eq_row,
+        eq_int,
+        _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam),
+        consts,
+        sched.live[0],
+        out_pairs,
+    )
+    transcript, prev_r, claim, pad_adj, z_cur, pos = _fs(
+        poly, transcript, pad_adj, z_cur, pos
+    )
+    polys.append(poly)
+    challenges.append(prev_r)
+
+    # Row-phase rounds 1..nrv-1: all `fix_row` at the row cap. Rounds 2..nrv-1
+    # are uniform-shape under the caps, so a WIDE shard -- whose cap is large
+    # enough that unrolling co-residents the ~nrv capped `_Planes` buffers into a
+    # >20 GB XLA temp arena and OOMs (sp1-zorch#254) -- rolls them into a
+    # `lax.scan`: the round working set becomes the loop carry, allocated once and
+    # reused, still inside the outer @jit. Byte-identical (same per-round ops;
+    # rows fold in the same order). A narrow shard keeps the unrolled path (no
+    # scan overhead). `_RoundScalars` `eq_adj` is `one` throughout the row phase
+    # (the residual is captured only at the handoff, below).
+    row_polys = row_chals = None
+    scan_rows = (
+        nrv > 2 and caps is not None and (force_row_scan or caps.row > _ROW_SCAN_CAP)
+    )
+
+    def _fix_row_round(
+        planes: _Planes,
+        eq_row: Array,
+        prev_r: Array,
+        live_rnd: Array,
+        out_pairs: int | None,
+    ) -> tuple[Array, _Planes, Array]:
+        poly, planes, eq_row = fix_row(
+            planes,
+            eq_row,
+            prev_r,
+            row_counts,
+            eq_int,
+            _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam),
+            consts,
+            live_rnd,
+            out_pairs,
+        )
+        return poly, planes, eq_row
+
+    if scan_rows:
+        # Round 1 (the first fold) promotes the numerator planes BF -> EF; run it
+        # explicitly so the scanned rounds 2..nrv-1 carry a loop-invariant (EF)
+        # plane dtype (a `lax.scan` carry type must not change across iterations).
+        poly, planes, eq_row = _fix_row_round(
+            planes, eq_row, prev_r, sched.live[1], None
+        )
+        transcript, prev_r, claim, pad_adj, z_cur, pos = _fs(
+            poly, transcript, pad_adj, z_cur, pos
+        )
+        polys.append(poly)
+        challenges.append(prev_r)
+
+        def _row_round(carry: Any, live_rnd: Array) -> tuple[Any, tuple[Array, Array]]:
+            planes, eq_row, claim, pad_adj, z_cur, pos, prev_r, transcript = carry
             poly, planes, eq_row = fix_row(
                 planes,
                 eq_row,
                 prev_r,
                 row_counts,
                 eq_int,
-                scalars,
+                _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam),
                 consts,
-                sched.live[rnd],
-                out_pairs,
+                live_rnd,
+                None,
             )
-        elif rnd == nrv:
-            # The handoff's live pairs: the row phase saturates every segment
-            # to one row by construction (row counts <= 2^nrv), so the last
-            # padded row layout is exactly two slots per interaction --
-            # 2^(niv+1) live elements, 2^(niv-1) post-bind pairs.
-            live = _dense_live_operand(1 << (niv - 1))
-            # The boundary marker needs its eq operand at half its plane width
-            # (the post-bind state), so the capped route reads a resized copy
-            # -- the live 2^niv prefix always fits in row // 2 (the last row
-            # layout, 2^(niv+1) slots, fits in the row cap). `eq_int` itself
-            # rides through the handoff unchanged, at its own width, for the
-            # interaction rounds below.
-            if caps is None:
-                eq_boundary = eq_int
-            else:
-                eq_boundary = _resize_zero(eq_int, caps.row // 2)
-            poly, planes, _ = fix_boundary(
-                planes, eq_boundary, prev_r, scalars, consts, live
+            transcript, r, claim, pad_adj, z_cur, pos = _fs(
+                poly, transcript, pad_adj, z_cur, pos
             )
-            if caps is not None:
-                # The handoff halves [row] -> [row // 2]; the dense phase runs
-                # at the interaction cap, so resize to it -- the live prefix
-                # (2^niv elements <= caps.interaction, validated above via the
-                # eq table) always survives.
-                planes = _Planes(
-                    *(
-                        _resize_zero(a, caps.interaction)
-                        for a in (planes.n0, planes.n1, planes.d0, planes.d1)
-                    )
-                )
+            return (
+                planes,
+                eq_row,
+                claim,
+                pad_adj,
+                z_cur,
+                pos,
+                r,
+                transcript,
+            ), (poly, r)
+
+        init = (planes, eq_row, claim, pad_adj, z_cur, pos, prev_r, transcript)
+        carry, (row_polys, row_chals) = jax.lax.scan(
+            _row_round, init, jnp.stack(sched.live[2:nrv])
+        )
+        planes, eq_row, claim, pad_adj, z_cur, pos, prev_r, transcript = carry
+    else:
+        for rnd in range(1, nrv):
+            out_pairs = None if sched.out_pairs is None else sched.out_pairs[rnd]
+            poly, planes, eq_row = _fix_row_round(
+                planes, eq_row, prev_r, sched.live[rnd], out_pairs
+            )
+            transcript, prev_r, claim, pad_adj, z_cur, pos = _fs(
+                poly, transcript, pad_adj, z_cur, pos
+            )
+            polys.append(poly)
+            challenges.append(prev_r)
+
+    # Rows exhausted: the accumulated row-eq residual becomes the scalar `eq_adj`
+    # and the batch variables fold densely (the old rnd==nrv-1 arm, pulled out of
+    # the loop so the row scan stays uniform).
+    # After the row-phase branches join, re-narrow the transcript (the scan
+    # branch unpacks it from an `Any` carry) so `_fs` keeps its DuplexTranscript.
+    transcript = cast(DuplexTranscript, transcript)
+    eq_adj = pad_adj
+    pad_adj = one
+
+    # Boundary round nrv, only when there are batch variables (niv == 0 has no
+    # interaction phase -- the old `range(nrv + niv)` simply stopped after the
+    # row rounds). The row -> interaction handoff: the marker needs its eq operand
+    # at half its plane width (the post-bind state); the capped route reads a
+    # resized copy (the live 2^niv prefix always fits in row // 2).
+    if niv > 0:
+        live = _dense_live_operand(1 << (niv - 1))
+        if caps is None:
+            eq_boundary = eq_int
         else:
-            live = _dense_live_operand(1 << (niv - 1 - (rnd - nrv)))
-            poly, planes, eq_int = fix_int(
-                planes, eq_int, prev_r, scalars, consts, live
+            eq_boundary = _resize_zero(eq_int, caps.row // 2)
+        poly, planes, _ = fix_boundary(
+            planes,
+            eq_boundary,
+            prev_r,
+            _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam),
+            consts,
+            live,
+        )
+        if caps is not None:
+            # The handoff halves [row] -> [row // 2]; the dense phase runs at the
+            # interaction cap, so resize to it -- the live prefix (2^niv elements
+            # <= caps.interaction) always survives.
+            planes = _Planes(
+                *(
+                    _resize_zero(a, caps.interaction)
+                    for a in (planes.n0, planes.n1, planes.d0, planes.d1)
+                )
             )
-        # Device FS hop + reduce -- traced into the whole-layer jit (one fused
-        # region per round). Slices the next z_cur via the decremented `pos`,
-        # riding the fold's dispatch instead of a standalone gather.
-        transcript, r, claim, pad_adj, z_cur, pos = _fs_reduce(
-            poly, transcript, pad_adj, z_cur, eval_point, pos, challenge_limbs, dtype
+        transcript, prev_r, claim, pad_adj, z_cur, pos = _fs(
+            poly, transcript, pad_adj, z_cur, pos
         )
         polys.append(poly)
-        challenges.append(r)
-        if rnd == nrv - 1:
-            eq_adj = pad_adj
-            pad_adj = one
-        prev_r = r
+        challenges.append(prev_r)
+
+    # Dense (batch-variable) rounds nrv+1 .. nrv+niv-1.
+    for rnd in range(nrv + 1, nrv + niv):
+        live = _dense_live_operand(1 << (niv - 1 - (rnd - nrv)))
+        poly, planes, eq_int = fix_int(
+            planes,
+            eq_int,
+            prev_r,
+            _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam),
+            consts,
+            live,
+        )
+        transcript, prev_r, claim, pad_adj, z_cur, pos = _fs(
+            poly, transcript, pad_adj, z_cur, pos
+        )
+        polys.append(poly)
+        challenges.append(prev_r)
+
+    # Stack the per-round polys/challenges in round order. A rolled row phase
+    # (rounds 2..nrv-1) comes back stacked; splice it between the explicit head
+    # (round 0 + the round-1 promotion = polys[:2]) and the boundary+dense tail
+    # (polys[2:], empty when niv == 0).
+    if row_polys is not None:
+        segs_p = [jnp.stack(polys[:2]), row_polys]
+        segs_c = [jnp.stack(challenges[:2]), row_chals]
+        if len(polys) > 2:
+            segs_p.append(jnp.stack(polys[2:]))
+            segs_c.append(jnp.stack(challenges[2:]))
+        stacked_polys = jnp.concatenate(segs_p)
+        stacked_chals = jnp.concatenate(segs_c)
+    else:
+        stacked_polys = jnp.stack(polys)
+        stacked_chals = jnp.stack(challenges)
 
     fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
-        planes, prev_r, challenges, polys
+        planes, prev_r, stacked_chals, stacked_polys
     )
     return (
         stacked_challenges,
