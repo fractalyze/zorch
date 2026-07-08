@@ -13,12 +13,15 @@ from __future__ import annotations
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
+from typing import cast
 
+import jax
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
+from zorch.logup_gkr._jagged_types import _Planes
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _interleave,
@@ -28,7 +31,14 @@ from zorch.logup_gkr.circuit import (
 from zorch.logup_gkr.jagged_prover import (
     JaggedGkrLayerRound,
     JaggedLayerProof,
+    _jagged_round_via_zone,
     _jagged_round_zone,
+    _layer_plane_width,
+    _observe_openings_and_fold,
+    _padded_round_schedule,
+    _padded_round_schedule_jax,
+    _run_jagged_rounds_padded,
+    _sample_lam_and_claim,
     prove_jagged_layer,
     prove_jagged_pyramid,
 )
@@ -43,6 +53,10 @@ from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.poly.univariate import eval_coeffs
 from zorch.round import ProveChain
+from zorch.sumcheck.jagged.buffers import _pad_to_width
+from zorch.sumcheck.jagged.rounds import _expand_eq_slice
+from zorch.sumcheck.jagged.schedule import _check_row_space, _row_counts_operand
+from zorch.sumcheck.jagged.types import RoundWidthCaps
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -66,6 +80,110 @@ def _virtual_claim(layer: JaggedGkrLayer, nrv: int, lam: Array, z: Array) -> Arr
     n0, n1, d0, d1 = virtual_planes(layer, nrv)
     eq = expand_eq_to_hypercube(z, jnp.ones((), z.dtype))
     return jnp.sum(_logup_combine(lam, eq, n0, d1, n1, d0))
+
+
+def _caps_for(layer: JaggedGkrLayer) -> RoundWidthCaps:
+    """A tight `RoundWidthCaps` for `layer` (the fixed-width round layout), the
+    recipe `jagged_round_runner_test._caps(slack=False)` uses: round-0 even-padded
+    height rounded up to a multiple of 4, the row-eq hypercube `1 << nrv`, and the
+    interaction width `max(4, 1 << niv)`. `nrv` is the layer's minimal virtual row
+    depth `ceil(log2(max(row_counts)))` -- exactly what a floor-outward chain grows
+    the entry point to by the time it proves this layer. First needed here; reused
+    by the padded/rolled tasks."""
+    nrv = max(1, (max(layer.row_counts) - 1).bit_length())
+    niv = layer.num_batch_variables
+    round0 = sum(rc + rc % 2 for rc in layer.row_counts)
+    return RoundWidthCaps(
+        row=round0 + (-round0 % 4),
+        eq_row=1 << nrv,
+        interaction=max(4, 1 << niv),
+    )
+
+
+def _prove_layer_padded(
+    layer: JaggedGkrLayer,
+    challenge_limbs: int,
+    caps: RoundWidthCaps,
+    carry: Carry,
+    transcript: Transcript,
+    *,
+    max_rounds: int,
+) -> tuple[Carry, Transcript, JaggedLayerProof]:
+    """Task-2 test shim: prove ONE layer through the fixed-`max_rounds` padded
+    round body (`_run_jagged_rounds_padded`), no scan. Mirrors the Task-4 scan
+    `step` per-layer head -- sample `lam`/claim, build the caps-width eq tables +
+    the padded schedule + the round-order coords, run the padded rounds, then
+    observe the openings and fold the carry -- but for one concrete layer, so
+    `nrv`/`real_rounds` are host-known and the ragged proof slices with Python
+    ints. Byte-identical to `_jagged_round_via_zone` on the same (layer, carry,
+    transcript)."""
+    niv = layer.num_batch_variables
+    num_eval, den_eval, eval_point = carry
+    dtype = num_eval.dtype
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    real_rounds = nrv + niv
+    t = cast(DuplexTranscript, transcript)
+    t, lam, claim = _sample_lam_and_claim(t, num_eval, den_eval, challenge_limbs, dtype)
+    # eq tables + planes laid into the caps buffers exactly as `_run_jagged_rounds`
+    # lays them (zero tail past the live prefix).
+    eq_row = _pad_to_width(_expand_eq_slice(eval_point, niv, row=True), caps.eq_row, 0)
+    eq_int = _pad_to_width(
+        _expand_eq_slice(eval_point, niv, row=False), caps.interaction, 0
+    )
+    planes = _Planes(
+        *(
+            _pad_to_width(a, caps.row, 0)
+            for a in (
+                layer.numerator_0,
+                layer.numerator_1,
+                layer.denominator_0,
+                layer.denominator_1,
+            )
+        )
+    )
+    sched = _padded_round_schedule_jax(
+        _row_counts_operand(layer.row_counts),
+        jnp.asarray(nrv, jnp.int32),
+        niv,
+        max_rounds,
+        caps.row,
+    )
+    # coords[rnd] = eval_point[real_rounds - 1 - rnd]: the round consumes the point
+    # from the end (the bound point is the challenges reversed); surplus rounds
+    # clamp to an in-bounds coordinate (their contribution is masked out).
+    idx = real_rounds - 1 - jnp.arange(max_rounds)
+    coords = eval_point[jnp.clip(idx, 0, eval_point.shape[0] - 1)]
+    polys, chal, planes_final, round_t = _run_jagged_rounds_padded(
+        planes,
+        eq_row,
+        eq_int,
+        coords,
+        lam,
+        claim,
+        t,
+        sched,
+        niv=niv,
+        max_rounds=max_rounds,
+        real_rounds=real_rounds,
+        caps=caps,
+        challenge_limbs=challenge_limbs,
+    )
+    t = cast(DuplexTranscript, round_t)
+    # The padded run stacks over `max_rounds`; the live layer is the leading
+    # `real_rounds` (its inactive tail is neutral). `chal` is already the bound
+    # point (real challenges reversed, front-aligned).
+    point = chal[:real_rounds]
+    n0, n1, d0, d1 = (
+        planes_final.n0,
+        planes_final.n1,
+        planes_final.d0,
+        planes_final.d1,
+    )
+    proof = JaggedLayerProof(lam, claim, polys[:real_rounds], point, n0, n1, d0, d1)
+    t, num_eval, den_eval, new_point = _observe_openings_and_fold(
+        t, n0, n1, d0, d1, point, challenge_limbs, dtype
+    )
+    return (num_eval, den_eval, new_point), t, proof
 
 
 class ProveJaggedLayerTest(absltest.TestCase):
@@ -510,6 +628,125 @@ class PyramidScanProveTest(absltest.TestCase):
         carry, _ = bind_output(output, cheap_transcript(KB))
         with self.assertRaises(NotImplementedError):
             prove_jagged_pyramid(list(reversed(layers[:-1])), carry, t_host, caps=None)
+
+    def test_padded_body_matches_natural_single_layer(self) -> None:
+        # The soundness-critical core (Task 2): one layer proved at
+        # `max_rounds > nrv + niv` must produce identical polys/challenges/openings
+        # and leave the transcript in the identical state -- the surplus rounds are
+        # inactive, so they must not advance Fiat-Shamir. A weaker transcript check
+        # (fewer than all five DuplexState leaves) would miss an FS over-advance,
+        # which is the whole point of the masking.
+        layers = build_jagged_pyramid(random_jagged_layer(6, self.ROW_COUNTS))
+        layer = layers[0]  # the deepest layer -- the most real rounds
+        caps = _caps_for(layer)
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        # Thread the carry outward through the interior layers so the deepest layer
+        # enters its prove at its full row depth: `bind_output` seeds only the
+        # floor's `niv` coordinates, and each interior layer's prove grows the
+        # eval_point by one (the child selector).
+        for outer in reversed(layers[1:-1]):
+            carry, t, _ = _jagged_round_via_zone(outer, 1, _caps_for(outer), carry, t)
+        niv = layer.num_batch_variables
+        nrv = _check_row_space(layer.row_counts, carry[2].shape[0], niv)
+
+        nat_carry, nat_t, nat_proof = _jagged_round_via_zone(layer, 1, caps, carry, t)
+        pad_carry, pad_t, pad_proof = _prove_layer_padded(
+            layer, 1, caps, carry, t, max_rounds=nrv + niv + 2
+        )
+
+        for f in fields(JaggedLayerProof):
+            self.assertTrue(
+                bool(jnp.all(getattr(pad_proof, f.name) == getattr(nat_proof, f.name))),
+                f"proof field {f.name} diverged",
+            )
+        for g, w in zip(pad_carry, nat_carry, strict=True):
+            self.assertTrue(bool(jnp.all(g == w)), "carry diverged")
+        if not isinstance(pad_t, DuplexTranscript) or not isinstance(
+            nat_t, DuplexTranscript
+        ):
+            raise AssertionError("both paths must thread the DuplexTranscript back")
+        ps, ns = pad_t.state, nat_t.state
+        self.assertTrue(bool(jnp.all(ps.input_buffer == ns.input_buffer)))
+        self.assertTrue(bool(jnp.all(ps.output_buffer == ns.output_buffer)))
+        self.assertTrue(bool(jnp.all(ps.sponge_state == ns.sponge_state)))
+        self.assertEqual(int(ps.in_pos), int(ns.in_pos))
+        self.assertEqual(int(ps.out_pos), int(ns.out_pos))
+
+
+class PaddedRoundScheduleJaxTest(absltest.TestCase):
+    """`_padded_round_schedule_jax` (the runtime, `row_counts`-derived schedule the
+    fixed-`max_rounds` body reads) byte-matches the readable numpy
+    `_padded_round_schedule` oracle -- the derivation stays cross-checked against
+    the host-baked construction, on the exact round count, with surplus inactive
+    rounds, and across the peel-chain envelope (where `1 << k` nears int32
+    overflow)."""
+
+    CASES = [
+        ((3, 1), 2, 1),  # odd seg (3) + saturated (1)
+        ((3, 1, 5, 2), 3, 2),  # the multi-segment golden
+        ((7, 3, 11, 5), 4, 2),  # taller, two odd segs > 1
+        ((2, 1, 4, 1), 2, 1),  # odd segs all length 1
+        ((1, 7, 1, 9), 3, 2),  # saturated floors, tall odd segs
+        ((4, 2, 6, 3), 3, 2),
+    ]
+
+    def _check(
+        self, row_counts: tuple[int, ...], nrv: int, niv: int, max_rounds: int
+    ) -> None:
+        plane_width = _layer_plane_width(row_counts, nrv, niv)
+        want = _padded_round_schedule(row_counts, nrv, niv, max_rounds, plane_width)
+        got = _padded_round_schedule_jax(
+            jnp.asarray(row_counts, jnp.int32),
+            jnp.asarray(nrv, jnp.int32),
+            niv,
+            max_rounds,
+            plane_width,
+        )
+        for key in want:
+            self.assertTrue(
+                bool(jnp.all(jnp.asarray(got[key]) == jnp.asarray(want[key]))),
+                f"{key} diverged: row_counts={row_counts} nrv={nrv} niv={niv} "
+                f"max_rounds={max_rounds}",
+            )
+
+    def test_exact_rounds_match(self) -> None:
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, nrv + niv)
+
+    def test_with_inactive_rounds_match(self) -> None:
+        # max_rounds > nrv+niv (the envelope a shorter pyramid layer rides): the
+        # surplus rounds must reconstruct as the identity gather / zeros / False.
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, nrv + niv + 3)
+
+    def test_peel_chain_envelope_no_overflow(self) -> None:
+        # A wide `max_rounds` (32): `bk = 1 << k` reaches 2^31 at k=31, where
+        # `row_counts + (bk - 1)` would overflow int32. The saturate guard must
+        # still byte-match the numpy oracle across the surplus rounds.
+        for row_counts, nrv, niv in self.CASES:
+            with self.subTest(row_counts=row_counts):
+                self._check(row_counts, nrv, niv, 32)
+
+    def test_under_jit_matches_eager(self) -> None:
+        # The reconstruction must lower (no baked plane-width constant) and match
+        # eager -- jitting it is the whole point.
+        row_counts, nrv, niv = (3, 1, 5, 2), 3, 2
+        plane_width = _layer_plane_width(row_counts, nrv, niv)
+        max_rounds = nrv + niv + 2
+        fn = jax.jit(
+            lambda rc, n: _padded_round_schedule_jax(
+                rc, n, niv, max_rounds, plane_width
+            )
+        )
+        got = fn(jnp.asarray(row_counts, jnp.int32), jnp.asarray(nrv, jnp.int32))
+        want = _padded_round_schedule(row_counts, nrv, niv, max_rounds, plane_width)
+        for key in want:
+            self.assertTrue(
+                bool(jnp.all(jnp.asarray(got[key]) == jnp.asarray(want[key]))), key
+            )
 
 
 class JaggedGkrLayerRoundZoneTest(absltest.TestCase):

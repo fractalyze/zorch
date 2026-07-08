@@ -41,7 +41,8 @@ from typing import TYPE_CHECKING, Any, cast
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+import numpy as np
+from jax import Array, lax
 
 from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
@@ -50,21 +51,23 @@ from zorch.logup_gkr._jagged_composites import (
     _composite_fix_last,
     _composite_sum_as_poly_row,
 )
-from zorch.logup_gkr._jagged_rounds import _round_interp_constants
+from zorch.logup_gkr._jagged_rounds import _paired_sums, _round_interp_constants
 from zorch.logup_gkr._jagged_types import _JaggedState, _Planes, _RoundScalars
-from zorch.logup_gkr.circuit import JaggedGkrLayer
+from zorch.logup_gkr.circuit import JaggedGkrLayer, _pad_neutral
 from zorch.logup_gkr.prover import Carry, fold_carry
 from zorch.round import Round
+from zorch.sumcheck import gruen
 from zorch.sumcheck.jagged.buffers import (
     _pad_to_width,
     _pool_lay_batch,
     _resize_zero,
 )
 from zorch.sumcheck.jagged.fs import _fs_reduce
-from zorch.sumcheck.jagged.rounds import _expand_eq_slice
+from zorch.sumcheck.jagged.rounds import _expand_eq_slice, _round_coeffs
 from zorch.sumcheck.jagged.schedule import (
     _check_row_space,
     _dense_live_operand,
+    _fixed_width_gather,
     _round_live_meta,
     _round_out_pairs,
     _row_counts_operand,
@@ -74,10 +77,13 @@ from zorch.sumcheck.jagged.types import (
     _InterpConsts,
     _JaggedSchedule,
 )
+from zorch.sumcheck.prover import fold_lsb
 from zorch.transcript import (
+    DuplexState,
     DuplexTranscript,
     Transcript,
     reinterpret_challenge,
+    sample_challenge,
 )
 
 if TYPE_CHECKING:
@@ -560,6 +566,423 @@ def _run_jagged_rounds(
         fd0,
         fd1,
     )
+
+
+# --- #254: fixed-max_rounds padded round body (FS-safe short-layer masking) ----
+# The scan (a later task) runs a FIXED `max_rounds` loop so a whole pyramid of
+# differently-sized layers shares one traced body. Layer j has only `nrv_j + niv`
+# real rounds, so the surplus rounds must select the UNCHANGED carry -- the five
+# transcript sponge leaves included -- or a short layer over-advances Fiat-Shamir
+# (docs/conventions.md soundness rule; the chain is k separate sumchecks, not one
+# joint scan, so this guard is what the homogeneous `zorch.sumcheck` scan omits).
+# Isolated + tested on one layer here (no scan); the round body reuses HEAD's
+# caps-width, `row_counts`-derived schedule (`_padded_round_schedule_jax`) and the
+# exact LogUp round primitives (`_paired_sums` / `_round_coeffs` / `fold_lsb` /
+# `gruen.fold_round_scalars`) the unrolled `_run_jagged_rounds_reference` oracle
+# uses, so an active round is byte-identical to `_run_jagged_rounds`.
+
+# The rolled step threads the per-round schedule through the marker as operands
+# (the body rebuilds the dict from them in this fixed order); shared so producer
+# and consumer agree.
+_SCHED_KEYS = (
+    "gather",
+    "pair_lo",
+    "pair_hi",
+    "col",
+    "live_pairs",
+    "active",
+    "in_rows",
+    "last_row",
+)
+
+
+def _layer_plane_width(row_counts: tuple[int, ...], nrv: int, niv: int) -> int:
+    """Fixed plane-buffer width for one layer: the widest per-round even-padded
+    height (an odd segment padding up to even can exceed the layer's own height)
+    or the dense interaction width, whichever is larger. The rolled pyramid pads
+    every layer to the max of this across the chain so the scan stays
+    shape-invariant. (Task 2 sizes the padded body at `caps.row` instead -- this
+    is the scan-invariant sibling the schedule byte-match test pins.)"""
+    width = 1 << niv
+    counts = row_counts
+    for _ in range(nrv):
+        width = max(width, sum(rc + rc % 2 for rc in counts))
+        counts = tuple((rc + rc % 2) // 2 for rc in counts)
+    return width
+
+
+def _excl_cumsum(x: Array) -> Array:
+    """Exclusive prefix sum `out[i] = sum(x[:i])` via a broadcast mask -- `nseg`
+    is tiny, so the n^2 cost is nil, and it dodges any `jnp.cumsum` fork quirk
+    (the schedule reconstruction must lower cleanly under the scan)."""
+    idx = jnp.arange(x.shape[0])
+    return jnp.sum(jnp.where(idx[None, :] < idx[:, None], x[None, :], 0), axis=1)
+
+
+def _padded_round_schedule(
+    row_counts: tuple[int, ...],
+    nrv: int,
+    niv: int,
+    max_rounds: int,
+    plane_width: int,
+) -> dict[str, np.ndarray]:
+    """Host-side per-round schedule for one layer, padded to the fixed
+    `max_rounds` / `plane_width`. The readable numpy oracle the runtime
+    `_padded_round_schedule_jax` is byte-matched against.
+
+    Each of `max_rounds` entries carries what the fixed-width round body reads off
+    the static layout: the segment `gather` re-padding the plane buffer (indices
+    `>= plane_width` resolve to the neutral fraction), the `eq_row` pair lookups
+    (`pair_lo`/`pair_hi`) and their `eq_int` batch column (`col`), the live pair
+    count the materialized sum is masked to (`live_pairs`), and the
+    `active`/`in_rows`/`last_row` flags. Rounds past `nrv + niv` are INACTIVE (a
+    shorter floor layer must not advance Fiat-Shamir there); rounds in
+    `[nrv, nrv + niv)` are the dense interaction rounds (identity gather over the
+    live prefix, the stride-2 `eq_int` split). Inactive / wrong-phase indices are
+    in-bounds zeros; the live-pair mask and the `active` flag zero their
+    contribution out."""
+    half_width = plane_width // 2
+    sentinel = plane_width  # `_gather_pad` treats any index >= width as padding
+
+    gather = np.tile(np.arange(plane_width, dtype=np.int32), (max_rounds, 1))
+    pair_lo = np.zeros((max_rounds, half_width), dtype=np.int32)
+    pair_hi = np.zeros((max_rounds, half_width), dtype=np.int32)
+    col = np.zeros((max_rounds, half_width), dtype=np.int32)
+    live_pairs = np.zeros(max_rounds, dtype=np.int32)
+    active = np.zeros(max_rounds, dtype=bool)
+    in_rows = np.zeros(max_rounds, dtype=bool)
+    last_row = np.zeros(max_rounds, dtype=bool)
+
+    counts = row_counts
+    for k in range(nrv):
+        padded = tuple(rc + rc % 2 for rc in counts)
+        pairs = tuple(p // 2 for p in padded)
+        live = sum(padded) // 2
+        gather[k] = _fixed_width_gather(counts, padded, plane_width)
+        ci = np.repeat(np.arange(len(pairs), dtype=np.int32), pairs)
+        pi = np.concatenate([np.arange(pc, dtype=np.int32) for pc in pairs])
+        pair_lo[k, : pi.shape[0]] = pi * 2
+        pair_hi[k, : pi.shape[0]] = pi * 2 + 1
+        col[k, : ci.shape[0]] = ci
+        live_pairs[k] = live
+        active[k] = True
+        in_rows[k] = True
+        last_row[k] = k == nrv - 1
+        counts = pairs
+
+    for m in range(niv):
+        k = nrv + m
+        int_width = 1 << (niv - m)  # dense interaction width entering this round
+        half = int_width // 2
+        gather[k, :int_width] = np.arange(int_width, dtype=np.int32)
+        gather[k, int_width:] = sentinel
+        pair_lo[k, :half] = np.arange(half, dtype=np.int32) * 2
+        pair_hi[k, :half] = np.arange(half, dtype=np.int32) * 2 + 1
+        live_pairs[k] = half
+        active[k] = True
+
+    return {
+        "gather": gather,
+        "pair_lo": pair_lo,
+        "pair_hi": pair_hi,
+        "col": col,
+        "live_pairs": live_pairs,
+        "active": active,
+        "in_rows": in_rows,
+        "last_row": last_row,
+    }
+
+
+def _padded_round_schedule_jax(
+    row_counts: Array,
+    nrv: Array,
+    niv: int,
+    max_rounds: int,
+    plane_width: int,
+) -> dict[str, Array]:
+    """`_padded_round_schedule` reconstructed from a RUNTIME `row_counts` (jax
+    `i32[nseg]`) and runtime `nrv` -- the derived-schedule form (xla#179): no
+    host-baked plane-width arrays, so the rolled scan computes its schedule from
+    the compact row-count channel instead of stacking a multi-GB constant.
+    Byte-identical to the numpy `_padded_round_schedule` (`PaddedRoundScheduleJaxTest`).
+
+    The row counts halve each round and `ceil(ceil(x/2)/2 ...)` collapses to a
+    single ceil-divide, so `counts_k = ceil(row_counts / 2^k)`. Every index pattern
+    is then an iota plus segment offsets (`_segment_of` on the exclusive cumsum),
+    so the only constants left are scalars."""
+    nseg = row_counts.shape[0]
+    half_width = plane_width // 2
+    sentinel = plane_width
+    i32 = jnp.int32
+    p = jnp.arange(plane_width, dtype=i32)
+    q = jnp.arange(half_width, dtype=i32)
+    # Dense interaction widths 2^(niv-m) for m in [0, niv] -- a static table
+    # indexed by the runtime m, dodging a runtime shift the fork may lack.
+    int_table = jnp.asarray([1 << (niv - mm) for mm in range(niv + 1)], i32)
+
+    def _segment_of(offsets: Array, pos: Array) -> Array:
+        # The segment each position falls in: count of offsets <= pos, minus 1
+        # (a broadcast `searchsorted(..., side="right") - 1` -- nseg is tiny, so
+        # the n*nseg compare is nil and it avoids jnp.searchsorted's method flag).
+        return jnp.clip(
+            jnp.sum((offsets[None, :] <= pos[:, None]).astype(i32), axis=1) - 1,
+            0,
+            nseg - 1,
+        )
+
+    gather_l, pair_lo_l, pair_hi_l, col_l = [], [], [], []
+    live_pairs_l, active_l, in_rows_l, last_row_l = [], [], [], []
+
+    for k in range(max_rounds):
+        in_rows_k = k < nrv
+        active_k = k < nrv + niv
+
+        # Row-round layout: counts_k = ceil(row_counts / 2^k); pad odd segs to
+        # even, then halve. Segment offsets are exclusive cumsums.
+        bk = 1 << k
+        if bk > plane_width:
+            # 2^k exceeds the buffer width, so every segment has folded to a
+            # single element: ceil(row_counts / 2^k) == 1 (row_counts >= 1).
+            # Saturate directly -- `row_counts + (bk - 1)` overflows int32 once
+            # `bk` nears 2^31, reachable when max_rounds widens to the envelope.
+            counts_k = (row_counts > 0).astype(i32)
+        else:
+            counts_k = (row_counts + (bk - 1)) // bk
+        padded_k = counts_k + (counts_k % 2)
+        pairs_k = padded_k // 2
+        src_off = _excl_cumsum(counts_k)
+        dst_off = _excl_cumsum(padded_k)
+        pair_off = _excl_cumsum(pairs_k)
+        total_dst = jnp.sum(padded_k)
+        total_pairs = jnp.sum(pairs_k)
+
+        seg_p = _segment_of(dst_off, p)
+        within_p = p - dst_off[seg_p]
+        live_p = (within_p < counts_k[seg_p]) & (p < total_dst)
+        gather_row = jnp.where(live_p, src_off[seg_p] + within_p, sentinel).astype(i32)
+
+        seg_q = _segment_of(pair_off, q)
+        within_q = q - pair_off[seg_q]
+        live_q = q < total_pairs
+        col_row = jnp.where(live_q, seg_q, 0).astype(i32)
+        pair_lo_row = jnp.where(live_q, within_q * 2, 0).astype(i32)
+        pair_hi_row = jnp.where(live_q, within_q * 2 + 1, 0).astype(i32)
+
+        # Interaction-round layout (dense): int_width = 2^(niv - (k - nrv)).
+        m = jnp.clip(k - nrv, 0, niv)
+        int_width = int_table[m]
+        half = int_width // 2
+        gather_int = jnp.where(p < int_width, p, sentinel).astype(i32)
+        pair_lo_int = jnp.where(q < half, q * 2, 0).astype(i32)
+        pair_hi_int = jnp.where(q < half, q * 2 + 1, 0).astype(i32)
+
+        # Select row (in_rows) / interaction (active & ~in_rows) / inactive. An
+        # inactive round keeps the identity gather (numpy's `tile(arange)` init)
+        # and zeroed lookups; its `active` flag zeros the contribution anyway.
+        gather_l.append(
+            jnp.where(in_rows_k, gather_row, jnp.where(active_k, gather_int, p))
+        )
+        col_l.append(jnp.where(in_rows_k, col_row, 0).astype(i32))
+        pair_lo_l.append(
+            jnp.where(
+                in_rows_k, pair_lo_row, jnp.where(active_k, pair_lo_int, 0)
+            ).astype(i32)
+        )
+        pair_hi_l.append(
+            jnp.where(
+                in_rows_k, pair_hi_row, jnp.where(active_k, pair_hi_int, 0)
+            ).astype(i32)
+        )
+        live_pairs_l.append(
+            jnp.where(in_rows_k, total_pairs, jnp.where(active_k, half, 0)).astype(i32)
+        )
+        active_l.append(active_k)
+        in_rows_l.append(in_rows_k)
+        last_row_l.append(k == nrv - 1)
+
+    return {
+        "gather": jnp.stack(gather_l),
+        "pair_lo": jnp.stack(pair_lo_l),
+        "pair_hi": jnp.stack(pair_hi_l),
+        "col": jnp.stack(col_l),
+        "live_pairs": jnp.stack(live_pairs_l),
+        "active": jnp.stack(active_l),
+        "in_rows": jnp.stack(in_rows_l),
+        "last_row": jnp.stack(last_row_l),
+    }
+
+
+def _select_active(active: Array, folded: Array, kept: Array) -> Array:
+    """Fixed-width fold-back: a fold halves the live prefix, so re-pad it to the
+    kept buffer's width before the select keeps it on active rounds (and the
+    unchanged buffer otherwise)."""
+    padded = jnp.concatenate([folded, jnp.zeros_like(folded)])[: kept.shape[0]]
+    return jnp.where(active, padded, kept)
+
+
+def _select_transcript(
+    active: Array, advanced: Transcript, kept: Transcript
+) -> Transcript:
+    """Select the advanced sponge on active rounds, the unchanged one otherwise,
+    leaf by leaf -- the transcript-neutral guard a shorter layer's padding rounds
+    need. Both are `DuplexTranscript`s built off the same permutation/rate/fs."""
+    a = cast(DuplexTranscript, advanced)
+    k = cast(DuplexTranscript, kept)
+    sel = lambda x, y: jnp.where(active, x, y)
+    return a._with_state(
+        DuplexState(
+            sel(a.state.input_buffer, k.state.input_buffer),
+            sel(a.state.output_buffer, k.state.output_buffer),
+            sel(a.state.sponge_state, k.state.sponge_state),
+            sel(a.state.in_pos, k.state.in_pos),
+            sel(a.state.out_pos, k.state.out_pos),
+        )
+    )
+
+
+def _run_jagged_rounds_padded(
+    planes: _Planes,
+    eq_row: Array,
+    eq_int: Array,
+    coords: Array,
+    lam: Array,
+    claim: Array,
+    transcript: Transcript,
+    sched: dict[str, Array],
+    *,
+    niv: int,
+    max_rounds: int,
+    real_rounds: Array,
+    caps: RoundWidthCaps,
+    challenge_limbs: int = 1,
+) -> tuple[Array, Array, _Planes, Transcript]:
+    """Fixed-width sibling of `_run_jagged_rounds`: run a FIXED `max_rounds` loop
+    over caps-width neutral-padded buffers so a whole pyramid of differently-sized
+    layers shares one traced round body. The four planes ride the `caps.row`
+    buffer (live prefix at the front, neutral fraction n=0/d=1 in the tail); the
+    per-round `sched` re-pads and folds inside that width and masks the
+    materialized sum to the live pairs, so the dead tail never enters it (field
+    zero-adds are exact -> byte-equal to `_run_jagged_rounds`'s live-only sum).
+    `coords` is the bound point in round order (`eval_point` reversed).
+
+    INACTIVE rounds (`sched["active"]` false -- a shorter layer's padding rounds
+    past `nrv + niv`) select every carried value UNCHANGED, the transcript's five
+    sponge leaves included, so the layer never over-advances Fiat-Shamir; the
+    chain is k separate sumchecks, not one joint scan, so this guard is what the
+    homogeneous `zorch.sumcheck` scan does not need.
+
+    Returns `(polys, chal, planes_final, transcript)`: `polys` are the round
+    polynomials stacked over `max_rounds` (surplus entries zero) in round order;
+    `chal` is the bound point (the real challenges reversed, front-aligned into
+    the fixed buffer via `real_rounds` so the caller slices `chal[:real_rounds]`);
+    `planes_final` holds the four scalar pair openings."""
+    del caps  # widths ride the arrays; kept for the caller/scan ABI
+    dtype = claim.dtype
+    naturals, inv_vand = _round_interp_constants(dtype)
+    n0, n1, d0, d1 = planes.n0, planes.n1, planes.d0, planes.d1
+    one = jnp.ones((), dtype)
+    zero = jnp.zeros((), dtype)
+    eq_adj = one
+    pad_adj = one
+    transcript = cast(DuplexTranscript, transcript)
+    polys: list[Array] = []
+    challenges: list[Array] = []
+
+    for rnd in range(max_rounds):
+        active = sched["active"][rnd]
+        in_rows = sched["in_rows"][rnd]
+        last_row = sched["last_row"][rnd]
+        z_cur = coords[rnd]
+        gather = sched["gather"][rnd]
+        lo, hi, col = sched["pair_lo"][rnd], sched["pair_hi"][rnd], sched["col"][rnd]
+        live_pairs = jnp.where(active, sched["live_pairs"][rnd], jnp.int32(0))
+
+        pn0, pn1, pd0, pd1 = _pad_neutral(n0, n1, d0, d1, gather)
+        # Row rounds weight each pair by its segment-local `eq_row` times its
+        # interaction column `eq_int[col]`; interaction rounds use the dense
+        # stride-2 `eq_int` split. Both weights are computed and `in_rows` selects
+        # one; the discarded phase's indices can overrun its (smaller) eq table
+        # (a row round's `pair_lo` overruns `eq_int`, an interaction round's
+        # overruns `eq_row`), so clamp -- the live mask zeros the dead branch, and
+        # the selected phase's indices are always in-bounds (clamp a no-op there).
+        w = eq_int[jnp.minimum(col, eq_int.shape[0] - 1)]
+        eq0_row = eq_row[jnp.minimum(lo, eq_row.shape[0] - 1)] * w
+        eq1_row = eq_row[jnp.minimum(hi, eq_row.shape[0] - 1)] * w
+        eq0_int = eq_int[jnp.minimum(lo, eq_int.shape[0] - 1)]
+        eq1_int = eq_int[jnp.minimum(hi, eq_int.shape[0] - 1)]
+        eq0 = jnp.where(in_rows, eq0_row, eq0_int)
+        eq1 = jnp.where(in_rows, eq1_row, eq1_int)
+
+        eval_zero, eval_half, eq_sum = _paired_sums(
+            pn0, pn1, pd0, pd1, eq0, eq1, lam, live_pairs=live_pairs
+        )
+        poly = _round_coeffs(
+            eval_zero,
+            eval_half,
+            eq_sum,
+            eq_adj,
+            pad_adj,
+            z_cur,
+            claim,
+            naturals,
+            inv_vand,
+        )
+
+        # Split FS hop (observe then squeeze) -- byte-identical to the fused
+        # `_fs_reduce` (the runner reference gate pins this). Inactive rounds leave
+        # the sponge (all five leaves) and the challenge untouched; the neutral
+        # proof slot they emit is sliced off by the caller.
+        observed = transcript.observe(poly)
+        observed, r = sample_challenge(observed, dtype, challenge_limbs)
+        transcript = _select_transcript(active, observed, transcript)
+        r = jnp.where(active, r, zero)
+        polys.append(jnp.where(active, poly, jnp.zeros_like(poly)))
+        challenges.append(r)
+
+        next_claim, next_pad = gruen.fold_round_scalars(poly, r, pad_adj, z_cur)
+        fn0, fn1, fd0, fd1 = (fold_lsb(a, r) for a in (pn0, pn1, pd0, pd1))
+        feq_row = fold_lsb(eq_row, r)
+
+        claim = jnp.where(active, next_claim, claim)
+        # Row rounds accumulate the bound row-eq mass into pad_adj; at the last
+        # row round it becomes the scalar eq_adj and pad_adj restarts to track the
+        # interaction variables' own mass (the `_run_jagged_rounds` boundary).
+        eq_adj = jnp.where(active & last_row, next_pad, eq_adj)
+        pad_adj = jnp.where(active, jnp.where(last_row, one, next_pad), pad_adj)
+        n0, n1, d0, d1 = (
+            _select_active(active, fa, pa)
+            for fa, pa in ((fn0, n0), (fn1, n1), (fd0, d0), (fd1, d1))
+        )
+        # eq_row folds on row rounds, eq_int on interaction rounds; the inactive
+        # guard subsumes the wrong-phase one (a fold there is discarded).
+        eq_row = _select_active(active & in_rows, feq_row, eq_row)
+        # niv == 0 has no interaction rounds: eq_int stays its natural table (the
+        # empty-product eq factor), exactly as `_run_jagged_rounds` leaves it.
+        # Folding a width-1 table here would collapse it to width 0 and the next
+        # `eq_int[col]` gather would slice a 0-length axis.
+        if niv:
+            feq_int = fold_lsb(eq_int, r)
+            eq_int = _select_active(active & ~in_rows, feq_int, eq_int)
+        # The inactive padding rounds leave the carry untouched via the selects
+        # above. Under `lax.scan` that dead-fold + select chain can alias into a
+        # live earlier round and corrupt its poly (an XLA scan-body value-numbering
+        # hazard, the family `zerocheck.jagged` documents). Materialize the
+        # per-round carry behind an optimization barrier so each round is
+        # independent. (Task 4 re-verifies whether the scan still needs it.)
+        claim, eq_adj, pad_adj, n0, n1, d0, d1, eq_row, eq_int = (
+            lax.optimization_barrier(
+                (claim, eq_adj, pad_adj, n0, n1, d0, d1, eq_row, eq_int)
+            )
+        )
+
+    # The real challenges land reversed at the tail of the fixed buffer (inactive
+    # rounds are zeros at the front); roll them to the front so `chal[:real_rounds]`
+    # is the bound point (a take by index -- this jaxlib lacks `jnp.roll`).
+    rev = jnp.stack(challenges[::-1])
+    roll = (jnp.arange(max_rounds) + (max_rounds - real_rounds)) % max_rounds
+    chal = rev[roll]
+    planes_final = _Planes(n0[0], n1[0], d0[0], d1[0])
+    return jnp.stack(polys), chal, planes_final, transcript
 
 
 # The inter-layer carry: sample `lam` + the batched claim before the round loop,
