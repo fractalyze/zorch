@@ -102,3 +102,19 @@ class SumcheckKernel:
         zero_val, one_val = message
         one = jnp.ones((), coord.dtype)
         return claim == (one - coord) * zero_val + coord * one_val
+
+    def verify_final(self, claim: Array, final_state: Any) -> tuple[Array, Array]:
+        """Verifier-side terminal for the raw-basis / cadence replay: check the
+        prover's terminal sumcheck value(s) (`final`) against the reduced running
+        claim, and return `(ok, codeword_value)` — `codeword_value` being the
+        constant the fully folded codeword must equal, the tie between the
+        sumcheck's final value and the FRI terminal.
+
+        The point path enforces per-round consistency through `round_check` and
+        ties the terminal with `code.check_final(final_poly, claim)`, so the
+        native default carries no extra terminal state: it passes and ties the
+        codeword to the running claim. A basis consumer whose terminal is a
+        product of folded vectors (`final = (a[0], b[0])`, claim `Σ a·b`)
+        overrides to check `a[0]·b[0] == claim` and return `a[0]`."""
+        del final_state
+        return jnp.bool_(True), claim
