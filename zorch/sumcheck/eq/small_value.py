@@ -26,7 +26,7 @@ from zorch.sumcheck.domain import uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
 from zorch.sumcheck.prover import SumcheckRound
-from zorch.sumcheck.sqrt_space import compute_folded_evaluations, materialized_round
+from zorch.sumcheck.sqrt_space import compute_folded_evaluations, sumcheck_round
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -125,16 +125,15 @@ def prove_eq_poly_small_value(
         msgs.append(msg)
     eq_w_prev = state[1]
 
-    # Phase 2: transition — one √-space round (Algorithm 2) over the d+1 factors
-    # (P₁..P_d plus eq(w,·)) refolded across the l₀ bound variables. Sampling at Û_d
-    # (not Û_{d+1}) is whir-zorch's "slice to the d real factors": the eq factor rides
-    # the message but its own fold is tracked as the scalar eq mass, so the tail state
-    # keeps only the d real factors.
+    # Phase 2: transition — materialize the l₀-bound state, then one sumcheck round
+    # over the d+1 factors [P₁..P_d, eq(w,·)]. Sampling at Û_d (not Û_{d+1}) drops the
+    # eq factor from the message; its fold is carried as the scalar eq mass, so the
+    # tail keeps only the d real factors.
     eq_evals = jnp.ones(1, dtype=p_initial.dtype)
     for r in challenges:
         eq_evals = expand_hypercube_step(eq_evals, r)
     folded = compute_folded_evaluations(p_with_weights, eq_evals)
-    folded, transcript, msg_t, r_t = materialized_round(
+    folded, transcript, msg_t, r_t = sumcheck_round(
         folded, SumcheckRound(degree=d), uhat_domain(d, p_initial.dtype), transcript
     )
     eq_w_prev = eq_w_prev * eq_factor(r_t, w[l_0])

@@ -69,16 +69,16 @@ class SqrtSpaceRound(Round):
         return (p_stacked, expand_hypercube_step(eq_evals, r[0])), transcript, msg
 
 
-def materialized_round(
+def sumcheck_round(
     folded: Array,
     summand: SumcheckSummand,
     domain: EvalDomain,
     transcript: Transcript,
 ) -> tuple[Array, Transcript, Array, Array]:
-    """One round on already-refolded (materialized) factors: send the summand's
-    message over `domain`, sample the challenge, fold. Returns (folded', transcript,
-    msg, r). prove_sqrt_space's second phase iterates this; the small-value transition
-    takes it once, with eq as a (d+1)-th factor sliced off via a Û_d `domain`."""
+    """One sumcheck round on the folded factor evaluations: round poly (the summand
+    over `domain`) → sample the challenge → fold. Returns (folded', transcript, msg,
+    r); r is returned for callers that thread the challenge outside the fold (the
+    small-value transition advances its eq mass by it)."""
     msg = summand_evals(folded, summand._combine, domain)
     transcript, r = transcript.observe_and_sample(msg, 1)
     return fold_stacked(folded, r[0]), transcript, msg, r[0]
@@ -105,12 +105,11 @@ def prove_sqrt_space(
         SqrtSpaceRound(summand, domain), state, transcript, l_half
     )
 
-    # Fold the factors down over the bound prefix, then a plain tail sumcheck.
+    # Boundary: materialize the deferred state — fold the whole bound prefix down at
+    # once — then run standard sumcheck rounds over the explicit evaluations.
     folded = compute_folded_evaluations(*state)
     phase2 = []
     for _ in range(l - l_half):
-        folded, transcript, msg, _ = materialized_round(
-            folded, summand, domain, transcript
-        )
+        folded, transcript, msg, _ = sumcheck_round(folded, summand, domain, transcript)
         phase2.append(msg)
     return folded, transcript, phase1 + phase2

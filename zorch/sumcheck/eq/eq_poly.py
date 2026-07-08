@@ -183,12 +183,10 @@ def prove_eq_poly(
     """Fold all l variables; return the final factors (d, 1), the advanced
     transcript, and the per-round messages (each sᵢ over Û_d).
 
-    Fiat-Shamir binds to the compressed Û_d message (the byte-match anchor to the
-    whir-zorch/SP1 on-wire form), which drops u=1 and is not standalone-verifiable —
-    its driver-level verifier dual is pending (issue #410). The independent,
-    standalone-verifiable coefficient form is EqPolyRound._round_coeffs, checked
-    round-by-round against verifier.CoeffsSumcheckRound (see test_coeff_round_verifies);
-    it is a distinct transcript, not a re-encoding of the Û_d proof returned here."""
+    Fiat-Shamir binds to the compressed Û_d message, which drops u=1 and so is not
+    standalone-verifiable. The standalone coefficient form is EqPolyRound._round_coeffs,
+    checked round-by-round against verifier.CoeffsSumcheckRound — a distinct transcript,
+    not a re-encoding of the Û_d proof returned here."""
     rounds = log2_strict_usize(p_initial.shape[1])
     if w.shape[0] != rounds:
         raise ValueError(
