@@ -138,16 +138,16 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         """Width caps for the fixed-width legs: `slack` pads every buffer well
         past its natural width (the cross-layer/shard reuse shape); the tight
         variant pins the caps to the layer's own widths (rounded up only where
-        the ABI demands -- row to a multiple of 4, interaction to >= 4)."""
+        the ABI demands -- elements to a multiple of 4, interaction to >= 4)."""
         round0_width = sum(rc + rc % 2 for rc in layer.row_counts)
         if not slack:
             return RoundWidthCaps(
-                row=round0_width + (-round0_width % 4),
+                elements=round0_width + (-round0_width % 4),
                 eq_row=1 << nrv,
                 interaction=max(4, 1 << niv),
             )
         return RoundWidthCaps(
-            row=2 * round0_width + 8,
+            elements=2 * round0_width + 8,
             eq_row=(1 << nrv) * 2,
             interaction=max(4, (1 << niv) * 2),
         )

@@ -19,12 +19,13 @@ class RoundWidthCaps:
     so one compiled round kernel serves every round, layer, and shard under
     the caps. Hashable (a jit static arg on the per-layer round zone).
 
-    `row` bounds the row-phase plane/gather width (>= the round-0 even-padded
-    layout, a multiple of 4); `eq_row` bounds the row-eq table (>= 2^nrv,
-    even); `interaction` bounds the dense-phase state and eq width (>= 2^niv,
-    a multiple of 4)."""
+    `elements` bounds the row-phase plane/gather width -- the flat element
+    count across chips (`sum(row_counts)`), not a per-chip row count (>= the
+    round-0 even-padded layout, a multiple of 4); `eq_row` bounds the row-eq
+    table (>= 2^nrv, even); `interaction` bounds the dense-phase state and eq
+    width (>= 2^niv, a multiple of 4)."""
 
-    row: int
+    elements: int
     eq_row: int
     interaction: int
 

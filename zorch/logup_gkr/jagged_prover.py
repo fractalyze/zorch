@@ -285,9 +285,9 @@ def _run_jagged_rounds(
     # `_jagged_round_via_zone`), so `_pad_to_width` no-ops on them here.
     caps = sched.caps
     if caps is not None:
-        if caps.row % 4:
+        if caps.elements % 4:
             raise ValueError(
-                f"row cap {caps.row} must be a multiple of 4 (the boundary "
+                f"elements cap {caps.elements} must be a multiple of 4 (the boundary "
                 "handoff binds then pairs the row-width state, two stride-2 "
                 "halvings)"
             )
@@ -309,7 +309,7 @@ def _run_jagged_rounds(
             )
         planes = _Planes(
             *(
-                _pad_to_width(a, caps.row, 0)
+                _pad_to_width(a, caps.elements, 0)
                 for a in (planes.n0, planes.n1, planes.d0, planes.d1)
             )
         )
@@ -368,19 +368,21 @@ def _run_jagged_rounds(
             live = _dense_live_operand(1 << (niv - 1))
             # The boundary marker needs its eq operand at half its plane width
             # (the post-bind state), so the capped route reads a resized copy
-            # -- the live 2^niv prefix always fits in row // 2 (the last row
-            # layout, 2^(niv+1) slots, fits in the row cap). `eq_int` itself
+            # -- the live 2^niv prefix always fits in elements // 2 (the last
+            # row layout, 2^(niv+1) slots, fits in the elements cap). `eq_int`
+            # itself
             # rides through the handoff unchanged, at its own width, for the
             # interaction rounds below.
             if caps is None:
                 eq_boundary = eq_int
             else:
-                eq_boundary = _resize_zero(eq_int, caps.row // 2)
+                eq_boundary = _resize_zero(eq_int, caps.elements // 2)
             poly, planes, _ = fix_boundary(
                 planes, eq_boundary, prev_r, scalars, consts, live
             )
             if caps is not None:
-                # The handoff halves [row] -> [row // 2]; the dense phase runs
+                # The handoff halves [elements] -> [elements // 2]; the dense
+                # phase runs
                 # at the interaction cap, so resize to it -- the live prefix
                 # (2^niv elements <= caps.interaction, validated above via the
                 # eq table) always survives.
@@ -592,11 +594,11 @@ def _jagged_round_via_zone(
     # is unchanged. Concrete path only: a tracer means an outer trace owns the
     # layout (and pooling would donate a traced value).
     if caps is not None:
-        if caps.row < planes[0].shape[0]:
+        if caps.elements < planes[0].shape[0]:
             raise ValueError(
-                f"row cap {caps.row} cannot hold the layer's row-phase plane "
-                f"width ({planes[0].shape[0]}); widen the cap (or its ladder "
-                "class) so the fixed-width pad is non-negative"
+                f"elements cap {caps.elements} cannot hold the layer's "
+                f"row-phase plane width ({planes[0].shape[0]}); widen the cap "
+                "(or its ladder class) so the fixed-width pad is non-negative"
             )
         # Concrete path only: a tracer means an outer trace owns the layout
         # (and pooling would donate a traced value).
@@ -604,7 +606,7 @@ def _jagged_round_via_zone(
             planes = tuple(
                 _pool_lay_batch(
                     [
-                        (role, a, caps.row)
+                        (role, a, caps.elements)
                         for role, a in zip(("n0", "n1", "d0", "d1"), planes)
                     ]
                 )
