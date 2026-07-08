@@ -41,9 +41,8 @@ class BasefoldChoreography(FoldChoreography):
         derived from the bits methods so the wire shape cannot drift from the
         schedule."""
         folds = sum(
-            1
+            self.fold_grind_bits(round_idx, 0) is not None
             for round_idx in range(config.num_vars)
-            if self.fold_grind_bits(round_idx, 0) is not None
         )
         queries = 1 if self.query_grind_bits(0) is not None else 0
         return folds + queries

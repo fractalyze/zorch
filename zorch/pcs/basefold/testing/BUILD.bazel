@@ -55,6 +55,7 @@ py_test(
         "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/pcs/basefold",
         "//zorch/poly",
+        "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("jax"),
         requirement("zk_dtypes"),

@@ -35,18 +35,12 @@ from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
 from zorch.pcs.basefold.verifier import BasefoldVerifier
 from zorch.poly.multilinear import mle_evals_to_coeffs
+from zorch.testkit.random_field import rand_field
 from zorch.transcript import DuplexTranscript, TranscriptT
 
 
 def _transcript() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
-
-
-def _vec(seed: int, n: int) -> Array:
-    """A deterministic, index-varying base-field vector (quadratic in the index so
-    the product sumcheck is non-degenerate and a tamper diverges the stream)."""
-    x = jnp.arange(n, dtype=F)
-    return x * x * F(seed + 1) + x * F(seed * 3 + 1) + F(seed * 5 + 2)
 
 
 @dataclass(frozen=True)
@@ -188,7 +182,7 @@ class BasefoldCadenceRoundTripTest(absltest.TestCase):
             config=config,
         )
         n = 1 << num_vars
-        a, cls.b = _vec(1, n), _vec(2, n)
+        a, cls.b = rand_field(1, (n,), F), rand_field(2, (n,), F)
         n_pos = code.block_len
         cw = _codeword(code, a, num_ntts)
         pd = BasefoldProverData(
@@ -245,7 +239,7 @@ class BasefoldCadenceRoundTripTest(absltest.TestCase):
     def test_verify_with_basis_raises_on_scheduled_grind(self) -> None:
         # A grind-scheduling choreography has nowhere to put a witness in
         # `CadenceProof` (no pow-witness field) — the cadence verify must fail
-        # loud, symmetric to the prover's `_require_no_cadence_grind` guard on
+        # loud, symmetric to the prover's grind guard on
         # `_open_with_basis_cadence`.
         grinding_verifier = dataclasses.replace(
             self.verifier, choreography=_GrindingCadenceChoreography()
