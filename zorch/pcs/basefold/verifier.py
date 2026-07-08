@@ -7,6 +7,18 @@ matrices' opened rows must agree with the batched codeword's first pair-leaf, an
 each fold layer's opened pair must fold to the next layer's, down to the constant
 final poly. It holds only the public params (`code` for the block geometry and
 fold, `tree` for the Merkle config) — never the prover's retained codeword.
+
+The replay is driven by a `(BasefoldConfig, BasefoldChoreography)` pair — the
+verify dual of `BasefoldProver`: the config fixes the fold schedule (commit
+cadence), the choreography fixes the Fiat-Shamir framing (running-claim
+recurrence via `reduce_claim`, message/root/terminal observes, query sampling,
+grind checks). `BasefoldVerifier`'s defaults are zorch's native wire — so the
+plain `BasefoldVerifier(code, tree, num_queries=…)` construction replays
+byte-for-byte today's implementation and accepts/rejects identically. Prover and
+verifier must share ONE choreography instance so their Fiat-Shamir streams stay
+equal by construction. A byte-fixed consumer supplies its own config +
+choreography and drives `verify_with_basis` (raw basis, `bind_statement`'s
+`point=None`) — the dual of `BasefoldProver.open_with_basis`.
 """
 
 from __future__ import annotations
@@ -23,14 +35,11 @@ from jax import Array, lax
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
-from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldProof
-from zorch.pcs.fold import (
-    from_base_field,
-    sample_positions,
-    verify_fold_chain,
-    verify_openings,
-)
+from zorch.pcs.basefold.choreography import BasefoldChoreography
+from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldConfig, BasefoldProof
+from zorch.pcs.fold import from_base_field, verify_fold_chain, verify_openings
 from zorch.transcript import Transcript
+from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
@@ -38,12 +47,34 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BasefoldVerifier:
-    """BaseFold PCS verifier (`PcsVerifier`)."""
+    """BaseFold PCS verifier (`PcsVerifier`). `code` fixes the block geometry +
+    fold; `tree` the Merkle config; `choreography` the Fiat-Shamir wire (share
+    the instance with the prover); `config` the fold schedule. The defaults are
+    zorch's native wire — the plain `BasefoldVerifier(code, tree, num_queries=…)`
+    construction replays byte-for-byte today's implementation. `config=None`
+    derives the native per-verify config (`commits_per_round`, `num_queries`
+    from the verifier)."""
 
     code: FoldableCode
     tree: MerkleTree
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
+    choreography: BasefoldChoreography = BasefoldChoreography()
+    config: BasefoldConfig | None = None
+
+    def _resolved_config(self, num_vars: int) -> BasefoldConfig:
+        """The config driving a verify over `num_vars` variables: the explicit
+        one (checked against the point dimension) or the native default
+        (`commits_per_round`, `num_queries` from the verifier). Mirrors
+        `BasefoldProver._resolved_config` so both sides resolve identically."""
+        if self.config is None:
+            return BasefoldConfig(num_vars=num_vars, num_queries=self.num_queries)
+        if self.config.num_vars != num_vars:
+            raise ValueError(
+                f"config.num_vars={self.config.num_vars} doesn't match the "
+                f"verify's variable count {num_vars}"
+            )
+        return self.config
 
     def verify(
         self,
@@ -85,8 +116,55 @@ class BasefoldVerifier:
                 f"point dimension {num_vars} doesn't match message_len "
                 f"{self.code.message_len} (expected 2^{num_vars})"
             )
-        # Fail loud on a structurally malformed proof — a short message/layer list
-        # would otherwise let the round loop silently skip checks.
+        self._check_proof_shape(proof, num_vars)
+        # Fail loud on a non-native cadence / scheduled grind BEFORE any verdict,
+        # symmetric to the prover's deferrals (P2 deferred, fail-loud).
+        _require_native_cadence(self._resolved_config(num_vars))
+        _require_no_grind(self.choreography, num_vars)
+        return _verify_batch_body(
+            self, list(commitments), z, list(values), proof, transcript
+        )
+
+    def verify_with_basis(
+        self,
+        commitment: BasefoldCommitment,
+        basis: Array,
+        value: Array,
+        proof: BasefoldProof,
+        transcript: Transcript,
+    ) -> tuple[Array, Transcript]:
+        """Verify a RAW-basis open — the dual of `BasefoldProver.open_with_basis`
+        (`bind_statement` receives `point=None`). The native per-round check
+        evaluates the sumcheck message at the opening point's coordinates, which
+        a raw basis lacks, so the native verifier structure has no basis-path
+        replay: symmetric to the prover's deferred basis-path message, the replay
+        is a fail-loud consumer delta. The native binding still refuses
+        `point=None` up front (a basis consumer overrides `bind_statement`)."""
+        if basis.shape[0] < 2:
+            raise ValueError("BaseFold opens over at least one variable, got none")
+        num_vars = log2_strict_usize(basis.shape[0])
+        if self.code.message_len != (1 << num_vars):
+            raise ValueError(
+                f"basis length {basis.shape[0]} doesn't match message_len "
+                f"{self.code.message_len} (expected 2^num_vars)"
+            )
+        self._check_proof_shape(proof, num_vars)
+        _require_native_cadence(self._resolved_config(num_vars))
+        _require_no_grind(self.choreography, num_vars)
+        # Bind the statement via the choreography with point=None (native refuses;
+        # a basis consumer binds via the basis). Even a basis consumer then hits
+        # the deferred basis-path replay below.
+        self.choreography.bind_statement(transcript, commitment, None, value)
+        raise NotImplementedError(
+            "verify_with_basis's raw-basis replay is not wired here: the native "
+            "per-round check evaluates the sumcheck message at the opening point, "
+            "which a raw basis lacks; a basis consumer supplies its own per-round "
+            "check from (message, basis), symmetric to open_with_basis"
+        )
+
+    def _check_proof_shape(self, proof: BasefoldProof, num_vars: int) -> None:
+        """Fail loud on a structurally malformed proof — a short message/layer
+        list would otherwise let the round loop silently skip checks."""
         if (
             len(proof.univariate_messages) != num_vars
             or len(proof.fri_roots) != num_vars
@@ -97,13 +175,43 @@ class BasefoldVerifier:
                 f"layers, got {len(proof.univariate_messages)} / "
                 f"{len(proof.fri_roots)} / {len(proof.query_openings)}"
             )
-        return _verify_batch_body(
-            self, list(commitments), z, list(values), proof, transcript
+
+
+def _require_native_cadence(config: BasefoldConfig) -> None:
+    """Fail loud on a non-native fold schedule: this driver replays only
+    `commits_per_round` (pre-fold arity-2 pair commit every round), the verify
+    dual of `BasefoldProver._require_native_cadence`. The row-batch prefix +
+    multi-arity epoch cadence is deferred (design §"Core driver"), wired +
+    byte-gated with its first consumer; only the config STRUCTURE exists here."""
+    if not config.commits_per_round:
+        raise NotImplementedError(
+            "non-native fold cadence (row_batch_prefix / fold_arities) is not "
+            "replayed yet; only commits_per_round (zorch-native) is wired. The "
+            "deferred row-batch-prefix + multi-arity epoch cadence lands with "
+            "its first byte-fixed consumer"
+        )
+
+
+def _require_no_grind(chor: BasefoldChoreography, num_vars: int) -> None:
+    """Fail loud on a scheduled grind: `BasefoldProof` carries no pow-witness
+    field (the native wire grinds nothing), so there is nothing for the verifier
+    to `check_grind` against. The grind-check wire is a deferred consumer delta,
+    symmetric to the prover's pow-witness NotImplementedError."""
+    scheduled = (
+        any(chor.fold_grind_bits(r, 0) is not None for r in range(num_vars))
+        or chor.query_grind_bits(0) is not None
+    )
+    if scheduled:
+        raise NotImplementedError(
+            "the choreography schedules a grind, but BasefoldProof carries no "
+            "pow-witness field for the verifier to check_grind against; the "
+            "grind-check wire is a deferred consumer delta"
         )
 
 
 # Jitted verify body: an eager replay interprets each composite op-by-op in
-# Python (issue #140). The verifier is the static key (by value, #214).
+# Python (issue #140). The verifier is the static key (by value, #214), so its
+# config and choreography (both frozen, value-compared) fix the compiled zone.
 @partial(jax.jit, static_argnames=("verifier",))
 def _verify_batch_body(
     verifier: BasefoldVerifier,
@@ -113,15 +221,20 @@ def _verify_batch_body(
     proof: BasefoldProof,
     transcript: Transcript,
 ) -> tuple[Array, Transcript]:
+    chor = verifier.choreography
     dtype = z.dtype
     n = verifier.code.block_len
     num_vars = z.shape[0]
+    config = verifier._resolved_config(num_vars)
     one = jnp.ones((), dtype)
     t = transcript
 
     # Re-derive the batch weights + initial claim (mirror open's FS order):
     # bind every commitment root, observe every matrix's claims, sample the
-    # staggered coeffs, then bind the fold-round count.
+    # staggered coeffs, then bind the fold-round count. This multi-matrix
+    # statement binding is the native consumer's staggered-RLC batching — kept
+    # verifier-side (its prover dual is in `_open_batch_body`, not a choreography
+    # hook, because "combine separate matrices" is where consumers diverge).
     for root in commitments:
         t = t.observe(root)
     for vals in values:
@@ -131,11 +244,15 @@ def _verify_batch_body(
     current_claim = batch_staggered(list(values), coeffs)
     t = t.observe(jnp.asarray(num_vars, dtype))
 
-    # Replay the interleaved sumcheck + fold challenges. Every round observes
-    # its pre-fold pair-leaf commitment root before sampling β, so all
-    # num_vars rounds are homogeneous (no peeled final round) and ride one
-    # lax.scan — the poseidon2 permute markers stop scaling with num_vars
-    # (#185). z_rev[r] binds the variable folded in round r.
+    # Replay the interleaved sumcheck + fold challenges through the choreography.
+    # Every round observes its message (`round_message`), then its pre-fold
+    # pair-leaf commitment root (`observe_root`), then samples β, then reduces
+    # the running claim (`reduce_claim`, native `s(0)+β·s(1)`). All num_vars
+    # rounds are homogeneous (no peeled final round) and ride one lax.scan — the
+    # poseidon2 permute markers stop scaling with num_vars (#185). z_rev[r] binds
+    # the variable folded in round r; the point-consistency check is native
+    # (a non-native message reframes it — deferred). The native choreography's
+    # message/root observes are pass-throughs, so the wire is byte-identical.
     z_rev = z[::-1]
     zero_vals = jnp.stack([m[0] for m in proof.univariate_messages])
     one_vals = jnp.stack([m[1] for m in proof.univariate_messages])
@@ -147,13 +264,18 @@ def _verify_batch_body(
     ) -> tuple[tuple[Transcript, Array, Array], Array]:
         t, claim, ok = carry
         zero_val, one_val, last, root = xs
+        # Native point-consistency check: the running claim equals the sumcheck
+        # message evaluated at the point coordinate `last`. Not a choreography
+        # hook — the message form is native (a non-native message reframes this,
+        # deferred); the ADDITIVE running-claim reduction is the hook.
         expected = (one - last) * zero_val + last * one_val
         ok = ok & (claim == expected)
-        t = t.observe(jnp.stack([zero_val, one_val]))
-        t = t.observe(root)
+        msg = chor.round_message(zero_val, one_val)
+        t = chor.observe_message(t, msg)
+        t = chor.observe_root(t, root)
         t, beta = t.sample()
         beta = beta.reshape(())
-        return (t, zero_val + beta * one_val, ok), beta
+        return (t, chor.reduce_claim(claim, msg, beta), ok), beta
 
     (t, current_claim, ok), betas_stacked = lax.scan(
         fold_round,
@@ -168,10 +290,10 @@ def _verify_batch_body(
     ok = ok & verifier.code.check_final(proof.final_poly, current_claim)
 
     # Bind the cleartext final codeword before sampling queries (mirror open).
-    t = t.observe(proof.final_poly)
+    t = chor.observe_final(t, proof.final_poly)
 
     # Query phase: shared positions; per-layer leaf index off the code seam.
-    t, positions = sample_positions(t, n, verifier.num_queries)
+    t, positions = chor.sample_queries(t, n, config.num_queries)
     a = verifier.code.layer_positions(positions, num_vars)
 
     # Merkle: every component matrix rebuilds its commitment at the query
