@@ -20,6 +20,7 @@ py_library(
         "//zorch/poly",
         "//zorch/sumcheck",
         "//zorch/utils:bits",
+        "//zorch/utils:field",
         requirement("jax"),
     ],
 )

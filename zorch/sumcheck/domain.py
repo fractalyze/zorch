@@ -21,13 +21,10 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-import zk_dtypes
 from jax import Array
 
-from zorch.poly.univariate import (
-    compute_inv_vandermonde,
-    compute_lagrange_basis,
-)
+from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
+from zorch.utils.field import naturals
 
 
 @cache
@@ -39,28 +36,16 @@ def _interp_constants(degree: int, dtype: Any) -> tuple[Array, Array]:
     # jit trace, which then escapes it (UnexpectedTracerError). The constants are
     # trace-independent anyway.
     with jax.ensure_compile_time_eval():
-        naturals = jnp.stack([jnp.array(j, dtype) for j in range(degree + 1)])
+        nat = naturals(degree + 1, dtype)
         inv_vand = compute_inv_vandermonde(degree, dtype)
-    return naturals, inv_vand
-
-
-def _naturals(n: int, dtype: Any) -> Array:
-    """The field-typed naturals {0, 1, …, n−1}. Built in the base field — an iota
-    over an extension dtype is unsupported in the fork, and integer nodes live in
-    the prime field anyway; extension callers promote at multiply time. Same pattern
-    as compute_inv_vandermonde."""
-    try:
-        base = zk_dtypes.efinfo(dtype).base_field_dtype
-    except ValueError:
-        base = dtype
-    return jnp.array(list(range(n)), base)
+    return nat, inv_vand
 
 
 def _finite_coeff_matrix(nodes: Array) -> Array:
     """Value → ascending-coefficient matrix (n, n) for a degree-(n−1) polynomial at
     the n finite nodes, bridged through the naturals then the inverse Vandermonde."""
-    naturals, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, nodes)
+    nat, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
+    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(nat, nodes)
     return jnp.dot(inv_vand, lagrange)
 
 
@@ -94,7 +79,7 @@ class EvalDomain:
         v_inf, finite = values[0], values[1:]
         d = finite.shape[0]
         if self.nodes is None:
-            # Naturals domain: _finite_coeff_matrix(_naturals(d)) is exactly the
+            # Naturals domain: _finite_coeff_matrix(naturals(d)) is exactly the
             # inverse Vandermonde — its Lagrange build over the naturals collapses to
             # the identity — so skip that identity vmap + matmul and use inv_vand.
             nodes, cmat = _interp_constants(d - 1, values.dtype)
@@ -142,14 +127,14 @@ def natural_domain(degree: int, dtype: Any) -> EvalDomain:
     and the default domain of the generic StandardRound. Nodes live in the base
     field (an integer node is a base-field element; extension factors promote at
     multiply), reproducing the list prover's per-point lift byte-for-byte."""
-    return EvalDomain(_naturals(degree + 1, dtype))
+    return EvalDomain(naturals(degree + 1, dtype))
 
 
 def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
     """The compressed product round domain Û_degree = {∞, 0, 2, …, degree−1}:
     ∞-leading, u=1 dropped (the verifier recovers s(1) from s(0)+s(1)=claim). The
     default sampling domain for the eq-poly / sqrt-space engines."""
-    nat = _naturals(degree, dtype)
+    nat = naturals(degree, dtype)
     return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), leading=True)
 
 
@@ -204,7 +189,7 @@ def product_round_coeffs(stacked: Array) -> Array:
     domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to coefficients —
     the wire form verifier.CoeffsSumcheckRound checks."""
     m = stacked.shape[0]
-    full = EvalDomain(_naturals(m, stacked.dtype), leading=True)  # [∞, 0, 1, …, m−1]
+    full = EvalDomain(naturals(m, stacked.dtype), leading=True)  # [∞, 0, 1, …, m−1]
     return EvalDomain(leading=True).to_coeffs(summand_evals(stacked, _product, full))
 
 

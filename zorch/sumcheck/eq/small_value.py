@@ -32,6 +32,7 @@ from zorch.sumcheck.prover import ProductSummand
 from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+from zorch.utils.field import naturals
 
 # (R_tensor, eq_w_prev, eq_evals): the contracted R tensor over U_dⁱ⁻¹, the running
 # eq mass eq(w[<i], r[<i]), and the eq(r[<i], ·) table over the bound prefix — all
@@ -43,7 +44,7 @@ def _lagrange_over_round_domain(r: Array, d: int) -> Array:
     """Lagrange basis over U_d at r: [L_∞, L₀, …, L_{d−1}], shape (d+1,). L_∞ is the
     vanishing polynomial on the finite nodes (the leading-coeff basis). Each round's
     R tensor grows by this factor."""
-    finite = jnp.stack([jnp.array(k, r.dtype) for k in range(d)])
+    finite = naturals(d, r.dtype)
     return jnp.concatenate(
         [jnp.atleast_1d(jnp.prod(r - finite)), compute_lagrange_basis(r, finite)]
     )

@@ -25,10 +25,11 @@ from jax import Array
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import EvalDomain, _naturals, split_halves, uhat_domain
+from zorch.sumcheck.domain import EvalDomain, split_halves, uhat_domain
 from zorch.sumcheck.prover import ProductSummand, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+from zorch.utils.field import naturals
 
 # (P_stacked, eq_w_prev): the d folded factors (d, 2ˡ⁻ⁱ) and the running eq mass
 # eq(w[<i], r[<i]) as a length-1 array.
@@ -151,7 +152,7 @@ class EqPolyRound(Round):
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
         p0s, diffs = _split_slope(p_stacked)
         w_i = self.w[i - 1]
-        full = EvalDomain(_naturals(degree + 1, p_stacked.dtype), leading=True)
+        full = EvalDomain(naturals(degree + 1, p_stacked.dtype), leading=True)
         t = _weighted_summand(p0s, diffs, eq_w_l, eq_w_r, full, self.summand._combine)
         l_evals = expand_hypercube_step(eq_w_prev, w_i)  # lᵢ(0), lᵢ(1)
         s = sumcheck_poly_from_t(t, l_evals, full)
