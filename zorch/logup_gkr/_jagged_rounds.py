@@ -14,7 +14,7 @@ from jax import Array
 from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import _pad_neutral
 from zorch.logup_gkr.prover import LogupSummand
-from zorch.sumcheck import gruen
+from zorch.sumcheck import domain
 from zorch.sumcheck.jagged.rounds import _round_coeffs
 from zorch.sumcheck.jagged.types import _InterpConsts
 from zorch.sumcheck.prover import fold_lsb
@@ -229,6 +229,6 @@ def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array
 
 def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
     """Lagrange `naturals` ({0..DEGREE}) and the inverse-Vandermonde for the LogUp
-    round degree -- the shared, memoized `sumcheck.gruen._interp_constants` baked at
+    round degree -- the shared, memoized `sumcheck.domain._interp_constants` baked at
     `_DEGREE`, surfaced here to populate the marker's interp-const operands."""
-    return gruen._interp_constants(_DEGREE, dtype)
+    return domain._interp_constants(_DEGREE, dtype)
