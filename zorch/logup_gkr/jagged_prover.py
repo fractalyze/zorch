@@ -654,6 +654,38 @@ def _plane_window(
     return jnp.where(live, win, neutral)
 
 
+def _expand_eq_prefix(
+    point: Array, live_len: Array, width: int, scalar: Array
+) -> Array:
+    """`expand_eq_to_hypercube` over a TRACED-length prefix of `point`, into a
+    fixed-`width` buffer -- the scan's per-layer `eq_row` build, where the live
+    row depth `nrv` rides as a tracer so the concrete-slice `_expand_eq_slice`
+    the per-layer head (`_prove_layer_padded`) uses cannot size the table.
+
+    Expands only the first `live_len` coordinates (a coordinate past `live_len`
+    folds in as the identity, factor 1); each doubling step is truncated to
+    `width`. With `width >= 2^live_len` -- always here, since the scan builds at
+    `width == caps.eq_row == 1 << max(nrvs)` and every layer's `live_len == nrv <=
+    max(nrvs)` -- the result is byte-identical to `_pad_to_width(
+    expand_eq_to_hypercube(coords, scalar), width, 0)`: the live `2^live_len` eq
+    entries at the front, then an exact-zero tail (the buffer's initial zeros past
+    position 1 never receive mass, so the interleave leaves them zero). Uses
+    `poly.eq.expand_hypercube_step`'s exact `high = state*coord; low = state -
+    high` so the live region is bit-identical to `_expand_eq_slice`'s table.
+    `width` is a single host-static value, so the buffer is shape-invariant across
+    the scanned layers."""
+    n = point.shape[0]
+    state = jnp.atleast_1d(scalar)
+    state = jnp.concatenate([state, jnp.zeros((width - 1,), state.dtype)])
+    for j in range(n):
+        coord = jnp.where(j < live_len, point[j], jnp.zeros((), point.dtype))
+        high = state * coord
+        low = state - high
+        inter = jnp.stack([low, high], axis=-1).reshape(-1)[:width]
+        state = jnp.where(j < live_len, inter, state)
+    return state
+
+
 def _excl_cumsum(x: Array) -> Array:
     """Exclusive prefix sum `out[i] = sum(x[:i])` via a broadcast mask -- `nseg`
     is tiny, so the n^2 cost is nil, and it dodges any `jnp.cumsum` fork quirk
@@ -1011,7 +1043,11 @@ def _run_jagged_rounds_padded(
         # live earlier round and corrupt its poly (an XLA scan-body value-numbering
         # hazard, the family `zerocheck.jagged` documents). Materialize the
         # per-round carry behind an optimization barrier so each round is
-        # independent. (Task 4 re-verifies whether the scan still needs it.)
+        # independent. Task 4 confirmed the rolled-scan byte-match holds WITH this
+        # in place; a standalone removal also passed the (small-shape) scan tests,
+        # but the barrier is near-free and the hazard is a documented at-scale one,
+        # so it is retained as a cheap guard (the scan-CARRY barrier the #254 scan
+        # briefly wrapped was dropped -- its removal left the byte-match intact).
         claim, eq_adj, pad_adj, n0, n1, d0, d1, eq_row, eq_int = (
             lax.optimization_barrier(
                 (claim, eq_adj, pad_adj, n0, n1, d0, d1, eq_row, eq_int)
@@ -1281,6 +1317,210 @@ def _prove_layer(
     return _jagged_round_via_zone(layer, challenge_limbs, caps, carry, transcript)
 
 
+def _scan_pyramid(
+    layers: list[JaggedGkrLayer],
+    carry: Carry,
+    transcript: Transcript,
+    caps: RoundWidthCaps,
+    challenge_limbs: int,
+) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
+    """Roll the all-EF interior layer chain into ONE `lax.scan` -- O(1) in the
+    layer count, byte-identical to the per-layer loop (hence to
+    `ProveChain(JaggedGkrLayerRound(l) for l in ...)`).
+
+    `layers` are floor-outward (the chain's order). The pyramid halves each
+    layer, so the per-layer planes ride `caps.row`-wide buffers padded to the
+    widest layer with the live prefix at the front -- sliced out of the flat
+    per-channel buffers (`_flat_planes`/`_plane_window`) so peak plane residency
+    stays O(caps.row), independent of the layer count. The per-layer round count
+    grows by one each outward layer, so it rides a fixed `max_rounds` loop
+    (`_run_jagged_rounds_padded`) whose surplus rounds a shorter layer leaves
+    INACTIVE, selecting the unchanged transcript so it never over-advances
+    Fiat-Shamir.
+
+    The scan carry is `((num_eval, den_eval, eval_point), transcript)`. The
+    interior is all-EF (the BF->EF carve ran first in `prove_jagged_pyramid`), so
+    the carry dtype is loop-invariant EF -- the fixed-shape `lax.scan` carry
+    contract (a carry dtype change would be rejected; if the first interior layer
+    still promoted, the carve boundary would be wrong). Each `step` is the scan
+    generalization of the Task-2 per-layer head `_prove_layer_padded`: sample
+    lam/claim, build the caps-width eq tables + the derived schedule + round-order
+    coords, run the padded rounds, then observe the openings and fold the carry
+    -- but with a traced `nrv`/round count, so the eq_row build uses
+    `_expand_eq_prefix` and the ragged proofs slice host-side after the scan."""
+    niv = layers[0].num_batch_variables
+    if any(l.num_batch_variables != niv for l in layers):
+        raise ValueError("every layer must share the interaction-variable count")
+    nseg = len(layers[0].row_counts)
+    if any(len(l.row_counts) != nseg for l in layers):
+        raise ValueError("every layer must share the segment (interaction) count")
+
+    num_eval0, den_eval0, eval_point0 = carry
+    dtype = num_eval0.dtype
+    # nrv grows by one each outward layer (the carry's eval_point gains the child
+    # selector), so the per-layer round counts are host-known from the entry point
+    # length; the widest (last) layer sets `max_rounds` and the scan-carry widths.
+    init_nrv = int(eval_point0.shape[0]) - niv
+    nrvs = [init_nrv + j for j in range(len(layers))]
+    real_rounds = [nrv + niv for nrv in nrvs]
+    max_rounds = max(real_rounds)
+    max_eval_len = max_rounds + 1  # +1 for the last layer's child selector
+    # eq_row's live extent is the widest layer's row depth; caps.eq_row (== 1 <<
+    # that, tight for the widest scanned layer) is the shape-invariant build width.
+    row_var_extent = max(nrvs)
+    plane_width = caps.row  # the scan-invariant plane-buffer width
+
+    # Fail loud (not silently truncate) if a cap is too small for the widest
+    # interior layer: an undersized `caps.row` would clip `_plane_window`'s
+    # slice short of the layer's live plane, and an undersized `caps.eq_row`
+    # would clip `_expand_eq_prefix`'s live prefix -- both produce a WRONG
+    # proof with no error (production has no byte-match oracle to catch it).
+    # Mirrors the natural per-layer path's checks (`prove_jagged_layer`'s
+    # `caps.eq_row < eq_row.shape[0]`, `_jagged_round_via_zone`'s
+    # `caps.row < planes[0].shape[0]`).
+    max_height = max(l.height for l in layers)
+    if caps.row < max_height:
+        raise ValueError(
+            f"row cap {caps.row} cannot hold the widest interior layer's "
+            f"row-phase plane width ({max_height}); widen the cap (or its "
+            "ladder class) so the fixed-width pad is non-negative"
+        )
+    max_eq_row = 1 << row_var_extent
+    if caps.eq_row < max_eq_row:
+        raise ValueError(
+            f"eq_row cap {caps.eq_row} cannot hold the widest interior "
+            f"layer's row-eq table ({max_eq_row})"
+        )
+
+    one = jnp.ones((), dtype)
+    zero = jnp.zeros((), dtype)
+
+    # Each layer's planes ride a flat per-channel buffer at NATURAL width; `step`
+    # slices a `plane_width` window per layer and masks its tail past the live
+    # height back to the neutral fraction (0 numerator, 1 denominator).
+    flat_n0, flat_n1, flat_d0, flat_d1, offsets, widths = _flat_planes(
+        layers, dtype, plane_width
+    )
+    xs_eval_len = jnp.asarray(np.asarray(real_rounds, dtype=np.int32))
+    xs_row_counts = jnp.asarray(np.asarray([l.row_counts for l in layers], np.int32))
+
+    def step(
+        carry_scan: tuple[Carry, Transcript], xs: tuple[Array, ...]
+    ) -> tuple[tuple[Carry, Transcript], tuple[Array, ...]]:
+        (num_eval, den_eval, eval_point), t = carry_scan
+        offset, live_width, eval_len, row_counts = xs
+        t = cast(DuplexTranscript, t)
+
+        # Reconstruct this layer's caps-width planes: the live prefix from the flat
+        # buffer, the tail past the live height masked to the neutral fraction --
+        # the [live prefix | neutral tail] the padded round body expects.
+        live = jnp.arange(plane_width) < live_width
+        planes = _Planes(
+            _plane_window(flat_n0, offset, plane_width, live, zero),
+            _plane_window(flat_n1, offset, plane_width, live, zero),
+            _plane_window(flat_d0, offset, plane_width, live, one),
+            _plane_window(flat_d1, offset, plane_width, live, one),
+        )
+
+        # Per-layer carry head: sample lam, batch the opening claim (the pre-round
+        # half of `_prove_jagged_layer_round`).
+        t, lam, claim = _sample_lam_and_claim(
+            t, num_eval, den_eval, challenge_limbs, dtype
+        )
+
+        nrv_t = eval_len - niv
+        # Per-round schedule reconstructed from the compact row counts at the caps
+        # width (no baked plane-width constant) -- the same call the Task-2
+        # per-layer head makes, byte-identical to `_padded_round_schedule`.
+        sched = _padded_round_schedule_jax(
+            row_counts, nrv_t, niv, max_rounds, plane_width
+        )
+        # eq_row over the live row coords into the caps.eq_row buffer (traced nrv);
+        # eq_int over the leading niv interaction coords (a host-static slice, so
+        # `_expand_eq_slice` works unchanged under the scan).
+        row_pt = lax.dynamic_slice_in_dim(eval_point, niv, row_var_extent, 0)
+        eq_row = _expand_eq_prefix(row_pt, nrv_t, caps.eq_row, one)
+        eq_int = _pad_to_width(
+            _expand_eq_slice(eval_point, niv, row=False), caps.interaction, 0
+        )
+        # coords[rnd] = eval_point[eval_len - 1 - rnd]: the round consumes the point
+        # from the end (the bound point is the challenges reversed); surplus rounds
+        # clamp to an in-bounds coord (their contribution is masked out).
+        idx = eval_len - 1 - jnp.arange(max_rounds)
+        coords = eval_point[jnp.clip(idx, 0, eval_point.shape[0] - 1)]
+
+        polys, chal, planes_final, t = _run_jagged_rounds_padded(
+            planes,
+            eq_row,
+            eq_int,
+            coords,
+            lam,
+            claim,
+            t,
+            sched,
+            niv=niv,
+            max_rounds=max_rounds,
+            real_rounds=eval_len,
+            caps=caps,
+            challenge_limbs=challenge_limbs,
+        )
+        fn0, fn1 = planes_final.n0, planes_final.n1
+        fd0, fd1 = planes_final.d0, planes_final.d1
+
+        # Per-layer carry tail (the post-round half of `_observe_openings_and_fold`,
+        # but with a fixed-width point): fused absorb+squeeze of the openings, then
+        # fold the carry under the child selector `r`. `chal` is the bound point
+        # (real challenges reversed, front-aligned), so the new point is [bound
+        # point | r | zeros] with `r` as the low (last) bit at position `eval_len`.
+        t, raw = t.observe_and_sample(jnp.stack([fn0, fn1, fd0, fd1]), challenge_limbs)
+        r = reinterpret_challenge(raw, dtype)
+        num_eval = fn0 + (fn1 - fn0) * r
+        den_eval = fd0 + (fd1 - fd0) * r
+        bound = jnp.concatenate([chal, jnp.zeros((1,), dtype)])
+        new_point = lax.dynamic_update_index_in_dim(bound, r, eval_len, 0)
+
+        out = (lam, claim, polys, chal, fn0, fn1, fd0, fd1)
+        carry_out = ((num_eval, den_eval, new_point), t)
+        # Guard the whole scan carry -- transcript sponge leaves included -- against
+        # the scan-body value-numbering miscompile (a dead masked inactive-round fold
+        # aliasing a live value) documented in the retired fe02c94 roll. The hazard is
+        # scale/scan-specific, so the small-shape CPU byte-match cannot prove it
+        # absent; the barrier is near-free, so it stays for this soundness-critical
+        # FS prover.
+        carry_out = lax.optimization_barrier(carry_out)
+        return carry_out, out
+
+    eval_buf = jnp.concatenate(
+        [eval_point0, jnp.zeros((max_eval_len - eval_point0.shape[0],), dtype)]
+    )
+    init = ((num_eval0, den_eval0, eval_buf), transcript)
+    xs = (offsets, widths, xs_eval_len, xs_row_counts)
+    (final_carry, final_t), outs = lax.scan(step, init, xs)
+    lam_s, claim_s, polys_s, chal_s, fn0_s, fn1_s, fd0_s, fd1_s = outs
+
+    # Reconstruct the ragged per-layer proofs: slice each layer's padded polys /
+    # bound point to its real round count. The padded body rolls the reversed real
+    # challenges to the FRONT, so the live point is the leading `rounds` entries.
+    proofs: list[JaggedLayerProof] = []
+    for j, rounds in enumerate(real_rounds):
+        proofs.append(
+            JaggedLayerProof(
+                lam_s[j],
+                claim_s[j],
+                polys_s[j][:rounds],
+                chal_s[j][:rounds],
+                fn0_s[j],
+                fn1_s[j],
+                fd0_s[j],
+                fd1_s[j],
+            )
+        )
+
+    num_eval, den_eval, eval_buf = final_carry
+    final_eval = eval_buf[: real_rounds[-1] + 1]
+    return (num_eval, den_eval, final_eval), final_t, proofs
+
+
 def prove_jagged_pyramid(
     layers: list[JaggedGkrLayer],
     carry: Carry,
@@ -1288,18 +1528,22 @@ def prove_jagged_pyramid(
     *,
     caps: RoundWidthCaps | None,
     challenge_limbs: int = 1,
+    force_scan: bool = False,
 ) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
     """Prove the jagged GKR pyramid's layer chain -- byte-identical to
     ProveChain(JaggedGkrLayerRound(l) for l in layers). `layers` are the
     proved layers floor-outward, threading the `(num_eval, den_eval,
     eval_point)` carry from one layer's proof into the next's claim.
 
-    Intent: roll the chain into a `lax.scan` when `caps` is given, bounding
-    cross-layer peak memory under an outer jit (the per-layer working set
-    becomes the scan carry, allocated once, reused) -- landing in a later
-    task. Today this is still a per-layer Python loop; `caps=None` is a valid
-    path and runs it eagerly, no caps required. Requires a device-FS
-    transcript (host-FS is an eager primitive that can't trace into a scan).
+    Under `caps` (the fixed-width round layout) a multi-layer interior rolls into
+    ONE `lax.scan` (`_scan_pyramid`): the per-layer working set becomes the scan
+    carry, allocated once and reused, so cross-layer peak memory is bounded under
+    an outer jit (a wide shard's unrolled arena OOMs -- sp1-zorch#254). The
+    caps-less path (`caps=None`, no `force_scan`) and a single-interior-layer
+    caps run stay the eager per-layer loop, where the scan buys nothing.
+    `force_scan` pins the scan on regardless (the byte-match tests). Requires a
+    device-FS transcript (host-FS is an eager primitive that can't trace into the
+    scan body).
     """
     layers = list(layers)
     if not layers:
@@ -1314,22 +1558,37 @@ def prove_jagged_pyramid(
 
     # BF->EF carve: the mixed-field layer (base-field LogUp numerators under EF
     # denominators) can't ride the scan (its fold changes the carry dtype). Prove
-    # it via the per-layer path; scan the all-EF interior. It is the chain's last
-    # round, so the result is byte-identical.
+    # it via the per-layer path; scan the all-EF interior (`force_scan` forwarded
+    # so the interior is genuinely scanned). It is the chain's last round, so the
+    # result is byte-identical.
     if layers[-1].numerator_0.dtype != carry[0].dtype:
         *interior, last = layers
         interior_proofs: list[JaggedLayerProof] = []
         if interior:
             carry, transcript, interior_proofs = prove_jagged_pyramid(
-                interior, carry, transcript, caps=caps, challenge_limbs=challenge_limbs
+                interior,
+                carry,
+                transcript,
+                caps=caps,
+                challenge_limbs=challenge_limbs,
+                force_scan=force_scan,
             )
         carry, transcript, last_proof = _prove_layer(
             last, challenge_limbs, caps, carry, transcript
         )
         return carry, transcript, [*interior_proofs, last_proof]
 
-    # TASK 1: per-layer loop (identical to ProveChain). TASK 4 replaces this with
-    # the lax.scan.
+    # Route to the rolled scan under caps for a multi-layer interior (or when
+    # forced); the per-layer loop stays the caps-less / single-layer fallback,
+    # where the scan's fixed-width padding buys nothing.
+    if force_scan or (caps is not None and len(layers) > 1):
+        if caps is None:
+            raise ValueError(
+                "the rolled scan needs caps (the fixed-width round layout); "
+                "pass caps or drop force_scan"
+            )
+        return _scan_pyramid(layers, carry, transcript, caps, challenge_limbs)
+
     proofs = []
     for layer in layers:
         carry, transcript, proof = _prove_layer(

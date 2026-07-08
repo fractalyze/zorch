@@ -689,6 +689,57 @@ class PyramidScanProveTest(absltest.TestCase):
             want = _pad_to_width(layer.numerator_0.astype(dtype), plane_width, 0)
             self.assertTrue(bool(jnp.all(got == want)), f"layer {j} window mismatch")
 
+    def test_scan_matches_chain_with_caps(self) -> None:
+        # Task 4: the whole interior chain rolled into ONE lax.scan, forced on and
+        # sized by the widest layer's caps -- byte-identical to the unrolled
+        # ProveChain (every proof field, the full carry, all five sponge leaves).
+        layers = build_jagged_pyramid(random_jagged_layer(9, self.ROW_COUNTS))
+        caps = _caps_for(layers[0])
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        want = self._chain(layers, carry, t)
+        got = prove_jagged_pyramid(
+            list(reversed(layers[:-1])), carry, t, caps=caps, force_scan=True
+        )
+        self._assert_byte_match(got, want)
+
+    def test_scan_matches_chain_with_caps_taller_shape(self) -> None:
+        # A second, deeper pyramid (more layers / larger max_rounds, taller odd
+        # segments) under one caps: the scan is shape-invariant, so a narrower
+        # layer runs at the widest layer's caps width -- the caps-padding a single
+        # shape would leave untested (closes the Task-2 single-shape note).
+        layers = build_jagged_pyramid(random_jagged_layer(3, (7, 3, 11, 5)))
+        caps = _caps_for(layers[0])
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        want = self._chain(layers, carry, t)
+        got = prove_jagged_pyramid(
+            list(reversed(layers[:-1])), carry, t, caps=caps, force_scan=True
+        )
+        self._assert_byte_match(got, want)
+
+    def test_scan_matches_chain_base_field_first_layer(self) -> None:
+        # The BF->EF carve UNDER the scan: caps + force_scan routes the all-EF
+        # interior through `_scan_pyramid` (the carve recursion forwards
+        # force_scan), while the base-field-numerator widest layer is carved to the
+        # per-layer path and proved last. Pins that the carve's interior is
+        # genuinely scanned (not the per-layer loop), on the mixed-field pyramid.
+        layers = build_jagged_pyramid(mixed_field_jagged_layer(7, self.ROW_COUNTS))
+        caps = _caps_for(layers[0])
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        reversed_layers = list(reversed(layers[:-1]))
+        self.assertNotEqual(
+            reversed_layers[-1].numerator_0.dtype,
+            carry[0].dtype,
+            "fixture must exercise the BF->EF carve",
+        )
+        want = self._chain(layers, carry, t, challenge_limbs=4)
+        got = prove_jagged_pyramid(
+            reversed_layers, carry, t, caps=caps, challenge_limbs=4, force_scan=True
+        )
+        self._assert_byte_match(got, want)
+
 
 class PaddedRoundScheduleJaxTest(absltest.TestCase):
     """`_padded_round_schedule_jax` (the runtime, `row_counts`-derived schedule the
