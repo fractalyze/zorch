@@ -15,9 +15,10 @@ from jax import Array
 from zorch.logup_gkr._jagged_rounds import _paired_sums
 from zorch.logup_gkr._jagged_types import _JaggedState
 from zorch.logup_gkr.circuit import _pad_neutral
-from zorch.sumcheck.jagged.fs import _fold_scalars
-from zorch.sumcheck.jagged.rounds import _bind_lsb, _round_coeffs
+from zorch.sumcheck import gruen
+from zorch.sumcheck.jagged.rounds import _round_coeffs
 from zorch.sumcheck.jagged.types import _JaggedSchedule
+from zorch.sumcheck.prover import fold_lsb
 from zorch.transcript import Transcript, sample_challenge
 
 
@@ -91,10 +92,10 @@ def _run_jagged_rounds_reference(
         polys.append(poly)
         challenges.append(r)
 
-        claim, pad_adj = _fold_scalars(poly, r, pad_adj, point[-1], one)
-        n0, n1, d0, d1 = (_bind_lsb(a, r) for a in (n0, n1, d0, d1))
+        claim, pad_adj = gruen.fold_round_scalars(poly, r, pad_adj, point[-1])
+        n0, n1, d0, d1 = (fold_lsb(a, r) for a in (n0, n1, d0, d1))
         if in_rows:
-            eq_row = _bind_lsb(eq_row, r)
+            eq_row = fold_lsb(eq_row, r)
             if rnd == nrv - 1:
                 # Rows exhausted: the accumulated row-eq product becomes the
                 # scalar factor of every batch round; pad_adj restarts
@@ -102,7 +103,7 @@ def _run_jagged_rounds_reference(
                 eq_adj = pad_adj
                 pad_adj = one
         else:
-            eq_int = _bind_lsb(eq_int, r)
+            eq_int = fold_lsb(eq_int, r)
         point = point[:-1]
 
     return (

@@ -1,8 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Scheme-agnostic per-round helpers for jagged sumcheck: the LSB bind, the
-virtual-mass correction, the Gruen coefficient-form round polynomial, and the
-eq-slice expansion. Degree-agnostic — they take the interpolation constants
-(`naturals`/`inv_vand`) as arguments. The LogUp-specific combine + plane bodies
+"""Scheme-agnostic per-round helpers for jagged sumcheck: the virtual-mass
+correction, the Gruen coefficient-form round polynomial, and the eq-slice
+expansion. Degree-agnostic — they take the interpolation constants
+(`naturals`/`inv_vand`) as arguments (also the round marker's operands, so the
+crossing stays inline here rather than routing through `gruen.round_coeffs`,
+which would rebuild them and DCE the operands out of the composite). The LSB
+bind is `sumcheck.prover.fold_lsb`. The LogUp-specific combine + plane bodies
 live in `zorch.logup_gkr._jagged_rounds`."""
 
 from __future__ import annotations
@@ -13,15 +16,6 @@ from jax import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_lagrange_basis
-from zorch.sumcheck.prover import fold_pair
-
-
-def _bind_lsb(arr: Array, r: Array) -> Array:
-    """Bind the LSB variable: stride-2 consecutive pairs fold via the shared
-    `sumcheck.prover.fold_pair` -- `e0 + r*(e1 - e0)`. (The split is LSB/stride-2,
-    distinct from `fold`/`split_halves`' contiguous MSB halves; only the scalar
-    fold is shared.)"""
-    return fold_pair(arr[0::2], arr[1::2], r)
 
 
 def _virtual_mass_correction(pad_adj: Array, eq_sum: Array) -> Array:

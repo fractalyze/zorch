@@ -19,12 +19,12 @@ from zorch.logup_gkr._jagged_rounds import (
 )
 from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
 from zorch.sumcheck.jagged.buffers import _pad_to_width
-from zorch.sumcheck.jagged.rounds import _bind_lsb
 from zorch.sumcheck.jagged.schedule import _derive_row_schedule
 from zorch.sumcheck.jagged.types import _InterpConsts
 from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER,
     SUMCHECK_ROUND_MARKER_VERSION,
+    fold_lsb,
 )
 
 # --- zorch#327: FS-less compute-only round composites ------------------------
@@ -65,7 +65,7 @@ def _round_composite_dense_decomp(
     buffer and the values match `_fix_and_sum_int` bit-for-bit."""
     width = planes.n0.shape[0]
     bound = _bind_planes(planes, alpha)
-    eq_bound = _bind_lsb(eq_int, alpha)
+    eq_bound = fold_lsb(eq_int, alpha)
     poly = _round_poly_int(
         bound,
         eq_bound,
@@ -153,7 +153,7 @@ def _round_composite_row_decomp(
         row_counts, live[2], num_pairs, sentinel=folded_len, idx_dtype=jnp.int32
     )
     bound = _bind_planes(planes, alpha)
-    eq_bound = _bind_lsb(eq_row, alpha)
+    eq_bound = fold_lsb(eq_row, alpha)
     poly, padded = _round_poly_row(
         bound,
         gather,

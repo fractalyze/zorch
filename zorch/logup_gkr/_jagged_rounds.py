@@ -6,19 +6,18 @@ scheme-agnostic round helpers live in `zorch.sumcheck.jagged.rounds`."""
 
 from __future__ import annotations
 
-from functools import cache
 from typing import Any
 
-import jax
 import jax.numpy as jnp
 from jax import Array
 
 from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import _pad_neutral
 from zorch.logup_gkr.prover import LogupSummand
-from zorch.poly.univariate import compute_inv_vandermonde
-from zorch.sumcheck.jagged.rounds import _bind_lsb, _round_coeffs
+from zorch.sumcheck import gruen
+from zorch.sumcheck.jagged.rounds import _round_coeffs
 from zorch.sumcheck.jagged.types import _InterpConsts
+from zorch.sumcheck.prover import fold_lsb
 
 
 def _paired_sums(
@@ -65,7 +64,7 @@ def _paired_sums(
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
     return _Planes(
-        *(_bind_lsb(a, alpha) for a in (planes.n0, planes.n1, planes.d0, planes.d1))
+        *(fold_lsb(a, alpha) for a in (planes.n0, planes.n1, planes.d0, planes.d1))
     )
 
 
@@ -120,7 +119,7 @@ def _fix_and_sum_int(
     loop threads the folded state into the next round. The fold and the inner
     `_paired_sums` slice stride-2 twice."""
     planes = _bind_planes(planes, alpha)
-    eq_int = _bind_lsb(eq_int, alpha)
+    eq_int = fold_lsb(eq_int, alpha)
     poly = _round_poly_int(planes, eq_int, scalars, consts)
     return poly, planes, eq_int
 
@@ -192,7 +191,7 @@ def _fix_and_sum_row(
     end. The input state and `eq_row` enter even, and the `_pad_neutral` output is
     even, so all halvings stay valid."""
     planes = _bind_planes(planes, alpha)
-    eq_row = _bind_lsb(eq_row, alpha)
+    eq_row = fold_lsb(eq_row, alpha)
     poly, planes = _round_poly_row(
         planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
     )
@@ -228,16 +227,8 @@ def _fix_last(planes: _Planes, alpha: Array) -> tuple[Array, Array, Array, Array
     return p.n0[0], p.n1[0], p.d0[0], p.d1[0]
 
 
-@cache
 def _round_interp_constants(dtype: Any) -> tuple[Array, Array]:
-    """Lagrange `naturals` ({0..DEGREE}) and the inverse-Vandermonde, hoisted once
-    per dtype. Both depend only on `_DEGREE`, so rebuilding them inside every
-    `prove_jagged_layer` trace is pure redundant host work -- `compute_inv_vandermonde`
-    is an O(DEGREE^2) numpy coefficient build, redone per GKR layer without the memo."""
-    # Force concrete eval: `@cache` memoizes the result, so building it inside a
-    # jit trace (the jit=True round zone) would cache a tracer that then escapes the
-    # trace (UnexpectedTracerError). The constants are trace-independent anyway.
-    with jax.ensure_compile_time_eval():
-        naturals = jnp.stack([jnp.array(j, dtype) for j in range(_DEGREE + 1)])
-        inv_vand = compute_inv_vandermonde(_DEGREE, dtype)
-    return naturals, inv_vand
+    """Lagrange `naturals` ({0..DEGREE}) and the inverse-Vandermonde for the LogUp
+    round degree -- the shared, memoized `sumcheck.gruen._interp_constants` baked at
+    `_DEGREE`, surfaced here to populate the marker's interp-const operands."""
+    return gruen._interp_constants(_DEGREE, dtype)
