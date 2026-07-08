@@ -281,23 +281,35 @@ class MerkleTree:
                 "fold-PCS query machinery; use vmap(reconstruct_root) for k-ary"
             )
 
-        def one(row: Array, index: Array, path: Array, mask: Array) -> Array:
-            node = self._leaf_hasher.hash(row)
+        # Batch over the whole leaf set (scan over DEPTH), never `vmap` over the
+        # per-leaf reconstruction: the leaf hash and the fold compress are
+        # name-routed hash composites (e.g. `zorch.sha256`) emitted at a fixed
+        # rank, and their emitter rejects the extra batch dim a `vmap` adds. The
+        # batched `_hash_leaves` / `_compress_groups` hooks keep the composite at
+        # its `[B, ...]` contract; per-leaf index parity and depth masking are
+        # just data-selects over the batch axis.
+        nodes = self._hash_leaves(rows)  # [B, digest]
 
-            def fold(
-                carry: tuple[Array, Array], step: tuple[Array, Array]
-            ) -> tuple[tuple[Array, Array], None]:
-                node, idx = carry
-                sibling, active = step
-                folded, idx = self._fold_with_sibling(node, idx, sibling)
-                # Padding past the real depth is a no-op: keep the rebuilt root.
-                node = jnp.where(active, folded, node)
-                return (node, idx), None
+        def fold(
+            carry: tuple[Array, Array], step: tuple[Array, Array]
+        ) -> tuple[tuple[Array, Array], None]:
+            nodes, idxs = carry  # [B, digest], [B]
+            siblings, active = step  # [B, digest], [B]
+            is_left = (idxs % 2 == 0)[:, None]
+            left = jnp.where(is_left, nodes, siblings)
+            right = jnp.where(is_left, siblings, nodes)
+            folded = self._compress_groups(jnp.stack([left, right], axis=1))
+            # Padding past the real depth is a no-op: keep the rebuilt node.
+            nodes = jnp.where(active[:, None], folded, nodes)
+            return (nodes, idxs // 2), None
 
-            (node, _), _ = jax.lax.scan(fold, (node, index), (path, mask))
-            return node
-
-        return jax.vmap(one)(rows, indices, paths, valid)
+        # scan the depth axis: paths/valid are leaf-first `(B, depth, ...)`.
+        (nodes, _), _ = jax.lax.scan(
+            fold,
+            (nodes, indices),
+            (jnp.swapaxes(paths, 0, 1), jnp.swapaxes(valid, 0, 1)),
+        )
+        return nodes
 
     def verify(self, root: Array, index: int, opening: Opening) -> bool:
         """Rebuild the root from the row + path; compare to the committed root."""
