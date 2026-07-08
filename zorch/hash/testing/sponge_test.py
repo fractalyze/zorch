@@ -1,11 +1,12 @@
-"""Sponge (padding-free, overwrite-mode) over a Permutation — contract + correctness.
+"""Sponge over a Permutation — contract + correctness (padding-free + Merkle-Damgard).
 
 The koalabear-16 poseidon2 is the golden permutation (byte-matches Plonky3
-4318eba). The expected outputs below replay the overwrite-mode absorb step by
-step (replace state[:rate], permute; a partial final block overwrites only its
-lanes, no padding) against that golden permutation — pinning block boundaries,
-overwrite semantics, and the partial-block rule. An independent Plonky3-generated
-sponge vector is added in the golden-vector slice.
+4318eba). The expected outputs below replay the padding-free absorb step by step
+(replace state[:rate], permute; a partial final block overwrites only its lanes,
+no padding) against that golden permutation — pinning block boundaries, absorb
+semantics, and the partial-block rule. An independent Plonky3-generated sponge
+vector is added in the golden-vector slice. The construction-level Merkle-Damgard
+tests live here too, since the construction is the Sponge's, not a permutation's.
 """
 
 from __future__ import annotations
@@ -13,10 +14,12 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 from absl.testing import absltest
+from jax import export
 from zk_dtypes import koalabear_mont as F
 
+from zorch.hash.permutation import Permutation
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams, SpongeType
 
 # Plonky3 golden vectors (p3_commit=4318eba..., default_koalabear_poseidon2_16):
 # PaddingFreeSponge<_, 16, 8, 8> over arange(n). arange(12) exercises the
@@ -153,6 +156,68 @@ class SpongeTest(absltest.TestCase):
         batched = jax.vmap(s.hash)(jnp.stack([a, b]))
         self.assertTrue(bool(jnp.array_equal(batched[0], s.hash(a))))
         self.assertTrue(bool(jnp.array_equal(batched[1], s.hash(b))))
+
+
+def _ref_merkle_damgard(
+    perm: Permutation, x: jnp.ndarray, rate: int, out: int
+) -> jnp.ndarray:
+    """Independent Merkle-Damgard reference: per-block unroll — zero-pad a short
+    final block, chain the prior digest state[:out] into capacity [rate:rate+out].
+    Permutation-agnostic, so it cross-checks Sponge.hash(MERKLE_DAMGARD) over any
+    permutation."""
+    w = perm.width
+    n = int(x.shape[0])
+    st = jnp.zeros(w, dtype=x.dtype)
+    for blk in range((n + rate - 1) // rate):
+        start = blk * rate
+        count = min(rate, n - start)
+        cap = st[:out]  # prior digest (zeros on block 0)
+        st = st.at[:count].set(x[start : start + count])
+        if count < rate:  # zero-pad the partial tail
+            st = st.at[count:rate].set(jnp.zeros(rate - count, dtype=x.dtype))
+        st = st.at[rate : rate + out].set(cap)  # chain
+        st = perm.permute(st)
+    return st[:out]
+
+
+# Permutations the construction is exercised over — add a row to cover another
+# (the Merkle-Damgard construction is the Sponge's, so one test serves all).
+# (permutation, rate, out) with rate + out == width.
+_MD_CASES = ((koalabear16_perm(), 8, 8),)
+
+
+class MerkleDamgardTest(absltest.TestCase):
+    """The Merkle-Damgard construction lives in Sponge, so it is tested here once
+    (over any permutation) rather than per hash."""
+
+    def test_matches_stepwise_reference(self) -> None:
+        for perm, rate, out in _MD_CASES:
+            s = Sponge(perm, SpongeParams(rate=rate, out=out))
+            # one full block, two full, then two partial-tail lengths.
+            for n in (rate, 2 * rate, rate + rate // 2, 2 * rate + rate // 2):
+                x = jnp.arange(n, dtype=F)
+                got = s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD)
+                self.assertTrue(
+                    bool(jnp.array_equal(got, _ref_merkle_damgard(perm, x, rate, out))),
+                    f"width {perm.width}, len {n}",
+                )
+
+    def test_requires_rate_plus_out_equals_width(self) -> None:
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=4))  # 8 + 4 != 16
+        with self.assertRaises(ValueError):
+            s.hash(jnp.arange(8, dtype=F), sponge_type=SpongeType.MERKLE_DAMGARD)
+
+    def test_lowers_under_symbolic_length(self) -> None:
+        # Rides the shared while_loop absorb, so a symbolic `len(input)` lowers
+        # (emits the sponge_hash marker) rather than needing a static-n path.
+        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
+        (n,) = export.symbolic_shape("n")
+        txt = (
+            jax.jit(lambda x: s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD))
+            .lower(jax.ShapeDtypeStruct((n,), F))
+            .as_text()
+        )
+        self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
 
 
 if __name__ == "__main__":

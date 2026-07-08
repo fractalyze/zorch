@@ -8,7 +8,6 @@ import functools
 import jax
 import jax.numpy as jnp
 from absl.testing import absltest
-from jax import export
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.poseidon2.poseidon2 import (
@@ -23,7 +22,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams, SpongeType
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 from zorch.testkit.jit_cache import assert_single_trace
 
 
@@ -139,58 +138,6 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             " tensor<16xi64>",
             txt,
         )
-
-
-def _ref_chained(perm: Poseidon2, x: jnp.ndarray, rate: int, out: int) -> jnp.ndarray:
-    """Independent Merkle-Damgard reference: explicit per-block unroll (zero-pad a
-    short final block; chain the prior digest state[:out] into capacity
-    [rate:rate+out]). Cross-checks Sponge.hash(CHAINED)'s shared while_loop absorb."""
-    w = perm.width
-    n = int(x.shape[0])
-    st = jnp.zeros(w, dtype=x.dtype)
-    for blk in range((n + rate - 1) // rate):
-        start = blk * rate
-        count = min(rate, n - start)
-        cap = st[:out]  # prior digest (zeros on block 0)
-        st = st.at[:count].set(x[start : start + count])
-        if count < rate:  # zero-pad the partial tail
-            st = st.at[count:rate].set(jnp.zeros(rate - count, dtype=x.dtype))
-        st = st.at[rate : rate + out].set(cap)  # chain
-        st = perm.permute(st)
-    return st[:out]
-
-
-class Poseidon2ChainedHashTest(absltest.TestCase):
-    def test_chained_matches_stepwise_merkle_damgard(self) -> None:
-        p = koalabear16_perm()  # width 16; rate + out == 16
-        s = Sponge(p, SpongeParams(rate=8, out=8))
-        # n=8 one block, 16 two full, 12/20 partial final block.
-        for n in (8, 16, 12, 20):
-            x = jnp.arange(n, dtype=F)
-            got = s.hash(x, sponge_type=SpongeType.CHAINED)
-            self.assertTrue(
-                bool(jnp.array_equal(got, _ref_chained(p, x, 8, 8))),
-                f"len {n}",
-            )
-
-    def test_chained_requires_rate_plus_out_equals_width(self) -> None:
-        p = koalabear16_perm()  # width 16
-        s = Sponge(p, SpongeParams(rate=8, out=4))  # 8 + 4 != 16
-        with self.assertRaises(ValueError):
-            s.hash(jnp.arange(8, dtype=F), sponge_type=SpongeType.CHAINED)
-
-    def test_chained_lowers_under_symbolic_length(self) -> None:
-        # The chained hash rides the shared while_loop absorb, so a symbolic
-        # `len(input)` lowers (emits the sponge_hash marker) — the old static
-        # for-loop raised NotImplementedError here.
-        s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-        (n,) = export.symbolic_shape("n")
-        txt = (
-            jax.jit(lambda x: s.hash(x, sponge_type=SpongeType.CHAINED))
-            .lower(jax.ShapeDtypeStruct((n,), F))
-            .as_text()
-        )
-        self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
 
 
 if __name__ == "__main__":

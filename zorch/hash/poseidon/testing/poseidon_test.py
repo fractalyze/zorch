@@ -22,7 +22,6 @@ from zorch.hash.poseidon.poseidon import (
     POSEIDON_MARKER_VERSION,
     Poseidon,
 )
-from zorch.hash.sponge import Sponge, SpongeParams, SpongeType
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -184,47 +183,6 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         p = Poseidon(_poseidon_params())
         txt = jax.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertIn("mds = dense<[2, 3, 1, 1, 2, 3, 3, 1, 2]> : tensor<9xi64>", txt)
-
-
-def _ref_chained(p: Poseidon, x: jnp.ndarray, rate: int, out: int) -> jnp.ndarray:
-    """Independent Merkle-Damgard reference (zero-pad short block; chain the prior
-    digest state[:out] into capacity [rate:rate+out]). Classic-Poseidon mirror of
-    the Poseidon2 chained test — pins the reusability win (chained over any
-    permutation, from the shared absorb)."""
-    w = p.width
-    n = int(x.shape[0])
-    st = jnp.zeros(w, dtype=x.dtype)
-    for blk in range((n + rate - 1) // rate):
-        start = blk * rate
-        count = min(rate, n - start)
-        cap = st[:out]
-        st = st.at[:count].set(x[start : start + count])
-        if count < rate:
-            st = st.at[count:rate].set(jnp.zeros(rate - count, dtype=x.dtype))
-        st = st.at[rate : rate + out].set(cap)
-        st = p.permute(st)
-    return st[:out]
-
-
-class PoseidonChainedHashTest(absltest.TestCase):
-    def test_chained_matches_stepwise_merkle_damgard(self) -> None:
-        # Classic Poseidon gets the chained hash for free (shared absorb). width
-        # 3, rate 2 + out 1 == width. n=2 one block, 4 two full, 3/5 partial tail.
-        p = Poseidon(_poseidon_params())
-        s = Sponge(p, SpongeParams(rate=2, out=1))
-        for n in (2, 3, 4, 5):
-            x = jnp.arange(n, dtype=F)
-            got = s.hash(x, sponge_type=SpongeType.CHAINED)
-            self.assertTrue(
-                bool(jnp.array_equal(got, _ref_chained(p, x, 2, 1))),
-                f"len {n}",
-            )
-
-    def test_chained_requires_rate_plus_out_equals_width(self) -> None:
-        p = Poseidon(_poseidon_params())  # width 3
-        s = Sponge(p, SpongeParams(rate=2, out=2))  # 2 + 2 != 3
-        with self.assertRaises(ValueError):
-            s.hash(jnp.arange(2, dtype=F), sponge_type=SpongeType.CHAINED)
 
 
 if __name__ == "__main__":

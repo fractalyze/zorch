@@ -30,7 +30,7 @@ class SpongeType(enum.Enum):
     Behaviour is a `_MODES` row, so a new one is a member + a row, not a method."""
 
     PADDING_FREE = "padding_free"  # Plonky3 PaddingFreeSponge (default)
-    CHAINED = "chained"  # the Merkle-Damgard construction
+    MERKLE_DAMGARD = "merkle_damgard"  # chains each block's digest through capacity
 
 
 # The whole absorb+squeeze as one region the vendor expands into the fused kernel.
@@ -50,7 +50,7 @@ def _keep_prior(s: Array, rate: int) -> Array:
 
 
 def _zero_pad(s: Array, rate: int) -> Array:
-    """Chained: a masked lane is zero-padded (const-free zero)."""
+    """Merkle-Damgard: a masked lane is zero-padded (const-free zero)."""
     return s[:rate] - s[:rate]
 
 
@@ -60,7 +60,7 @@ def _carry_capacity(s: Array, cap: Array, rate: int, out: int) -> Array:
 
 
 def _chain_digest(s: Array, cap: Array, rate: int, out: int) -> Array:
-    """Chained: capacity lanes [rate:rate+out] take the prior digest."""
+    """Merkle-Damgard: capacity lanes [rate:rate+out] take the prior digest."""
     return s.at[rate : rate + out].set(cap)
 
 
@@ -74,8 +74,6 @@ class _Mode:
     # The digest fills the whole capacity, so the caller must have
     # rate + out == width (chaining carries the out-lane digest as capacity).
     fills_capacity: bool
-    # `chained` marker attribute the vendor kernel reads (int; absent when 0).
-    marker_chained: int
 
 
 _MODES: dict[SpongeType, _Mode] = {
@@ -83,13 +81,11 @@ _MODES: dict[SpongeType, _Mode] = {
         tail_fill=_keep_prior,
         set_capacity=_carry_capacity,
         fills_capacity=False,
-        marker_chained=0,
     ),
-    SpongeType.CHAINED: _Mode(
+    SpongeType.MERKLE_DAMGARD: _Mode(
         tail_fill=_zero_pad,
         set_capacity=_chain_digest,
         fills_capacity=True,
-        marker_chained=1,
     ),
 }
 
@@ -153,17 +149,15 @@ def _fused_hash(
             sponge_type,
         )
 
-    # Permutation attrs + this sponge's shape (`rate`/`digest_elems`, and the
-    # `chained` discriminator the kernel selects on — int, since composite bool
-    # attrs have no precedent). The marker name/version are the sponge's.
+    # Permutation attrs + this sponge's shape (`rate`/`digest_elems`) and
+    # `construction` — the string the kernel switches on (extensible to any
+    # `SpongeType`). The marker name/version are the sponge's.
     attrs: dict[str, object] = {
         **perm_attrs,
         "rate": rate,
         "digest_elems": out,
+        "construction": sponge_type.value,
     }
-    marker_chained = _MODES[sponge_type].marker_chained
-    if marker_chained:
-        attrs["chained"] = marker_chained
     return fused_region(
         sponge,
         *operands,
@@ -260,7 +254,7 @@ class Sponge:
             raise TypeError(
                 f"input dtype {input.dtype} must match the sponge field {self.dtype}"
             )
-        # A capacity-filling construction (e.g. CHAINED) needs rate + out == width.
+        # A capacity-filling construction (e.g. MERKLE_DAMGARD) needs rate+out==width.
         if _MODES[sponge_type].fills_capacity and (
             self.rate + self.out != self._permutation.width
         ):
