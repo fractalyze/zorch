@@ -44,7 +44,7 @@ def _round_metadata_impl(
 
     `live` is the round's i32[2] `{live pairs, live eq_row}` operand -- on the
     exact layout it just restates the schedule widths; with `width` set
-    (`RoundWidthCaps.row`) the schedule is laid into fixed-width buffers
+    (`RoundWidthCaps.elements`) the schedule is laid into fixed-width buffers
     (sentinel-padded gather via `_fixed_width_gather`, zero-padded indices)
     and `live` marks the prefix that is real.
     """
