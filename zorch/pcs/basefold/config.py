@@ -55,3 +55,26 @@ class BasefoldProof:
     final_poly: Array
     component_openings: list[Opening]
     query_openings: list[Opening]
+
+
+@dataclass(frozen=True)
+class BasefoldConfig:
+    """BaseFold fold-schedule knobs.
+
+    num_vars: number of folded variables.
+    num_queries: number of query positions opened per commitment.
+    row_batch_prefix, fold_arities: fold schedule. Rounds fold arity-2 each; a
+        "commit boundary" observes a root. `row_batch_prefix` rounds fold the
+        codeword by a deferred multilinear lane-combine (not FRI) and commit
+        once at the prefix end; the remaining rounds fold per-round and commit
+        at the cumulative epoch boundaries.
+    """
+
+    num_vars: int
+    num_queries: int
+    row_batch_prefix: int = 0  # 0 = no prefix (zorch-native)
+    fold_arities: tuple[int, ...] = ()  # () = uniform per-round commit (zorch-native)
+
+    @property
+    def commits_per_round(self) -> bool:
+        return not self.fold_arities and self.row_batch_prefix == 0
