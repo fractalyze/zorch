@@ -69,19 +69,25 @@ class SqrtSpaceRound(Round):
         return (p_stacked, expand_hypercube_step(eq_evals, r[0])), transcript, msg
 
 
-def sumcheck_round(
-    folded: Array,
-    summand: SumcheckSummand,
-    domain: EvalDomain,
-    transcript: Transcript,
-) -> tuple[Array, Transcript, Array, Array]:
-    """One sumcheck round on the folded factor evaluations: round poly (the summand
-    over `domain`) → sample the challenge → fold. Returns (folded', transcript, msg,
-    r); r is returned for callers that thread the challenge outside the fold (the
-    small-value transition advances its eq mass by it)."""
-    msg = summand_evals(folded, summand._combine, domain)
-    transcript, r = transcript.observe_and_sample(msg, 1)
-    return fold_stacked(folded, r[0]), transcript, msg, r[0]
+class StandardRound(Round):
+    """One second-phase round on the folded factor evaluations: send the summand's
+    round poly over the domain, sample, fold. The dense counterpart to SqrtSpaceRound
+    — the boundary has already collapsed the deferred state, so this simply folds the
+    materialized factors each round. Bound to a SumcheckSummand and an EvalDomain."""
+
+    def __init__(self, summand: SumcheckSummand, domain: EvalDomain) -> None:
+        self.summand = summand
+        self.domain = domain
+
+    def _round_poly(self, folded: Array) -> Array:
+        return summand_evals(folded, self.summand._combine, self.domain)
+
+    def __call__(
+        self, folded: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array]:
+        msg = self._round_poly(folded)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        return fold_stacked(folded, r[0]), transcript, msg
 
 
 def prove_sqrt_space(
@@ -108,8 +114,7 @@ def prove_sqrt_space(
     # Boundary: materialize the deferred state — fold the whole bound prefix down at
     # once — then run standard sumcheck rounds over the explicit evaluations.
     folded = compute_folded_evaluations(*state)
-    phase2 = []
-    for _ in range(l - l_half):
-        folded, transcript, msg, _ = sumcheck_round(folded, summand, domain, transcript)
-        phase2.append(msg)
+    folded, transcript, phase2 = fold_rounds(
+        StandardRound(summand, domain), folded, transcript, l - l_half
+    )
     return folded, transcript, phase1 + phase2

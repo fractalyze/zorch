@@ -8,9 +8,9 @@ same challenges (testing/small_value_test.py):
 - Rounds 1..l₀ (SmallValueRound): the round polynomial is a contraction of the
   running R tensor against the round's accumulator; the factors are never touched,
   only R grows (by a Lagrange tensor factor) and the eq mass advances.
-- Round l₀+1 (MaterializeRound): collapse the postponed folds — one refold of
-  [P₁, …, P_d, eq(w,·)] over the l₀ bound variables — giving the tail its folded
-  factors.
+- Round l₀+1 (transition): materialize the postponed folds — one refold of
+  [P₁, …, P_d, eq(w,·)] over the l₀ bound variables — then a TransitionRound over
+  those factors, handing the tail its folded factors.
 - Rounds l₀+2..l: the ordinary EqPolyRound tail.
 """
 
@@ -89,13 +89,11 @@ class SmallValueRound(Round):
         return new_state, transcript, msg
 
 
-class MaterializeRound(Round):
-    """Materialize the folds the accumulator phase postponed: refold the d+1 factors
-    [P₁..P_d, eq(w,·)] over the whole bound prefix in one shot, then one Û_d round,
-    binding variable l₀+1 and advancing the eq mass. Collapses the deferred √-space
-    state (the phase never folded the factors, only grew R) into the tail's folded
-    factors. Called once — its output state shape (folded, eq mass) differs from the
-    deferred input, so it is the √-space→dense boundary, not a uniform loop round."""
+class TransitionRound(Round):
+    """The √-space→eq-poly handoff (round l₀+1): one product round over the d+1 factors
+    [P₁..P_d, eq(w,·)] at Û_d, binding the variable and advancing the eq mass for the
+    tail. Runs on the materialized factors — the boundary compute_folded_evaluations
+    has already collapsed the folds the accumulator phase postponed."""
 
     def __init__(self, d: int, w_l0: Array, dtype: Any) -> None:
         self.summand = SumcheckRound(degree=d)
@@ -103,10 +101,9 @@ class MaterializeRound(Round):
         self.domain = uhat_domain(d, dtype)
 
     def __call__(
-        self, state: tuple[Array, Array, Array], transcript: Transcript
+        self, state: tuple[Array, Array], transcript: Transcript
     ) -> tuple[tuple[Array, Array], Transcript, Array]:
-        p_with_weights, eq_evals, eq_w_prev = state
-        folded = compute_folded_evaluations(p_with_weights, eq_evals)
+        folded, eq_w_prev = state
         msg = summand_evals(folded, self.summand._combine, self.domain)
         transcript, r = transcript.observe_and_sample(msg, 1)
         return (
@@ -160,13 +157,14 @@ def prove_eq_poly_small_value(
     )
     _, eq_w_prev, eq_evals = state
 
-    # Phase 2: the √-space→dense boundary. MaterializeRound collapses the postponed
-    # folds and binds variable l₀+1; sampling the d+1 factors at Û_d (not Û_{d+1})
-    # drops the eq factor from the message, and its fold rides the scalar eq mass, so
-    # the tail keeps only the d real factors.
-    (folded, eq_w_prev), transcript, msg_t = MaterializeRound(
+    # Phase 2: the √-space→dense boundary. Materialize the postponed folds (as in
+    # sqrt_space), then one transition round over the d+1 factors [P₁..P_d, eq(w,·)].
+    # Sampling at Û_d (not Û_{d+1}) drops the eq factor from the message, its fold
+    # riding the scalar eq mass, so the tail keeps only the d real factors.
+    folded = compute_folded_evaluations(p_with_weights, eq_evals)
+    (folded, eq_w_prev), transcript, msg_t = TransitionRound(
         d, w[l_0], p_initial.dtype
-    )((p_with_weights, eq_evals, eq_w_prev), transcript)
+    )((folded, eq_w_prev), transcript)
     folded_p = folded[:d]
 
     # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute
