@@ -27,6 +27,16 @@ py_test(
 )
 
 py_test(
+    name = "config_test",
+    size = "small",
+    srcs = ["config_test.py"],
+    deps = [
+        "//zorch/pcs/basefold",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
     name = "batching_test",
     size = "small",
     srcs = ["batching_test.py"],
