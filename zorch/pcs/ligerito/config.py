@@ -63,7 +63,8 @@ class LigeritoConfig:
         formats that fix that convention. Prover and verifier both derive from it,
         so the round trip holds either way; it only changes the produced bytes.
     compressed_sumcheck_messages: round-message wire form. False = the natural
-        domain evals `[s(0), s(1), s(2)]` (`SumcheckRound(degree=2)`); True = the
+        domain evals `[s(0), s(1), s(2)]` (`StandardRound(ProductSummand(2))`);
+        True = the
         compressed coefficients `[c_0, c_2]` with the linear coefficient
         reconstructed from the running claim (`CompressedProductRound`). Another
         wire-convention knob: both sides derive from it, only the bytes change.

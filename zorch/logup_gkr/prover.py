@@ -6,7 +6,7 @@ five MLE factors `[eq, n0, d1, n1, d0]`, shared by this module's value-form
 round and `jagged_prover`'s coeff-form round. `LogupSumcheckRound` is one
 per-variable sumcheck round whose summand (`_combine`) delegates to a
 `LogupSummand` scoped to its `lam` -- the sibling of the product
-`zorch.sumcheck.prover.SumcheckRound`. Its `__call__` emits a
+`zorch.sumcheck.prover.StandardRound`. Its `__call__` emits a
 `RoundMsg(round_poly, challenge)` per round; `GkrLayerRound` stacks the per-round
 messages, so the evaluation point is the stacked challenges.
 
@@ -45,12 +45,8 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.prover import (
-    RoundMsg,
-    factors_on_domain,
-    fold,
-    split_pairs,
-)
+from zorch.sumcheck.domain import fold, natural_domain, split_pairs, summand_evals
+from zorch.sumcheck.prover import RoundMsg
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -191,7 +187,7 @@ def fold_carry(
 @dataclass(frozen=True)
 class LogupSumcheckRound(Round):
     """Per-variable sumcheck round for the LogUp combine (sibling of the product
-    `zorch.sumcheck.prover.SumcheckRound`); emits a `RoundMsg`."""
+    `zorch.sumcheck.prover.StandardRound`); emits a `RoundMsg`."""
 
     # Batching challenge; fixed across a layer's variable-rounds.
     lam: Array
@@ -228,18 +224,20 @@ class LogupSumcheckRound(Round):
         """LogUp summand bound to its scalars (λ)."""
         return self.combine(self.combine_scalars(), *factors)
 
-    def _round_poly(self, state: Sequence[Array]) -> Array:
-        """Round polynomial over [0..degree], shape (degree+1, *batch):
-        s[u] = sum_x' combine(f_u for each factor). One batched reduction."""
-        return jnp.sum(self._combine(*factors_on_domain(state, self.degree)), axis=-1)
+    def _round_poly(self, folded: Array) -> Array:
+        """Round polynomial over the natural {0..degree} evals, shape
+        (degree+1, *batch): one batched `summand_evals` reduction of the LogUp
+        combine over the stacked [eq, n0, d1, n1, d0] factors."""
+        return summand_evals(
+            folded, self._combine, natural_domain(self.degree, folded.dtype)
+        )
 
     def __call__(
-        self, state: Sequence[Array], transcript: Transcript
-    ) -> tuple[list[Array], Transcript, RoundMsg]:
-        msg = self._round_poly(state)
+        self, folded: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, RoundMsg]:
+        msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        state = fold(state, r[0])
-        return state, transcript, RoundMsg(msg, r[0])
+        return fold(folded, r[0]), transcript, RoundMsg(msg, r[0])
 
 
 @dataclass(frozen=True)
@@ -295,22 +293,24 @@ class GkrLayerRound(Round):
         transcript, lam = transcript.sample(1)
         lam = lam[0]
         one = jnp.ones((), eval_point.dtype)
-        # State order is LogupSumcheckRound's: [eq, n0, d1, n1, d0].
-        state: list[Array] = [
-            expand_eq_to_hypercube(eval_point, one),
-            self.layer.numerator_0,
-            self.layer.denominator_1,
-            self.layer.numerator_1,
-            self.layer.denominator_0,
-        ]
-        rounds = log2_strict_usize(state[0].shape[-1])
+        # State order is LogupSumcheckRound's: [eq, n0, d1, n1, d0], stacked (5, N).
+        state = jnp.stack(
+            [
+                expand_eq_to_hypercube(eval_point, one),
+                self.layer.numerator_0,
+                self.layer.denominator_1,
+                self.layer.numerator_1,
+                self.layer.denominator_0,
+            ]
+        )
+        rounds = log2_strict_usize(state.shape[-1])
         final_state, transcript, msgs = fold_rounds(
             LogupSumcheckRound(lam), state, transcript, rounds
         )
         round_polys = jnp.stack([m.round_poly for m in msgs])
         point = jnp.stack([m.challenge for m in msgs])
 
-        _, n0, d1, n1, d0 = (factor[0] for factor in final_state)
+        _, n0, d1, n1, d0 = final_state[:, 0]
         transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)

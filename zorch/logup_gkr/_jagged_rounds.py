@@ -17,7 +17,6 @@ from zorch.logup_gkr.prover import LogupSummand
 from zorch.sumcheck import domain
 from zorch.sumcheck.jagged.rounds import _round_coeffs
 from zorch.sumcheck.jagged.types import _InterpConsts
-from zorch.sumcheck.prover import fold_lsb
 
 
 def _paired_sums(
@@ -64,7 +63,10 @@ def _paired_sums(
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:
     return _Planes(
-        *(fold_lsb(a, alpha) for a in (planes.n0, planes.n1, planes.d0, planes.d1))
+        *(
+            domain.fold(a, alpha, msb=False)
+            for a in (planes.n0, planes.n1, planes.d0, planes.d1)
+        )
     )
 
 
@@ -119,7 +121,7 @@ def _fix_and_sum_int(
     loop threads the folded state into the next round. The fold and the inner
     `_paired_sums` slice stride-2 twice."""
     planes = _bind_planes(planes, alpha)
-    eq_int = fold_lsb(eq_int, alpha)
+    eq_int = domain.fold(eq_int, alpha, msb=False)
     poly = _round_poly_int(planes, eq_int, scalars, consts)
     return poly, planes, eq_int
 
@@ -191,7 +193,7 @@ def _fix_and_sum_row(
     end. The input state and `eq_row` enter even, and the `_pad_neutral` output is
     even, so all halvings stay valid."""
     planes = _bind_planes(planes, alpha)
-    eq_row = fold_lsb(eq_row, alpha)
+    eq_row = domain.fold(eq_row, alpha, msb=False)
     poly, planes = _round_poly_row(
         planes, gather, col_index, pair_index, eq_row, eq_int, scalars, consts
     )

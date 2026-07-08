@@ -7,8 +7,9 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-import zk_dtypes
 from jax import Array
+
+from zorch.utils.field import base_field, naturals
 
 
 def powers(x: Array, n: int) -> Array:
@@ -34,9 +35,8 @@ def eval_univariate(evals: Array, x: Array) -> Array:
     """Evaluate a univariate given by its values on ``[0, 1, ..., len-1]`` at
     ``x``, by Lagrange interpolation over that integer domain.
 
-    A composer over the jitted basis kernel, so itself un-jitted. Nodes are
-    built per element — an iota over an extension dtype is unsupported."""
-    nodes = jnp.stack([jnp.array(i, evals.dtype) for i in range(evals.shape[0])])
+    A composer over the jitted basis kernel, so itself un-jitted."""
+    nodes = naturals(evals.shape[0], evals.dtype)
     return jnp.dot(evals, compute_lagrange_basis(x, nodes))
 
 
@@ -70,14 +70,11 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
     Built in the base field — the Lagrange basis for an integer domain lives
     in the prime field — so one matrix serves BF and EF callers; EF
     evaluations promote at multiply time."""
-    try:
-        base = zk_dtypes.efinfo(dtype).base_field_dtype
-    except ValueError:
-        base = dtype
+    base = base_field(dtype)
     n = degree + 1
     one = jnp.array(1, base)
     zero = jnp.array(0, base)
-    domain = jnp.array(list(range(n)), base)
+    domain = naturals(n, dtype)
     denoms = _lagrange_denominators(domain)
     # Column j = coefficients of L_j(x) = prod_{k != j} (x - k) / denom_j,
     # expanded by repeated (x - k) multiplication over the coefficient list.

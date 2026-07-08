@@ -60,8 +60,12 @@ from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.sumcheck.prover import CompressedProductRound, SumcheckRound
-from zorch.sumcheck.prover import fold as sc_fold
+from zorch.sumcheck.domain import fold
+from zorch.sumcheck.prover import (
+    CompressedProductRound,
+    ProductSummand,
+    StandardRound,
+)
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -75,7 +79,7 @@ MakeCode = Callable[[int, int], TensorCode]
 
 # The degree-2 product round (`W·B`) drives every sumcheck round; one instance,
 # reused. The claim reduces through `eval_univariate` (value-form message).
-_ROUND = SumcheckRound(degree=2)
+_ROUND = StandardRound(ProductSummand(degree=2))
 _COMPRESSED_ROUND = CompressedProductRound()
 
 
@@ -237,7 +241,7 @@ def _open(
     eager = chor.eager_messages
 
     def emit(t: Transcript, witness: Array, basis: Array) -> Transcript:
-        msg = round_._round_poly([witness, basis])
+        msg = round_._round_poly(jnp.stack([witness, basis]))
         sumcheck_messages.append(msg)
         return chor.observe_message(t, msg)
 
@@ -259,11 +263,11 @@ def _open(
         for i in range(k_j):
             msg: Array | None = None  # eager: this round's is already absorbed
             if not eager:
-                msg = round_._round_poly([W, B])
+                msg = round_._round_poly(jnp.stack([W, B]))
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = sc_fold([W, B], r)
+            W, B = fold(jnp.stack([W, B]), r)
             if eager:
                 # The freshly folded state's — the terminal residual state's
                 # included (the verifier recomputes that one in the clear).

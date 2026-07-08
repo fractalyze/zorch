@@ -5,8 +5,8 @@ expansion. Degree-agnostic — they take the interpolation constants
 (`naturals`/`inv_vand`) as arguments (also the round marker's operands, so the
 crossing stays inline here rather than routing through `gruen.round_coeffs`,
 which would rebuild them and DCE the operands out of the composite). The LSB
-bind is `sumcheck.prover.fold_lsb`. The LogUp-specific combine + plane bodies
-live in `zorch.logup_gkr._jagged_rounds`."""
+bind is `sumcheck.domain.fold(..., msb=False)`. The LogUp-specific combine +
+plane bodies live in `zorch.logup_gkr._jagged_rounds`."""
 
 from __future__ import annotations
 

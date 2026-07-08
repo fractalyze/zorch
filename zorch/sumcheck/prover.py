@@ -1,21 +1,29 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck prover rounds and the fold/lift helpers they share.
+"""Sumcheck prover rounds: the product `StandardRound`, its compressed-wire
+sibling `CompressedProductRound`, and the summand seam they read.
 
 A sumcheck round splits each MLE on the current variable, sends the round
-polynomial over the domain [0..degree], then folds every MLE at the verifier's
-challenge (P0 + r*(P1 - P0)). The split/validate and fold steps are summand-
-independent, so they live as `split_halves` / `factors_on_domain` / `fold` (plus
-the LSB stride-2 duals `split_pairs` / `fold_lsb` the jagged engines bind by), and
-each round supplies only its summand via `_round_poly`: `SumcheckRound` (here) sums
-a product of factors; `LogupSumcheckRound` (in zorch.logup_gkr.prover) sums the
-LogUp combine. The round body is element-wise field ops plus the one inherent Sigma
-(no reduce/gather beyond it). The verifier dual lives in `zorch.sumcheck.verifier`.
+polynomial sampled over an `EvalDomain`, then folds every MLE at the verifier's
+challenge (P0 + r*(P1 - P0)). Split and fold are summand-independent, and the
+round poly is built by `zorch.sumcheck.domain.summand_evals` over the stacked
+`(m, N)` state -- generic over BOTH the summand (`SumcheckSummand._combine`:
+product, LogUp, ...) and the sampling domain. `StandardRound` (here) is the plain
+materialized round: it holds the full factor table and does split -> sample ->
+combine -> sum, the linear-time reference the memory-optimized siblings
+(`sqrt_space.SqrtSpaceRound`, `eq.SmallValueRound`) specialize. Its summand
+defaults to the product (`ProductSummand`) and its domain to the natural
+{0..degree} evals.
+
+The dense round binds MSB-first (`domain.fold`); the jagged engines bind
+LSB-first (`domain.fold(..., msb=False)`). The split/fold primitives and the
+round-poly builder (`summand_evals`) live in `zorch.sumcheck.domain`; the
+verifier dual in `zorch.sumcheck.verifier`.
 
 Rounds run under the scheme-agnostic `zorch.prove.fold_rounds` host loop (any
-`Round`, any message shape) — one round per variable, folding the state down each
-step. `SumcheckSummand` (`degree` + `_combine`) is the summand seam the round-poly
-builders read, so the product `SumcheckRound` and the LogUp `LogupSumcheckRound`
-share it.
+`Round`, any message shape) -- one round per variable, folding the state down
+each step. `SumcheckSummand` (`degree` + `_combine`) is the summand seam the
+round-poly builder reads, so the product `ProductSummand` and the LogUp
+`logup_gkr.prover.LogupSummand` drive it interchangeably.
 """
 
 from __future__ import annotations
@@ -30,85 +38,24 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.round import Round
-from zorch.sumcheck.domain import EvalDomain, fold_stacked, summand_evals
+from zorch.sumcheck.domain import (
+    EvalDomain,
+    fold,
+    natural_domain,
+    summand_evals,
+)
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
 
 
-def split_halves(state: Sequence[Array]) -> list[tuple[Array, Array]]:
-    """Validate, then halve each MLE on the current variable: [(P0, P1), ...].
-
-    Factors must be non-empty, share a shape, and have an even width -- fail
-    loud rather than silently drop the odd element on `// 2`."""
-    if not state:
-        raise ValueError("state must hold at least one factor")
-    shape = state[0].shape
-    out = []
-    for i, evals in enumerate(state):
-        if evals.shape != shape:
-            raise ValueError(
-                f"all factors must share a shape; factor {i} is {evals.shape}, "
-                f"factor 0 is {shape}"
-            )
-        if evals.shape[-1] % 2 != 0:
-            raise ValueError(f"factor width must be even, got {evals.shape[-1]}")
-        half = evals.shape[-1] // 2
-        out.append((evals[..., :half], evals[..., half:]))
-    return out
-
-
-def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
-    """Fold one split pair at challenge `r`: P0 + r*(P1 - P0)."""
-    return p0 + r * (p1 - p0)
-
-
-def split_pairs(arr: Array) -> tuple[Array, Array]:
-    """Split on the LSB variable: the stride-2 `(arr[..., 0::2], arr[..., 1::2])`
-    consecutive-pair dual of `split_halves`' contiguous MSB halves. The jagged
-    engines bind LSB-first -- a batch-major jagged layout makes the row LSB the
-    in-segment pair dimension, so the pair fold never crosses a segment
-    boundary -- while the dense drivers here stay MSB-halving."""
-    return arr[..., 0::2], arr[..., 1::2]
-
-
-def fold_lsb(arr: Array, r: Array) -> Array:
-    """Bind the LSB variable at challenge `r`: `fold_pair` over the stride-2
-    pairs. Halves the last axis; the LSB dual of `fold`."""
-    p0, p1 = split_pairs(arr)
-    return fold_pair(p0, p1, r)
-
-
-def lift_to_domain(p0: Array, p1: Array, degree: int, start: int = 0) -> Array:
-    """Lift one split pair to the evaluation domain [start..degree]:
-    f[u] = P0 + u*(P1 - P0), shape (degree+1-start, *P0.shape).
-
-    `start` defaults to 0 (the natural domain [0..degree]); set it to 1 to omit
-    the f[0] = P0 point, the compressed round-poly wire form a verifier
-    reconstructs from the running claim (s(0) = claim - s(1)). The whole u-domain
-    is built at once so the round poly stays one batched reduction (not
-    degree+1 separate ones). `us` uses jnp.stack (not jnp.arange, whose iota is
-    unsupported for extension dtypes) and is reshaped to broadcast over any
-    leading batch dims of the factor."""
-    us = jnp.stack([jnp.array(u, p0.dtype) for u in range(start, degree + 1)])
-    return p0 + us.reshape((-1,) + (1,) * p0.ndim) * (p1 - p0)
-
-
-def fold(state: Sequence[Array], r: Array) -> list[Array]:
-    """Fold each MLE at challenge `r`: P0 + r*(P1 - P0). Halves width."""
-    return [fold_pair(p0, p1, r) for (p0, p1) in split_halves(state)]
-
-
-def factors_on_domain(state: Sequence[Array], degree: int) -> list[Array]:
-    """Lift each split factor to the round's evaluation domain [0..degree]:
-    f_k[u] = P0_k + u*(P1_k - P0_k), one array of shape (degree+1, *batch) each."""
-    return [lift_to_domain(p0, p1, degree) for (p0, p1) in split_halves(state)]
-
-
 @dataclass(frozen=True)
-class SumcheckRound(Round):
-    """Product sumcheck: s = sum_x prod_k P_k(x), one factor per state entry."""
+class ProductSummand:
+    """The product sumcheck summand `s = Σ_x Πₖ Pₖ(x)`: the combine math alone, no
+    round machinery. The default summand of `StandardRound`; the `eq` / `sqrt_space`
+    engines hold one to weight their eq-product. Pairs with the LogUp
+    `logup_gkr.prover.LogupSummand` under the `SumcheckSummand` seam."""
 
     degree: int
 
@@ -117,90 +64,80 @@ class SumcheckRound(Round):
             raise ValueError("degree must be >= 1")
 
     def combine_scalars(self) -> tuple[Array, ...]:
-        """No loop-invariant scalars: the product summand reads only its factors."""
+        """No loop-invariant scalars: the product reads only its factors."""
         return ()
 
     def combine(self, scalars: Sequence[Array], *factors: Array) -> Array:
-        """Product summand `prod_k f_k` (the scalar-explicit seam; product takes no
-        scalars). Single source of the combine math: `_combine` and the round-poly
-        reduction both route here, so they cannot drift."""
+        """Product `Πₖ fₖ` (the scalar-explicit seam; product takes no scalars).
+        Single source of the combine math: `_combine` and any marked path route
+        here, so they cannot drift."""
         del scalars  # product has none
         return reduce(operator.mul, factors)
 
     def _combine(self, *factors: Array) -> Array:
-        """Product summand bound to its (empty) scalars; the round-poly builders read
-        only this, so the round owns its summand and callers stay summand-generic."""
+        """Product bound to its (empty) scalars; the round-poly builder reads only
+        this, so callers stay summand-generic."""
         return self.combine(self.combine_scalars(), *factors)
-
-    def _round_poly(self, state: Sequence[Array]) -> Array:
-        """s[u] = sum_x' prod_k (P0_k + u*(P1_k - P0_k)), shape (degree+1, *batch).
-
-        One batched reduction over the whole u-domain, so it lowers toward a
-        single reduction kernel rather than degree+1 separate ones."""
-        return jnp.sum(self._combine(*factors_on_domain(state, self.degree)), axis=-1)
-
-    def __call__(
-        self, state: Sequence[Array], transcript: Transcript
-    ) -> tuple[list[Array], Transcript, Array]:
-        msg = self._round_poly(state)
-        transcript, r = transcript.observe_and_sample(msg, 1)
-        state = fold(state, r[0])
-        return state, transcript, msg
 
 
 class StandardRound(Round):
-    """A standard sumcheck round on stacked factor evaluations: send the summand's
-    round poly over `domain`, sample the challenge, fold. Bound to a SumcheckSummand
-    and an EvalDomain — the host-loop, EvalDomain-form sibling of SumcheckRound (which
-    holds its factors as a list and sends the natural [0..degree] eval form). Driven by
-    fold_rounds; used by sqrt_space's second phase and the eq engines."""
+    """The plain materialized sumcheck round: send the summand's round poly over
+    `domain`, sample the challenge, fold the stacked `(m, N)` state. Bound to a
+    `SumcheckSummand` (product by default) and an `EvalDomain` (the natural
+    {0..degree} evals when None). This is the linear-time reference the √-space /
+    eq engines specialize; driven by `fold_rounds`."""
 
-    def __init__(self, summand: SumcheckSummand, domain: EvalDomain) -> None:
+    def __init__(
+        self, summand: SumcheckSummand, domain: EvalDomain | None = None
+    ) -> None:
         self.summand = summand
         self.domain = domain
 
     def _round_poly(self, folded: Array) -> Array:
-        return summand_evals(folded, self.summand._combine, self.domain)
+        """s sampled at `domain` (the natural {0..degree} evals by default), shape
+        (num_points, *batch): one batched `summand_evals` reduction over the stacked
+        factors, so it lowers toward a single reduction kernel."""
+        domain = self.domain or natural_domain(self.summand.degree, folded.dtype)
+        return summand_evals(folded, self.summand._combine, domain)
 
     def __call__(
         self, folded: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold_stacked(folded, r[0]), transcript, msg
+        return fold(folded, r[0]), transcript, msg
 
 
-@dataclass(frozen=True)
 class CompressedProductRound(Round):
     """Two-factor product round with the compressed coefficient wire: the message
     is `[c_0, c_2]` — the degree-2 round polynomial's constant and leading
     coefficients — and the linear coefficient stays off the wire (the verifier
     dual, `verifier.CompressedCoeffsSumcheckRound`, reconstructs it from the
     running claim via `s(0) + s(1) = claim`). Split and fold match
-    `SumcheckRound(degree=2)` exactly (the MSB variable binds); only the message
-    form differs, so a scheme whose wire fixes this form swaps rounds without
-    touching the fold. `c_2 = Σ (P1_f - P0_f)·(P1_b - P0_b)` is the honest
+    `StandardRound(ProductSummand(2))` exactly (the MSB variable binds); only the
+    message form differs, so a scheme whose wire fixes this form swaps rounds
+    without touching the fold. `c_2 = Σ (P1_f - P0_f)·(P1_b - P0_b)` is the honest
     leading coefficient in any characteristic; over char 2 it coincides with the
     `(P0 + P1)` products some wire specs write it as."""
 
-    def _round_poly(self, state: Sequence[Array]) -> Array:
+    def _round_poly(self, folded: Array) -> Array:
         """`[c_0, c_2]` of `s(X) = Σ_x' f(X, x')·b(X, x')`, shape (2, *batch):
         one stacked element-wise product per coefficient, then the single
-        inherent Σ."""
-        if len(state) != 2:
+        inherent Σ. The two stacked factors split MSB-first into (f0, f1), (b0, b1)."""
+        if folded.shape[0] != 2:
             raise ValueError(
-                f"compressed product round takes exactly 2 factors, got {len(state)}"
+                f"compressed product round takes exactly 2 factors, got "
+                f"{folded.shape[0]}"
             )
-        (f0, f1), (b0, b1) = split_halves(state)
+        (f0, f1), (b0, b1) = jnp.reshape(folded, (2, 2, -1))
         return jnp.sum(jnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
-        self, state: Sequence[Array], transcript: Transcript
-    ) -> tuple[list[Array], Transcript, Array]:
-        msg = self._round_poly(state)
+        self, folded: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array]:
+        msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        state = fold(state, r[0])
-        return state, transcript, msg
+        return fold(folded, r[0]), transcript, msg
 
 
 @dataclass(frozen=True)
@@ -218,10 +155,10 @@ class RoundMsg:
 
 class SumcheckSummand(Protocol):
     """The summand seam a per-variable round exposes: the round-poly `degree`, and
-    `_combine` — the summand over the lifted factors. The round-poly builders read
-    only this, so one builder serves every sumcheck; `SumcheckRound` (product) and
-    `logup_gkr.prover.LogupSumcheckRound` (LogUp) both satisfy it, as do the host-loop
-    engines (sqrt_space / eq) which pass a summand to `summand_evals`.
+    `_combine` — the summand over the lifted factors. The round-poly builder reads
+    only this, so one builder serves every sumcheck; `ProductSummand` (product) and
+    `logup_gkr.prover.LogupSummand` (LogUp) both satisfy it, and the host-loop
+    engines (sqrt_space / eq) pass a summand to `summand_evals`.
 
     `degree` is a read-only property here so a frozen-dataclass field (product)
     and a `@property` (LogUp) both match — a plain `degree: int` would demand a
@@ -271,6 +208,6 @@ SUMCHECK_ROUND_MARKER_VERSION = 1
 
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
-    _summand: type[SumcheckSummand] = SumcheckRound
-    _prover_round: type[ProverRound] = SumcheckRound
+    _summand: type[SumcheckSummand] = ProductSummand
+    _prover_round: type[ProverRound] = StandardRound
     _compressed_prover_round: type[ProverRound] = CompressedProductRound

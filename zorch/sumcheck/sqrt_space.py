@@ -9,7 +9,8 @@ folded down at the phase boundary. Messages match a linear-time prover on the sa
 challenges (testing/sqrt_space_test.py).
 
 Generic over two orthogonal axes: the round summand (the SumcheckSummand seam
-prove/SumcheckRound share) and the sampling EvalDomain. The √-space memory trick
+StandardRound and ProductSummand share) and the sampling EvalDomain. The √-space
+memory trick
 refolds each factor independently, so it is orthogonal to how the factors combine
 AND to where the round poly is sampled. Defaults keep a product sumcheck on the
 compressed Û_degree domain, so prove_sqrt_space(p) is unchanged; pass a homogeneous
@@ -27,7 +28,7 @@ from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.sumcheck.domain import EvalDomain, summand_evals, uhat_domain
-from zorch.sumcheck.prover import StandardRound, SumcheckRound, SumcheckSummand
+from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -76,11 +77,11 @@ def prove_sqrt_space(
     domain: EvalDomain | None = None,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck: √-space first phase, standard second phase. `summand`
-    defaults to the product over the factors (SumcheckRound) and `domain` to the
+    defaults to the product over the factors (ProductSummand) and `domain` to the
     compressed Û_degree; pass a homogeneous SumcheckSummand and/or another EvalDomain
     to retarget the engine. Returns the final folded factors (d, 1), the transcript,
     and all l messages."""
-    summand = summand or SumcheckRound(degree=p_initial.shape[0])
+    summand = summand or ProductSummand(degree=p_initial.shape[0])
     domain = domain or uhat_domain(summand.degree, p_initial.dtype)
     l = log2_strict_usize(p_initial.shape[1])
     l_half = l // 2

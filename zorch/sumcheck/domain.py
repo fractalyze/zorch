@@ -21,13 +21,10 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-import zk_dtypes
 from jax import Array
 
-from zorch.poly.univariate import (
-    compute_inv_vandermonde,
-    compute_lagrange_basis,
-)
+from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
+from zorch.utils.field import naturals
 
 
 @cache
@@ -39,28 +36,16 @@ def _interp_constants(degree: int, dtype: Any) -> tuple[Array, Array]:
     # jit trace, which then escapes it (UnexpectedTracerError). The constants are
     # trace-independent anyway.
     with jax.ensure_compile_time_eval():
-        naturals = jnp.stack([jnp.array(j, dtype) for j in range(degree + 1)])
+        nat = naturals(degree + 1, dtype)
         inv_vand = compute_inv_vandermonde(degree, dtype)
-    return naturals, inv_vand
-
-
-def _naturals(n: int, dtype: Any) -> Array:
-    """The field-typed naturals {0, 1, …, n−1}. Built in the base field — an iota
-    over an extension dtype is unsupported in the fork, and integer nodes live in
-    the prime field anyway; extension callers promote at multiply time. Same pattern
-    as compute_inv_vandermonde."""
-    try:
-        base = zk_dtypes.efinfo(dtype).base_field_dtype
-    except ValueError:
-        base = dtype
-    return jnp.array(list(range(n)), base)
+    return nat, inv_vand
 
 
 def _finite_coeff_matrix(nodes: Array) -> Array:
     """Value → ascending-coefficient matrix (n, n) for a degree-(n−1) polynomial at
     the n finite nodes, bridged through the naturals then the inverse Vandermonde."""
-    naturals, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, nodes)
+    nat, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
+    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(nat, nodes)
     return jnp.dot(inv_vand, lagrange)
 
 
@@ -94,7 +79,7 @@ class EvalDomain:
         v_inf, finite = values[0], values[1:]
         d = finite.shape[0]
         if self.nodes is None:
-            # Naturals domain: _finite_coeff_matrix(_naturals(d)) is exactly the
+            # Naturals domain: _finite_coeff_matrix(naturals(d)) is exactly the
             # inverse Vandermonde — its Lagrange build over the naturals collapses to
             # the identity — so skip that identity vmap + matmul and use inv_vand.
             nodes, cmat = _interp_constants(d - 1, values.dtype)
@@ -136,12 +121,39 @@ def _product(*factors: Array) -> Array:
     return reduce(operator.mul, factors)
 
 
+def natural_domain(degree: int, dtype: Any) -> EvalDomain:
+    """The natural evaluation domain {0, 1, …, degree}: the round poly sent as its
+    plain values [s(0), …, s(degree)] — the wire form verifier.SumcheckRound checks
+    and the default domain of the generic StandardRound. Nodes live in the base
+    field (an integer node is a base-field element; extension factors promote at
+    multiply), reproducing the list prover's per-point lift byte-for-byte."""
+    return EvalDomain(naturals(degree + 1, dtype))
+
+
 def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
     """The compressed product round domain Û_degree = {∞, 0, 2, …, degree−1}:
     ∞-leading, u=1 dropped (the verifier recovers s(1) from s(0)+s(1)=claim). The
     default sampling domain for the eq-poly / sqrt-space engines."""
-    nat = _naturals(degree, dtype)
+    nat = naturals(degree, dtype)
     return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), leading=True)
+
+
+def split_halves(arr: Array) -> tuple[Array, Array]:
+    """Split the last variable MSB-first into contiguous halves
+    `(arr[..., :N/2], arr[..., N/2:])` — the dense bind. ndim-agnostic; the MSB
+    dual of split_pairs."""
+    half = arr.shape[-1] // 2
+    return arr[..., :half], arr[..., half:]
+
+
+def split_pairs(arr: Array) -> tuple[Array, Array]:
+    """Split the last variable LSB-first into stride-2 consecutive pairs
+    `(arr[..., 0::2], arr[..., 1::2])`. The jagged engines bind LSB-first — a
+    batch-major layout makes the pair the in-segment dimension, so a fold never
+    crosses a segment boundary — while the dense drivers split MSB-first
+    (split_halves). Its split-only form also serves the LogUp `paired_evals`,
+    which needs both halves without folding."""
+    return arr[..., 0::2], arr[..., 1::2]
 
 
 def summand_evals(
@@ -158,9 +170,7 @@ def summand_evals(
     factors (a plain product, or the LogUp combine); a mixed-degree combine like
     E·(A·B − C) is not. A finite domain carries no such restriction — any summand
     samples cleanly on it."""
-    m = stacked.shape[0]
-    pairs = jnp.reshape(stacked, (m, 2, -1))
-    p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
+    p0, p1 = split_halves(stacked)
     lifted = jax.vmap(domain.sample)(p0, p1)
     return jnp.sum(combine(*lifted), axis=1)
 
@@ -179,13 +189,15 @@ def product_round_coeffs(stacked: Array) -> Array:
     domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to coefficients —
     the wire form verifier.CoeffsSumcheckRound checks."""
     m = stacked.shape[0]
-    full = EvalDomain(_naturals(m, stacked.dtype), leading=True)  # [∞, 0, 1, …, m−1]
+    full = EvalDomain(naturals(m, stacked.dtype), leading=True)  # [∞, 0, 1, …, m−1]
     return EvalDomain(leading=True).to_coeffs(summand_evals(stacked, _product, full))
 
 
-def fold_stacked(stacked: Array, r: Array) -> Array:
-    """Standard sumcheck fold of the leading variable on a stacked (m, N) array,
-    halving the width — shared by the product round and the small-value transition."""
-    pairs = jnp.reshape(stacked, (stacked.shape[0], 2, -1))
-    p0 = pairs[:, 0, :]
-    return (pairs[:, 1, :] - p0) * r + p0
+def fold(arr: Array, r: Array, *, msb: bool = True) -> Array:
+    """Fold the last variable at challenge `r`: P0 + r*(P1 - P0), halving the last
+    axis. `msb` (the dense default) splits contiguous halves [low | high]; msb=False
+    splits stride-2 consecutive pairs — the jagged bind, where a batch-major layout
+    makes the pair the in-segment dimension, so the fold never crosses a segment
+    boundary. ndim-agnostic: the leading factor/batch axes broadcast."""
+    p0, p1 = split_halves(arr) if msb else split_pairs(arr)
+    return p0 + r * (p1 - p0)

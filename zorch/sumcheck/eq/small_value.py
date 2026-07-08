@@ -25,13 +25,14 @@ from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_st
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold_stacked, summand_evals, uhat_domain
+from zorch.sumcheck.domain import fold, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
-from zorch.sumcheck.prover import SumcheckRound
+from zorch.sumcheck.prover import ProductSummand
 from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+from zorch.utils.field import naturals
 
 # (R_tensor, eq_w_prev, eq_evals): the contracted R tensor over U_dⁱ⁻¹, the running
 # eq mass eq(w[<i], r[<i]), and the eq(r[<i], ·) table over the bound prefix — all
@@ -43,7 +44,7 @@ def _lagrange_over_round_domain(r: Array, d: int) -> Array:
     """Lagrange basis over U_d at r: [L_∞, L₀, …, L_{d−1}], shape (d+1,). L_∞ is the
     vanishing polynomial on the finite nodes (the leading-coeff basis). Each round's
     R tensor grows by this factor."""
-    finite = jnp.stack([jnp.array(k, r.dtype) for k in range(d)])
+    finite = naturals(d, r.dtype)
     return jnp.concatenate(
         [jnp.atleast_1d(jnp.prod(r - finite)), compute_lagrange_basis(r, finite)]
     )
@@ -96,7 +97,7 @@ class TransitionRound(Round):
     has already collapsed the folds the accumulator phase postponed."""
 
     def __init__(self, d: int, w_l0: Array, dtype: Any) -> None:
-        self.summand = SumcheckRound(degree=d)
+        self.summand = ProductSummand(degree=d)
         self.w_l0 = w_l0
         self.domain = uhat_domain(d, dtype)
 
@@ -107,7 +108,7 @@ class TransitionRound(Round):
         msg = summand_evals(folded, self.summand._combine, self.domain)
         transcript, r = transcript.observe_and_sample(msg, 1)
         return (
-            (fold_stacked(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
+            (fold(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
             transcript,
             msg,
         )
@@ -171,7 +172,7 @@ def prove_eq_poly_small_value(
     # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
     # unlike EqPolyRound / SqrtSpaceRound, it does not take a general summand.
     (p_final, _), transcript, tail = fold_rounds(
-        EqPolyRound(SumcheckRound(degree=d), w),
+        EqPolyRound(ProductSummand(degree=d), w),
         (folded_p, eq_w_prev),
         transcript,
         l - l_0 - 1,
