@@ -40,10 +40,9 @@ import numpy as np
 from jax import Array
 from zk_dtypes import efinfo
 
+from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
 from zorch.pcs.jagged.poly import (
-    _TRANSITION_ROWS,
     _offset_bit_tensor,
-    bp_eval_core,
     build_jagged_layout,
     build_prefix_sums,
     msb_first_bits,
@@ -231,21 +230,18 @@ def _bp_all(
     z_row: Array,
     z_trace: Array,
     t_matrix: Array,
-    bp_num_vars: Any,
     num_bits: Any,
 ) -> Array:
     """Vectorize ``bp_eval_core`` over the column axis of ``buf`` ``(L,
     2·num_bits)``.
 
-    ``num_bits`` (= n_d) and ``bp_num_vars`` (= max(n_r, n_d), the BP layer count)
-    are passed as VALUES, not static args, so both the column count ``L`` and the
-    prefix-bit width ``num_bits`` can be symbolic export dims: the half-split
-    ``buf[:, :num_bits]`` / ``buf[:, num_bits:]`` slices at a symbolic midpoint and
-    ``bp_eval_core``'s layer ``fori_loop`` takes a symbolic trip count."""
+    ``num_bits`` (= n_d) is passed as a VALUE, not a static arg, so both the
+    column count ``L`` and the prefix-bit width ``num_bits`` can be symbolic export
+    dims: the half-split ``buf[:, :num_bits]`` / ``buf[:, num_bits:]`` slices at a
+    symbolic midpoint and ``bp_eval_core``'s layer ``fori_loop`` (deriving its trip
+    count from the ``num_bits``-wide prefix operands) takes a symbolic count."""
     return jax.vmap(
-        lambda left, right: bp_eval_core(
-            z_row, z_trace, left, right, t_matrix, bp_num_vars
-        )
+        lambda left, right: bp_eval_core(z_row, z_trace, left, right, t_matrix)
     )(buf[:, :num_bits], buf[:, num_bits:])
 
 
@@ -264,19 +260,17 @@ def inner_sumcheck_core(
     Polymorphic in the column count L = merged.shape[0]: per-column work is a
     vmap + jnp.sum over the real columns (no padding), so L can be a symbolic
     export dim. The 2*num_bits round loop is unrolled (num_bits concrete) — one
-    fused zorch.duplex_fs kernel per round. bp_num_vars = max(n_r, n_d) is the BP
-    layer count. weights is the column-eq table col_eq[:L]; the caller keeps z_col
-    at its true length (n_c, unpadded) so those weights are exact even when L is
-    a symbolic dim."""
+    fused zorch.duplex_fs kernel per round. weights is the column-eq table
+    col_eq[:L]; the caller keeps z_col at its true length (n_c, unpadded) so those
+    weights are exact even when L is a symbolic dim."""
     n_vars = 2 * num_bits
-    bp_num_vars = jnp.maximum(z_row.shape[0], num_bits)
     t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
     one = jnp.ones((), dtype)
     two = jnp.array(2, dtype)
     ef_limbs = efinfo(dtype).degree
 
     def bp_all(buf: Array) -> Array:
-        return _bp_all(buf, z_row, z_trace, t_matrix, bp_num_vars, num_bits)
+        return _bp_all(buf, z_row, z_trace, t_matrix, num_bits)
 
     # claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c — a jnp.sum,
     # not eval_jagged_mle's ~1700-deep trace-time unroll (which compiles abysmally).

@@ -5,11 +5,13 @@ py_library(
     name = "poly",
     srcs = [
         "__init__.py",
+        "branching_program.py",
         "poly.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         ":dense",
+        "//zorch:fusion",
         "//zorch/poly",
         "//zorch/utils:bits",
         requirement("jax"),

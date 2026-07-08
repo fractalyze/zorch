@@ -47,16 +47,13 @@ from zorch.commit.merkle import Opening
 from zorch.commit.smcs import SingleMatrixCommitmentScheme, VerifyCode
 from zorch.pcs.basefold.batching import batch_staggered
 from zorch.pcs.fold import verify_fold_chain
+from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
 from zorch.pcs.jagged.open import (
     StackedOpenProof,
     sample_query_positions,
     sample_rlc_coeffs,
 )
-from zorch.pcs.jagged.poly import (
-    _TRANSITION_ROWS,
-    bp_eval_core,
-    build_jagged_layout,
-)
+from zorch.pcs.jagged.poly import build_jagged_layout
 from zorch.pcs.jagged.prover import (
     JaggedEvalMsg,
     merged_prefix_bits,
@@ -147,7 +144,6 @@ def verify_jagged_eval_msg(
         inner_point[:num_bits],
         inner_point[num_bits:],
         t_matrix,
-        max(z_row.shape[0], num_bits),
     )
     ok = ok & jnp.array_equal(inner_final, jnp.sum(col_eq[:l_max] * eqs) * h_bp)
 
