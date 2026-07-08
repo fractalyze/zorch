@@ -6,6 +6,7 @@ both `open` and `verify` derive live in `pcs/basefold/batching.py`."""
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, TypeAlias
@@ -108,6 +109,48 @@ class BasefoldConfig:
     row_batch_prefix: int = 0  # 0 = no prefix (zorch-native)
     fold_arities: tuple[int, ...] = ()  # () = uniform per-round commit (zorch-native)
 
+    def __post_init__(self) -> None:
+        # A non-native cadence schedule must cover exactly `num_vars` rounds:
+        # `row_batch_prefix` (prefix folds) + `sum(fold_arities)` (FRI folds). A
+        # mismatch would overrun `fold_arities` (IndexError) or leave later epochs
+        # uncommitted, so fail fast at construction. The native schedule is
+        # implicit (per-round), so it is exempt.
+        if not self.commits_per_round:
+            scheduled = self.row_batch_prefix + sum(self.fold_arities)
+            if scheduled != self.num_vars:
+                raise ValueError(
+                    f"cadence fold schedule covers {scheduled} rounds "
+                    f"(row_batch_prefix={self.row_batch_prefix} + "
+                    f"sum(fold_arities)={sum(self.fold_arities)}) but "
+                    f"num_vars={self.num_vars}"
+                )
+
     @property
     def commits_per_round(self) -> bool:
         return not self.fold_arities and self.row_batch_prefix == 0
+
+    def require_native(self, action: str) -> None:
+        """Fail loud on a non-native fold schedule: the native drivers handle only
+        `commits_per_round` (pre-fold arity-2 pair commit every round). The
+        row-batch-prefix + multi-arity epoch cadence is the deferred fold-schedule
+        machinery (design §"Core driver"), wired + byte-gated with its first
+        byte-fixed consumer; only the config STRUCTURE for it exists here.
+        `action` names the caller's verb (e.g. "open" / "verify") for the message,
+        so prover and verifier share one guard."""
+        if not self.commits_per_round:
+            raise NotImplementedError(
+                f"non-native fold cadence (row_batch_prefix / fold_arities) is not "
+                f"wired to {action} yet; only commits_per_round (zorch-native) is "
+                f"wired. The deferred row-batch-prefix + multi-arity epoch cadence "
+                f"lands with its first byte-fixed consumer"
+            )
+
+    def layer_shifts(self) -> list[int]:
+        """The per-committed-layer index shift, in commit order: layer 0 the
+        initial commit at the full query index, then one shift per committed layer
+        (the post-prefix commit, then each committed epoch), each the cumulative
+        fold count above that layer. A query position maps to a layer's leaf index
+        by `position >> shift`. Pure function of `fold_arities` — the running fold
+        total at each commit boundary — so the prover's interleaved commits and the
+        verifier's replay read the identical sequence off one method."""
+        return list(itertools.accumulate(self.fold_arities, initial=0))

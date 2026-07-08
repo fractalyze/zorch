@@ -220,7 +220,7 @@ class BasefoldProver:
                     f"point dimension {num_vars} doesn't match MLE height "
                     f"{pd.mle.shape[0]} (expected 2^{num_vars})"
                 )
-        _require_native_cadence(self._resolved_config(num_vars))
+        self._resolved_config(num_vars).require_native("open")
         return _open_batch_body(self, list(rounds), z, transcript)
 
     def open_with_basis(
@@ -260,24 +260,6 @@ class BasefoldProver:
         return _open_with_basis_body(self, prover_data, basis, value, transcript)
 
 
-def _require_no_cadence_grind(chor: BasefoldChoreography, num_vars: int) -> None:
-    """Fail loud on a scheduled grind under the non-native cadence: `CadenceProof`
-    carries no pow-witness field, so a ground witness has nowhere to live — it
-    would be silently dropped (a soundness hole). Refuse instead, symmetric to the
-    native path's pow-witness `NotImplementedError` (`_fold_and_query`) and the
-    verifier's `_require_no_grind`. The grind wire is a deferred consumer delta."""
-    scheduled = (
-        any(chor.fold_grind_bits(r, 0) is not None for r in range(num_vars))
-        or chor.query_grind_bits(0) is not None
-    )
-    if scheduled:
-        raise NotImplementedError(
-            "the choreography schedules a grind, but the non-native cadence open "
-            "drops no witness into CadenceProof (it carries no pow field); the "
-            "grind wire is a deferred consumer delta, symmetric to the native path"
-        )
-
-
 def _open_with_basis_cadence(
     prover: BasefoldProver,
     pd: BasefoldProverData,
@@ -308,30 +290,39 @@ def _open_with_basis_cadence(
     n_pos = code.block_len
     num_ntts = 1 << prefix
     # Fail loud on a scheduled grind BEFORE producing any bytes, symmetric to the
-    # native path's pow-witness refusal (`CadenceProof` carries no pow field).
-    _require_no_cadence_grind(chor, num_vars)
+    # native path's pow-witness refusal (`CadenceProof` carries no pow field). The
+    # schedule count comes off the choreography's bits methods (`num_pow_witnesses`)
+    # so this and the native/verifier guards share one source of truth.
+    if chor.num_pow_witnesses(config) > 0:
+        raise NotImplementedError(
+            "the choreography schedules a grind, but the non-native cadence open "
+            "drops no witness into CadenceProof (it carries no pow field); the "
+            "grind wire is a deferred consumer delta, symmetric to the native path"
+        )
 
     # Initial commit (leaf = the interleave lanes of one position). Re-derived
     # here for the query openings only — the outer protocol already bound this
     # root, so the choreography does NOT observe it now (its `bind_statement`
-    # binds whatever the wire binds, e.g. a domain label).
+    # binds whatever the wire binds, e.g. a domain label). The cadence commits
+    # the leaves directly, NOT through `to_base_field` like the native path: the
+    # consumer owns the leaf grouping (the interleave-lane layout it committed),
+    # so routing through `to_base_field` here would change its wire.
     init_leaves = pd.codeword.reshape(n_pos, num_ntts)
-    init_root, init_digest = tree.commit(init_leaves)
+    init_root, init_digest = _commit_leaves(tree, init_leaves)
     t = chor.bind_statement(transcript, init_root, None, value)
 
-    # Layers opened in the query phase: (leaves, digest_layers, index shift).
-    # Layer 0 is the initial commit at the full index; the shift maps a query
-    # position to that layer's folded leaf index (position >> shift).
+    # Layers opened in the query phase, in commit order: layer 0 the initial
+    # commit at the full index, then one per committed layer; the shift sequence
+    # (`config.layer_shifts()`) maps a query position to each layer's folded leaf
+    # index (position >> shift).
     layer_leaves: list[Array] = [init_leaves]
     layer_digests: list[list[Array]] = [init_digest]
-    layer_shifts: list[int] = [0]
     commit_roots: list[Array] = []
 
     state = kernel.initial_state(pd.mle, basis, value)
     cw = None if prefix > 0 else pd.codeword.reshape(n_pos)
     round_messages: list[tuple] = []
     rb_challenges: list[Array] = []
-    cum = 0  # cumulative FRI folds
     epoch = in_epoch = 0
 
     for rnd in range(num_vars):
@@ -352,27 +343,24 @@ def _open_with_basis_cadence(
                 if arities:
                     lf = 1 << arities[0]
                     leaves = cw.reshape(n_pos // lf, lf)
-                    root, digest = tree.commit(leaves)
+                    root, digest = _commit_leaves(tree, leaves)
                     t = chor.observe_root(t, root)
                     commit_roots.append(root)
                     layer_leaves.append(leaves)
                     layer_digests.append(digest)
-                    layer_shifts.append(arities[0])
         else:
             cw = code.fold(cw, r)
-            cum += 1
             in_epoch += 1
             if in_epoch == arities[epoch]:
                 if epoch + 1 < num_epochs:
                     next_arity = arities[epoch + 1]
                     lf = 1 << next_arity
                     leaves = cw.reshape(cw.shape[0] // lf, lf)
-                    root, digest = tree.commit(leaves)
+                    root, digest = _commit_leaves(tree, leaves)
                     t = chor.observe_root(t, root)
                     commit_roots.append(root)
                     layer_leaves.append(leaves)
                     layer_digests.append(digest)
-                    layer_shifts.append(cum + next_arity)
                 in_epoch = 0
                 epoch += 1
 
@@ -388,7 +376,9 @@ def _open_with_basis_cadence(
     layer_openings: list = []
     layer_positions: list[Array] = []
     layer_num_leaves: list[int] = []
-    for leaves, digest, shift in zip(layer_leaves, layer_digests, layer_shifts):
+    for leaves, digest, shift in zip(
+        layer_leaves, layer_digests, config.layer_shifts()
+    ):
         idx = positions >> shift
         layer_openings.append(open_rows(tree, leaves, digest, idx))
         layer_positions.append(idx)
@@ -407,19 +397,15 @@ def _open_with_basis_cadence(
     return proof, t
 
 
-def _require_native_cadence(config: BasefoldConfig) -> None:
-    """Fail loud on a non-native fold schedule: this driver drives only
-    `commits_per_round` (pre-fold arity-2 pair commit every round). The
-    row-batch prefix + multi-arity epoch cadence is the deferred fold-schedule
-    machinery (design §"Core driver" step 2), wired + byte-gated with its first
-    consumer; only the config STRUCTURE for it exists here."""
-    if not config.commits_per_round:
-        raise NotImplementedError(
-            "non-native fold cadence (row_batch_prefix / fold_arities) is not "
-            "driven yet; only commits_per_round (zorch-native) is wired. The "
-            "deferred row-batch-prefix + multi-arity epoch cadence lands with "
-            "its first byte-fixed consumer"
-        )
+# Jitted cadence-layer commit island: the eager cadence driver
+# (`_open_with_basis_cadence`) keeps its host-sequential Fiat-Shamir
+# orchestration eager, but each Merkle commit is pure compute that must lower to
+# one fused kernel (`tree.commit` → one fused_region), so it rides its own jit
+# island — mirroring the native `_commit_body` and ligerito's `_commit`. `tree`
+# is the static key (frozen, value-compared, #214).
+@partial(jax.jit, static_argnames=("tree",))
+def _commit_leaves(tree: MerkleTree, leaves: Array) -> tuple[Array, list[Array]]:
+    return tree.commit(leaves)
 
 
 # Jitted commit body: standalone (outside the jagged seam's enclosing jit), an
@@ -471,6 +457,19 @@ def _fold_and_query(
     kernel = prover.kernel
     num_vars = config.num_vars
 
+    # Fail loud on a scheduled grind BEFORE the fold loop (not after): a grind
+    # produces a pow witness, but `BasefoldProof` has no pow field to carry it
+    # (the native wire grinds nothing), so refuse without wasted fold work. The
+    # count comes off the choreography's bits methods (`num_pow_witnesses`), the
+    # one source of truth shared with the cadence + verifier guards; the grind
+    # wire is a deferred consumer delta.
+    if chor.num_pow_witnesses(config) > 0:
+        raise NotImplementedError(
+            "scheduled grind produced pow witnesses, but BasefoldProof carries "
+            "no pow field yet (the native wire grinds nothing); the grind wire "
+            "is a deferred consumer delta"
+        )
+
     # Interleaved sumcheck + pre-fold pair-leaf FRI fold, num_vars rounds. Every
     # round commits its pre-fold layer; the final folded codeword (length
     # `blowup`) is the cleartext final poly. The kernel owns the round state's
@@ -488,29 +487,16 @@ def _fold_and_query(
     fri_roots = [m[1] for m in msgs]
     layer_leaves = [m[2] for m in msgs]
     layer_digests = [m[3] for m in msgs]
-    pow_witnesses = [m[4] for m in msgs if m[4] is not None]
 
     # Bind the cleartext final codeword before sampling queries, so the query
     # positions depend on it (the IOPP terminal binding; `verify` mirrors).
     t = chor.observe_final(t, final_poly)
 
     # Query phase: shared positions; open every matrix at the full index and
-    # every fold layer's pair-leaf at its halved index.
+    # every fold layer's pair-leaf at its halved index. No grind: the eager guard
+    # above refused any scheduled grind before the fold loop.
     n = prover.code.block_len
-    qbits = chor.query_grind_bits(0)
-    if qbits is not None:
-        t, witness = chor.grind(t, qbits)
-        pow_witnesses.append(witness)
     t, positions = chor.sample_queries(t, n, config.num_queries)
-    if pow_witnesses:
-        # A grinding schedule produced witnesses, but `BasefoldProof` has no pow
-        # field to carry them (the native wire grinds nothing). The grind wire —
-        # a grinding consumer's delta — lands with the field in a later adoption.
-        raise NotImplementedError(
-            "scheduled grind produced pow witnesses, but BasefoldProof carries "
-            "no pow field yet (the native wire grinds nothing); the grind wire "
-            "is a deferred consumer delta"
-        )
     a = prover.code.layer_positions(positions, num_vars)
     component_openings = [
         open_rows(prover.tree, pd.leaves, pd.digest_layers, positions)

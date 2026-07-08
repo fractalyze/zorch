@@ -21,6 +21,13 @@ class ConfigTest(absltest.TestCase):
         )
         self.assertFalse(c.commits_per_round)
 
+    def test_cadence_schedule_must_cover_num_vars(self) -> None:
+        # prefix 5 + sum(2, 2) = 9 != num_vars 8 -> reject at construction.
+        with self.assertRaisesRegex(ValueError, "cadence fold schedule"):
+            BasefoldConfig(
+                num_vars=8, num_queries=8, row_batch_prefix=5, fold_arities=(2, 2)
+            )
+
 
 if __name__ == "__main__":
     absltest.main()

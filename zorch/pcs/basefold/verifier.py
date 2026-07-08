@@ -132,8 +132,9 @@ class BasefoldVerifier:
         self._check_proof_shape(proof, num_vars)
         # Fail loud on a non-native cadence / scheduled grind BEFORE any verdict,
         # symmetric to the prover's deferrals (P2 deferred, fail-loud).
-        _require_native_cadence(self._resolved_config(num_vars))
-        _require_no_grind(self.choreography, num_vars)
+        config = self._resolved_config(num_vars)
+        config.require_native("verify")
+        _require_no_grind(self.choreography, config)
         return _verify_batch_body(
             self, list(commitments), z, list(values), proof, transcript
         )
@@ -192,7 +193,7 @@ class BasefoldVerifier:
                 f"{self.code.message_len} (expected 2^num_vars)"
             )
         self._check_proof_shape(cast(BasefoldProof, proof), num_vars)
-        _require_no_grind(self.choreography, num_vars)
+        _require_no_grind(self.choreography, config)
         # Bind the statement via the choreography with point=None (native refuses;
         # a basis consumer binds via the basis). Even a basis consumer then hits
         # the deferred basis-path replay below.
@@ -219,38 +220,22 @@ class BasefoldVerifier:
             )
 
 
-def _require_native_cadence(config: BasefoldConfig) -> None:
-    """Fail loud on a non-native fold schedule: this driver replays only
-    `commits_per_round` (pre-fold arity-2 pair commit every round), the verify
-    dual of `BasefoldProver._require_native_cadence`. The row-batch prefix +
-    multi-arity epoch cadence is deferred (design §"Core driver"), wired +
-    byte-gated with its first consumer; only the config STRUCTURE exists here."""
-    if not config.commits_per_round:
+def _require_no_grind(chor: BasefoldChoreography, config: BasefoldConfig) -> None:
+    """Fail loud on a scheduled grind: neither `BasefoldProof` nor `CadenceProof`
+    carries a pow-witness field (the native wire grinds nothing), so there is
+    nothing for the verifier to `check_grind` against. The schedule count comes
+    off the choreography's bits methods (`num_pow_witnesses`), the one source of
+    truth shared with the prover's guards. The grind-check wire is a deferred
+    consumer delta, symmetric to the prover's pow-witness NotImplementedError."""
+    if chor.num_pow_witnesses(config) > 0:
         raise NotImplementedError(
-            "non-native fold cadence (row_batch_prefix / fold_arities) is not "
-            "replayed yet; only commits_per_round (zorch-native) is wired. The "
-            "deferred row-batch-prefix + multi-arity epoch cadence lands with "
-            "its first byte-fixed consumer"
-        )
-
-
-def _require_no_grind(chor: BasefoldChoreography, num_vars: int) -> None:
-    """Fail loud on a scheduled grind: `BasefoldProof` carries no pow-witness
-    field (the native wire grinds nothing), so there is nothing for the verifier
-    to `check_grind` against. The grind-check wire is a deferred consumer delta,
-    symmetric to the prover's pow-witness NotImplementedError."""
-    scheduled = (
-        any(chor.fold_grind_bits(r, 0) is not None for r in range(num_vars))
-        or chor.query_grind_bits(0) is not None
-    )
-    if scheduled:
-        raise NotImplementedError(
-            "the choreography schedules a grind, but BasefoldProof carries no "
+            "the choreography schedules a grind, but the proof carries no "
             "pow-witness field for the verifier to check_grind against; the "
             "grind-check wire is a deferred consumer delta"
         )
 
 
+@partial(jax.jit, static_argnames=("code", "base_level"))
 def _fold_coset(
     code: FoldableCode,
     coset: Array,
@@ -261,7 +246,10 @@ def _fold_coset(
     """Fold a `[Q, 2^len(betas)]` opened coset down to `[Q]` by `len(betas)`
     successive binary code folds, from code fold level `base_level` — the
     verifier's per-epoch refold, the dual of the prover's `code.fold` chain within
-    one epoch. The coset is contiguous (adjacent entries are the code's conjugate
+    one epoch. A jit island (`code`/`base_level` static, `coset`/`betas`/
+    `leaf_index` traced): the cadence verify keeps its Fiat-Shamir orchestration
+    eager, but the refold is pure compute that must lower to one fused kernel. The
+    coset is contiguous (adjacent entries are the code's conjugate
     pair, the row-batch/multi-arity layout the epoch commits group), so each level
     reshapes to `[Q, half, 2]` and folds the pair; `leaf_index` [Q] is the coset's
     index in each layer (unchanged as the width halves), and the pair's landing
@@ -311,13 +299,13 @@ def _verify_with_basis_cadence(
     n_pos = code.block_len
 
     # Fail loud on a scheduled grind BEFORE any verdict: `CadenceProof` carries no
-    # pow-witness field, symmetric to the prover's `_require_no_cadence_grind`
-    # guard on `_open_with_basis_cadence`.
-    _require_no_grind(chor, num_vars)
+    # pow-witness field, symmetric to the prover's grind guard on
+    # `_open_with_basis_cadence`.
+    _require_no_grind(chor, config)
 
     # Shape guard on the CadenceProof, symmetric to `_check_proof_shape` — a short
     # message / root / layer list would let the replay skip checks silently.
-    expected_roots = (1 if arities else 0) + max(num_epochs - 1, 0)
+    expected_roots = num_epochs  # 1 post-prefix commit + (num_epochs - 1) epochs
     expected_layers = 1 + expected_roots
     if (
         len(proof.round_messages) != num_vars
@@ -375,16 +363,11 @@ def _verify_with_basis_cadence(
     t, positions = chor.sample_queries(t, n_pos, config.num_queries)
     ok = ok & jnp.all(positions == proof.positions)
 
-    # Per-layer folded query indices (mirror the prover's `layer_shifts`): layer 0
-    # the initial commit at the full index, then the post-prefix layer, then one
-    # per committed epoch, each addressed by `positions >> shift`.
-    layer_shifts = [0]
-    if arities:
-        layer_shifts.append(arities[0])
-        cum_a = arities[0]
-        for e in range(num_epochs - 1):
-            layer_shifts.append(cum_a + arities[e + 1])
-            cum_a += arities[e + 1]
+    # Per-layer folded query indices: layer 0 the initial commit at the full
+    # index, then the post-prefix layer, then one per committed epoch, each
+    # addressed by `positions >> shift`. The shift sequence is a pure function of
+    # the fold arities — the prover commits against the identical `layer_shifts()`.
+    layer_shifts = config.layer_shifts()
 
     # Merkle: layer 0 rebuilds the initial commitment, each fold layer its commit
     # root, at the shifted query index — one batched pass per leaf-row width.
