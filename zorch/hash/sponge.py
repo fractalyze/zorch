@@ -40,51 +40,36 @@ SPONGE_HASH_MARKER = "zorch.sponge_hash"
 SPONGE_HASH_MARKER_VERSION = 1
 
 
-# Constructions differ only in how a block fills its masked rate lanes and its
-# capacity; the loop is otherwise shared (`_absorb`), via two hooks. `cap` is the
-# block's prior digest (`s[:out]`). Zeros are const-free (`s[:r]-s[:r]`, not
-# `jnp.zeros`) so no fresh const is lifted to a leading operand, breaking the ABI.
-def _keep_prior(s: Array, rate: int) -> Array:
-    """Padding-free: a masked lane keeps the prior state."""
-    return s[:rate]
-
-
-def _zero_pad(s: Array, rate: int) -> Array:
-    """Merkle-Damgard: a masked lane is zero-padded (const-free zero)."""
-    return s[:rate] - s[:rate]
-
-
-def _carry_capacity(s: Array, cap: Array, rate: int, out: int) -> Array:
-    """Padding-free: capacity carries implicitly."""
-    return s
-
-
-def _chain_digest(s: Array, cap: Array, rate: int, out: int) -> Array:
-    """Merkle-Damgard: capacity lanes [rate:rate+out] take the prior digest."""
-    return s.at[rate : rate + out].set(cap)
-
-
 @dataclass(frozen=True)
 class _Mode:
-    """One sponge construction's behaviour — the whole per-type surface. Add a
-    `SpongeType` member and a `_MODES` row to introduce a new construction."""
+    """One sponge construction's behaviour — the whole per-type surface. A new
+    construction is one `_MODES` row (a `SpongeType` member + its two hooks),
+    no new module-level functions.
+
+    `tail_fill(state, rate)` fills a partial block's masked rate lanes;
+    `set_capacity(state, cap, rate, out)` places the prior digest `cap`
+    (`state[:out]`) into capacity."""
 
     tail_fill: Callable[[Array, int], Array]
     set_capacity: Callable[[Array, Array, int, int], Array]
     # The digest fills the whole capacity, so the caller must have
-    # rate + out == width (chaining carries the out-lane digest as capacity).
+    # rate + out == width (the out-lane digest is carried as capacity).
     fills_capacity: bool
 
 
 _MODES: dict[SpongeType, _Mode] = {
+    # Padding-free (Plonky3): masked lanes keep the prior state; capacity
+    # carries implicitly, so set_capacity is a no-op.
     SpongeType.PADDING_FREE: _Mode(
-        tail_fill=_keep_prior,
-        set_capacity=_carry_capacity,
+        tail_fill=lambda s, rate: s[:rate],
+        set_capacity=lambda s, cap, rate, out: s,
         fills_capacity=False,
     ),
+    # Merkle-Damgard: masked lanes are zero-padded; capacity lanes
+    # [rate:rate+out] take the prior block's digest.
     SpongeType.MERKLE_DAMGARD: _Mode(
-        tail_fill=_zero_pad,
-        set_capacity=_chain_digest,
+        tail_fill=lambda s, rate: s[:rate] - s[:rate],
+        set_capacity=lambda s, cap, rate, out: s.at[rate : rate + out].set(cap),
         fills_capacity=True,
     ),
 }
