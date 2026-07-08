@@ -52,11 +52,7 @@ from zorch.logup_gkr._jagged_composites import (
 )
 from zorch.logup_gkr._jagged_rounds import _round_interp_constants
 from zorch.logup_gkr._jagged_types import _JaggedState, _Planes, _RoundScalars
-from zorch.logup_gkr.circuit import (
-    JaggedGkrLayer,
-    _pad_neutral,
-    _segment_gather,
-)
+from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.prover import Carry, fold_carry
 from zorch.round import Round
 from zorch.sumcheck.jagged.buffers import (
@@ -127,47 +123,6 @@ class JaggedLayerProof:
     denominator_1: Array
 
 
-def pad_layer_to_capacity(
-    layer: JaggedGkrLayer, capacities: tuple[int, ...]
-) -> JaggedGkrLayer:
-    """Re-store `layer` in a capacity layout: each segment extended to its
-    capacity with the fold-neutral fraction (n=0, d=1), and `row_counts`
-    becoming the capacity tuple.
-
-    The prove over the capacity layer is byte-identical to the exact layout:
-    the neutral fraction is a fixed point of the per-round fold (and of the
-    re-pad gathers a non-even capacity's schedule inserts), and its eq mass
-    moves from the closed-form virtual correction (`pad_adj - eq_sum`) into
-    the materialized sum -- the round polynomials, challenges, and openings do
-    not change. What changes is the compile-key surface: the whole-layer
-    program's plane and schedule shapes now derive from `capacities` alone, so
-    shards sharing a capacity tuple share every trace and executable, and the
-    true row counts ride only in this one gather's runtime data.
-
-    Any `capacities >= row_counts` works; the choice trades memory against
-    cache hits. A memory-tight consumer keeps capacities at a running
-    per-segment max over its shards (padding ~= the inter-shard spread); a
-    power-of-two capacity additionally makes every fold even (no per-round
-    re-pad gathers) at up to 2x padding."""
-    if len(capacities) != len(layer.row_counts):
-        raise ValueError(
-            f"capacities {capacities} must have one entry per segment "
-            f"({len(layer.row_counts)})"
-        )
-    for rc, cap in zip(layer.row_counts, capacities, strict=True):
-        if cap < rc:
-            raise ValueError(f"capacity {cap} < row count {rc}")
-    gather = _segment_gather(layer.row_counts, capacities)
-    n0, n1, d0, d1 = _pad_neutral(
-        layer.numerator_0,
-        layer.numerator_1,
-        layer.denominator_0,
-        layer.denominator_1,
-        gather,
-    )
-    return JaggedGkrLayer(n0, n1, d0, d1, capacities)
-
-
 def prove_jagged_layer(
     layer: JaggedGkrLayer,
     lam: Array,
@@ -178,7 +133,10 @@ def prove_jagged_layer(
     challenge_limbs: int = 1,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
-    """Run one jagged GKR layer's materialized sumcheck.
+    """Prove one jagged GKR layer's materialized sumcheck from an explicit
+    `lam` / `claim` (no inter-layer carry). The standalone single-layer seam
+    the layer tests drive; the pyramid runs `JaggedGkrLayerRound`, which
+    brackets this same core (`_prove_jagged_layer_from_ops`) with the carry.
 
     `eval_point` is MSB-first over (batch || row) variables; its length
     fixes the virtual row depth `nrv = len(eval_point) - niv`, which may
@@ -192,55 +150,27 @@ def prove_jagged_layer(
     tracked by the rounds' `live` operand, so one compiled round kernel serves
     every round -- and every layer and shard proved under the same caps.
     Byte-identical to the exact layout.
+
+    The device-derived schedule (xla#179): the per-round re-pad schedule is a
+    pure function of `row_counts` + the round index and derives inside the
+    claimed kernels, so the loop carries only the tiny i32[nseg] `row_counts`
+    operand plus per-round i32[3] live triples -- both ride as traced operands,
+    so `row_counts` never enters the jit key.
     """
     niv = layer.num_batch_variables
-    _check_row_space(layer.row_counts, eval_point.shape[0], niv)  # validates only
+    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
     planes = _Planes(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
     )
-    return _prove_jagged_layer_from_counts(
-        planes,
-        niv,
-        layer.row_counts,
-        lam,
-        claim,
-        eval_point,
-        transcript,
-        challenge_limbs,
-        caps,
-    )
-
-
-def _prove_jagged_layer_from_counts(
-    planes: _Planes,
-    niv: int,
-    row_counts: tuple[int, ...],
-    lam: Array,
-    claim: Array,
-    eval_point: Array,
-    transcript: Transcript,
-    challenge_limbs: int,
-    caps: RoundWidthCaps | None = None,
-) -> tuple[Array, Transcript, JaggedLayerProof]:
-    """One jagged layer's sumcheck from the layer's static `row_counts`.
-
-    The device-derived schedule (xla#179): the per-round re-pad schedule
-    is a pure function of `row_counts` + the round index and derives inside
-    the claimed kernels (and the decompositions), so the loop carries only the
-    tiny i32[nseg] `row_counts` operand plus per-round i32[3] live triples —
-    the hundreds-of-MB host-built gather uploads (and their per-warm-pass
-    rebuild/staging) are gone, and the whole-layer jit's HLO stays tiny
-    without `row_counts` ever entering the jit key (both ride as operands)."""
-    nrv = eval_point.shape[0] - niv
     return _prove_jagged_layer_from_ops(
         planes,
         niv,
-        _row_counts_operand(row_counts),
-        _round_live_meta(row_counts, nrv),
-        None if caps is not None else _round_out_pairs(row_counts, nrv),
+        _row_counts_operand(layer.row_counts),
+        _round_live_meta(layer.row_counts, nrv),
+        None if caps is not None else _round_out_pairs(layer.row_counts, nrv),
         lam,
         claim,
         eval_point,
@@ -263,11 +193,12 @@ def _prove_jagged_layer_from_ops(
     challenge_limbs: int,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
-    """`_prove_jagged_layer_from_counts` from PREBUILT schedule operands — the
-    seam the whole-layer jit zone routes through, so `row_counts` and the live
-    triples ride as TRACED operands (never keying the jit) while `out_pairs`
-    (the exact layout's static padded widths; None under caps) stays static
-    like `niv`/`caps`."""
+    """One jagged layer's sumcheck from PREBUILT schedule operands — the shared
+    core both entries reach: the whole-layer jit zone (`_prove_jagged_layer_round`)
+    and the standalone `prove_jagged_layer`. `row_counts` and the live triples
+    ride as TRACED operands (never keying the jit) while `out_pairs` (the exact
+    layout's static padded widths; None under caps) stays static like
+    `niv`/`caps`."""
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)

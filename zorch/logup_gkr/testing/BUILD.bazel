@@ -76,24 +76,6 @@ py_test(
 )
 
 py_test(
-    name = "jagged_capacity_test",
-    size = "medium",
-    srcs = ["jagged_capacity_test.py"],
-    deps = [
-        ":testing",
-        "//zorch:transcript",
-        "//zorch/logup_gkr",
-        "//zorch/poly",
-        "//zorch/testkit:random_field",
-        "//zorch/testkit:transcript",
-        requirement("absl_py"),
-        requirement("jax"),
-        requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
     name = "round_composite_test",
     size = "small",
     srcs = ["round_composite_test.py"],
