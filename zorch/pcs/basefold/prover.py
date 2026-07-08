@@ -49,7 +49,7 @@ from zorch.pcs.basefold.config import (
     CadenceProof,
 )
 from zorch.pcs.basefold.kernel import SumcheckKernel
-from zorch.pcs.fold import open_rows, to_base_field
+from zorch.pcs.fold import lane_combine, open_rows, to_base_field
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
@@ -260,20 +260,22 @@ class BasefoldProver:
         return _open_with_basis_body(self, prover_data, basis, value, transcript)
 
 
-def _lane_combine(lanes: Array, challenges: Sequence[Array]) -> Array:
-    """The row-batch prefix's codeword op: fold the trailing lane axis of
-    `lanes` `[n_pos, 2^prefix]` by each prefix challenge in turn (the multilinear
-    partial-eval bind `(1-r)·e0 + r·e1`, low bit first), collapsing to `[n_pos]`.
-    Deferred to one pass at prefix end — the lane variables are exactly the ones
-    the sumcheck binds over the prefix rounds, so they combine with the same
-    challenges. Char-2-agnostic: `(1-r)·e0 + r·e1` is the field-general bind."""
-    buf = lanes
-    for r in challenges:
-        pairs = buf.reshape(buf.shape[0], -1, 2)
-        e0, e1 = pairs[..., 0], pairs[..., 1]
-        one = jnp.ones((), e0.dtype)
-        buf = (one - r) * e0 + r * e1
-    return buf[:, 0]
+def _require_no_cadence_grind(chor: BasefoldChoreography, num_vars: int) -> None:
+    """Fail loud on a scheduled grind under the non-native cadence: `CadenceProof`
+    carries no pow-witness field, so a ground witness has nowhere to live — it
+    would be silently dropped (a soundness hole). Refuse instead, symmetric to the
+    native path's pow-witness `NotImplementedError` (`_fold_and_query`) and the
+    verifier's `_require_no_grind`. The grind wire is a deferred consumer delta."""
+    scheduled = (
+        any(chor.fold_grind_bits(r, 0) is not None for r in range(num_vars))
+        or chor.query_grind_bits(0) is not None
+    )
+    if scheduled:
+        raise NotImplementedError(
+            "the choreography schedules a grind, but the non-native cadence open "
+            "drops no witness into CadenceProof (it carries no pow field); the "
+            "grind wire is a deferred consumer delta, symmetric to the native path"
+        )
 
 
 def _open_with_basis_cadence(
@@ -305,6 +307,9 @@ def _open_with_basis_cadence(
     num_epochs = len(arities)
     n_pos = code.block_len
     num_ntts = 1 << prefix
+    # Fail loud on a scheduled grind BEFORE producing any bytes, symmetric to the
+    # native path's pow-witness refusal (`CadenceProof` carries no pow field).
+    _require_no_cadence_grind(chor, num_vars)
 
     # Initial commit (leaf = the interleave lanes of one position). Re-derived
     # here for the query openings only — the outer protocol already bound this
@@ -333,9 +338,6 @@ def _open_with_basis_cadence(
         components = kernel.message(state)
         msg = chor.round_message(*components)
         t = chor.observe_message(t, msg)
-        bits = chor.fold_grind_bits(rnd, 0)
-        if bits is not None:
-            t, _ = chor.grind(t, bits)
         t, r = chor.fold_challenge(t, None, rnd, 0)
         state = kernel.fold(state, components, r)
         round_messages.append(components)
@@ -343,15 +345,20 @@ def _open_with_basis_cadence(
         if rnd < prefix:
             rb_challenges.append(r)
             if rnd + 1 == prefix:
-                cw = _lane_combine(init_leaves, rb_challenges)  # [n_pos]
-                lf = 1 << arities[0]
-                leaves = cw.reshape(n_pos // lf, lf)
-                root, digest = tree.commit(leaves)
-                t = chor.observe_root(t, root)
-                commit_roots.append(root)
-                layer_leaves.append(leaves)
-                layer_digests.append(digest)
-                layer_shifts.append(arities[0])
+                cw = lane_combine(init_leaves, rb_challenges)  # [n_pos]
+                # No FRI epochs (log_dim == 0): the row-batched codeword is the
+                # terminal, so there is no post-prefix commit to make (guarding
+                # `arities[0]` here mirrors flock's `if arities:`; latent until a
+                # log_dim==0 consumer, but correct by construction).
+                if arities:
+                    lf = 1 << arities[0]
+                    leaves = cw.reshape(n_pos // lf, lf)
+                    root, digest = tree.commit(leaves)
+                    t = chor.observe_root(t, root)
+                    commit_roots.append(root)
+                    layer_leaves.append(leaves)
+                    layer_digests.append(digest)
+                    layer_shifts.append(arities[0])
         else:
             cw = code.fold(cw, r)
             cum += 1

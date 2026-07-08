@@ -149,6 +149,27 @@ def open_rows(
     return jax.vmap(lambda i: tree.open(matrix, digest_layers, i))(indices)
 
 
+def lane_combine(lanes: Array, challenges: Sequence[Array]) -> Array:
+    """The row-batch prefix's codeword op: fold the trailing lane axis of
+    `lanes` `[rows, 2^prefix]` by each prefix challenge in turn (the multilinear
+    partial-eval bind `(1-r)·e0 + r·e1`, low bit first), collapsing to `[rows]`.
+
+    Deferred to one pass at prefix end — the lane variables are exactly the ones
+    the sumcheck binds over the prefix rounds, so they combine with the same
+    challenges. The prover folds the whole post-lane codeword (`[n_pos, 2^prefix]`
+    -> `[n_pos]`); the verifier folds each query's opened lanes (`[Q, 2^prefix]`
+    -> `[Q]`) — one op, so the two cannot drift. An empty `challenges` (no prefix)
+    returns the single lane. Char-2-agnostic: `(1-r)·e0 + r·e1` is the
+    field-general bind."""
+    buf = lanes
+    for r in challenges:
+        pairs = buf.reshape(buf.shape[0], -1, 2)
+        e0, e1 = pairs[..., 0], pairs[..., 1]
+        one = jnp.ones((), e0.dtype)
+        buf = (one - r) * e0 + r * e1
+    return buf[:, 0]
+
+
 def sample_positions(
     transcript: TranscriptT, block_len: int, count: int
 ) -> tuple[TranscriptT, Array]:
