@@ -26,8 +26,8 @@ from jax import Array
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import EvalDomain, fold_stacked, summand_evals, uhat_domain
-from zorch.sumcheck.prover import SumcheckRound, SumcheckSummand
+from zorch.sumcheck.domain import EvalDomain, summand_evals, uhat_domain
+from zorch.sumcheck.prover import StandardRound, SumcheckRound, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -67,27 +67,6 @@ class SqrtSpaceRound(Round):
         msg = self._round_poly(state)
         transcript, r = transcript.observe_and_sample(msg, 1)
         return (p_stacked, expand_hypercube_step(eq_evals, r[0])), transcript, msg
-
-
-class StandardRound(Round):
-    """One second-phase round on the folded factor evaluations: send the summand's
-    round poly over the domain, sample, fold. The dense counterpart to SqrtSpaceRound
-    — the boundary has already collapsed the deferred state, so this simply folds the
-    materialized factors each round. Bound to a SumcheckSummand and an EvalDomain."""
-
-    def __init__(self, summand: SumcheckSummand, domain: EvalDomain) -> None:
-        self.summand = summand
-        self.domain = domain
-
-    def _round_poly(self, folded: Array) -> Array:
-        return summand_evals(folded, self.summand._combine, self.domain)
-
-    def __call__(
-        self, folded: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array]:
-        msg = self._round_poly(folded)
-        transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold_stacked(folded, r[0]), transcript, msg
 
 
 def prove_sqrt_space(

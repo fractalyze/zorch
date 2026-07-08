@@ -30,6 +30,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from zorch.round import Round
+from zorch.sumcheck.domain import EvalDomain, fold_stacked, summand_evals
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -145,6 +146,28 @@ class SumcheckRound(Round):
         transcript, r = transcript.observe_and_sample(msg, 1)
         state = fold(state, r[0])
         return state, transcript, msg
+
+
+class StandardRound(Round):
+    """A standard sumcheck round on stacked factor evaluations: send the summand's
+    round poly over `domain`, sample the challenge, fold. Bound to a SumcheckSummand
+    and an EvalDomain — the host-loop, EvalDomain-form sibling of SumcheckRound (which
+    holds its factors as a list and sends the natural [0..degree] eval form). Driven by
+    fold_rounds; used by sqrt_space's second phase and the eq engines."""
+
+    def __init__(self, summand: SumcheckSummand, domain: EvalDomain) -> None:
+        self.summand = summand
+        self.domain = domain
+
+    def _round_poly(self, folded: Array) -> Array:
+        return summand_evals(folded, self.summand._combine, self.domain)
+
+    def __call__(
+        self, folded: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array]:
+        msg = self._round_poly(folded)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        return fold_stacked(folded, r[0]), transcript, msg
 
 
 @dataclass(frozen=True)
