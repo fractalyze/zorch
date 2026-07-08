@@ -22,7 +22,7 @@ from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_st
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold_stacked, product_round_poly
+from zorch.sumcheck.domain import fold_stacked, product_round_poly, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
 from zorch.sumcheck.prover import SumcheckRound
@@ -58,12 +58,15 @@ class SmallValueRound(Round):
         self.d = d
         self.w_i = w_i
         self.accumulator = accumulator
+        # Product-bound to the compressed Û_d domain: the accumulator table it
+        # contracts against was itself precomputed over Û_d (Procedure 9).
+        self.domain = uhat_domain(d, w_i.dtype)
 
     def _round_poly(self, state: SmallValueState) -> Array:
         r_tensor, eq_w_prev = state
         t_evals = (r_tensor[:, None] * self.accumulator).sum(axis=0)
         l_evals = expand_hypercube_step(eq_w_prev, self.w_i)
-        return sumcheck_poly_from_t(t_evals, l_evals, self.d)
+        return sumcheck_poly_from_t(t_evals, l_evals, self.domain)
 
     def _fold(self, state: SmallValueState, r: Array) -> SmallValueState:
         r_tensor, eq_w_prev = state

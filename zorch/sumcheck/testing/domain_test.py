@@ -11,6 +11,8 @@ from zorch.sumcheck.domain import (
     fold_stacked,
     product_round_coeffs,
     product_round_poly,
+    summand_evals,
+    uhat_domain,
 )
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.testkit.transcript import cheap_transcript
@@ -77,6 +79,27 @@ class DomainTest(absltest.TestCase):
                 jnp.array_equal(
                     zerocheck.to_coeffs(jnp.array([1, 17, 57], dtype=KB)),
                     jnp.array([1, 2, 3], dtype=KB),
+                )
+            )
+        )
+
+    def test_summand_evals_settable_domain(self) -> None:
+        # summand_evals samples the round poly wherever the EvalDomain says — here an
+        # explicit finite {0, 2, 4} instead of the default ∞-leading Û. Two linear
+        # factors over one variable: a(u)=1+2u, b(u)=2+3u, s(u)=a(u)·b(u).
+        stacked = jnp.stack([jnp.array([1, 3], dtype=KB), jnp.array([2, 5], dtype=KB)])
+        got = summand_evals(
+            stacked, lambda x, y: x * y, EvalDomain(jnp.array([0, 2, 4], dtype=KB))
+        )
+        want = jnp.array([1 * 2, 5 * 8, 9 * 14], dtype=KB)  # u = 0, 2, 4
+        self.assertTrue(bool(jnp.array_equal(got, want)))
+        # The default Û domain is just one EvalDomain choice: product_round_poly is
+        # summand_evals on uhat_domain.
+        self.assertTrue(
+            bool(
+                jnp.array_equal(
+                    product_round_poly(stacked),
+                    summand_evals(stacked, lambda x, y: x * y, uhat_domain(2, KB)),
                 )
             )
         )

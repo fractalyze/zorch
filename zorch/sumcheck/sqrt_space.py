@@ -8,13 +8,14 @@ recompute). The tail is a plain sumcheck (summand_evals + fold) over the state
 folded down at the phase boundary. Messages match a linear-time prover on the same
 challenges (testing/sqrt_space_test.py).
 
-Generic over the round summand (the SumcheckSummand seam prove/SumcheckRound share):
-the √-space memory trick refolds each factor independently, so it is orthogonal to
-how the factors combine into the round message. The summand must be HOMOGENEOUS
-(round-poly leading coeff = combine(*factor_slopes)) since the message rides the
-∞-leading Û_degree form — product and LogUp qualify; the non-homogeneous R1CS
-combine wants the finite-domain prove-scan path instead. The default is the product
-summand, so prove_sqrt_space(p) stays a product sumcheck.
+Generic over two orthogonal axes: the round summand (the SumcheckSummand seam
+prove/SumcheckRound share) and the sampling EvalDomain. The √-space memory trick
+refolds each factor independently, so it is orthogonal to how the factors combine
+AND to where the round poly is sampled. Defaults keep a product sumcheck on the
+compressed Û_degree domain, so prove_sqrt_space(p) is unchanged; pass a homogeneous
+summand and/or another EvalDomain (Gruen {0,1,*extra,eq_root(z)}, {0,½}, {0,2,4}) to
+retarget it. The ∞-leading Û message needs a homogeneous summand (leading coeff =
+combine(*slopes)); a finite domain lifts that restriction for any summand.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ from jax import Array
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold_stacked, summand_evals
+from zorch.sumcheck.domain import EvalDomain, fold_stacked, summand_evals, uhat_domain
 from zorch.sumcheck.prover import SumcheckRound, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -46,19 +47,17 @@ def compute_folded_evaluations(p_stacked: Array, eq_evals: Array) -> Array:
 
 
 class SqrtSpaceRound(Round):
-    """One first-phase round: refold on the fly, send the summand's round poly, and
-    extend the eq table by the sampled challenge (the factors stay put). Bound to a
-    SumcheckSummand (product by default)."""
+    """One first-phase round: refold on the fly, send the summand's round poly over
+    the sampling domain, and extend the eq table by the sampled challenge (the
+    factors stay put). Bound to a SumcheckSummand and an EvalDomain."""
 
-    def __init__(self, summand: SumcheckSummand) -> None:
+    def __init__(self, summand: SumcheckSummand, domain: EvalDomain) -> None:
         self.summand = summand
+        self.domain = domain
 
     def _round_poly(self, state: SqrtSpaceState) -> Array:
         return summand_evals(
-            compute_folded_evaluations(*state),
-            self.summand._combine,
-            self.summand.degree,
-            skip_one=True,
+            compute_folded_evaluations(*state), self.summand._combine, self.domain
         )
 
     def __call__(
@@ -71,26 +70,31 @@ class SqrtSpaceRound(Round):
 
 
 def prove_sqrt_space(
-    p_initial: Array, transcript: Transcript, summand: SumcheckSummand | None = None
+    p_initial: Array,
+    transcript: Transcript,
+    summand: SumcheckSummand | None = None,
+    domain: EvalDomain | None = None,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck: √-space first phase, standard second phase. `summand`
-    defaults to the product over the factors (SumcheckRound); pass a homogeneous
-    SumcheckSummand to reuse the √-space engine for another round shape. Returns the
-    final folded factors (d, 1), the transcript, and all l messages."""
+    defaults to the product over the factors (SumcheckRound) and `domain` to the
+    compressed Û_degree; pass a homogeneous SumcheckSummand and/or another EvalDomain
+    to retarget the engine. Returns the final folded factors (d, 1), the transcript,
+    and all l messages."""
     summand = summand or SumcheckRound(degree=p_initial.shape[0])
+    domain = domain or uhat_domain(summand.degree, p_initial.dtype)
     l = log2_strict_usize(p_initial.shape[1])
     l_half = l // 2
 
     state: SqrtSpaceState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
     state, transcript, phase1 = fold_rounds(
-        SqrtSpaceRound(summand), state, transcript, l_half
+        SqrtSpaceRound(summand, domain), state, transcript, l_half
     )
 
     # Fold the factors down over the bound prefix, then a plain tail sumcheck.
     folded = compute_folded_evaluations(*state)
     phase2 = []
     for _ in range(l - l_half):
-        msg = summand_evals(folded, summand._combine, summand.degree, skip_one=True)
+        msg = summand_evals(folded, summand._combine, domain)
         transcript, r = transcript.observe_and_sample(msg, 1)
         folded = fold_stacked(folded, r[0])
         phase2.append(msg)

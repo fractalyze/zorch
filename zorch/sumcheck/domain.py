@@ -103,6 +103,16 @@ class EvalDomain:
         low = jnp.dot(cmat, finite - v_inf * nodes**d)
         return jnp.concatenate([low, jnp.atleast_1d(v_inf)])
 
+    def sample(self, p0: Array, p1: Array) -> Array:
+        """Sample the linear factor p(x) = p0 + x·(p1−p0) at this domain's points
+        [∞ if leading, *nodes]: p(∞) = slope p1−p0, p(node) = p0 + node·slope. The
+        leading axis indexes the domain. Requires explicit nodes — a sampling domain
+        must be concrete (the naturals-sized domain is an output-only coeff map)."""
+        assert self.nodes is not None, "a sampling domain needs an explicit node set"
+        diff = p1 - p0
+        finite = p0[None] + self.nodes.reshape((-1,) + (1,) * p0.ndim) * diff[None]
+        return jnp.concatenate([diff[None], finite]) if self.leading else finite
+
 
 def extend_to_round_domain(
     p0: Array, p1: Array, d: int, *, skip_one: bool = False
@@ -126,45 +136,49 @@ def _product(*factors: Array) -> Array:
     return reduce(operator.mul, factors)
 
 
-def summand_evals(
-    stacked: Array,
-    combine: Callable[..., Array],
-    degree: int,
-    *,
-    skip_one: bool,
-) -> Array:
-    """Σ_x' combine(f₁, …, f_m)(x') per node of the round's domain: the m stacked
-    factors lifted onto Û_degree (skip_one, u=1 dropped) or the full U_degree, then
-    combined and summed. The one reduction body the round-message builders share,
-    generic over the summand's `combine` (Πₖ for a product, the LogUp combine, …).
+def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
+    """The compressed product round domain Û_degree = {∞, 0, 2, …, degree−1}:
+    ∞-leading, u=1 dropped (the verifier recovers s(1) from s(0)+s(1)=claim). The
+    default sampling domain for the eq-poly / sqrt-space engines."""
+    nat = _naturals(degree, dtype)
+    return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), leading=True)
 
-    The ∞ node (leading coefficient) is combine(*slopes), which equals the round
-    polynomial's true leading coefficient only for a HOMOGENEOUS combine — every
-    monomial a product of exactly `degree` factors (product, LogUp; NOT the R1CS
-    E·(AB−C) whose finite-domain form belongs on the prove-scan seam instead)."""
+
+def summand_evals(
+    stacked: Array, combine: Callable[..., Array], domain: EvalDomain
+) -> Array:
+    """Σ_x' combine(f₁, …, f_m)(x') per point of `domain`: the m stacked factors
+    sampled at the domain's points (domain.sample), combined, then summed. The one
+    reduction body the round-message builders share — generic over BOTH the summand's
+    `combine` (Πₖ, LogUp, …) and the evaluation domain (∞-leading Û, Gruen, {0,½},
+    {0,2,4}, …).
+
+    A leading (∞) node encodes s(∞) = combine(*slopes), the true leading coefficient
+    only for a HOMOGENEOUS combine (product, LogUp; NOT the R1CS E·(AB−C)). A finite
+    domain carries no such restriction — any summand samples cleanly on it."""
     m = stacked.shape[0]
     pairs = jnp.reshape(stacked, (m, 2, -1))
     p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
-    lifted = jax.vmap(
-        lambda a, b: extend_to_round_domain(a, b, degree, skip_one=skip_one)
-    )(p0, p1)
+    lifted = jax.vmap(domain.sample)(p0, p1)
     return jnp.sum(combine(*lifted), axis=1)
 
 
 def product_round_poly(stacked: Array) -> Array:
     """Round message s = Σₓ Πₖ fₖ over Û_m for the m stacked multilinears, shape
-    (m,) — the product instantiation of summand_evals."""
-    return summand_evals(stacked, _product, stacked.shape[0], skip_one=True)
+    (m,) — the product summand on the compressed domain."""
+    return summand_evals(
+        stacked, _product, uhat_domain(stacked.shape[0], stacked.dtype)
+    )
 
 
 def product_round_coeffs(stacked: Array) -> Array:
     """Ascending coefficients of the degree-m product round polynomial for m stacked
-    factors: the same Σ_x' Πₖ fₖ as product_round_poly but evaluated over the full
-    round domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to
-    coefficients — the wire form verifier.CoeffsSumcheckRound checks."""
-    return EvalDomain(leading=True).to_coeffs(
-        summand_evals(stacked, _product, stacked.shape[0], skip_one=False)
-    )
+    factors: the same Σ_x' Πₖ fₖ as product_round_poly but sampled over the full round
+    domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to coefficients —
+    the wire form verifier.CoeffsSumcheckRound checks."""
+    m = stacked.shape[0]
+    full = EvalDomain(_naturals(m, stacked.dtype), leading=True)  # [∞, 0, 1, …, m−1]
+    return EvalDomain(leading=True).to_coeffs(summand_evals(stacked, _product, full))
 
 
 def fold_stacked(stacked: Array, r: Array) -> Array:
