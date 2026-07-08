@@ -7,7 +7,7 @@ messages, a basis (no opening point) statement bind, and multi-element fold
 arities. This gives zorch CI regression coverage of the cadence driver + verifier
 WITHOUT the flock repo (which byte-anchors the same seams cross-repo).
 
-The instance is kept prime-field and small (`size=small`): the codeword is built
+The instance is kept prime-field and small (`size=medium`): the codeword is built
 per-lane as `encode(evals_to_coeffs(lane_message))` so the affine sumcheck fold
 ties to the code's coefficient fold (the two coincide in char-2 for flock; the
 `evals_to_coeffs` bridge makes the tie hold over an odd-characteristic field too),
@@ -153,7 +153,7 @@ class BasefoldCadenceRoundTripTest(absltest.TestCase):
     # The open + verify ride the eager composite path (real poseidon2 Merkle +
     # NTT folds), so build the instance and prove ONCE at class scope — every case
     # reuses the one proof (tampers on a copy), keeping the whole suite inside the
-    # `size=small` budget instead of re-tracing per method.
+    # `size=medium` budget instead of re-tracing per method.
     @classmethod
     def setUpClass(cls) -> None:
         super().setUpClass()

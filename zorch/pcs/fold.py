@@ -187,7 +187,7 @@ def sample_distinct_positions(
 ) -> tuple[TranscriptT, Array]:
     """Rejection-sample `count` DISTINCT positions in `[0, block_len)`, sorted
     ascending — the strategy of wire formats that spend one squeeze per
-    candidate and re-squeeze on a repeat (flock's `sample_distinct_queries`;
+    candidate and re-squeeze on a repeat (a distinct-query byte-wire strategy;
     each squeeze reduces like `sample_positions`, low limb mod `block_len`).
     Transcript consumption is data-dependent, so the loop is host-driven (one
     device->host sync per candidate) and cannot run under `jit`; both sides
