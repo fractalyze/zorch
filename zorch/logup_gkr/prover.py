@@ -7,14 +7,12 @@ round and `jagged_prover`'s coeff-form round. `LogupSumcheckRound` is one
 per-variable sumcheck round whose summand (`_combine`) delegates to a
 `LogupSummand` scoped to its `lam` -- the sibling of the product
 `zorch.sumcheck.prover.SumcheckRound`. Its `__call__` emits a
-`RoundMsg(round_poly, challenge)` for the generic `fold_rounds` driver; the
-homogeneous scan driver `prove` (which `GkrLayerRound` uses) reads only
-`degree` + `_combine` and stacks that same `RoundMsg`, so the evaluation point
-is `msgs.challenge`.
+`RoundMsg(round_poly, challenge)` per round; `GkrLayerRound` stacks the per-round
+messages, so the evaluation point is the stacked challenges.
 
 `GkrLayerRound` is one GKR layer: it runs the layer's per-variable LogUp sumcheck
-(via the homogeneous scan driver `prove` over `LogupSumcheckRound`), then reduces
-the numerator and denominator claims across the child selector. The whole GKR
+(`fold_rounds` over `LogupSumcheckRound`), then reduces the numerator and
+denominator claims across the child selector. The whole GKR
 prover is `ProveChain([GkrLayerRound(l) for l in reversed(layers[:-1])])` -- the
 interaction floor outward to the input, one bound variable per layer.
 
@@ -45,12 +43,12 @@ from jax import Array
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
+from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.sumcheck.prover import (
     RoundMsg,
     factors_on_domain,
     fold,
-    prove,
     split_pairs,
 )
 from zorch.transcript import Transcript
@@ -305,10 +303,12 @@ class GkrLayerRound(Round):
             self.layer.numerator_1,
             self.layer.denominator_0,
         ]
-        final_state, transcript, msgs = prove(
-            LogupSumcheckRound(lam), state, transcript
+        rounds = log2_strict_usize(state[0].shape[-1])
+        final_state, transcript, msgs = fold_rounds(
+            LogupSumcheckRound(lam), state, transcript, rounds
         )
-        round_polys, point = msgs.round_poly, msgs.challenge
+        round_polys = jnp.stack([m.round_poly for m in msgs])
+        point = jnp.stack([m.challenge for m in msgs])
 
         _, n0, d1, n1, d0 = (factor[0] for factor in final_state)
         transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)

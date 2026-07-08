@@ -150,29 +150,15 @@ class LsbHelpersTest(absltest.TestCase):
             bool(jnp.all(prover.fold_lsb(f, r) == prover.fold([deinterleaved], r)[0]))
         )
 
-    def test_zero_extend_pads_the_last_axis(self) -> None:
-        f = rand_field(23, (2, 3), KB)
-        got = prover.zero_extend(f, 5)
-        self.assertEqual(got.shape, (2, 5))
-        self.assertTrue(bool(jnp.all(got[:, :3] == f)))
-        self.assertTrue(bool(jnp.all(got[:, 3:] == jnp.zeros((2, 2), KB))))
-
-    def test_zero_extend_at_width_is_identity(self) -> None:
-        f = rand_field(24, (4,), KB)
-        self.assertIs(prover.zero_extend(f, 4), f)
-
-    def test_zero_extend_rejects_shrinking(self) -> None:
-        with self.assertRaises(ValueError):
-            prover.zero_extend(rand_field(25, (4,), KB), 3)
-
 
 class SumcheckRoundPytreeTest(absltest.TestCase):
-    def test_config_is_static_pytree(self) -> None:
-        # degree is config, not data: prover and verifier rounds carry zero array
-        # leaves, so each threads through jit/vmap as a fully-static pytree.
-        for rnd in (prover.SumcheckRound(degree=2), verifier.SumcheckRound(degree=2)):
-            leaves, _ = tree_util.tree_flatten(rnd)
-            self.assertEqual(leaves, [])
+    def test_verifier_config_is_static_pytree(self) -> None:
+        # The verifier round is a `verify` scan argument, so degree must be config,
+        # not data: zero array leaves, threading through the scan as a static pytree.
+        # (The prover round runs under the fold_rounds host loop, never a jit arg, so
+        # it is a plain frozen dataclass — no pytree registration.)
+        leaves, _ = tree_util.tree_flatten(verifier.SumcheckRound(degree=2))
+        self.assertEqual(leaves, [])
 
 
 if __name__ == "__main__":
