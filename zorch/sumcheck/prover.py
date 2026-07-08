@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck prover rounds and the split/fold helpers they share.
+"""Sumcheck prover rounds and the LSB split helper they share.
 
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial sampled over an `EvalDomain`, then folds every MLE at the verifier's
@@ -15,9 +15,9 @@ defaults to the product (`ProductSummand`) and its domain to the natural
 
 The dense round binds MSB-first via `domain.fold` (contiguous-half split); the
 jagged engines bind LSB-first with `fold(..., msb=False)` (stride-2 pairs). The
-split-only `split_pairs` and the pair primitive `fold_pair` live here for those
-consumers (a jagged body that splits without folding, whir's manual pair fold).
-The verifier dual lives in `zorch.sumcheck.verifier`.
+split-only `split_pairs` lives here for the jagged bodies that need both halves
+without folding (the LogUp `paired_evals`). The verifier dual lives in
+`zorch.sumcheck.verifier`.
 
 Rounds run under the scheme-agnostic `zorch.prove.fold_rounds` host loop (any
 `Round`, any message shape) -- one round per variable, folding the state down
@@ -48,11 +48,6 @@ from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
-
-
-def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
-    """Fold one split pair at challenge `r`: P0 + r*(P1 - P0)."""
-    return p0 + r * (p1 - p0)
 
 
 def split_pairs(arr: Array) -> tuple[Array, Array]:
