@@ -4,7 +4,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import tree_util
+from jax import Array, lax, tree_util
 
 from zorch.sumcheck import prover, verifier
 from zorch.sumcheck.domain import fold, split_halves, split_pairs
@@ -142,6 +142,26 @@ class SumcheckRoundPytreeTest(absltest.TestCase):
         # it is a plain class — no pytree registration.)
         leaves, _ = tree_util.tree_flatten(verifier.SumcheckRound(degree=2))
         self.assertEqual(leaves, [])
+
+    def test_round_msg_survives_scan_as_output(self) -> None:
+        # RoundMsg is the per-step output of the fold_rounds / jagged-zerocheck
+        # scan, so it must be a registered pytree: its two array fields are data
+        # leaves, no meta. A plain frozen dataclass is "not a valid JAX type" as a
+        # scan output leaf.
+        msg = prover.RoundMsg(round_poly=jnp.zeros(3, KB), challenge=jnp.ones((), KB))
+        leaves, _ = tree_util.tree_flatten(msg)
+        self.assertEqual(len(leaves), 2)
+
+        # The regression guard: a scan emitting one RoundMsg per step must stack
+        # them into RoundMsg(round_poly=(n, ...), challenge=(n, ...)).
+        xs = rand_field(7, (4, 3), KB)
+
+        def step(carry: Array, x: Array) -> tuple[Array, prover.RoundMsg]:
+            return carry, prover.RoundMsg(round_poly=x, challenge=jnp.sum(x))
+
+        _, msgs = lax.scan(step, jnp.zeros((), KB), xs)
+        self.assertEqual(msgs.round_poly.shape, (4, 3))
+        self.assertEqual(msgs.challenge.shape, (4,))
 
 
 if __name__ == "__main__":
