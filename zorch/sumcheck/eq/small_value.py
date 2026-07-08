@@ -8,12 +8,15 @@ same challenges (testing/small_value_test.py):
 - Rounds 1..l₀ (SmallValueRound): the round polynomial is a contraction of the
   running R tensor against the round's accumulator; the factors are never touched,
   only R grows (by a Lagrange tensor factor) and the eq mass advances.
-- Round l₀+1 (transition): one SqrtSpace-style refold of [P₁, …, P_d, eq(w,·)] over
-  the l₀ bound variables, giving back a foldable factor state for the tail.
+- Round l₀+1 (MaterializeRound): collapse the postponed folds — one refold of
+  [P₁, …, P_d, eq(w,·)] over the l₀ bound variables — giving the tail its folded
+  factors.
 - Rounds l₀+2..l: the ordinary EqPolyRound tail.
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 import jax.numpy as jnp
 from jax import Array
@@ -22,11 +25,11 @@ from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_st
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import uhat_domain
+from zorch.sumcheck.domain import fold_stacked, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
 from zorch.sumcheck.prover import SumcheckRound
-from zorch.sumcheck.sqrt_space import compute_folded_evaluations, sumcheck_round
+from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -86,6 +89,33 @@ class SmallValueRound(Round):
         return new_state, transcript, msg
 
 
+class MaterializeRound(Round):
+    """Materialize the folds the accumulator phase postponed: refold the d+1 factors
+    [P₁..P_d, eq(w,·)] over the whole bound prefix in one shot, then one Û_d round,
+    binding variable l₀+1 and advancing the eq mass. Collapses the deferred √-space
+    state (the phase never folded the factors, only grew R) into the tail's folded
+    factors. Called once — its output state shape (folded, eq mass) differs from the
+    deferred input, so it is the √-space→dense boundary, not a uniform loop round."""
+
+    def __init__(self, d: int, w_l0: Array, dtype: Any) -> None:
+        self.summand = SumcheckRound(degree=d)
+        self.w_l0 = w_l0
+        self.domain = uhat_domain(d, dtype)
+
+    def __call__(
+        self, state: tuple[Array, Array, Array], transcript: Transcript
+    ) -> tuple[tuple[Array, Array], Transcript, Array]:
+        p_with_weights, eq_evals, eq_w_prev = state
+        folded = compute_folded_evaluations(p_with_weights, eq_evals)
+        msg = summand_evals(folded, self.summand._combine, self.domain)
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        return (
+            (fold_stacked(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
+            transcript,
+            msg,
+        )
+
+
 def _precompute(p_initial: Array, w: Array, l_0: int) -> tuple[list[Array], Array]:
     """Accumulators A_1..A_{l₀} and the factors with eq(w,·) appended as the
     (d+1)-th factor (the transition round folds all d+1 together)."""
@@ -130,15 +160,13 @@ def prove_eq_poly_small_value(
     )
     _, eq_w_prev, eq_evals = state
 
-    # Phase 2: transition — materialize the l₀-bound state, then one sumcheck round
-    # over the d+1 factors [P₁..P_d, eq(w,·)]. Sampling at Û_d (not Û_{d+1}) drops the
-    # eq factor from the message; its fold is carried as the scalar eq mass, so the
-    # tail keeps only the d real factors.
-    folded = compute_folded_evaluations(p_with_weights, eq_evals)
-    folded, transcript, msg_t, r_t = sumcheck_round(
-        folded, SumcheckRound(degree=d), uhat_domain(d, p_initial.dtype), transcript
-    )
-    eq_w_prev = eq_w_prev * eq_factor(r_t, w[l_0])
+    # Phase 2: the √-space→dense boundary. MaterializeRound collapses the postponed
+    # folds and binds variable l₀+1; sampling the d+1 factors at Û_d (not Û_{d+1})
+    # drops the eq factor from the message, and its fold rides the scalar eq mass, so
+    # the tail keeps only the d real factors.
+    (folded, eq_w_prev), transcript, msg_t = MaterializeRound(
+        d, w[l_0], p_initial.dtype
+    )((p_with_weights, eq_evals, eq_w_prev), transcript)
     folded_p = folded[:d]
 
     # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute
