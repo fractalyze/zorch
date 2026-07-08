@@ -154,8 +154,10 @@ def summand_evals(
     {0,2,4}, …).
 
     A leading (∞) node encodes s(∞) = combine(*slopes), the true leading coefficient
-    only for a HOMOGENEOUS combine (product, LogUp; NOT the R1CS E·(AB−C)). A finite
-    domain carries no such restriction — any summand samples cleanly on it."""
+    only for a HOMOGENEOUS combine — every monomial a product of exactly `degree`
+    factors (a plain product, or the LogUp combine); a mixed-degree combine like
+    E·(A·B − C) is not. A finite domain carries no such restriction — any summand
+    samples cleanly on it."""
     m = stacked.shape[0]
     pairs = jnp.reshape(stacked, (m, 2, -1))
     p0, p1 = pairs[:, 0, :], pairs[:, 1, :]

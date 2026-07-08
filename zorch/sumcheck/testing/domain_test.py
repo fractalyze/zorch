@@ -57,27 +57,26 @@ class DomainTest(absltest.TestCase):
             bool(jnp.array_equal(led.to_coeffs(jnp.array([3, 1, 6], dtype=KB)), want))
         )
 
-    def test_sp1_node_sets_to_coeffs(self) -> None:
-        # EvalDomain is node-set-generic, so the SP1 engines slated for zorch reuse
-        # it directly: materialized logup samples {0, 1/2} (degree 1), zerocheck
-        # samples {0, 2, 4} (degree 2). Both recover coefficients here.
+    def test_non_natural_node_sets_to_coeffs(self) -> None:
+        # EvalDomain handles any finite node set, not just the naturals: a node at a
+        # field inverse (1/2) and a non-consecutive integer set both recover coeffs.
         half = jnp.array(1, dtype=KB) / jnp.array(2, dtype=KB)
         # p(x) = 3 + 5x on {0, 1/2}: p(0)=3, p(1/2)=3 + 5/2.
-        logup = EvalDomain(jnp.stack([jnp.array(0, dtype=KB), half]))
+        deg1 = EvalDomain(jnp.stack([jnp.array(0, dtype=KB), half]))
         self.assertTrue(
             bool(
                 jnp.array_equal(
-                    logup.to_coeffs(jnp.stack([jnp.array(3, dtype=KB), 3 + 5 * half])),
+                    deg1.to_coeffs(jnp.stack([jnp.array(3, dtype=KB), 3 + 5 * half])),
                     jnp.array([3, 5], dtype=KB),
                 )
             )
         )
         # p(x) = 1 + 2x + 3x² on {0, 2, 4}: p = 1, 17, 57.
-        zerocheck = EvalDomain(jnp.array([0, 2, 4], dtype=KB))
+        deg2 = EvalDomain(jnp.array([0, 2, 4], dtype=KB))
         self.assertTrue(
             bool(
                 jnp.array_equal(
-                    zerocheck.to_coeffs(jnp.array([1, 17, 57], dtype=KB)),
+                    deg2.to_coeffs(jnp.array([1, 17, 57], dtype=KB)),
                     jnp.array([1, 2, 3], dtype=KB),
                 )
             )
