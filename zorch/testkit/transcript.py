@@ -55,9 +55,7 @@ class CheapPermutation:
         mixed = state * state * state
         return mixed + jnp.sum(mixed)
 
-    # Inert fused-region ABI. CheapPermutation is non-fused
-    # (`has_dedicated_fusion` False), so `Sponge` never calls this — but the
-    # `Permutation` seam requires it, so provide a conformant stub.
+    # Inert fused-region ABI: non-fused, never called; a conformant stub.
     def fused_region_spec(
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:

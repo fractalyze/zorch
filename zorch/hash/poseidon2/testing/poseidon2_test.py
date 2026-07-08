@@ -96,10 +96,9 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
 
     def test_non_plonky3_m4_takes_dedicated_route(self) -> None:
         # A non-default but M4-block-structured matrix (here the HorizenLabs
-        # reference M4 that pil2/ZisK use) must take the dedicated zorch.poseidon2
-        # route, carrying its own M4 as the external_m4 attribute — not fall back
-        # to the generic marker. This is what makes the dedicated emitter usable
-        # by the HorizenLabs variant without a per-matrix special case.
+        # reference M4) must take the dedicated zorch.poseidon2 route, carrying its
+        # own M4 as the external_m4 attribute — not fall back to the generic
+        # marker — so the dedicated emitter serves any M4 without a special case.
         hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
         w = 16
         mds = jnp.array(

@@ -101,17 +101,13 @@ class Poseidon2:
             )
         return _permute_body(self, state)
 
-    # -- Fused-region ABI (Permutation seam): so a consumer (e.g. `Sponge`) can
-    # wrap a whole computation over this permutation as one `fused_region` without
-    # knowing the operand layout. Sponge-agnostic — names no construction.
-
+    # Fused-region ABI (see `Permutation.fused_region_spec`).
     def fused_region_spec(
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
-        """See `Permutation.fused_region_spec`. The Poseidon2Fusion ABI: operands
-        `(leading, *round_constants)`, the M4-external + internal-diffusion
-        decomposition, and attrs whose `external_m4` identifies the M4 the kernel
-        implements. Meaningful only on the dedicated (M4-structured) path."""
+        """The Poseidon2Fusion ABI: operands `(leading, *round_constants)`, the
+        M4-external + internal-diffusion permute, and attrs whose `external_m4`
+        names the M4. Dedicated (M4-structured) path only."""
         p = self._p
         attrs: dict[str, Any] = {
             "permutation": "poseidon2",

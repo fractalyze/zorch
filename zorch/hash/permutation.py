@@ -44,25 +44,18 @@ class Permutation(Protocol):
     def fused_region_spec(
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
-        """The pieces to wrap a whole computation over this permutation — an
-        `absorb`/`squeeze`, a compression — as ONE `fused_region` in this
-        permutation's ABI, without the consumer (e.g. `Sponge`) knowing the
-        operand layout. Returns ``(operands, permute_from_operands, attrs)``:
+        """Pieces to wrap a computation over this permutation as ONE `fused_region`
+        in its ABI, without the consumer knowing the operand layout. Returns
+        ``(operands, permute_from_operands, attrs)``:
 
-        - ``operands`` = the composite operands ``(leading, *constants)``;
-          ``leading`` is the caller's data, the rest this permutation's round
-          constants, passed explicitly so a `lax.composite` cannot lift them to
-          leading operands and break the emitter ABI.
-        - ``permute_from_operands(state, *constants)`` runs the permutation on
-          ``state`` from those constant operands — a const-free straight-line
-          body, the decomposition the `fused_region` runs.
+        - ``operands`` = ``(leading, *constants)``; the round constants ride as
+          explicit operands so a `lax.composite` can't lift them and break the ABI.
+        - ``permute_from_operands(state, *constants)`` = the const-free permute the
+          `fused_region` runs.
         - ``attrs`` = identifying `composite.attributes` (a ``permutation``
-          discriminator plus the shape the recognizer reads); the consumer owns
-          the marker name and its own attributes.
+          discriminator + shape).
 
-        Invariant: ``operands[0] is leading`` and
-        ``permute_from_operands(s, *operands[1:])`` runs the permutation on ``s``
-        marker-free. Meaningful only on the dedicated path
-        (`has_dedicated_fusion`); a non-fused permutation returns an inert spec.
+        Meaningful only on the dedicated path; a non-fused permutation returns an
+        inert spec.
         """
         ...

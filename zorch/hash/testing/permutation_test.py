@@ -19,8 +19,7 @@ class _Id:
     def permute(self, state: Array) -> Array:
         return state
 
-    # Inert fused-region ABI — required by the seam, never called for a non-fused
-    # permutation (`has_dedicated_fusion` False).
+    # Inert fused-region ABI: non-fused, never called.
     def fused_region_spec(
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, object]]:
