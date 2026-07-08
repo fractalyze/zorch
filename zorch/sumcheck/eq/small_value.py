@@ -28,7 +28,7 @@ from zorch.round import Round
 from zorch.sumcheck.domain import fold_stacked, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
-from zorch.sumcheck.prover import SumcheckRound
+from zorch.sumcheck.prover import ProductSummand
 from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -96,7 +96,7 @@ class TransitionRound(Round):
     has already collapsed the folds the accumulator phase postponed."""
 
     def __init__(self, d: int, w_l0: Array, dtype: Any) -> None:
-        self.summand = SumcheckRound(degree=d)
+        self.summand = ProductSummand(degree=d)
         self.w_l0 = w_l0
         self.domain = uhat_domain(d, dtype)
 
@@ -171,7 +171,7 @@ def prove_eq_poly_small_value(
     # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
     # unlike EqPolyRound / SqrtSpaceRound, it does not take a general summand.
     (p_final, _), transcript, tail = fold_rounds(
-        EqPolyRound(SumcheckRound(degree=d), w),
+        EqPolyRound(ProductSummand(degree=d), w),
         (folded_p, eq_w_prev),
         transcript,
         l - l_0 - 1,

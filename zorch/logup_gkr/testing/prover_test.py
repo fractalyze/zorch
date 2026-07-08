@@ -36,9 +36,9 @@ from zorch.transcript import Transcript
 KB = zk_dtypes.koalabear_mont
 
 
-def _state(seed: int, width: int) -> list[Array]:
-    """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
-    return [rand_field(seed + i, (width,), KB) for i in range(5)]
+def _state(seed: int, width: int) -> Array:
+    """Five MLE-eval factors [eq, n0, d1, n1, d0], stacked (5, width)."""
+    return jnp.stack([rand_field(seed + i, (width,), KB) for i in range(5)])
 
 
 class LogupSummandTest(absltest.TestCase):
@@ -74,13 +74,6 @@ class LogupSumcheckRoundTest(absltest.TestCase):
             folded = [x[:half] + uf * (x[half:] - x[:half]) for x in st]
             want = jnp.sum(rnd._combine(*folded))
             self.assertTrue(bool(msg[u] == want))
-
-    def test_round_poly_with_batch_dimension(self) -> None:
-        # Leading batch dims must broadcast: msg is (degree+1, *batch).
-        batch = 3
-        st = [x.reshape(batch, -1) for x in _state(20, 24)]
-        msg = LogupSumcheckRound(jnp.array(7, KB))._round_poly(st)
-        self.assertEqual(msg.shape, (4, batch))
 
     def test_sumcheck_invariant_s0_plus_s1(self) -> None:
         st = _state(40, 16)

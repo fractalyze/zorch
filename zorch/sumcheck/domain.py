@@ -136,6 +136,15 @@ def _product(*factors: Array) -> Array:
     return reduce(operator.mul, factors)
 
 
+def natural_domain(degree: int, dtype: Any) -> EvalDomain:
+    """The natural evaluation domain {0, 1, …, degree}: the round poly sent as its
+    plain values [s(0), …, s(degree)] — the wire form verifier.SumcheckRound checks
+    and the default domain of the generic StandardRound. Nodes live in the base
+    field (an integer node is a base-field element; extension factors promote at
+    multiply), reproducing the list prover's per-point lift byte-for-byte."""
+    return EvalDomain(_naturals(degree + 1, dtype))
+
+
 def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
     """The compressed product round domain Û_degree = {∞, 0, 2, …, degree−1}:
     ∞-leading, u=1 dropped (the verifier recovers s(1) from s(0)+s(1)=claim). The

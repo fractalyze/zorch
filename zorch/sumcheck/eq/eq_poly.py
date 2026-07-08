@@ -26,7 +26,7 @@ from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.sumcheck.domain import EvalDomain, _naturals, uhat_domain
-from zorch.sumcheck.prover import SumcheckRound, SumcheckSummand
+from zorch.sumcheck.prover import ProductSummand, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -192,7 +192,7 @@ def prove_eq_poly(
         raise ValueError(
             f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
         )
-    rnd = EqPolyRound(summand or SumcheckRound(degree=p_initial.shape[0]), w, domain)
+    rnd = EqPolyRound(summand or ProductSummand(degree=p_initial.shape[0]), w, domain)
     state: EqPolyState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
     (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
     return p_final, transcript, msgs
