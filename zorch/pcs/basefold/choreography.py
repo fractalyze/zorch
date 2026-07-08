@@ -3,15 +3,16 @@
 sumcheck + FRI fold touches the transcript, decoupled from WHAT it computes.
 
 `BasefoldChoreography` owns the shared Fiat-Shamir surface (statement binding,
-round-message framing, grinding, query sampling) as overridable hooks, plus
-three basefold-specific hooks for the sumcheck's own domain objects: the wire
-message, the per-round claim recurrence, and the terminal binding. zorch's
-native BaseFold wire is the default behavior, derived from
-`BasefoldProver.open`/`BasefoldVerifier.verify` (the `_SumcheckPairFoldRound`
-message emission and claim update) — a byte-fixed consumer subclasses and
-overrides only its deltas, the `LigeritoChoreography` pattern applied to
-BaseFold. Standalone for now (no shared base yet): the shared hooks mirror
-`LigeritoChoreography`'s verbatim, and the two collapse onto one
+round-message framing, grinding, query sampling) as overridable hooks, plus two
+basefold-specific FRAMING hooks: how the round-message components are stacked
+onto the wire (`round_message`) and the terminal binding (`observe_final`). The
+round ALGEBRA — the message components themselves, the state fold, and the
+verifier's claim recurrence — lives on the `SumcheckKernel` seam (`kernel.py`),
+not here. zorch's native BaseFold wire is the default behavior, derived from
+`BasefoldProver.open`/`BasefoldVerifier.verify` — a byte-fixed consumer
+subclasses and overrides only its deltas, the `LigeritoChoreography` pattern
+applied to BaseFold. Standalone for now (no shared base yet): the shared hooks
+mirror `LigeritoChoreography`'s verbatim, and the two collapse onto one
 `FoldChoreography` base once this class is proven against a second wire.
 
 `BasefoldProver` and `BasefoldVerifier` must share ONE choreography instance:
@@ -149,21 +150,14 @@ class BasefoldChoreography:
 
     # --- basefold-specific ---
 
-    def round_message(self, zero_val: Array, one_val: Array) -> Array:
-        """The wire message one interleaved-sumcheck round emits: the degree-1
-        message `(s(0), s(1))`, stacked (mirrors `_SumcheckPairFoldRound`)."""
-        return jnp.stack([zero_val, one_val])
-
-    def reduce_claim(self, running: Array, msg: Array, r: Array) -> Array:
-        """The per-round running-claim recurrence: `s(0) + r * s(1)` — the
-        additive BaseFold/FRI combine (`mle_fold`'s `e0 + r*e1`, NOT the affine
-        partial-eval bind), by construction the same challenge `r` that folds
-        the codeword and the MLE (mirrors `_SumcheckPairFoldRound` and the
-        verifier's replay). `running` rides unused in the native reduction — a
-        consumer whose recurrence also depends on the prior claim overrides."""
-        del running
-        zero_val, one_val = msg[0], msg[1]
-        return zero_val + r * one_val
+    def round_message(self, *components: Array) -> Array:
+        """Frame the kernel's raw round-message components onto the wire: stack
+        them into one array (native: `(s(0), s(1))`; a product consumer:
+        `(u0, u2)`). The FRAMING only — the components come from the kernel, and
+        a consumer whose transcript absorbs them element-by-element (e.g. two
+        scalar observes) keeps this default because `observe_message` iterates
+        the stacked array under such a transcript."""
+        return jnp.stack(list(components))
 
     def observe_final(self, transcript: TranscriptT, final_poly: Array) -> TranscriptT:
         """Bind the terminal poly before sampling queries. Default observes

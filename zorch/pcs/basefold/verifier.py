@@ -8,15 +8,16 @@ each fold layer's opened pair must fold to the next layer's, down to the constan
 final poly. It holds only the public params (`code` for the block geometry and
 fold, `tree` for the Merkle config) — never the prover's retained codeword.
 
-The replay is driven by a `(BasefoldConfig, BasefoldChoreography)` pair — the
-verify dual of `BasefoldProver`: the config fixes the fold schedule (commit
-cadence), the choreography fixes the Fiat-Shamir framing (running-claim
-recurrence via `reduce_claim`, message/root/terminal observes, query sampling,
-grind checks). `BasefoldVerifier`'s defaults are zorch's native wire — so the
-plain `BasefoldVerifier(code, tree, num_queries=…)` construction replays
-byte-for-byte today's implementation and accepts/rejects identically. Prover and
-verifier must share ONE choreography instance so their Fiat-Shamir streams stay
-equal by construction. A byte-fixed consumer supplies its own config +
+The replay is driven by a `(BasefoldConfig, BasefoldChoreography, SumcheckKernel)`
+triple — the verify dual of `BasefoldProver`: the config fixes the fold schedule
+(commit cadence), the choreography fixes the Fiat-Shamir framing (message/root/
+terminal observes, query sampling, grind checks), and the kernel owns the round
+algebra (the per-round `round_check` consistency + `reduce_claim` recurrence).
+`BasefoldVerifier`'s defaults are zorch's native wire — so the plain
+`BasefoldVerifier(code, tree, num_queries=…)` construction replays byte-for-byte
+today's implementation and accepts/rejects identically. Prover and verifier must
+share ONE choreography + kernel so their Fiat-Shamir streams stay equal by
+construction. A byte-fixed consumer supplies its own config +
 choreography and drives `verify_with_basis` (raw basis, `bind_statement`'s
 `point=None`) — the dual of `BasefoldProver.open_with_basis`.
 """
@@ -37,6 +38,7 @@ from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
 from zorch.pcs.basefold.choreography import BasefoldChoreography
 from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldConfig, BasefoldProof
+from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.fold import from_base_field, verify_fold_chain, verify_openings
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -60,6 +62,7 @@ class BasefoldVerifier:
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
     choreography: BasefoldChoreography = BasefoldChoreography()
+    kernel: SumcheckKernel = SumcheckKernel()
     config: BasefoldConfig | None = None
 
     def _resolved_config(self, num_vars: int) -> BasefoldConfig:
@@ -222,11 +225,11 @@ def _verify_batch_body(
     transcript: Transcript,
 ) -> tuple[Array, Transcript]:
     chor = verifier.choreography
+    kernel = verifier.kernel
     dtype = z.dtype
     n = verifier.code.block_len
     num_vars = z.shape[0]
     config = verifier._resolved_config(num_vars)
-    one = jnp.ones((), dtype)
     t = transcript
 
     # Re-derive the batch weights + initial claim (mirror open's FS order):
@@ -244,15 +247,16 @@ def _verify_batch_body(
     current_claim = batch_staggered(list(values), coeffs)
     t = t.observe(jnp.asarray(num_vars, dtype))
 
-    # Replay the interleaved sumcheck + fold challenges through the choreography.
-    # Every round observes its message (`round_message`), then its pre-fold
-    # pair-leaf commitment root (`observe_root`), then samples β, then reduces
-    # the running claim (`reduce_claim`, native `s(0)+β·s(1)`). All num_vars
-    # rounds are homogeneous (no peeled final round) and ride one lax.scan — the
-    # poseidon2 permute markers stop scaling with num_vars (#185). z_rev[r] binds
-    # the variable folded in round r; the point-consistency check is native
-    # (a non-native message reframes it — deferred). The native choreography's
-    # message/root observes are pass-throughs, so the wire is byte-identical.
+    # Replay the interleaved sumcheck + fold challenges through the kernel +
+    # choreography. Every round checks the running claim against the message
+    # (`kernel.round_check`), frames+observes the message (`round_message` +
+    # `observe_message`), observes its pre-fold pair-leaf commitment root
+    # (`observe_root`), samples β, then reduces the running claim
+    # (`kernel.reduce_claim`, native `s(0)+β·s(1)`). All num_vars rounds are
+    # homogeneous (no peeled final round) and ride one lax.scan — the poseidon2
+    # permute markers stop scaling with num_vars (#185). z_rev[r] binds the
+    # variable folded in round r. The native choreography's message/root
+    # observes are pass-throughs, so the wire is byte-identical.
     z_rev = z[::-1]
     zero_vals = jnp.stack([m[0] for m in proof.univariate_messages])
     one_vals = jnp.stack([m[1] for m in proof.univariate_messages])
@@ -264,18 +268,14 @@ def _verify_batch_body(
     ) -> tuple[tuple[Transcript, Array, Array], Array]:
         t, claim, ok = carry
         zero_val, one_val, last, root = xs
-        # Native point-consistency check: the running claim equals the sumcheck
-        # message evaluated at the point coordinate `last`. Not a choreography
-        # hook — the message form is native (a non-native message reframes this,
-        # deferred); the ADDITIVE running-claim reduction is the hook.
-        expected = (one - last) * zero_val + last * one_val
-        ok = ok & (claim == expected)
-        msg = chor.round_message(zero_val, one_val)
+        components = (zero_val, one_val)
+        ok = ok & kernel.round_check(claim, components, last)
+        msg = chor.round_message(*components)
         t = chor.observe_message(t, msg)
         t = chor.observe_root(t, root)
         t, beta = t.sample()
         beta = beta.reshape(())
-        return (t, chor.reduce_claim(claim, msg, beta), ok), beta
+        return (t, kernel.reduce_claim(claim, components, beta), ok), beta
 
     (t, current_claim, ok), betas_stacked = lax.scan(
         fold_round,
