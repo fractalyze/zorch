@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import jax
 import jax.numpy as jnp
@@ -30,7 +30,7 @@ from jax import Array, lax
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.round import Round
-from zorch.transcript import Transcript, TranscriptT
+from zorch.transcript import GrindingTranscript, Transcript, TranscriptT
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
@@ -206,6 +206,128 @@ def sample_distinct_positions(
             seen.add(pos)
             out.append(pos)
     return t, jnp.sort(jnp.asarray(out, dtype=jnp.int32))
+
+
+@dataclass(frozen=True)
+class FoldChoreography:
+    """The Fiat-Shamir choreography shared by the fold-recursion schemes built
+    on this module's rounds: the seam that fixes WHEN a recursive open touches
+    the transcript, decoupled from WHAT the recursion computes and from
+    whatever round algebra a scheme layers on top (its own kernel/config seam).
+
+    Two provers can run the identical recursion (same folds, same commits) and
+    still produce different byte streams: one binds the opening point, the
+    other binds only the claim; one grinds a proof-of-work between a round
+    message and its challenge; one observes each round message the moment it
+    forms, the other fuses observe+sample at round start; one derives query
+    indices by rejection sampling instead of a plain reduction.
+    `FoldChoreography` owns exactly those choices as overridable hooks
+    operating on the generic `Transcript`, with zorch's native wire as the
+    default behavior — a scheme subclasses this with its own framing/algebra
+    hooks, and a byte-fixed consumer subclasses further, overriding only its
+    deltas.
+
+    Prover and verifier must share ONE choreography instance: every hook is
+    side-neutral (a pure transcript interaction) except the grind/check pair,
+    whose schedule both sides read off the same bits methods, so a shared
+    instance keeps the two Fiat-Shamir streams equal by construction.
+
+    The message emission policy is the structural choice `eager_messages`
+    selects: lazy (default) fuses each round message's absorb with its
+    challenge squeeze (`fold_challenge`); eager absorbs a message the moment it
+    forms (`observe_message`) and `fold_challenge` samples bare (`msg=None`) —
+    the two are one policy, split only so the driver can place the
+    interactions."""
+
+    @property
+    def eager_messages(self) -> bool:
+        """False: round messages ride fused observe+sample hops
+        (`fold_challenge`). True: `observe_message` absorbs each message at
+        emission time and `fold_challenge` must be overridden to a bare sample
+        (its `msg` arrives as None) — the two are one policy, split only so the
+        driver can place the interactions."""
+        return False
+
+    def bind_statement(
+        self, transcript: TranscriptT, root: Array, point: Array | None, value: Array
+    ) -> TranscriptT:
+        """Bind the opening statement before any challenge. Default binds all
+        of (root, point, value) in that order; a consumer whose outer protocol
+        already binds the point overrides. `point` is None under a raw-basis
+        entry, where no point exists — the native binding refuses rather than
+        silently bind less."""
+        transcript = transcript.observe(root)
+        if point is None:
+            raise ValueError(
+                "the native statement binding observes the opening point, but "
+                "this entry carries none — a basis-entry consumer must "
+                "override bind_statement (the basis binds the statement)"
+            )
+        transcript = transcript.observe(point)
+        return transcript.observe(value)
+
+    def observe_message(self, transcript: TranscriptT, msg: Array) -> TranscriptT:
+        """Absorb one eagerly emitted message (eager policy only)."""
+        return transcript.observe(msg)
+
+    def fold_challenge(
+        self, transcript: TranscriptT, msg: Array | None, level: int, fold_idx: int
+    ) -> tuple[TranscriptT, Array]:
+        """The per-round Fiat-Shamir hop: absorb the round message, squeeze the
+        scalar fold challenge. Default is the fused `observe_and_sample` (one
+        kernel under `@jit` — the repo's fusion contract). Under the eager
+        policy `msg` is None (already absorbed) and the override samples bare."""
+        del level, fold_idx  # the default schedule is position-independent
+        if msg is None:
+            raise ValueError(
+                "the lazy default absorbs the round message here; an eager "
+                "choreography must override fold_challenge to a bare sample"
+            )
+        transcript, r = transcript.observe_and_sample(msg, 1)
+        return transcript, r[0]
+
+    def observe_root(self, transcript: TranscriptT, root: Array) -> TranscriptT:
+        """Absorb a fold round's commit root."""
+        return transcript.observe(root)
+
+    def fold_grind_bits(self, level: int, fold_idx: int) -> int | None:
+        """Proof-of-work schedule for a fold round, ground between the round
+        message's absorb and its challenge squeeze. None (default) = no grind
+        and nothing on the wire; an int puts a witness on the wire — 0 included
+        (a 0-bit grind is trivial but still advances the transcript)."""
+        del level, fold_idx
+        return None
+
+    def query_grind_bits(self, level: int) -> int | None:
+        """Proof-of-work schedule for a level's query phase, ground right
+        before its positions are sampled. Same None / int-including-0 contract
+        as `fold_grind_bits`."""
+        del level
+        return None
+
+    def grind(self, transcript: TranscriptT, bits: int) -> tuple[TranscriptT, Array]:
+        """Prover-side grind (called only when the bits schedule says so).
+        Default is the `GrindingTranscript` seam, so a zorch-native consumer
+        adds grinding by overriding only the bits methods; a byte-wire consumer
+        overrides the mechanism too."""
+        grinding = cast(GrindingTranscript, transcript)
+        advanced, witness = grinding.grind(bits)
+        return cast(TranscriptT, advanced), witness
+
+    def check_grind(
+        self, transcript: TranscriptT, bits: int, witness: Array
+    ) -> tuple[TranscriptT, Array]:
+        """Verifier-side dual of `grind`: replay the witness, return
+        `(transcript, ok)` with the transcript advanced identically."""
+        grinding = cast(GrindingTranscript, transcript)
+        advanced, ok = grinding.check_witness(bits, witness)
+        return cast(TranscriptT, advanced), ok
+
+    def sample_queries(
+        self, transcript: TranscriptT, block_len: int, count: int
+    ) -> tuple[TranscriptT, Array]:
+        """Squeeze `count` query positions in `[0, block_len)`."""
+        return sample_positions(transcript, block_len, count)
 
 
 def verify_openings(
