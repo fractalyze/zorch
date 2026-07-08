@@ -9,6 +9,9 @@ py_library(
     name = "logup_gkr",
     srcs = [
         "__init__.py",
+        "_jagged_composites.py",
+        "_jagged_rounds.py",
+        "_jagged_types.py",
         "circuit.py",
         "jagged_prover.py",
         "jagged_verifier.py",
@@ -22,8 +25,8 @@ py_library(
         "//zorch:verify",
         "//zorch/poly",
         "//zorch/sumcheck",
+        "//zorch/sumcheck/jagged",
         "//zorch/utils:bits",
         requirement("jax"),
-        requirement("numpy"),
     ],
 )

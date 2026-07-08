@@ -7,7 +7,7 @@ from absl.testing import absltest
 from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.sumcheck import prover
-from zorch.sumcheck.prover import SUMCHECK_MARKER, prove
+from zorch.sumcheck.prover import prove
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
@@ -46,15 +46,15 @@ class ProvePerPermuteTest(absltest.TestCase):
     def _poseidon_transcript(self) -> DuplexTranscript:
         return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
-    def test_no_whole_scan_marker_over_poseidon_transcript(self) -> None:
+    def test_per_permute_fs_marker_over_poseidon_transcript(self) -> None:
         # Over a real poseidon2 transcript the lowering carries the per-permute
-        # `zorch.poseidon2` FS marker but NO `zorch.sumcheck` whole-scan composite.
+        # `zorch.poseidon2` FS marker (that no whole-scan composite wraps the
+        # scan is guarded structurally by test_no_top_level_composite below).
         a = rand_field(40, (1 << 4,), KB)
         b = rand_field(41, (1 << 4,), KB)
         rnd = prover.SumcheckRound(degree=2)
         t0 = self._poseidon_transcript()
         text = jax.jit(lambda x, y: prove(rnd, [x, y], t0)).lower(a, b).as_text()
-        self.assertNotIn(SUMCHECK_MARKER, text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
 
     def test_no_top_level_composite(self) -> None:

@@ -260,15 +260,32 @@ class SumcheckSummand(Protocol):
     def _combine(self, *factors: Array) -> Array: ...
 
 
-# The hash-agnostic `zorch.sumcheck` register-resident marker. `sumcheck.prove` no
-# longer emits it — the whole-scan megakernel it once wrapped was dropped (it
-# ptxas-overflowed shared memory around 2^20; see the module docstring). The name
-# and version live here as the shared definition the LogUp-GKR jagged prover
-# (`zorch.logup_gkr.jagged_prover`) still emits and the zkx `SumcheckRecognizer`
-# gates on (`composite.version`); the version is reserved for a future
-# cross-release ABI break.
-SUMCHECK_MARKER = "zorch.sumcheck"
-SUMCHECK_MARKER_VERSION = 1
+# The FS-less compute-only round marker (zorch#327): the jagged LogUp-GKR host
+# loop wraps each round's fold+sum (no Fiat-Shamir) in this composite, while the
+# separate `zorch.poseidon2` marker carries FS between rounds. The composite
+# attributes the recognizing emitter parses:
+#   phase   -- "first" (round 0, no fold), "mid" (fold-by-alpha then sum),
+#              "boundary" (the row->interaction handoff: fold-by-alpha then sum
+#              over the still-unfolded eq, which rides through un-bound), or
+#              "final" (fold only, emitting the four pair openings); routes to
+#              the round kernel by position.
+#   variant -- the round-kernel shape: "dense" (the uniform interaction round --
+#              a batched LogUp-GKR round-poly, folds densely) or "jagged" (the row
+#              phase -- segment-based, variable heights, runtime row_counts).
+#   degree    -- round-poly degree.
+#   poly_form -- the round-poly evaluation domain/form ("coefficient" = the Gruen
+#                {0, 1/2} + s(1)=claim-s(0) scheme this round uses).
+# No `num_scalars`: the LogUp summand is hardcoded in the emitter (AccumLogupPair),
+# which does not read it (it matters only for a generic `zorch.sumcheck.combine`
+# region). No `challenge_limbs`: the separate FS step recomposes the fold
+# challenge, which arrives as one operand whose dtype already carries base vs
+# extension.
+SUMCHECK_ROUND_MARKER = "zorch.sumcheck.round"
+# Version 1: this marker never shipped, and its producer (here), the zkx
+# `SumcheckRecognizer` (`kSumcheckRoundCompositeVersion`), and the emitters are
+# pinned together, so the version is the initial one and moves only on a future
+# cross-release ABI break. Keep in lockstep with the zkx recognizer's constant.
+SUMCHECK_ROUND_MARKER_VERSION = 1
 
 
 def prove(
