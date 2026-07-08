@@ -101,7 +101,7 @@ def _round_metadata(
     """The per-round row schedule: memoized for the exact layout, built fresh
     for capped layouts (`_round_metadata_impl` has the full story).
 
-    Marker v2 (xla#179 device-derived schedule) no longer carries these
+    The device-derived schedule (xla#179) no longer carries these
     arrays — the claimed kernels and the composite decompositions derive the
     schedule from `row_counts` + the round index (`_derive_row_schedule`).
     This host builder remains the independent oracle's source
@@ -115,7 +115,7 @@ def _round_metadata(
 @cache
 def _round_live_meta(row_counts: tuple[int, ...], num_row_vars: int) -> list[Array]:
     """Per-round i32[3] `{live pairs, live eq_row entry, round}` operands for
-    the v2 round markers — the only per-round schedule state that still rides
+    the round markers — the only per-round schedule state that still rides
     the marker (the index arrays derive in place from `row_counts`). Values
     restate `_round_metadata_impl`'s recurrence; independent of any width cap
     (a cap changes buffer layout, never liveness), so one memoized list serves
@@ -158,7 +158,7 @@ def _derive_row_schedule(
 ) -> tuple[Array, Array, Array]:
     """Round `rnd`'s `(gather, col_index, pair_index)` derived in-trace from
     the layer's `row_counts` — the traced mirror of `_round_metadata_impl`'s
-    host build, and the byte-exact fallback contract for the v2 markers (the
+    host build, and the byte-exact fallback contract for the round markers (the
     claimed kernels run the same derivation in place).
 
     Entering round k every segment holds `counts_k[s] = ceil(rc[s] / 2^k)`

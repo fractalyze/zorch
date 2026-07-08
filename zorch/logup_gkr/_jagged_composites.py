@@ -132,8 +132,8 @@ def _round_composite_row_decomp(
     """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `mid` phase
     -- the byte-exact fallback a recognizing emitter replaces. `_attrs` (phase /
     variant / degree / poly_form) are composite metadata the emitter parses; the
-    decomposition needs only the operands. Marker v2 (xla#179 device-derived
-    schedule): the re-pad schedule derives in-trace from `row_counts` + the
+    decomposition needs only the operands. The device-derived schedule
+    (xla#179): the re-pad schedule derives in-trace from `row_counts` + the
     round index `live[2]` (`_derive_row_schedule` — the claimed kernel runs
     the same derivation in place), so no index array is uploaded per round.
     `out_pairs` is the exact layout's STATIC padded pair count, closed over by
@@ -184,7 +184,7 @@ def _composite_fix_and_sum_row(
     hardcoded LogUp combine over the derived re-pad schedule and the
     segment-local `eq_row`, not a plain product). The signature mirrors
     `_fix_and_sum_row` with the schedule operands replaced by the layer's
-    `row_counts` (i32[nseg], marker v2) plus the trailing i32[3]
+    `row_counts` (i32[nseg], device-derived schedule) plus the trailing i32[3]
     `{live pairs, live eq_row, round}` operand. `out_pairs` (static, exact
     layout only) sizes the padded output run; None keeps the capped
     width-preserving convention. `eq_row` returns width-preserved (folded
@@ -334,7 +334,7 @@ def _round_composite_first_row_decomp(
     order is the `mid` row ABI minus `alpha`: round 0 binds nothing, so there is
     no previous challenge to fold by and the marker carries no `alpha` slot.
     The re-pad schedule derives in-trace from `row_counts` + `live[2]` (= 0,
-    marker v2 — see the row `mid` decomposition); the derived indexes span the
+    see the row `mid` decomposition); the derived indexes span the
     FULL raw height (nothing folds this round). The sum masks to the `live[0]`
     live pairs of a fixed-width schedule (the re-padded state's live prefix is
     `2 * live[0]`)."""
@@ -370,7 +370,7 @@ def _composite_sum_as_poly_row(
     marker around the round-0 sum -- no fold, no challenge, just the row-shaped
     round poly over the raw layer plus the re-padded state the caller binds next
     round. The signature mirrors `_round_poly_row` with the schedule operands
-    replaced by the layer's `row_counts` (marker v2) plus the trailing i32[3]
+    replaced by the layer's `row_counts` plus the trailing i32[3]
     `{live pairs, live eq_row, round}` operand, so the round loop can select it
     in the `sum0` slot. `out_pairs` (static, exact layout only) sizes the
     padded output run; None keeps the capped width-preserving convention.

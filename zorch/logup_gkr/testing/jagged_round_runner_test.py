@@ -85,7 +85,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
     ) -> None:
         state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
-        # The runner's schedule carries the v2 derived-schedule fields
+        # The runner's schedule carries the derived-schedule fields
         # (row_counts operand + live triples + the exact layout's static
         # padded widths); `meta` — the host-built explicit schedule — feeds
         # only the reference oracle, keeping the derivation cross-checked

@@ -181,7 +181,7 @@ def _round0_inputs(
     eq_int = expand_eq_to_hypercube(z_int, one)
     scalars0 = _RoundScalars(*(rand_field(seed * 10 + i, (), KB) for i in range(5)))
     gather0, col0, pair0, _live0 = _round_metadata(counts, nrv)[0]
-    # The v2 marker operands (row_counts, live triple, static padded width) --
+    # The marker operands (row_counts, live triple, static padded width) --
     # the explicit arrays above feed only the eager want-side.
     marker0 = (
         _row_counts_operand(counts),

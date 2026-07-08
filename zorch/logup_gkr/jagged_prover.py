@@ -227,7 +227,7 @@ def _prove_jagged_layer_from_counts(
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """One jagged layer's sumcheck from the layer's static `row_counts`.
 
-    Marker v2 (xla#179 device-derived schedule): the per-round re-pad schedule
+    The device-derived schedule (xla#179): the per-round re-pad schedule
     is a pure function of `row_counts` + the round index and derives inside
     the claimed kernels (and the decompositions), so the loop carries only the
     tiny i32[nseg] `row_counts` operand plus per-round i32[3] live triples —
@@ -592,7 +592,7 @@ def _prove_jagged_layer_round(
 # static args, so `row_counts` values leave the jit key: it keys only on the
 # operand SHAPES plus the static `niv` / `challenge_limbs` / `caps` /
 # `out_pairs` (`nrv` is read from `eval_point`'s length inside; `out_pairs` is
-# None under caps, so the capped pyramid shares one key). Marker v2 shrank
+# None under caps, so the capped pyramid shares one key). The derived schedule shrank
 # these operands from the hundreds-of-MB per-round gather arrays to KBs — the
 # schedule now derives in-kernel — but the operand-not-closure rule stands:
 # baking per-layer values into the trace would recompile per shard. Two layers

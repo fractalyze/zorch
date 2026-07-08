@@ -260,16 +260,6 @@ class SumcheckSummand(Protocol):
     def _combine(self, *factors: Array) -> Array: ...
 
 
-# The hash-agnostic `zorch.sumcheck` register-resident marker. `sumcheck.prove` no
-# longer emits it — the whole-scan megakernel it once wrapped was dropped (it
-# ptxas-overflowed shared memory around 2^20; see the module docstring). The name
-# and version live here as the shared definition the LogUp-GKR jagged prover
-# (`zorch.logup_gkr.jagged_prover`) still emits and the zkx `SumcheckRecognizer`
-# gates on (`composite.version`); the version is reserved for a future
-# cross-release ABI break.
-SUMCHECK_MARKER = "zorch.sumcheck"
-SUMCHECK_MARKER_VERSION = 1
-
 # The FS-less compute-only round marker (zorch#327): the jagged LogUp-GKR host
 # loop wraps each round's fold+sum (no Fiat-Shamir) in this composite, while the
 # separate `zorch.poseidon2` marker carries FS between rounds. The composite
