@@ -347,9 +347,8 @@ def _open_with_basis_cadence(
             if rnd + 1 == prefix:
                 cw = lane_combine(init_leaves, rb_challenges)  # [n_pos]
                 # No FRI epochs (log_dim == 0): the row-batched codeword is the
-                # terminal, so there is no post-prefix commit to make (guarding
-                # `arities[0]` here mirrors flock's `if arities:`; latent until a
-                # log_dim==0 consumer, but correct by construction).
+                # terminal, so there is no post-prefix commit to make (latent
+                # until a log_dim==0 consumer, but correct by construction).
                 if arities:
                     lf = 1 << arities[0]
                     leaves = cw.reshape(n_pos // lf, lf)
