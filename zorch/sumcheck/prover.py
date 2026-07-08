@@ -1,5 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck prover rounds and the LSB split helper they share.
+"""Sumcheck prover rounds: the product `StandardRound`, its compressed-wire
+sibling `CompressedProductRound`, and the summand seam they read.
 
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial sampled over an `EvalDomain`, then folds every MLE at the verifier's
@@ -13,11 +14,10 @@ combine -> sum, the linear-time reference the memory-optimized siblings
 defaults to the product (`ProductSummand`) and its domain to the natural
 {0..degree} evals.
 
-The dense round binds MSB-first via `domain.fold` (contiguous-half split); the
-jagged engines bind LSB-first with `fold(..., msb=False)` (stride-2 pairs). The
-split-only `split_pairs` lives here for the jagged bodies that need both halves
-without folding (the LogUp `paired_evals`). The verifier dual lives in
-`zorch.sumcheck.verifier`.
+The dense round binds MSB-first (`domain.fold`); the jagged engines bind
+LSB-first (`domain.fold(..., msb=False)`). The split/fold primitives and the
+round-poly builder (`summand_evals`) live in `zorch.sumcheck.domain`; the
+verifier dual in `zorch.sumcheck.verifier`.
 
 Rounds run under the scheme-agnostic `zorch.prove.fold_rounds` host loop (any
 `Round`, any message shape) -- one round per variable, folding the state down
@@ -48,15 +48,6 @@ from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
-
-
-def split_pairs(arr: Array) -> tuple[Array, Array]:
-    """Split on the LSB variable: the stride-2 `(arr[..., 0::2], arr[..., 1::2])`
-    consecutive-pair dual of the MSB contiguous-half split `fold` binds.
-    The jagged engines bind LSB-first -- a batch-major jagged layout makes the row
-    LSB the in-segment pair dimension, so the pair fold never crosses a segment
-    boundary -- while the dense drivers stay MSB-halving."""
-    return arr[..., 0::2], arr[..., 1::2]
 
 
 @dataclass(frozen=True)

@@ -153,6 +153,24 @@ def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
     return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), leading=True)
 
 
+def split_halves(arr: Array) -> tuple[Array, Array]:
+    """Split the last variable MSB-first into contiguous halves
+    `(arr[..., :N/2], arr[..., N/2:])` — the dense bind. ndim-agnostic; the MSB
+    dual of split_pairs."""
+    half = arr.shape[-1] // 2
+    return arr[..., :half], arr[..., half:]
+
+
+def split_pairs(arr: Array) -> tuple[Array, Array]:
+    """Split the last variable LSB-first into stride-2 consecutive pairs
+    `(arr[..., 0::2], arr[..., 1::2])`. The jagged engines bind LSB-first — a
+    batch-major layout makes the pair the in-segment dimension, so a fold never
+    crosses a segment boundary — while the dense drivers split MSB-first
+    (split_halves). Its split-only form also serves the LogUp `paired_evals`,
+    which needs both halves without folding."""
+    return arr[..., 0::2], arr[..., 1::2]
+
+
 def summand_evals(
     stacked: Array, combine: Callable[..., Array], domain: EvalDomain
 ) -> Array:
@@ -167,9 +185,7 @@ def summand_evals(
     factors (a plain product, or the LogUp combine); a mixed-degree combine like
     E·(A·B − C) is not. A finite domain carries no such restriction — any summand
     samples cleanly on it."""
-    m = stacked.shape[0]
-    pairs = jnp.reshape(stacked, (m, 2, -1))
-    p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
+    p0, p1 = split_halves(stacked)
     lifted = jax.vmap(domain.sample)(p0, p1)
     return jnp.sum(combine(*lifted), axis=1)
 
@@ -198,9 +214,5 @@ def fold(arr: Array, r: Array, *, msb: bool = True) -> Array:
     splits stride-2 consecutive pairs — the jagged bind, where a batch-major layout
     makes the pair the in-segment dimension, so the fold never crosses a segment
     boundary. ndim-agnostic: the leading factor/batch axes broadcast."""
-    if msb:
-        half = arr.shape[-1] // 2
-        p0, p1 = arr[..., :half], arr[..., half:]
-    else:
-        p0, p1 = arr[..., 0::2], arr[..., 1::2]
+    p0, p1 = split_halves(arr) if msb else split_pairs(arr)
     return p0 + r * (p1 - p0)

@@ -25,7 +25,7 @@ from jax import Array
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import EvalDomain, _naturals, uhat_domain
+from zorch.sumcheck.domain import EvalDomain, _naturals, split_halves, uhat_domain
 from zorch.sumcheck.prover import ProductSummand, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -47,12 +47,11 @@ def compute_eq_evaluations(w: Array) -> list[Array]:
     return v_list
 
 
-def _split_pairs(p_stacked: Array) -> tuple[Array, Array]:
-    """Halve each factor on the current variable into (P0, P1−P0), each (d, N/2)."""
-    d = p_stacked.shape[0]
-    pairs = jnp.reshape(p_stacked, (d, 2, -1))
-    p0 = pairs[:, 0, :]
-    return p0, pairs[:, 1, :] - p0
+def _split_slope(p_stacked: Array) -> tuple[Array, Array]:
+    """Halve each factor on the current variable into (P0, slope P1−P0), each
+    (d, N/2) — the MSB `split_halves` in the (P0, slope) form the eq round folds by."""
+    p0, p1 = split_halves(p_stacked)
+    return p0, p1 - p0
 
 
 def _weighted_summand(
@@ -129,7 +128,7 @@ class EqPolyRound(Round):
         coefficient form is _round_coeffs)."""
         p_stacked, eq_w_prev = state
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
-        p0s, diffs = _split_pairs(p_stacked)
+        p0s, diffs = _split_slope(p_stacked)
         t_evals = _weighted_summand(
             p0s, diffs, eq_w_l, eq_w_r, self.domain, self.summand._combine
         )
@@ -150,7 +149,7 @@ class EqPolyRound(Round):
         p_stacked, eq_w_prev = state
         degree = self.summand.degree
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
-        p0s, diffs = _split_pairs(p_stacked)
+        p0s, diffs = _split_slope(p_stacked)
         w_i = self.w[i - 1]
         full = EvalDomain(_naturals(degree + 1, p_stacked.dtype), leading=True)
         t = _weighted_summand(p0s, diffs, eq_w_l, eq_w_r, full, self.summand._combine)

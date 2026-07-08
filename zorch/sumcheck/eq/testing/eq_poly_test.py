@@ -9,7 +9,7 @@ from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.sumcheck.domain import product_round_poly
 from zorch.sumcheck.eq.eq_poly import (
     EqPolyRound,
-    _split_pairs,
+    _split_slope,
     compute_eq_evaluations,
     prove_eq_poly,
 )
@@ -60,7 +60,7 @@ class EqPolyTest(absltest.TestCase):
             msg, cache = rnd._round_poly(state)
             self.assertTrue(bool(jnp.array_equal(msg, product_round_poly(ref)[:-1])))
             state = rnd._fold(cache, state[1], r)
-            ref_p0, ref_diff = _split_pairs(ref)
+            ref_p0, ref_diff = _split_slope(ref)
             ref = ref_diff * r + ref_p0
 
     def test_prove_folds_all_rounds(self) -> None:

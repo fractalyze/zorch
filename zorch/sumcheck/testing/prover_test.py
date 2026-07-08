@@ -7,7 +7,7 @@ from absl.testing import absltest
 from jax import tree_util
 
 from zorch.sumcheck import prover, verifier
-from zorch.sumcheck.domain import fold
+from zorch.sumcheck.domain import fold, split_halves, split_pairs
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -97,9 +97,15 @@ class CompressedProductRoundTest(absltest.TestCase):
 
 
 class FoldTest(absltest.TestCase):
+    def test_split_halves_splits_contiguous_halves(self) -> None:
+        f = jnp.array([[0, 1, 2, 3], [4, 5, 6, 7]], KB)
+        p0, p1 = split_halves(f)
+        self.assertTrue(bool(jnp.all(p0 == jnp.array([[0, 1], [4, 5]], KB))))
+        self.assertTrue(bool(jnp.all(p1 == jnp.array([[2, 3], [6, 7]], KB))))
+
     def test_split_pairs_strides_the_last_axis(self) -> None:
         f = jnp.array([[0, 1, 2, 3], [4, 5, 6, 7]], KB)
-        p0, p1 = prover.split_pairs(f)
+        p0, p1 = split_pairs(f)
         self.assertTrue(bool(jnp.all(p0 == jnp.array([[0, 2], [4, 6]], KB))))
         self.assertTrue(bool(jnp.all(p1 == jnp.array([[1, 3], [5, 7]], KB))))
 

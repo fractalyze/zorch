@@ -45,8 +45,8 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold, natural_domain, summand_evals
-from zorch.sumcheck.prover import RoundMsg, split_pairs
+from zorch.sumcheck.domain import fold, natural_domain, split_pairs, summand_evals
+from zorch.sumcheck.prover import RoundMsg
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
