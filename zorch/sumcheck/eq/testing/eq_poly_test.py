@@ -13,6 +13,7 @@ from zorch.sumcheck.eq.eq_poly import (
     compute_eq_evaluations,
     prove_eq_poly,
 )
+from zorch.sumcheck.prover import SumcheckRound
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
@@ -32,7 +33,7 @@ class EqPolyTest(absltest.TestCase):
     def test_fold_matches_linear_update(self) -> None:
         # r=3 fold of P1 = 1..32: (P1[16+j] − P1[j])·3 + P1[j] = 49..64.
         P = jnp.stack([jnp.arange(1, 33, dtype=KB), jnp.arange(2, 34, dtype=KB)])
-        rnd = EqPolyRound(2, jnp.array([0, 1, 1, 0, 1], dtype=KB))
+        rnd = EqPolyRound(SumcheckRound(degree=2), jnp.array([0, 1, 1, 0, 1], dtype=KB))
         state = (P, jnp.ones(1, dtype=KB))
         _, cache = rnd._round_poly(state)
         new_p, _ = rnd._fold(cache, state[1], jnp.array(3, dtype=KB))
@@ -48,7 +49,7 @@ class EqPolyTest(absltest.TestCase):
         w = jnp.array([1, 0, 1, 0], dtype=KB)
         eq_w = compute_eq_evaluations(w)[-1]
 
-        rnd = EqPolyRound(d, w)
+        rnd = EqPolyRound(SumcheckRound(degree=d), w)
         state = (P, jnp.ones(1, dtype=KB))
         ref = jnp.concatenate([P, eq_w[None, :]], axis=0)
 
@@ -81,7 +82,7 @@ class EqPolyTest(absltest.TestCase):
             expand_eq_to_hypercube(w, jnp.ones((), KB)) * jnp.prod(P, axis=0)
         )
 
-        rnd = EqPolyRound(d, w)
+        rnd = EqPolyRound(SumcheckRound(degree=d), w)
         state = (P, jnp.ones(1, dtype=KB))
         verifier = CoeffsSumcheckRound(degree=d + 1)
         transcript: Transcript = cheap_transcript(KB)

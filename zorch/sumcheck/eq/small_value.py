@@ -25,6 +25,7 @@ from zorch.round import Round
 from zorch.sumcheck.domain import fold_stacked, product_round_poly
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
+from zorch.sumcheck.prover import SumcheckRound
 from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -133,8 +134,13 @@ def prove_eq_poly_small_value(
     eq_w_prev = eq_w_prev * eq_factor(r_t, w[l_0])
     folded_p = fold_stacked(folded[:d], r_t)
 
-    # Phase 3: the ordinary eq-poly tail.
+    # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute
+    # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
+    # unlike EqPolyRound / SqrtSpaceRound, it does not take a general summand.
     (p_final, _), transcript, tail = fold_rounds(
-        EqPolyRound(d, w), (folded_p, eq_w_prev), transcript, l - l_0 - 1
+        EqPolyRound(SumcheckRound(degree=d), w),
+        (folded_p, eq_w_prev),
+        transcript,
+        l - l_0 - 1,
     )
     return p_final, transcript, msgs + [msg_t] + tail

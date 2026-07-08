@@ -14,7 +14,7 @@ product sumcheck over [P₁, …, P_d, eq(w,·)] (testing/eq_poly_test.py).
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 import jax.numpy as jnp
 from jax import Array
@@ -23,6 +23,7 @@ from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.sumcheck.domain import EvalDomain, _naturals
+from zorch.sumcheck.prover import SumcheckRound, SumcheckSummand
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -51,37 +52,50 @@ def _split_pairs(p_stacked: Array) -> tuple[Array, Array]:
     return p0, pairs[:, 1, :] - p0
 
 
-def _weighted_product(
-    p0s: Array, diffs: Array, eq_w_l: Array | None, eq_w_r: Array, us: Sequence[int]
+def _weighted_summand(
+    p0s: Array,
+    diffs: Array,
+    eq_w_l: Array | None,
+    eq_w_r: Array,
+    us: Sequence[int],
+    combine: Callable[..., Array],
 ) -> Array:
-    """[t(∞), t(u) for u in us] where t(u) = Σₓ eq-weight(x) · Πₖ (diffsₖ·u + P0ₖ)
-    and t(∞) is the leading coefficient Πₖ diffsₖ. Early rounds carry both eq halves
-    (eq_w_l set, factors reshaped into x_L × x_R); late rounds weight by eq_w_r."""
-    d = p0s.shape[0]
+    """[t(∞), t(u) for u in us] where t(u) = Σₓ eq-weight(x) · combine(f₁, …, f_m)(x)
+    with fₖ = diffsₖ·u + P0ₖ, and t(∞) = combine(*diffs) is the leading coefficient
+    (valid for a homogeneous combine — see domain.summand_evals). Early rounds carry
+    both eq halves (eq_w_l set, factors reshaped into x_L × x_R); late rounds weight
+    by eq_w_r. The default combine is the product Πₖ fₖ (an eq-weighted product)."""
+    m = p0s.shape[0]
     if eq_w_l is not None:
         num_x_l = eq_w_l.shape[0]
         num_x_r = p0s.shape[1] // num_x_l
-        p0s = jnp.reshape(p0s, (d, num_x_l, num_x_r))
-        diffs = jnp.reshape(diffs, (d, num_x_l, num_x_r))
+        p0s = jnp.reshape(p0s, (m, num_x_l, num_x_r))
+        diffs = jnp.reshape(diffs, (m, num_x_l, num_x_r))
 
     def weighted_sum(vals: Array) -> Array:
         if eq_w_l is not None:
             return jnp.sum(eq_w_l[:, None] * vals * eq_w_r[None, :])
         return jnp.sum(vals * eq_w_r)
 
-    evals = [weighted_sum(jnp.prod(diffs, axis=0))]
+    evals = [weighted_sum(combine(*diffs))]
     for u in us:
-        evals.append(weighted_sum(jnp.prod(diffs * u + p0s, axis=0)))
+        evals.append(weighted_sum(combine(*(diffs * u + p0s))))
     return jnp.stack(evals)
 
 
 def compute_t_poly(
-    p0s: Array, diffs: Array, eq_w_l: Array | None, eq_w_r: Array
+    p0s: Array,
+    diffs: Array,
+    eq_w_l: Array | None,
+    eq_w_r: Array,
+    degree: int,
+    combine: Callable[..., Array],
 ) -> Array:
-    """tᵢ over Û_d = [t(∞), t(0), t(2), …, t(d−1)] — the compressed form the round
-    message oracle checks against."""
-    d = p0s.shape[0]
-    return _weighted_product(p0s, diffs, eq_w_l, eq_w_r, [0, *range(2, d)])
+    """tᵢ over Û_degree = [t(∞), t(0), t(2), …, t(degree−1)] — the compressed form the
+    round message oracle checks against."""
+    return _weighted_summand(
+        p0s, diffs, eq_w_l, eq_w_r, [0, *range(2, degree)], combine
+    )
 
 
 def _mul_linear_into_t(t_evals: Array, l_evals: Array, us: Array) -> Array:
@@ -106,10 +120,11 @@ def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, d: int) -> Array:
 
 class EqPolyRound(Round):
     """One EqPoly variable-binding round, reused across all l rounds — it reads the
-    round index off the state width, so one object drives the whole proof."""
+    round index off the state width, so one object drives the whole proof. Bound to a
+    homogeneous SumcheckSummand (its combine weighted by eq); product by default."""
 
-    def __init__(self, d: int, w: Array) -> None:
-        self.d = d
+    def __init__(self, summand: SumcheckSummand, w: Array) -> None:
+        self.summand = summand
         self.w = w
         self.l = int(w.shape[0])
         self.l_half = self.l // 2
@@ -127,14 +142,18 @@ class EqPolyRound(Round):
     def _round_poly(
         self, state: EqPolyState
     ) -> tuple[Array, tuple[Array, Array, Array]]:
-        """The compressed Û_d round message [sᵢ(∞), sᵢ(0), sᵢ(2), …] — the oracle
-        anchor; __call__ sends the coefficient form."""
+        """The compressed Û_degree round message [sᵢ(∞), sᵢ(0), sᵢ(2), …] — the oracle
+        anchor __call__ binds Fiat-Shamir to (the standalone coefficient form is
+        _round_coeffs)."""
         p_stacked, eq_w_prev = state
+        degree = self.summand.degree
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
         p0s, diffs = _split_pairs(p_stacked)
-        t_evals = compute_t_poly(p0s, diffs, eq_w_l, eq_w_r)
+        t_evals = compute_t_poly(
+            p0s, diffs, eq_w_l, eq_w_r, degree, self.summand._combine
+        )
         l_evals = expand_hypercube_step(eq_w_prev, self.w[i - 1])
-        return sumcheck_poly_from_t(t_evals, l_evals, self.d), (
+        return sumcheck_poly_from_t(t_evals, l_evals, degree), (
             p0s,
             diffs,
             self.w[i - 1],
@@ -143,17 +162,21 @@ class EqPolyRound(Round):
     def _round_coeffs(
         self, state: EqPolyState
     ) -> tuple[Array, tuple[Array, Array, Array]]:
-        """Ascending coefficients of the degree-(d+1) round polynomial sᵢ = lᵢ · tᵢ.
-        tᵢ is taken at the full round domain [∞, 0, 1, …, d] so s is fully determined
-        (the compressed Û_d form drops a point and is not standalone-verifiable)."""
+        """Ascending coefficients of the degree-(degree+1) round polynomial sᵢ = lᵢ·tᵢ.
+        tᵢ is taken at the full round domain [∞, 0, 1, …, degree] so s is fully
+        determined (the compressed Û form drops a point and is not standalone-
+        verifiable)."""
         p_stacked, eq_w_prev = state
+        degree = self.summand.degree
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
         p0s, diffs = _split_pairs(p_stacked)
         w_i = self.w[i - 1]
-        t = _weighted_product(p0s, diffs, eq_w_l, eq_w_r, range(self.d + 1))
+        t = _weighted_summand(
+            p0s, diffs, eq_w_l, eq_w_r, range(degree + 1), self.summand._combine
+        )
         l_evals = expand_hypercube_step(eq_w_prev, w_i)  # lᵢ(0), lᵢ(1)
-        # Full round domain [∞, 0, 1, …, d] (u=1 kept) so s is standalone-verifiable.
-        s = _mul_linear_into_t(t, l_evals, _naturals(self.d + 1, t.dtype))
+        # Full round domain [∞, 0, …, degree] (u=1 kept) → standalone-verifiable.
+        s = _mul_linear_into_t(t, l_evals, _naturals(degree + 1, t.dtype))
         coeffs = EvalDomain(leading=True).to_coeffs(s)
         return coeffs, (p0s, diffs, w_i)
 
@@ -172,7 +195,10 @@ class EqPolyRound(Round):
 
 
 def prove_eq_poly(
-    p_initial: Array, w: Array, transcript: Transcript
+    p_initial: Array,
+    w: Array,
+    transcript: Transcript,
+    summand: SumcheckSummand | None = None,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Fold all l variables; return the final factors (d, 1), the advanced
     transcript, and the per-round messages (each sᵢ over Û_d).
@@ -188,7 +214,7 @@ def prove_eq_poly(
         raise ValueError(
             f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
         )
-    rnd = EqPolyRound(p_initial.shape[0], w)
+    rnd = EqPolyRound(summand or SumcheckRound(degree=p_initial.shape[0]), w)
     state: EqPolyState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
     (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
     return p_final, transcript, msgs

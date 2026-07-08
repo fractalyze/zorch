@@ -13,8 +13,10 @@ it (the prover Rounds that emit them live in sqrt_space).
 
 from __future__ import annotations
 
+import operator
+from collections.abc import Callable
 from dataclasses import dataclass
-from functools import cache
+from functools import cache, reduce
 from typing import Any
 
 import jax
@@ -119,23 +121,40 @@ def extend_to_round_domain(
     return jnp.concatenate([base, rest], axis=0)
 
 
-def _product_evals(stacked: Array, *, skip_one: bool) -> Array:
-    """Σ_x' Πₖ fₖ(x') per node of the product round's domain: the m stacked factors
-    lifted onto Û_m (skip_one, u=1 dropped) or the full U_m, then summed. The one
-    reduction body product_round_poly and product_round_coeffs share."""
+def _product(*factors: Array) -> Array:
+    """The product summand Πₖ fₖ — the default combine for summand_evals."""
+    return reduce(operator.mul, factors)
+
+
+def summand_evals(
+    stacked: Array,
+    combine: Callable[..., Array],
+    degree: int,
+    *,
+    skip_one: bool,
+) -> Array:
+    """Σ_x' combine(f₁, …, f_m)(x') per node of the round's domain: the m stacked
+    factors lifted onto Û_degree (skip_one, u=1 dropped) or the full U_degree, then
+    combined and summed. The one reduction body the round-message builders share,
+    generic over the summand's `combine` (Πₖ for a product, the LogUp combine, …).
+
+    The ∞ node (leading coefficient) is combine(*slopes), which equals the round
+    polynomial's true leading coefficient only for a HOMOGENEOUS combine — every
+    monomial a product of exactly `degree` factors (product, LogUp; NOT the R1CS
+    E·(AB−C) whose finite-domain form belongs on the prove-scan seam instead)."""
     m = stacked.shape[0]
     pairs = jnp.reshape(stacked, (m, 2, -1))
     p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
-    lifted = jax.vmap(lambda a, b: extend_to_round_domain(a, b, m, skip_one=skip_one))(
-        p0, p1
-    )
-    return jnp.sum(jnp.prod(lifted, axis=0), axis=1)
+    lifted = jax.vmap(
+        lambda a, b: extend_to_round_domain(a, b, degree, skip_one=skip_one)
+    )(p0, p1)
+    return jnp.sum(combine(*lifted), axis=1)
 
 
 def product_round_poly(stacked: Array) -> Array:
     """Round message s = Σₓ Πₖ fₖ over Û_m for the m stacked multilinears, shape
-    (m,)."""
-    return _product_evals(stacked, skip_one=True)
+    (m,) — the product instantiation of summand_evals."""
+    return summand_evals(stacked, _product, stacked.shape[0], skip_one=True)
 
 
 def product_round_coeffs(stacked: Array) -> Array:
@@ -143,7 +162,9 @@ def product_round_coeffs(stacked: Array) -> Array:
     factors: the same Σ_x' Πₖ fₖ as product_round_poly but evaluated over the full
     round domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to
     coefficients — the wire form verifier.CoeffsSumcheckRound checks."""
-    return EvalDomain(leading=True).to_coeffs(_product_evals(stacked, skip_one=False))
+    return EvalDomain(leading=True).to_coeffs(
+        summand_evals(stacked, _product, stacked.shape[0], skip_one=False)
+    )
 
 
 def fold_stacked(stacked: Array, r: Array) -> Array:
