@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import TypeAlias
+from typing import Any, TypeAlias
 
 import jax
 from jax import Array
@@ -55,6 +55,39 @@ class BasefoldProof:
     final_poly: Array
     component_openings: list[Opening]
     query_openings: list[Opening]
+
+
+@dataclass(frozen=True)
+class CadenceProof:
+    """The generic artifacts a non-native (row-batch-prefix + multi-arity-epoch)
+    open produces, for a consumer to assemble into its own wire format.
+
+    The fold schedule commits several layers with different leaf groupings, so a
+    single `BasefoldProof` (uniform per-round pair leaves) does not describe it;
+    this carries the raw per-layer openings + the interleaved-sumcheck artifacts
+    for the consumer to serialize.
+
+    round_messages: per fold round, the kernel's raw message-component tuple
+        (e.g. `(u0, u2)`), in order.
+    commit_roots: the commit roots the choreography observed, in order — the
+        post-prefix root first, then one per committed epoch (all but the last).
+    final_codeword: the fully folded codeword, cleartext.
+    final_state: the kernel's terminal value(s) (`kernel.final`).
+    layer_openings / layer_positions / layer_num_leaves: one entry per committed
+        layer at the sampled query positions — layer 0 the initial codeword
+        (leaf index = the full position), layer 1 the post-prefix commit, layers
+        2+ the per-epoch commits (leaf index = position >> the layer's shift).
+    positions: the sampled query positions (full index).
+    """
+
+    round_messages: list[tuple]
+    commit_roots: list[Array]
+    final_codeword: Array
+    final_state: Any
+    layer_openings: list[Opening]
+    layer_positions: list[Array]
+    layer_num_leaves: list[int]
+    positions: Array
 
 
 @dataclass(frozen=True)

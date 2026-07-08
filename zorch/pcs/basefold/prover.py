@@ -42,7 +42,12 @@ from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import batch_staggered, sample_staggered_coeffs
 from zorch.pcs.basefold.choreography import BasefoldChoreography
-from zorch.pcs.basefold.config import BasefoldCommitment, BasefoldConfig, BasefoldProof
+from zorch.pcs.basefold.config import (
+    BasefoldCommitment,
+    BasefoldConfig,
+    BasefoldProof,
+    CadenceProof,
+)
 from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.fold import open_rows, to_base_field
 from zorch.poly.multilinear import eval_mle
@@ -224,22 +229,176 @@ class BasefoldProver:
         basis: Array,
         value: Array,
         transcript: Transcript,
-    ) -> tuple[BasefoldProof, Transcript]:
+    ) -> tuple[BasefoldProof | CadenceProof, Transcript]:
         """Open the batched claim `<f, basis> = value` for a RAW hypercube basis
         instead of a point — the entry of outer protocols whose eval-claims
         arrive as an already-batched basis vector. Mirrors
         `LigeritoProver.open_with_basis`: no point exists, so the choreography's
         `bind_statement` receives `point=None` and must bind the statement
         another way (the native binding refuses — this entry is for a basis
-        consumer)."""
+        consumer).
+
+        Under a non-native fold schedule (`row_batch_prefix` / `fold_arities`)
+        this returns a generic `CadenceProof` the consumer serializes; under the
+        native uniform schedule it returns a `BasefoldProof` (and the native
+        binding refuses the basis entry, as before)."""
         if basis.shape[0] != prover_data.mle.shape[0]:
             raise ValueError(
                 f"basis length {basis.shape[0]} must equal the MLE height "
                 f"{prover_data.mle.shape[0]} (= 2^num_vars)"
             )
         num_vars = log2_strict_usize(basis.shape[0])
-        _require_native_cadence(self._resolved_config(num_vars))
+        config = self._resolved_config(num_vars)
+        if not config.commits_per_round:
+            # Non-native fold schedule (row-batch prefix + multi-arity epochs):
+            # the eager, host-Fiat-Shamir cadence driver, returning a generic
+            # `CadenceProof` the consumer serializes. A byte-wire consumer drives
+            # this entry with its own choreography + kernel.
+            return _open_with_basis_cadence(
+                self, prover_data, basis, value, config, transcript
+            )
         return _open_with_basis_body(self, prover_data, basis, value, transcript)
+
+
+def _lane_combine(lanes: Array, challenges: Sequence[Array]) -> Array:
+    """The row-batch prefix's codeword op: fold the trailing lane axis of
+    `lanes` `[n_pos, 2^prefix]` by each prefix challenge in turn (the multilinear
+    partial-eval bind `(1-r)·e0 + r·e1`, low bit first), collapsing to `[n_pos]`.
+    Deferred to one pass at prefix end — the lane variables are exactly the ones
+    the sumcheck binds over the prefix rounds, so they combine with the same
+    challenges. Char-2-agnostic: `(1-r)·e0 + r·e1` is the field-general bind."""
+    buf = lanes
+    for r in challenges:
+        pairs = buf.reshape(buf.shape[0], -1, 2)
+        e0, e1 = pairs[..., 0], pairs[..., 1]
+        one = jnp.ones((), e0.dtype)
+        buf = (one - r) * e0 + r * e1
+    return buf[:, 0]
+
+
+def _open_with_basis_cadence(
+    prover: BasefoldProver,
+    pd: BasefoldProverData,
+    basis: Array,
+    value: Array,
+    config: BasefoldConfig,
+    transcript: Transcript,
+) -> tuple[CadenceProof, Transcript]:
+    """Eager driver for a non-native fold schedule: the interleaved sumcheck
+    (kernel) + a row-batch prefix (deferred lane-combine, one commit at prefix
+    end) + multi-arity epoch commits (post-fold, next-arity leaf grouping), all
+    FS-framed by the choreography. Mirrors `LigeritoProver._open`'s eager
+    orchestration (jitted kernels inside), NOT the jitted native basefold bodies:
+    a host-sequential byte-wire transcript can't ride one jit zone.
+
+    `pd.codeword` is the flat codeword the fold walks (interleave lanes grouped
+    per position); `pd.mle` seeds the kernel's sumcheck state alongside `basis`.
+    Returns a `CadenceProof` — the raw per-layer openings + sumcheck artifacts —
+    for the consumer to serialize into its wire (roots, octopus, query tuples)."""
+    chor = prover.choreography
+    kernel = prover.kernel
+    code = prover.code
+    tree = prover.tree
+    num_vars = config.num_vars
+    prefix = config.row_batch_prefix
+    arities = config.fold_arities
+    num_epochs = len(arities)
+    n_pos = code.block_len
+    num_ntts = 1 << prefix
+
+    # Initial commit (leaf = the interleave lanes of one position). Re-derived
+    # here for the query openings only — the outer protocol already bound this
+    # root, so the choreography does NOT observe it now (its `bind_statement`
+    # binds whatever the wire binds, e.g. a domain label).
+    init_leaves = pd.codeword.reshape(n_pos, num_ntts)
+    init_root, init_digest = tree.commit(init_leaves)
+    t = chor.bind_statement(transcript, init_root, None, value)
+
+    # Layers opened in the query phase: (leaves, digest_layers, index shift).
+    # Layer 0 is the initial commit at the full index; the shift maps a query
+    # position to that layer's folded leaf index (position >> shift).
+    layer_leaves: list[Array] = [init_leaves]
+    layer_digests: list[list[Array]] = [init_digest]
+    layer_shifts: list[int] = [0]
+    commit_roots: list[Array] = []
+
+    state = kernel.initial_state(pd.mle, basis, value)
+    cw = None if prefix > 0 else pd.codeword.reshape(n_pos)
+    round_messages: list[tuple] = []
+    rb_challenges: list[Array] = []
+    cum = 0  # cumulative FRI folds
+    epoch = in_epoch = 0
+
+    for rnd in range(num_vars):
+        components = kernel.message(state)
+        msg = chor.round_message(*components)
+        t = chor.observe_message(t, msg)
+        bits = chor.fold_grind_bits(rnd, 0)
+        if bits is not None:
+            t, _ = chor.grind(t, bits)
+        t, r = chor.fold_challenge(t, None, rnd, 0)
+        state = kernel.fold(state, components, r)
+        round_messages.append(components)
+
+        if rnd < prefix:
+            rb_challenges.append(r)
+            if rnd + 1 == prefix:
+                cw = _lane_combine(init_leaves, rb_challenges)  # [n_pos]
+                lf = 1 << arities[0]
+                leaves = cw.reshape(n_pos // lf, lf)
+                root, digest = tree.commit(leaves)
+                t = chor.observe_root(t, root)
+                commit_roots.append(root)
+                layer_leaves.append(leaves)
+                layer_digests.append(digest)
+                layer_shifts.append(arities[0])
+        else:
+            cw = code.fold(cw, r)
+            cum += 1
+            in_epoch += 1
+            if in_epoch == arities[epoch]:
+                if epoch + 1 < num_epochs:
+                    next_arity = arities[epoch + 1]
+                    lf = 1 << next_arity
+                    leaves = cw.reshape(cw.shape[0] // lf, lf)
+                    root, digest = tree.commit(leaves)
+                    t = chor.observe_root(t, root)
+                    commit_roots.append(root)
+                    layer_leaves.append(leaves)
+                    layer_digests.append(digest)
+                    layer_shifts.append(cum + next_arity)
+                in_epoch = 0
+                epoch += 1
+
+    final_codeword = cw
+    final_state = kernel.final(state)
+    # Bind the terminal (the native wire observes the whole codeword; a consumer
+    # that binds nothing here overrides `observe_final` to a no-op).
+    t = chor.observe_final(t, final_codeword)
+
+    # Query phase: shared positions; open every committed layer at its shifted
+    # leaf index. `open_rows` returns generic `Opening`s the consumer converts.
+    t, positions = chor.sample_queries(t, n_pos, config.num_queries)
+    layer_openings: list = []
+    layer_positions: list[Array] = []
+    layer_num_leaves: list[int] = []
+    for leaves, digest, shift in zip(layer_leaves, layer_digests, layer_shifts):
+        idx = positions >> shift
+        layer_openings.append(open_rows(tree, leaves, digest, idx))
+        layer_positions.append(idx)
+        layer_num_leaves.append(int(leaves.shape[0]))
+
+    proof = CadenceProof(
+        round_messages=round_messages,
+        commit_roots=commit_roots,
+        final_codeword=final_codeword,
+        final_state=final_state,
+        layer_openings=layer_openings,
+        layer_positions=layer_positions,
+        layer_num_leaves=layer_num_leaves,
+        positions=positions,
+    )
+    return proof, t
 
 
 def _require_native_cadence(config: BasefoldConfig) -> None:
