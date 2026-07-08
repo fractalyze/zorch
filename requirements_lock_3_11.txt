@@ -10,19 +10,19 @@ absl-py==2.4.0 \
     --hash=sha256:88476fd881ca8aab94ffa78b7b6c632a782ab3ba1cd19c9bd423abc4fb4cd28d \
     --hash=sha256:8c6af82722b35cf71e0f4d1d47dcaebfff286e27110a99fc359349b247dfb5d4
     # via -r requirements.in
-jax==0.10.0.dev20260708205343 \
-    --hash=sha256:992d2ac8e0a8558fac55d2e578798b99b12e9ba41adf609d11595afbbce33de4
+jax==0.10.0.dev20260708221109 \
+    --hash=sha256:e855a3fde62435772e05a4c16c30e7a843a29a72cfda867f936e8b04194b7be3
     # via -r requirements.in
-jax-cuda12-pjrt==0.10.0.dev20260708205343 \
-    --hash=sha256:3d6c0ac02cec282d9220d65a6fbd38f644133940f7fddd2e7901e9223274f4dc
+jax-cuda12-pjrt==0.10.0.dev20260708221109 \
+    --hash=sha256:165af4e009a2852fa647e0d3cf0a9fc4478bf11791b528a5e26a304faa6f9050
     # via
     #   -r requirements.in
     #   jax-cuda12-plugin
-jax-cuda12-plugin==0.10.0.dev20260708205343 \
-    --hash=sha256:745ad47ef0458909a803652edc3615f56fb40ce8ca53fe03b7e961aaa3053893
+jax-cuda12-plugin==0.10.0.dev20260708221109 \
+    --hash=sha256:c8ec595f0e7d678665f89218c6e42b34ae130613eb146c7030c5d2e93dc3def2
     # via -r requirements.in
-jaxlib==0.10.0.dev20260708205343 \
-    --hash=sha256:ddca453fc01db70c40ae4ef3143c586c8cade036b969d6562d59d9a7ef518c64
+jaxlib==0.10.0.dev20260708221109 \
+    --hash=sha256:e90131c14e11b4027168b42b795a1821ee555fdc3e19f69530873c64188bea07
     # via
     #   -r requirements.in
     #   jax
