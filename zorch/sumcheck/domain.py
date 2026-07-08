@@ -19,6 +19,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import zk_dtypes
 from jax import Array
 
 from zorch.poly.univariate import (
@@ -42,9 +43,15 @@ def _interp_constants(degree: int, dtype: Any) -> tuple[Array, Array]:
 
 
 def _naturals(n: int, dtype: Any) -> Array:
-    """The field-typed naturals {0, 1, …, n−1} (a stack, not iota — unsupported for
-    extension dtypes)."""
-    return jnp.stack([jnp.array(k, dtype) for k in range(n)])
+    """The field-typed naturals {0, 1, …, n−1}. Built in the base field — an iota
+    over an extension dtype is unsupported in the fork, and integer nodes live in
+    the prime field anyway; extension callers promote at multiply time. Same pattern
+    as compute_inv_vandermonde."""
+    try:
+        base = zk_dtypes.efinfo(dtype).base_field_dtype
+    except ValueError:
+        base = dtype
+    return jnp.array(list(range(n)), base)
 
 
 def _finite_coeff_matrix(nodes: Array) -> Array:
@@ -84,8 +91,14 @@ class EvalDomain:
         # samples (naturals {0..d−1} unless given) interpolate the residual p − c_d·xᵈ.
         v_inf, finite = values[0], values[1:]
         d = finite.shape[0]
-        nodes = self.nodes if self.nodes is not None else _naturals(d, values.dtype)
-        low = jnp.dot(_finite_coeff_matrix(nodes), finite - v_inf * nodes**d)
+        if self.nodes is None:
+            # Naturals domain: _finite_coeff_matrix(_naturals(d)) is exactly the
+            # inverse Vandermonde — its Lagrange build over the naturals collapses to
+            # the identity — so skip that identity vmap + matmul and use inv_vand.
+            nodes, cmat = _interp_constants(d - 1, values.dtype)
+        else:
+            nodes, cmat = self.nodes, _finite_coeff_matrix(self.nodes)
+        low = jnp.dot(cmat, finite - v_inf * nodes**d)
         return jnp.concatenate([low, jnp.atleast_1d(v_inf)])
 
 
@@ -106,16 +119,23 @@ def extend_to_round_domain(
     return jnp.concatenate([base, rest], axis=0)
 
 
-def product_round_poly(stacked: Array) -> Array:
-    """Round message s = Σₓ Πₖ fₖ over Û_m for the m stacked multilinears, shape
-    (m,)."""
+def _product_evals(stacked: Array, *, skip_one: bool) -> Array:
+    """Σ_x' Πₖ fₖ(x') per node of the product round's domain: the m stacked factors
+    lifted onto Û_m (skip_one, u=1 dropped) or the full U_m, then summed. The one
+    reduction body product_round_poly and product_round_coeffs share."""
     m = stacked.shape[0]
     pairs = jnp.reshape(stacked, (m, 2, -1))
     p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
-    lifted = jax.vmap(lambda a, b: extend_to_round_domain(a, b, m, skip_one=True))(
+    lifted = jax.vmap(lambda a, b: extend_to_round_domain(a, b, m, skip_one=skip_one))(
         p0, p1
     )
     return jnp.sum(jnp.prod(lifted, axis=0), axis=1)
+
+
+def product_round_poly(stacked: Array) -> Array:
+    """Round message s = Σₓ Πₖ fₖ over Û_m for the m stacked multilinears, shape
+    (m,)."""
+    return _product_evals(stacked, skip_one=True)
 
 
 def product_round_coeffs(stacked: Array) -> Array:
@@ -123,12 +143,7 @@ def product_round_coeffs(stacked: Array) -> Array:
     factors: the same Σ_x' Πₖ fₖ as product_round_poly but evaluated over the full
     round domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to
     coefficients — the wire form verifier.CoeffsSumcheckRound checks."""
-    m = stacked.shape[0]
-    pairs = jnp.reshape(stacked, (m, 2, -1))
-    p0, p1 = pairs[:, 0, :], pairs[:, 1, :]
-    lifted = jax.vmap(lambda a, b: extend_to_round_domain(a, b, m))(p0, p1)
-    evals = jnp.sum(jnp.prod(lifted, axis=0), axis=1)
-    return EvalDomain(leading=True).to_coeffs(evals)
+    return EvalDomain(leading=True).to_coeffs(_product_evals(stacked, skip_one=False))
 
 
 def fold_stacked(stacked: Array, r: Array) -> Array:

@@ -51,23 +51,35 @@ def precompute_accumulators(
     x_out_size = 1 << (l - l_half - l_0)
     beta_size = (d + 1) ** l_0
 
-    accumulators = [
-        jnp.zeros(((d + 1) ** i, d), dtype=p_evals.dtype) for i in range(l_0)
-    ]
-
     # Extend the first l₀ variables to U_d, then contract x_in against eq(w_in, ·):
     # tA[β, x_out] = Σ_{x_in} e_in[x_in] · Πₖ pₖ(β, x_in, x_out).
     p_beta = vmap(lambda e: _extend_prefix_to_domain(e, d, l_0))(p_evals)
     p_beta_prod = jnp.reshape(
         jnp.prod(p_beta, axis=0), (beta_size, x_in_size, x_out_size)
     )
-    t_a = (p_beta_prod * e_in[None, :, None]).sum(axis=1)
+    t_a = (p_beta_prod * e_in[None, :, None]).sum(axis=1)  # (β, x_out)
 
-    # Scatter each β into the (round, v, u) slots it feeds, weighted by eq over y.
+    # _idx4 is pure host arithmetic, so collect each round's (β, flat v·d+u, y) slots
+    # once on the host, then contract + scatter that round in a single vectorized op.
+    # A per-contribution `.at[].add()` instead bakes O((d+1)^l₀·l₀) scatters into the
+    # traced graph — the compile time/memory blow up exponentially in l₀.
+    routes: list[tuple[list[int], list[int], list[int]]] = [
+        ([], [], []) for _ in range(l_0)
+    ]
     for beta_idx in range(beta_size):
         for i, v, u, y in _idx4(beta_idx, l_0, d):
-            contribution = jnp.sum(e_out[i - 1][y, :] * t_a[beta_idx, :])
-            accumulators[i - 1] = accumulators[i - 1].at[v, u].add(contribution)
+            betas, vus, ys = routes[i - 1]
+            betas.append(beta_idx)
+            vus.append(v * d + u)
+            ys.append(y)
+
+    accumulators = []
+    for i in range(l_0):
+        betas, vus, ys = (jnp.asarray(col, dtype=jnp.int32) for col in routes[i])
+        # contrib[k] = Σ_x_out e_out[i][y_k, :] · t_a[β_k, :]
+        contrib = jnp.sum(e_out[i][ys, :] * t_a[betas, :], axis=1)
+        flat = jnp.zeros((d + 1) ** i * d, dtype=p_evals.dtype).at[vus].add(contrib)
+        accumulators.append(flat.reshape(((d + 1) ** i, d)))
     return accumulators
 
 

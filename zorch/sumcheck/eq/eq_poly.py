@@ -22,7 +22,7 @@ from jax import Array
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import EvalDomain
+from zorch.sumcheck.domain import EvalDomain, _naturals
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -84,18 +84,24 @@ def compute_t_poly(
     return _weighted_product(p0s, diffs, eq_w_l, eq_w_r, [0, *range(2, d)])
 
 
+def _mul_linear_into_t(t_evals: Array, l_evals: Array, us: Array) -> Array:
+    """s(u) = l(u) · t(u) node-wise over [∞, *us], where l is the linear eq factor
+    l(u) = l(0) + u·(l(1)−l(0)): s(∞) = l_diff·t(∞), s(u) = (l0 + u·l_diff)·t(u).
+    The compressed Û_d message and the full-domain coefficient form differ only in
+    the finite node set us, so both route through here."""
+    l_0, l_1 = l_evals[0], l_evals[1]
+    l_diff = l_1 - l_0
+    return jnp.concatenate(
+        [jnp.atleast_1d(l_diff * t_evals[0]), (l_0 + us * l_diff) * t_evals[1:]]
+    )
+
+
 def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, d: int) -> Array:
     """sᵢ = lᵢ · tᵢ over Û_d, shape (d,). l_evals = [l(0), l(1)]; the product is
     pointwise per node, so s(∞) is the product of leading coefficients."""
-    t_inf, t_0, t_rest = t_evals[0], t_evals[1], t_evals[2:]
-    l_0, l_1 = l_evals[0], l_evals[1]
-    l_diff = l_1 - l_0
-    head = jnp.stack([l_diff * t_inf, l_0 * t_0])
-    if d <= 2:
-        return head
-    # Domain {2..d−1} via stack, not arange — a field-dtype iota is unsupported.
-    us = jnp.stack([jnp.array(u, t_evals.dtype) for u in range(2, d)])
-    return jnp.concatenate([head, (l_0 + us * l_diff) * t_rest])
+    nat = _naturals(d, t_evals.dtype)  # [0, 1, …, d−1]
+    us = jnp.concatenate([nat[:1], nat[2:]])  # Û_d finite nodes: u=1 dropped
+    return _mul_linear_into_t(t_evals, l_evals, us)
 
 
 class EqPolyRound(Round):
@@ -145,12 +151,9 @@ class EqPolyRound(Round):
         p0s, diffs = _split_pairs(p_stacked)
         w_i = self.w[i - 1]
         t = _weighted_product(p0s, diffs, eq_w_l, eq_w_r, range(self.d + 1))
-        l_0, l_1 = expand_hypercube_step(eq_w_prev, w_i)  # lᵢ(0), lᵢ(1)
-        l_diff = l_1 - l_0
-        us = jnp.stack([jnp.array(u, t.dtype) for u in range(self.d + 1)])
-        s = jnp.concatenate(
-            [jnp.atleast_1d(l_diff * t[0]), (l_0 + us * l_diff) * t[1:]]
-        )
+        l_evals = expand_hypercube_step(eq_w_prev, w_i)  # lᵢ(0), lᵢ(1)
+        # Full round domain [∞, 0, 1, …, d] (u=1 kept) so s is standalone-verifiable.
+        s = _mul_linear_into_t(t, l_evals, _naturals(self.d + 1, t.dtype))
         coeffs = EvalDomain(leading=True).to_coeffs(s)
         return coeffs, (p0s, diffs, w_i)
 
@@ -173,8 +176,13 @@ def prove_eq_poly(
 ) -> tuple[Array, Transcript, list[Array]]:
     """Fold all l variables; return the final factors (d, 1), the advanced
     transcript, and the per-round messages (each sᵢ over Û_d).
-    EqPolyRound._round_coeffs gives the coefficient wire form for
-    verifier.CoeffsSumcheckRound."""
+
+    Fiat-Shamir binds to the compressed Û_d message (the byte-match anchor to the
+    whir-zorch/SP1 on-wire form), which drops u=1 and is not standalone-verifiable —
+    its driver-level verifier dual is pending (issue #410). The independent,
+    standalone-verifiable coefficient form is EqPolyRound._round_coeffs, checked
+    round-by-round against verifier.CoeffsSumcheckRound (see test_coeff_round_verifies);
+    it is a distinct transcript, not a re-encoding of the Û_d proof returned here."""
     rounds = log2_strict_usize(p_initial.shape[1])
     if w.shape[0] != rounds:
         raise ValueError(

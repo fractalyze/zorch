@@ -46,7 +46,12 @@ def _lagrange_over_round_domain(r: Array, d: int) -> Array:
 
 class SmallValueRound(Round):
     """One accumulator round i: sᵢ = lᵢ · (Rᵢ · Aᵢ), then grow R by the round's
-    Lagrange tensor and advance the eq mass. Bound to its round index and table."""
+    Lagrange tensor and advance the eq mass. Bound to its round index and table.
+
+    Deliberately no __call__: the phase-1 driver in prove_eq_poly_small_value is a
+    manual loop over _round_poly / _fold, not fold_rounds, because the transition
+    round rebuilds the bound-prefix eq table from the raw phase-1 challenges — which
+    a Round.__call__ (returning only state/transcript/msg) would swallow."""
 
     def __init__(self, d: int, w_i: Array, accumulator: Array) -> None:
         self.d = d
