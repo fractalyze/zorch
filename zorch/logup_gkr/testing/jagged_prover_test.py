@@ -30,6 +30,7 @@ from zorch.logup_gkr.jagged_prover import (
     JaggedLayerProof,
     _jagged_round_zone,
     prove_jagged_layer,
+    prove_jagged_pyramid,
 )
 from zorch.logup_gkr.prover import Carry, bind_output
 from zorch.logup_gkr.testing import (
@@ -417,6 +418,98 @@ class ChainedJaggedProveTest(absltest.TestCase):
         # At each build, only the round just proved could still be alive.
         self.assertEqual(live_log, [0] + [1] * (len(yielded) - 1))
         self.assertEqual([ref() for ref in yielded], [None] * len(yielded))
+
+
+class PyramidScanProveTest(absltest.TestCase):
+    """`prove_jagged_pyramid` is the #254 entry point: this task pins it as a
+    byte-identical drop-in for `ProveChain(JaggedGkrLayerRound(l) for l in
+    ...)` before the scan (landing in a later task) replaces its per-layer
+    Python loop."""
+
+    ROW_COUNTS = ChainedJaggedProveTest.ROW_COUNTS
+
+    def _chain(
+        self,
+        layers: list[JaggedGkrLayer],
+        carry: Carry,
+        transcript: Transcript,
+        challenge_limbs: int = 1,
+    ) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
+        chain = ProveChain(
+            JaggedGkrLayerRound(l, challenge_limbs) for l in reversed(layers[:-1])
+        )
+        return chain(carry, transcript)
+
+    def _assert_byte_match(
+        self,
+        got: tuple[Carry, Transcript, list[JaggedLayerProof]],
+        want: tuple[Carry, Transcript, list[JaggedLayerProof]],
+    ) -> None:
+        got_c, got_t, got_p = got
+        want_c, want_t, want_p = want
+        for g, w in zip(got_p, want_p, strict=True):
+            for f in fields(JaggedLayerProof):
+                self.assertTrue(
+                    bool(jnp.all(getattr(g, f.name) == getattr(w, f.name))),
+                    f"proof field {f.name} mismatch",
+                )
+        for g, w in zip(got_c, want_c, strict=True):
+            self.assertTrue(bool(jnp.all(g == w)), "carry mismatch")
+        if not isinstance(got_t, DuplexTranscript) or not isinstance(
+            want_t, DuplexTranscript
+        ):
+            raise AssertionError("both paths must thread the DuplexTranscript back")
+        gs, ws = got_t.state, want_t.state
+        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
+        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
+        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
+        self.assertEqual(int(gs.in_pos), int(ws.in_pos))
+        self.assertEqual(int(gs.out_pos), int(ws.out_pos))
+
+    def test_entry_matches_chain_no_caps(self) -> None:
+        layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
+        output = extract_jagged_outputs(layers[-1])
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+        want = self._chain(layers, carry, transcript)
+        got = prove_jagged_pyramid(
+            list(reversed(layers[:-1])), carry, transcript, caps=None
+        )
+        self._assert_byte_match(got, want)
+
+    def test_entry_matches_chain_base_field_first_layer(self) -> None:
+        # The BF->EF carve (#254): the pyramid's first layer carries
+        # base-field LogUp numerators under EF denominators (the
+        # `BaseFieldNumeratorFirstLayerTest` shape). One `jagged_layer_transition`
+        # fold combines through the EF denominators (n0*d1 + n1*d0), so every
+        # layer above the first is already all-EF -- the carry the entry reads
+        # off the floor is EF while the entry's last-proved layer (the
+        # original first layer) is still base-field-numerator, so the entry
+        # must take the carve's true branch.
+        layers = build_jagged_pyramid(mixed_field_jagged_layer(7, self.ROW_COUNTS))
+        output = extract_jagged_outputs(layers[-1])
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+        reversed_layers = list(reversed(layers[:-1]))
+        self.assertNotEqual(
+            reversed_layers[-1].numerator_0.dtype,
+            carry[0].dtype,
+            "fixture must exercise the BF->EF carve",
+        )
+        want = self._chain(layers, carry, transcript, challenge_limbs=4)
+        got = prove_jagged_pyramid(
+            reversed_layers, carry, transcript, caps=None, challenge_limbs=4
+        )
+        self._assert_byte_match(got, want)
+
+    def test_entry_rejects_host_fs(self) -> None:
+        layers = build_jagged_pyramid(random_jagged_layer(5, self.ROW_COUNTS))
+        output = extract_jagged_outputs(layers[-1])
+        _, t = bind_output(output, cheap_transcript(KB))
+        if not isinstance(t, DuplexTranscript):
+            raise AssertionError("bind_output must thread the DuplexTranscript back")
+        t_host = DuplexTranscript.new(t.permutation, rate=t.rate, fs_on_host=True)
+        carry, _ = bind_output(output, cheap_transcript(KB))
+        with self.assertRaises(NotImplementedError):
+            prove_jagged_pyramid(list(reversed(layers[:-1])), carry, t_host, caps=None)
 
 
 class JaggedGkrLayerRoundZoneTest(absltest.TestCase):

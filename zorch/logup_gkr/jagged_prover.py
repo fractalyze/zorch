@@ -803,6 +803,76 @@ class JaggedGkrLayerRound(Round):
         return self._call(carry, transcript)
 
 
+def _prove_layer(
+    layer: JaggedGkrLayer,
+    challenge_limbs: int,
+    caps: RoundWidthCaps | None,
+    carry: Carry,
+    transcript: Transcript,
+) -> tuple[Carry, Transcript, JaggedLayerProof]:
+    """Prove one layer via the existing whole-layer path (operand building +
+    zone). Extracted so the entry, the carve, and the scan fallback share it."""
+    return _jagged_round_via_zone(layer, challenge_limbs, caps, carry, transcript)
+
+
+def prove_jagged_pyramid(
+    layers: list[JaggedGkrLayer],
+    carry: Carry,
+    transcript: Transcript,
+    *,
+    caps: RoundWidthCaps | None,
+    challenge_limbs: int = 1,
+) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
+    """Prove the jagged GKR pyramid's layer chain -- byte-identical to
+    ProveChain(JaggedGkrLayerRound(l) for l in layers). `layers` are the
+    proved layers floor-outward, threading the `(num_eval, den_eval,
+    eval_point)` carry from one layer's proof into the next's claim.
+
+    Intent: roll the chain into a `lax.scan` when `caps` is given, bounding
+    cross-layer peak memory under an outer jit (the per-layer working set
+    becomes the scan carry, allocated once, reused) -- landing in a later
+    task. Today this is still a per-layer Python loop; `caps=None` is a valid
+    path and runs it eagerly, no caps required. Requires a device-FS
+    transcript (host-FS is an eager primitive that can't trace into a scan).
+    """
+    layers = list(layers)
+    if not layers:
+        raise ValueError("prove_jagged_pyramid needs at least one layer")
+    if not isinstance(transcript, DuplexTranscript):
+        raise TypeError("prove_jagged_pyramid threads a DuplexTranscript scan carry")
+    if transcript.fs_on_host:
+        raise NotImplementedError(
+            "prove_jagged_pyramid needs a device-FS transcript; host-FS is an "
+            "eager primitive that cannot trace into the scan body"
+        )
+
+    # BF->EF carve: the mixed-field layer (base-field LogUp numerators under EF
+    # denominators) can't ride the scan (its fold changes the carry dtype). Prove
+    # it via the per-layer path; scan the all-EF interior. It is the chain's last
+    # round, so the result is byte-identical.
+    if layers[-1].numerator_0.dtype != carry[0].dtype:
+        *interior, last = layers
+        interior_proofs: list[JaggedLayerProof] = []
+        if interior:
+            carry, transcript, interior_proofs = prove_jagged_pyramid(
+                interior, carry, transcript, caps=caps, challenge_limbs=challenge_limbs
+            )
+        carry, transcript, last_proof = _prove_layer(
+            last, challenge_limbs, caps, carry, transcript
+        )
+        return carry, transcript, [*interior_proofs, last_proof]
+
+    # TASK 1: per-layer loop (identical to ProveChain). TASK 4 replaces this with
+    # the lax.scan.
+    proofs = []
+    for layer in layers:
+        carry, transcript, proof = _prove_layer(
+            layer, challenge_limbs, caps, carry, transcript
+        )
+        proofs.append(proof)
+    return carry, transcript, proofs
+
+
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[ProverRound] = JaggedGkrLayerRound
