@@ -23,9 +23,10 @@ from __future__ import annotations
 import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import reduce
+from functools import partial, reduce
 from typing import TYPE_CHECKING, Protocol
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -203,6 +204,11 @@ class CompressedProductRound(Round):
         return state, transcript, msg
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=["round_poly", "challenge"],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class RoundMsg:
     """One per-variable sumcheck round's message: the round polynomial sent plus
@@ -210,7 +216,8 @@ class RoundMsg:
     challenges the evaluation point. The challenge is re-derivable from `round_poly`,
     so it never goes on the wire; it rides here only to spare the prover a transcript
     replay. `LogupSumcheckRound.__call__` emits one per round for the `fold_rounds`
-    driver."""
+    driver. Registered as a pytree because a downstream `lax.scan` stacks it as its
+    output — a scan output leaf must be a valid JAX type."""
 
     round_poly: Array
     challenge: Array
