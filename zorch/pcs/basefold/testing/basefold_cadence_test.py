@@ -124,6 +124,17 @@ class _CadenceChoreography(BasefoldChoreography):
         return t, r[0]
 
 
+@dataclass(frozen=True)
+class _GrindingCadenceChoreography(_CadenceChoreography):
+    """The cadence wire above, but scheduling a query-phase grind — exercises
+    the cadence verify's grind guard (`CadenceProof` carries no pow-witness
+    field for a scheduled grind to land in)."""
+
+    def query_grind_bits(self, level: int) -> int | None:
+        del level
+        return 0
+
+
 def _codeword(code: BitReversedReedSolomon, a: Array, num_ntts: int) -> Array:
     """The interleaved codeword for MLE `a`: lane `l` holds `encode` of the
     coefficient form of `a`'s lane-`l` sub-message (`a[l::num_ntts]`), stored
@@ -230,6 +241,19 @@ class BasefoldCadenceRoundTripTest(absltest.TestCase):
             ],
         )
         self.assertFalse(self._verify(bad))
+
+    def test_verify_with_basis_raises_on_scheduled_grind(self) -> None:
+        # A grind-scheduling choreography has nowhere to put a witness in
+        # `CadenceProof` (no pow-witness field) — the cadence verify must fail
+        # loud, symmetric to the prover's `_require_no_cadence_grind` guard on
+        # `_open_with_basis_cadence`.
+        grinding_verifier = dataclasses.replace(
+            self.verifier, choreography=_GrindingCadenceChoreography()
+        )
+        with self.assertRaises(NotImplementedError):
+            grinding_verifier.verify_with_basis(
+                self.commitment, self.b, self.value, self.proof, _transcript()
+            )
 
     def test_verify_rejects_tampered_final_state(self) -> None:
         # Exercises the kernel's `verify_final` tie: a forged terminal value fails

@@ -169,9 +169,9 @@ class BasefoldVerifier:
             if config.row_batch_prefix == 0:
                 raise NotImplementedError(
                     "non-native cadence verify is wired for a row-batch prefix "
-                    "(row_batch_prefix > 0, the flock shape); the prefix-free "
-                    "multi-arity sub-case commits no post-prefix layer and needs "
-                    "its own bridge — not replayed here"
+                    "(row_batch_prefix > 0, the row-batch-prefix shape); the "
+                    "prefix-free multi-arity sub-case commits no post-prefix "
+                    "layer and needs its own bridge — not replayed here"
                 )
             # The schedule fixes the proof type (dispatch mirrors the prover):
             # a non-native config carries a `CadenceProof`.
@@ -265,8 +265,8 @@ def _fold_coset(
     pair, the row-batch/multi-arity layout the epoch commits group), so each level
     reshapes to `[Q, half, 2]` and folds the pair; `leaf_index` [Q] is the coset's
     index in each layer (unchanged as the width halves), and the pair's landing
-    index in the next layer is `leaf_index*half + j`. Mirrors flock's
-    `fri_fold_coset` assembled from the `FoldableCode` seam."""
+    index in the next layer is `leaf_index*half + j` — the per-epoch coset refold
+    assembled from the `FoldableCode` seam."""
     buf = coset
     for k, beta in enumerate(betas):
         q, width = buf.shape
@@ -309,6 +309,11 @@ def _verify_with_basis_cadence(
     arities = config.fold_arities
     num_epochs = len(arities)
     n_pos = code.block_len
+
+    # Fail loud on a scheduled grind BEFORE any verdict: `CadenceProof` carries no
+    # pow-witness field, symmetric to the prover's `_require_no_cadence_grind`
+    # guard on `_open_with_basis_cadence`.
+    _require_no_grind(chor, num_vars)
 
     # Shape guard on the CadenceProof, symmetric to `_check_proof_shape` — a short
     # message / root / layer list would let the replay skip checks silently.
