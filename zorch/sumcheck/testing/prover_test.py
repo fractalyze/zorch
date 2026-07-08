@@ -7,7 +7,7 @@ from absl.testing import absltest
 from jax import tree_util
 
 from zorch.sumcheck import prover, verifier
-from zorch.sumcheck.domain import fold_stacked
+from zorch.sumcheck.domain import fold
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -40,13 +40,6 @@ class StandardRoundTest(absltest.TestCase):
             fa = a[:4] + uf * (a[4:] - a[:4])
             fb = b[:4] + uf * (b[4:] - b[:4])
             self.assertTrue(bool(msg[u] == jnp.sum(fa * fb)))
-
-    def test_fold_matches_manual(self) -> None:
-        f = rand_field(14, (8,), KB)
-        r = jnp.array(6, KB)
-        got = fold_stacked(f[None], r)[0]
-        want = f[:4] + r * (f[4:] - f[:4])
-        self.assertTrue(bool(jnp.all(got == want)))
 
     def test_call_threads_state_transcript_msg(self) -> None:
         f = rand_field(15, (8,), KB)
@@ -103,34 +96,36 @@ class CompressedProductRoundTest(absltest.TestCase):
             prover.CompressedProductRound()._round_poly(f[None])
 
 
-class LsbHelpersTest(absltest.TestCase):
+class FoldTest(absltest.TestCase):
     def test_split_pairs_strides_the_last_axis(self) -> None:
         f = jnp.array([[0, 1, 2, 3], [4, 5, 6, 7]], KB)
         p0, p1 = prover.split_pairs(f)
         self.assertTrue(bool(jnp.all(p0 == jnp.array([[0, 2], [4, 6]], KB))))
         self.assertTrue(bool(jnp.all(p1 == jnp.array([[1, 3], [5, 7]], KB))))
 
-    def test_fold_lsb_matches_manual_pair_fold(self) -> None:
+    def test_msb_fold_splits_contiguous_halves(self) -> None:
+        f = rand_field(20, (8,), KB)
+        r = jnp.array(6, KB)
+        got = fold(f, r)
+        want = f[:4] + r * (f[4:] - f[:4])
+        self.assertEqual(got.shape, (4,))
+        self.assertTrue(bool(jnp.all(got == want)))
+
+    def test_lsb_fold_splits_stride_2_pairs(self) -> None:
         f = rand_field(21, (8,), KB)
         r = jnp.array(6, KB)
-        got = prover.fold_lsb(f, r)
+        got = fold(f, r, msb=False)
         want = f[0::2] + r * (f[1::2] - f[0::2])
         self.assertEqual(got.shape, (4,))
         self.assertTrue(bool(jnp.all(got == want)))
 
-    def test_fold_lsb_is_the_stride_dual_of_msb_fold(self) -> None:
-        # fold_lsb on an interleaved buffer equals `fold_stacked` on the
+    def test_lsb_fold_is_the_stride_dual_of_msb_fold(self) -> None:
+        # An LSB fold on an interleaved buffer equals an MSB fold on the
         # deinterleaved one: same pairs, different layout.
         f = rand_field(22, (8,), KB)
         r = jnp.array(9, KB)
         deinterleaved = jnp.concatenate([f[0::2], f[1::2]])
-        self.assertTrue(
-            bool(
-                jnp.all(
-                    prover.fold_lsb(f, r) == fold_stacked(deinterleaved[None], r)[0]
-                )
-            )
-        )
+        self.assertTrue(bool(jnp.all(fold(f, r, msb=False) == fold(deinterleaved, r))))
 
 
 class SumcheckRoundPytreeTest(absltest.TestCase):

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.sumcheck.domain import fold_stacked, product_round_poly
+from zorch.sumcheck.domain import fold, product_round_poly
 from zorch.sumcheck.sqrt_space import prove_sqrt_space
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
@@ -25,7 +25,7 @@ def _prove_product(p: jnp.ndarray, transcript: Transcript) -> list[jnp.ndarray]:
     for _ in range(log2_strict_usize(p.shape[1])):
         msg = product_round_poly(p)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        p = fold_stacked(p, r[0])
+        p = fold(p, r[0])
         msgs.append(msg)
     return msgs
 

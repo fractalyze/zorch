@@ -60,7 +60,7 @@ from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.sumcheck.domain import fold_stacked
+from zorch.sumcheck.domain import fold
 from zorch.sumcheck.prover import (
     CompressedProductRound,
     ProductSummand,
@@ -267,7 +267,7 @@ def _open(
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = fold_stacked(jnp.stack([W, B]), r)
+            W, B = fold(jnp.stack([W, B]), r)
             if eager:
                 # The freshly folded state's — the terminal residual state's
                 # included (the verifier recomputes that one in the clear).

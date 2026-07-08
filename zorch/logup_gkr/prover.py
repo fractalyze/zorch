@@ -45,7 +45,7 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold_stacked, natural_domain, summand_evals
+from zorch.sumcheck.domain import fold, natural_domain, summand_evals
 from zorch.sumcheck.prover import RoundMsg, split_pairs
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -237,7 +237,7 @@ class LogupSumcheckRound(Round):
     ) -> tuple[Array, Transcript, RoundMsg]:
         msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold_stacked(folded, r[0]), transcript, RoundMsg(msg, r[0])
+        return fold(folded, r[0]), transcript, RoundMsg(msg, r[0])
 
 
 @dataclass(frozen=True)

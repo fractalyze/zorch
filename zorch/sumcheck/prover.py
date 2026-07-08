@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck prover rounds and the fold helpers they share.
+"""Sumcheck prover rounds and the split/fold helpers they share.
 
 A sumcheck round splits each MLE on the current variable, sends the round
 polynomial sampled over an `EvalDomain`, then folds every MLE at the verifier's
@@ -13,10 +13,11 @@ combine -> sum, the linear-time reference the memory-optimized siblings
 defaults to the product (`ProductSummand`) and its domain to the natural
 {0..degree} evals.
 
-Variables bind MSB-first here (the `fold_stacked` contiguous-half split); the
-jagged engines bind LSB-first, so the stride-2 duals `split_pairs` / `fold_lsb`
-(and the `fold_pair` primitive both forms share) live here too for those
-consumers. The verifier dual lives in `zorch.sumcheck.verifier`.
+The dense round binds MSB-first via `domain.fold` (contiguous-half split); the
+jagged engines bind LSB-first with `fold(..., msb=False)` (stride-2 pairs). The
+split-only `split_pairs` and the pair primitive `fold_pair` live here for those
+consumers (a jagged body that splits without folding, whir's manual pair fold).
+The verifier dual lives in `zorch.sumcheck.verifier`.
 
 Rounds run under the scheme-agnostic `zorch.prove.fold_rounds` host loop (any
 `Round`, any message shape) -- one round per variable, folding the state down
@@ -39,7 +40,7 @@ from jax import Array
 from zorch.round import Round
 from zorch.sumcheck.domain import (
     EvalDomain,
-    fold_stacked,
+    fold,
     natural_domain,
     summand_evals,
 )
@@ -56,18 +57,11 @@ def fold_pair(p0: Array, p1: Array, r: Array) -> Array:
 
 def split_pairs(arr: Array) -> tuple[Array, Array]:
     """Split on the LSB variable: the stride-2 `(arr[..., 0::2], arr[..., 1::2])`
-    consecutive-pair dual of the MSB contiguous-half split `fold_stacked` binds.
+    consecutive-pair dual of the MSB contiguous-half split `fold` binds.
     The jagged engines bind LSB-first -- a batch-major jagged layout makes the row
     LSB the in-segment pair dimension, so the pair fold never crosses a segment
     boundary -- while the dense drivers stay MSB-halving."""
     return arr[..., 0::2], arr[..., 1::2]
-
-
-def fold_lsb(arr: Array, r: Array) -> Array:
-    """Bind the LSB variable at challenge `r`: `fold_pair` over the stride-2
-    pairs. Halves the last axis; the LSB dual of `fold_stacked`."""
-    p0, p1 = split_pairs(arr)
-    return fold_pair(p0, p1, r)
 
 
 @dataclass(frozen=True)
@@ -125,7 +119,7 @@ class StandardRound(Round):
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold_stacked(folded, r[0]), transcript, msg
+        return fold(folded, r[0]), transcript, msg
 
 
 class CompressedProductRound(Round):
@@ -157,7 +151,7 @@ class CompressedProductRound(Round):
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold_stacked(folded, r[0]), transcript, msg
+        return fold(folded, r[0]), transcript, msg
 
 
 @dataclass(frozen=True)

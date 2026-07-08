@@ -31,7 +31,7 @@ from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, Ligeri
 from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.sumcheck import prover as sc_prover
-from zorch.sumcheck.domain import fold_stacked
+from zorch.sumcheck.domain import fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
 from zorch.transcript import Transcript
 
@@ -202,7 +202,7 @@ def _verify(
             ok = ok & ok_round
             # The round verifier reduces only the claim; fold the public basis B
             # by the same challenge so it tracks the prover's folded B.
-            B = fold_stacked(B[None], r)[0]
+            B = fold(B, r)
             challenges.append(r)
             if eager:
                 t, cur = take(t)

@@ -8,7 +8,7 @@ from absl.testing import absltest
 from zorch.sumcheck.domain import (
     EvalDomain,
     extend_to_round_domain,
-    fold_stacked,
+    fold,
     product_round_coeffs,
     product_round_poly,
     summand_evals,
@@ -118,7 +118,7 @@ class DomainTest(absltest.TestCase):
             self.assertEqual(coeffs.shape, (m + 1,))
             claim, transcript, r, ok = verifier(claim, coeffs, transcript)
             self.assertTrue(bool(ok))
-            state = fold_stacked(state, r)
+            state = fold(state, r)
             point.append(r)
         self.assertTrue(bool(claim == jnp.prod(state[:, 0])))
 

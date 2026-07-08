@@ -192,9 +192,15 @@ def product_round_coeffs(stacked: Array) -> Array:
     return EvalDomain(leading=True).to_coeffs(summand_evals(stacked, _product, full))
 
 
-def fold_stacked(stacked: Array, r: Array) -> Array:
-    """Standard sumcheck fold of the leading variable on a stacked (m, N) array,
-    halving the width — shared by the product round and the small-value transition."""
-    pairs = jnp.reshape(stacked, (stacked.shape[0], 2, -1))
-    p0 = pairs[:, 0, :]
-    return (pairs[:, 1, :] - p0) * r + p0
+def fold(arr: Array, r: Array, *, msb: bool = True) -> Array:
+    """Fold the last variable at challenge `r`: P0 + r*(P1 - P0), halving the last
+    axis. `msb` (the dense default) splits contiguous halves [low | high]; msb=False
+    splits stride-2 consecutive pairs — the jagged bind, where a batch-major layout
+    makes the pair the in-segment dimension, so the fold never crosses a segment
+    boundary. ndim-agnostic: the leading factor/batch axes broadcast."""
+    if msb:
+        half = arr.shape[-1] // 2
+        p0, p1 = arr[..., :half], arr[..., half:]
+    else:
+        p0, p1 = arr[..., 0::2], arr[..., 1::2]
+    return p0 + r * (p1 - p0)

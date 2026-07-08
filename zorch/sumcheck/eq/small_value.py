@@ -25,7 +25,7 @@ from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_st
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold_stacked, summand_evals, uhat_domain
+from zorch.sumcheck.domain import fold, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
 from zorch.sumcheck.prover import ProductSummand
@@ -107,7 +107,7 @@ class TransitionRound(Round):
         msg = summand_evals(folded, self.summand._combine, self.domain)
         transcript, r = transcript.observe_and_sample(msg, 1)
         return (
-            (fold_stacked(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
+            (fold(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
             transcript,
             msg,
         )
