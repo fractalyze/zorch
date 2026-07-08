@@ -22,11 +22,11 @@ from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_st
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
 from zorch.round import Round
-from zorch.sumcheck.domain import fold_stacked, product_round_poly, uhat_domain
+from zorch.sumcheck.domain import uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
 from zorch.sumcheck.prover import SumcheckRound
-from zorch.sumcheck.sqrt_space import compute_folded_evaluations
+from zorch.sumcheck.sqrt_space import compute_folded_evaluations, materialized_round
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -125,17 +125,20 @@ def prove_eq_poly_small_value(
         msgs.append(msg)
     eq_w_prev = state[1]
 
-    # Phase 2: transition — refold all d+1 factors over the l₀ bound variables, send
-    # the round poly (sliced to the d real factors), then fold to the tail state.
+    # Phase 2: transition — one √-space round (Algorithm 2) over the d+1 factors
+    # (P₁..P_d plus eq(w,·)) refolded across the l₀ bound variables. Sampling at Û_d
+    # (not Û_{d+1}) is whir-zorch's "slice to the d real factors": the eq factor rides
+    # the message but its own fold is tracked as the scalar eq mass, so the tail state
+    # keeps only the d real factors.
     eq_evals = jnp.ones(1, dtype=p_initial.dtype)
     for r in challenges:
         eq_evals = expand_hypercube_step(eq_evals, r)
     folded = compute_folded_evaluations(p_with_weights, eq_evals)
-    msg_t = product_round_poly(folded)[:d]
-    transcript, r_t = transcript.observe_and_sample(msg_t, 1)
-    r_t = r_t[0]
+    folded, transcript, msg_t, r_t = materialized_round(
+        folded, SumcheckRound(degree=d), uhat_domain(d, p_initial.dtype), transcript
+    )
     eq_w_prev = eq_w_prev * eq_factor(r_t, w[l_0])
-    folded_p = fold_stacked(folded[:d], r_t)
+    folded_p = folded[:d]
 
     # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute
     # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
