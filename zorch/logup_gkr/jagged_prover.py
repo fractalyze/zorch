@@ -611,6 +611,49 @@ def _layer_plane_width(row_counts: tuple[int, ...], nrv: int, niv: int) -> int:
     return width
 
 
+def _flat_planes(
+    layers: list[JaggedGkrLayer], dtype: Any, plane_width: int
+) -> tuple[Array, Array, Array, Array, Array, Array]:
+    """Concatenate each of the four MLE channels across `layers` at natural
+    width (no per-layer padding), so the flat buffer is O(sum(heights)) rather
+    than O(len(layers) * plane_width) -- the peak the unrolled per-layer pad
+    would otherwise pay. `_plane_window` then slices a fixed `plane_width`
+    window per layer out of the flat buffer in-body. `offsets[j]` is where
+    layer `j`'s live prefix starts in the flat buffer; `widths[j]` is its live
+    height (`layer.height`), the boundary `_plane_window`'s `live` mask needs
+    since a window can run past the next layer's live prefix into it.
+
+    The flat buffer itself is padded by `plane_width` past the last offset so
+    the final layer's window (`offset + plane_width`) never runs out of
+    bounds."""
+    widths = [l.height for l in layers]
+    offsets = np.concatenate([[0], np.cumsum(widths)[:-1]]).astype(np.int32)
+    flat_len = int(offsets[-1]) + plane_width  # last window must stay in bounds
+
+    def chan(attr: str, neutral: int) -> Array:
+        flat = jnp.concatenate([getattr(l, attr).astype(dtype) for l in layers])
+        return _pad_to_width(flat, flat_len, neutral)
+
+    return (
+        chan("numerator_0", 0),
+        chan("numerator_1", 0),
+        chan("denominator_0", 1),
+        chan("denominator_1", 1),
+        jnp.asarray(offsets),
+        jnp.asarray(np.asarray(widths, dtype=np.int32)),
+    )
+
+
+def _plane_window(
+    flat: Array, offset: Array, plane_width: int, live: Array, neutral: Array
+) -> Array:
+    """Slice a fixed `plane_width` window out of `flat` at `offset` and mask
+    past the live width to the neutral fraction -- byte-identical to
+    `_pad_to_width(layer_channel, plane_width, neutral)`."""
+    win = lax.dynamic_slice_in_dim(flat, offset, plane_width, 0)
+    return jnp.where(live, win, neutral)
+
+
 def _excl_cumsum(x: Array) -> Array:
     """Exclusive prefix sum `out[i] = sum(x[:i])` via a broadcast mask -- `nseg`
     is tiny, so the n^2 cost is nil, and it dodges any `jnp.cumsum` fork quirk

@@ -31,12 +31,14 @@ from zorch.logup_gkr.circuit import (
 from zorch.logup_gkr.jagged_prover import (
     JaggedGkrLayerRound,
     JaggedLayerProof,
+    _flat_planes,
     _jagged_round_via_zone,
     _jagged_round_zone,
     _layer_plane_width,
     _observe_openings_and_fold,
     _padded_round_schedule,
     _padded_round_schedule_jax,
+    _plane_window,
     _run_jagged_rounds_padded,
     _sample_lam_and_claim,
     prove_jagged_layer,
@@ -672,6 +674,20 @@ class PyramidScanProveTest(absltest.TestCase):
         self.assertTrue(bool(jnp.all(ps.sponge_state == ns.sponge_state)))
         self.assertEqual(int(ps.in_pos), int(ns.in_pos))
         self.assertEqual(int(ps.out_pos), int(ns.out_pos))
+
+    def test_plane_window_matches_pad_to_width(self) -> None:
+        layers = build_jagged_pyramid(random_jagged_layer(6, self.ROW_COUNTS))
+        interior = list(reversed(layers[:-1]))
+        dtype = interior[0].numerator_0.dtype
+        plane_width = max(l.height for l in interior)
+        flat_n0, *_, offsets, widths = _flat_planes(interior, dtype, plane_width)
+        for j, layer in enumerate(interior):
+            live = jnp.arange(plane_width) < widths[j]
+            got = _plane_window(
+                flat_n0, offsets[j], plane_width, live, jnp.zeros((), dtype)
+            )
+            want = _pad_to_width(layer.numerator_0.astype(dtype), plane_width, 0)
+            self.assertTrue(bool(jnp.all(got == want)), f"layer {j} window mismatch")
 
 
 class PaddedRoundScheduleJaxTest(absltest.TestCase):
