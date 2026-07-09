@@ -17,7 +17,7 @@ jax==0.10.0.dev20260709073514
 jaxlib==0.10.0.dev20260709073514
 jax-cuda12-pjrt==0.10.0.dev20260709073514
 jax-cuda12-plugin==0.10.0.dev20260709073514
-zk-dtypes==0.0.8
+zk-dtypes==0.0.9
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
