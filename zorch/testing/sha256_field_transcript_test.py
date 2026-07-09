@@ -16,7 +16,7 @@ import numpy as np
 from absl.testing import absltest
 
 from zorch.byte_transcript import ByteHashTranscript
-from zorch.hash.sha256 import Sha256
+from zorch.hash.sha256 import HashlibSha256, Sha256
 from zorch.sha256_field_transcript import Sha256FieldTranscript
 
 
@@ -74,6 +74,28 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         f = f.observe_label(label).observe_bytes(jnp.asarray(root))
         f, f_el = f.sample(2)
         self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
+
+    def test_grind_verify_match_byte_transcript(self) -> None:
+        # Host grind/verify reproduce ByteHashTranscript's u64-nonce PoW: same
+        # nonce, and the transcripts stay in lockstep (same challenge afterwards).
+        root_u8 = jnp.asarray(np.frombuffer(b"root", np.uint8))
+        for bits in (0, 8):
+            b = ByteHashTranscript.new(b"pow", HashlibSha256()).observe_bytes(b"root")
+            b, b_nonce = b.grind_pow(bits)
+            _, b_ch = b.sample_scalar(4)
+
+            f = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
+            f, f_nonce = f.grind_pow(bits)
+            self.assertEqual(f_nonce, b_nonce)
+            _, f_ch = f.sample_scalar()
+            self.assertEqual(np.asarray(f_ch).astype("<u4").tobytes(), b_ch)
+
+            # Verifier mirror accepts the honest nonce and reaches the same state.
+            vf = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
+            vf, ok = vf.verify_pow(int(f_nonce), bits)
+            self.assertTrue(ok)
+            _, vf_ch = vf.sample_scalar()
+            self.assertEqual(np.asarray(vf_ch).astype("<u4").tobytes(), b_ch)
 
     def test_threads_under_jit(self) -> None:
         vals = np.arange(6, dtype=np.uint32)

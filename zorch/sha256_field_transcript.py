@@ -19,6 +19,7 @@ consumer supplies; a byte-framed challenger can use `ByteHashTranscript` instead
 """
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
@@ -54,6 +55,29 @@ def _len8(n: int) -> bytes:
 def _const_u8(data: bytes) -> Array:
     """A compile-time-constant byte payload as a device uint8 array."""
     return jnp.asarray(np.frombuffer(data, dtype=np.uint8))
+
+
+def _leading_zero_bits_ok(digest: bytes, bits: int) -> bool:
+    """Whether `digest` has >= `bits` leading zero bits, big-endian. The host PoW
+    predicate — byte-identical to `byte_transcript._leading_zero_bits_ok`; the
+    grind oracle test pins the two together."""
+    full, extra = divmod(bits, 8)
+    if any(digest[:full]):
+        return False
+    return extra == 0 or (digest[full] >> (8 - extra)) == 0
+
+
+def _grind_host(state_digest: bytes, bits: int) -> int:
+    """Lowest u64 nonce with `SHA256(state_digest || nonce_le8)` having `bits`
+    leading zero bits — a host sequential search (hashlib), byte-identical to
+    `ByteHashTranscript`'s host grind (window 1). Unbounded; never returns an
+    unchecked nonce."""
+    nonce = 0
+    while True:
+        d = hashlib.sha256(state_digest + _len8(nonce)).digest()
+        if _leading_zero_bits_ok(d, bits):
+            return nonce
+        nonce += 1
 
 
 @partial(register_dataclass, data_fields=["state"], meta_fields=["dtype"])
@@ -150,3 +174,31 @@ class Sha256FieldTranscript:
         self, values: Array, n: int = 1
     ) -> tuple[Sha256FieldTranscript, Array]:
         return self.observe(values).sample(n)
+
+    # ---- proof-of-work (host to start; a device grind is a follow-up) ----
+    def _state_digest(self) -> bytes:
+        """`SHA256(buffer)` — the PoW base: a non-mutating finalize of the current
+        streaming state (no counter, no extras), materialized to host bytes for the
+        host grind. Matches the byte transcript's `_digest`."""
+        dig = sha256_stream_finalize(self.state, jnp.zeros((1, 0), dtype=jnp.uint8))
+        return bytes(np.asarray(dig)[0])
+
+    def grind_pow(self, bits: int) -> tuple[Sha256FieldTranscript, int]:
+        """Host proof-of-work grind: the lowest u64 nonce whose PoW passes (0 when
+        `bits == 0`), absorbed via `observe_bytes` so later challenges bind to it.
+        Host to start — a one-shot search, not per-round threading, so it does not
+        break device graph capture; a device grind is a follow-up. Byte-identical
+        to `ByteHashTranscript.grind_pow`."""
+        nonce = 0 if bits == 0 else _grind_host(self._state_digest(), bits)
+        return self.observe_bytes(_const_u8(_len8(nonce))), nonce
+
+    def verify_pow(self, nonce: int, bits: int) -> tuple[Sha256FieldTranscript, bool]:
+        """Verifier mirror of `grind_pow`: check the PoW (`bits == 0` requires the
+        canonical nonce 0), then absorb the nonce REGARDLESS so the transcript stays
+        in lockstep. Byte-identical to `ByteHashTranscript.verify_pow`."""
+        if bits == 0:
+            ok = nonce == 0
+        else:
+            d = hashlib.sha256(self._state_digest() + _len8(nonce)).digest()
+            ok = _leading_zero_bits_ok(d, bits)
+        return self.observe_bytes(_const_u8(_len8(nonce))), ok
