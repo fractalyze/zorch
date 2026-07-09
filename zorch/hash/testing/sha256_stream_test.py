@@ -98,6 +98,26 @@ class Sha256StreamTest(absltest.TestCase):
         got = bytes(np.asarray(run(_u8(msg), _u8(extra)))[0])
         self.assertEqual(got, hashlib.sha256(msg + extra).digest())
 
+    def test_stream_threads_through_scan(self) -> None:
+        # The design claim `test_stream_threads_under_jit` alludes to: `Sha256State`'s
+        # fixed shapes make it a valid `lax.scan` carry. Fold equal-size chunks
+        # through a scan and check the finalized digest still matches hashlib.
+        msg = bytes(range(96))  # 6 chunks of 16 -> one full block + a 32 B remainder
+        chunks = jnp.asarray(np.frombuffer(msg, np.uint8)).reshape(6, 16)
+
+        @jax.jit
+        def run(xs: jnp.ndarray) -> jnp.ndarray:
+            def step(
+                state: Sha256State, chunk: jnp.ndarray
+            ) -> tuple[Sha256State, None]:
+                return sha256_stream_absorb(state, chunk), None
+
+            state, _ = jax.lax.scan(step, sha256_stream_init(), xs)
+            return sha256_stream_finalize(state, jnp.zeros((1, 0), dtype=jnp.uint8))
+
+        got = bytes(np.asarray(run(chunks))[0])
+        self.assertEqual(got, hashlib.sha256(msg).digest())
+
 
 if __name__ == "__main__":
     absltest.main()
