@@ -5,13 +5,21 @@ import jax.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.sumcheck.domain import fold, product_round_poly
+from zorch.sumcheck.domain import (
+    fold,
+    natural_domain,
+    product_round_poly,
+    summand_evals,
+)
+from zorch.sumcheck.prover import ProductSummand, challenge_limbs
 from zorch.sumcheck.sqrt_space import prove_sqrt_space
+from zorch.testkit.random_field import rand_ext_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import Transcript
+from zorch.transcript import Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
+KBx4 = zk_dtypes.koalabearx4_mont
 
 
 def _stacked(d: int, l: int) -> jnp.ndarray:
@@ -49,6 +57,37 @@ class SqrtSpaceTest(absltest.TestCase):
         p_final, _, msgs = prove_sqrt_space(_stacked(3, 4), cheap_transcript(KB))
         self.assertEqual(p_final.shape, (3, 1))
         self.assertLen(msgs, 4)
+
+    def test_matches_linear_time_prover_ext(self) -> None:
+        # With ext_dtype set, the √-space prover must still reproduce a linear-time
+        # prover that samples the SAME extension challenges — the memory trick is
+        # transcript-neutral in the extension field too.
+        def ref(p: jnp.ndarray, transcript: Transcript) -> list[jnp.ndarray]:
+            msgs = []
+            summand = ProductSummand(degree=p.shape[0])
+            domain = natural_domain(p.shape[0], p.dtype)
+            for _ in range(log2_strict_usize(p.shape[1])):
+                msg = summand_evals(p, summand._combine, domain)
+                transcript = transcript.observe(msg)
+                transcript, r = sample_challenge(
+                    transcript, KBx4, challenge_limbs(KBx4)
+                )
+                p = fold(p, r)
+                msgs.append(msg)
+            return msgs
+
+        for d, l in [(2, 4), (3, 4), (2, 5)]:
+            p = rand_ext_field(200 + d + l, (d, 1 << l), KB, KBx4)
+            want = ref(p, cheap_transcript(KB))
+            _, _, got = prove_sqrt_space(
+                p,
+                cheap_transcript(KB),
+                domain=natural_domain(d, KBx4),
+                ext_dtype=KBx4,
+            )
+            self.assertLen(got, l)
+            for i, (a, b) in enumerate(zip(want, got, strict=True)):
+                self.assertTrue(bool(jnp.array_equal(a, b)), msg=f"d={d} l={l} r{i}")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -27,6 +27,7 @@ from jax import Array
 
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
+from zorch.sumcheck.domain import subgroup_sum
 from zorch.transcript import Transcript, sample_challenge
 
 if TYPE_CHECKING:
@@ -133,8 +134,60 @@ class CompressedCoeffsSumcheckRound(Round):
         return reduced, transcript, r[0], ok
 
 
+@partial(
+    jax.tree_util.register_dataclass,
+    data_fields=[],
+    meta_fields=["skip_rounds", "degree", "ext_dtype", "challenge_limbs"],
+)
+@dataclass(frozen=True)
+class UnivariateSkipRound(Round):
+    """Verifier for the univariate skip's round 0 (`sumcheck.univariate_skip`): the
+    message is the round polynomial s₀ in ascending-coefficient form (degree
+    `degree·(|D|−1)`, |D| = 2^skip_rounds), so the round identity is the SUBGROUP-sum
+    check
+    `c == Σ_{z∈D} s₀(z)` — `subgroup_sum` reads it off the coefficients at multiples
+    of |D| — and the claim reduces to `s₀(r₀)`. The subgroup sibling of
+    `CoeffsSumcheckRound`, whose hypercube identity (`s(0)=c₀`, `s(1)=Σc`) it swaps for
+    the subgroup sum. r₀ ∈ F_ext, so the challenge takes `challenge_limbs` squeezes of
+    `ext_dtype` (the reduced claim promotes to it via the base coefficients × r₀); a
+    base-field run is `ext_dtype` prime with `challenge_limbs == 1`. `skip_rounds` is
+    the number of collapsed leading rounds (|D| = 2^skip_rounds)."""
+
+    skip_rounds: int
+    degree: int
+    ext_dtype: Any
+    challenge_limbs: int = 1
+
+    def __post_init__(self) -> None:
+        if self.skip_rounds < 1:
+            raise ValueError(
+                "skip_rounds must be >= 1 (skip_rounds=0 is the plain sumcheck run)"
+            )
+        if self.degree < 1:
+            raise ValueError("degree must be >= 1")
+        if self.challenge_limbs < 1:
+            raise ValueError("challenge_limbs must be >= 1")
+
+    def __call__(
+        self, claim: Array, msg: Array, transcript: Transcript
+    ) -> tuple[Array, Transcript, Array, Array]:
+        d0 = self.degree * ((1 << self.skip_rounds) - 1)
+        if msg.shape[0] != d0 + 1:
+            raise ValueError(
+                f"round-0 message must have degree·(|D|−1)+1={d0 + 1} coefficients, "
+                f"got {msg.shape[0]}"
+            )
+        ok = claim == subgroup_sum(msg, self.skip_rounds)
+        transcript = transcript.observe(msg)
+        transcript, r = sample_challenge(
+            transcript, self.ext_dtype, self.challenge_limbs
+        )
+        return eval_coeffs(msg, r), transcript, r, ok
+
+
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _eval_form: type[InnerVerifierRound] = SumcheckRound
     _coeffs_form: type[InnerVerifierRound] = CoeffsSumcheckRound
     _compressed_coeffs_form: type[InnerVerifierRound] = CompressedCoeffsSumcheckRound
+    _univariate_skip_form: type[InnerVerifierRound] = UnivariateSkipRound
