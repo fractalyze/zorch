@@ -9,6 +9,7 @@ on the unmarked path (no `zorch.sumcheck` marker).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import jax.numpy as jnp
@@ -53,6 +54,12 @@ class CheapPermutation:
         # challenges; not a secure or even bijective permutation — tests only.
         mixed = state * state * state
         return mixed + jnp.sum(mixed)
+
+    # Inert fused-region ABI: non-fused, never called; a conformant stub.
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        return (leading,), (lambda state, *ops: self.permute(state)), {}
 
 
 def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTranscript:

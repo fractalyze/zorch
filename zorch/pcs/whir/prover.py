@@ -39,7 +39,7 @@ from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.poly.univariate import eval_coeffs
-from zorch.sumcheck.prover import fold_pair
+from zorch.sumcheck.domain import fold
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
 
@@ -196,8 +196,8 @@ def _island_round_poly(f_evals: Array, w_evals: Array) -> Array:
 def _island_fold(f_evals: Array, w_evals: Array, alpha: Array) -> tuple[Array, Array]:
     """Fold both tables at `alpha` (LSB-first, halving the length)."""
     return (
-        fold_pair(f_evals[0::2], f_evals[1::2], alpha),
-        fold_pair(w_evals[0::2], w_evals[1::2], alpha),
+        fold(f_evals, alpha, msb=False),
+        fold(w_evals, alpha, msb=False),
     )
 
 

@@ -15,6 +15,7 @@ this — each implementation carries it (`Poseidon2`, `CheapPermutation`).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
 from jax import Array
@@ -37,5 +38,24 @@ class Permutation(Protocol):
         Batch with `jax.vmap(permute)`: the dedicated-fusion marker lowers
         identically batched (one shared decomposition), so no batched twin is
         needed.
+        """
+        ...
+
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        """Pieces to wrap a computation over this permutation as ONE `fused_region`
+        in its ABI, without the consumer knowing the operand layout. Returns
+        ``(operands, permute_from_operands, attrs)``:
+
+        - ``operands`` = ``(leading, *constants)``; the round constants ride as
+          explicit operands so a `lax.composite` can't lift them and break the ABI.
+        - ``permute_from_operands(state, *constants)`` = the const-free permute the
+          `fused_region` runs.
+        - ``attrs`` = identifying `composite.attributes` (a ``permutation``
+          discriminator + shape).
+
+        Meaningful only on the dedicated path; a non-fused permutation returns an
+        inert spec.
         """
         ...

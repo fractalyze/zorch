@@ -39,9 +39,9 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 from jax import Array
 
+from zorch.sumcheck.jagged.layout import _prepad_folded, _segment_gather_np
 from zorch.utils.bits import log2_strict_usize
 
 
@@ -227,30 +227,6 @@ class JaggedGkrLayer:
         return (0, *itertools.accumulate(self.row_counts))
 
 
-def _segment_gather_np(
-    src_counts: tuple[int, ...], dst_counts: tuple[int, ...]
-) -> np.ndarray | None:
-    """Numpy core of `_segment_gather` (see it for the gather semantics).
-
-    Stays numpy so the schedule is precomputed host-side and baked into the
-    `jax.jit` trace as a constant, where an `np.asarray` of a jnp value would
-    trip on a tracer.
-    """
-    if src_counts == dst_counts:
-        return None
-    sentinel = sum(src_counts)
-    gather = np.full(sum(dst_counts), sentinel, dtype=np.int32)
-    src_pos = dst_pos = 0
-    # strict: a silently truncated zip would emit a sentinel-filled (all
-    # padding) gather instead of failing.
-    for src, dst in zip(src_counts, dst_counts, strict=True):
-        copy = min(src, dst)
-        gather[dst_pos : dst_pos + copy] = np.arange(src_pos, src_pos + copy)
-        src_pos += src
-        dst_pos += dst
-    return gather
-
-
 def _segment_gather(
     src_counts: tuple[int, ...], dst_counts: tuple[int, ...]
 ) -> Array | None:
@@ -290,21 +266,6 @@ def _pad_neutral(
         _gather_pad(d0, gather, 1),
         _gather_pad(d1, gather, 1),
     )
-
-
-def _prepad_folded(
-    row_counts: tuple[int, ...],
-) -> tuple[tuple[int, ...], tuple[int, ...]]:
-    """One transition's even-prepad counts and the resulting folded counts.
-
-    Odd segments pad up to even so the stride-2 fold never pairs across a
-    batch boundary; the fold then halves the padded count. One recurrence
-    so the wrapper's truncation guard validates exactly the schedule the core's
-    gathers fold to.
-    """
-    prepad = tuple(rc + rc % 2 for rc in row_counts)
-    folded = tuple(pc // 2 for pc in prepad)
-    return prepad, folded
 
 
 @partial(jax.jit, static_argnames=("row_counts", "out_row_counts"))

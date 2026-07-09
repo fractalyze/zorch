@@ -13,7 +13,6 @@ from zk_dtypes import koalabear_mont as F
 from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
     POSEIDON2_MARKER_VERSION,
-    SPONGE_HASH_MARKER,
     Poseidon2,
     _permute_body,
 )
@@ -23,6 +22,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 from zorch.testkit.jit_cache import assert_single_trace
 
 
@@ -95,10 +95,9 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
 
     def test_non_plonky3_m4_takes_dedicated_route(self) -> None:
         # A non-default but M4-block-structured matrix (here the HorizenLabs
-        # reference M4 that pil2/ZisK use) must take the dedicated zorch.poseidon2
-        # route, carrying its own M4 as the external_m4 attribute — not fall back
-        # to the generic marker. This is what makes the dedicated emitter usable
-        # by the HorizenLabs variant without a per-matrix special case.
+        # reference M4) must take the dedicated zorch.poseidon2 route, carrying its
+        # own M4 as the external_m4 attribute — not fall back to the generic
+        # marker — so the dedicated emitter serves any M4 without a special case.
         hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
         w = 16
         mds = jnp.array(
@@ -131,11 +130,8 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             dtype=F,
         )
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
-        txt = (
-            jax.jit(lambda x: p.sponge_hash(x, 8, 8))
-            .lower(jnp.arange(w, dtype=F))
-            .as_text()
-        )
+        s = Sponge(p, SpongeParams(rate=8, out=8))
+        txt = jax.jit(lambda x: s.hash(x)).lower(jnp.arange(w, dtype=F)).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"

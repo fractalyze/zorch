@@ -17,8 +17,9 @@ reduce/dot/gather that would split the kernel.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -32,11 +33,6 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import Poseidon2Params
-from zorch.hash.sponge import (
-    SPONGE_HASH_MARKER,
-    SPONGE_HASH_MARKER_VERSION,
-    _absorb_symbolic,
-)
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -105,15 +101,23 @@ class Poseidon2:
             )
         return _permute_body(self, state)
 
-    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` and squeeze `out` lanes as ONE `sponge_hash`
-        region (fused kernel, state register-resident) — byte-identical to
-        `Sponge.hash`. Only the dedicated (M4-structured) path emits the marker; a
-        generic permutation runs the inline absorb. Lowers under symbolic
-        `len(input)` (the kernel reads the length at runtime) for export."""
-        if input.ndim != 1:
-            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
-        return _sponge_hash_body(self, input, rate, out)
+    # Fused-region ABI (see `Permutation.fused_region_spec`).
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        """The Poseidon2Fusion ABI: operands `(leading, *round_constants)`, the
+        M4-external + internal-diffusion permute, and attrs whose `external_m4`
+        names the M4. Dedicated (M4-structured) path only."""
+        p = self._p
+        attrs: dict[str, Any] = {
+            "permutation": "poseidon2",
+            "width": self.width,
+            "external_rounds": p.external_rounds,
+            "internal_rounds": p.internal_rounds,
+            "alpha": p.alpha,
+            "external_m4": _external_m4_attr(self),
+        }
+        return _abi_operands(self, leading), partial(_permutation_body, self), attrs
 
 
 def _permutation_body(
@@ -260,64 +264,6 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         name=perm._fused_region_name,
         version=version,
         **attrs,
-    )
-
-
-def _sponge_hash_body(perm: Poseidon2, input: Array, rate: int, out: int) -> Array:
-    """Emit the `sponge_hash` marker (dedicated path) or run the
-    `while_loop` absorb (generic). The decomposition is byte-identical to
-    `Sponge.hash` so the region's fallback HLO matches the kernel. The 6-operand
-    region carries
-    the round constants explicitly — a `lax.composite` would lift closed-over
-    consts as extra operands and break the Poseidon2Fusion ABI."""
-    w = perm.width
-
-    def sponge(
-        inp: Array,
-        ext_init_rc: Array,
-        int_rc: Array,
-        ext_term_rc: Array,
-        diag: Array,
-        off_diag: Array,
-        **_attrs: object,
-    ) -> Array:
-        def permute(s: Array) -> Array:
-            return _permutation_body(
-                perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
-            )
-
-        # One `while_loop` absorb for any length, concrete or symbolic. A static
-        # unroll traced once per emission (`lax.composite` has no trace cache), so
-        # a wide leaf paid O(blocks) trace + compile for a body the recognizer
-        # discards anyway — it matches the marker by name + attrs, not its shape.
-        state = jnp.zeros(w, dtype=inp.dtype)
-        return _absorb_symbolic(inp, state, rate, out, permute)
-
-    operands = _abi_operands(perm, input)
-    # Generic permutation: no fused sponge kernel, run the absorb directly (a
-    # whole-sponge LoopFusion register-spills); only the dedicated path marks it.
-    if not perm.has_dedicated_fusion:
-        return sponge(*operands)
-    p = perm._p
-    # external_m4 rides here too (like the permute marker) so the recognizer can
-    # gate the sponge kernel on the M4 it implements — the canonical circ(2,3,1,1)
-    # rewrites, any other M4 inlines its real body.
-    marker_attrs: dict[str, object] = {
-        "permutation": "poseidon2",
-        "width": w,
-        "rate": rate,
-        "digest_elems": out,
-        "external_rounds": p.external_rounds,
-        "internal_rounds": p.internal_rounds,
-        "alpha": p.alpha,
-        "external_m4": _external_m4_attr(perm),
-    }
-    return fused_region(
-        sponge,
-        *operands,
-        name=SPONGE_HASH_MARKER,
-        version=SPONGE_HASH_MARKER_VERSION,
-        **marker_attrs,
     )
 
 

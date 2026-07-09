@@ -29,19 +29,14 @@ accumulates by ``eq_factor(r, z)`` -- both already shared definitions.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from functools import cache
 from typing import Any, Protocol
 
-import jax
 import jax.numpy as jnp
 from jax import Array
 
 from zorch.poly.eq import eq_factor, eq_root
-from zorch.poly.univariate import (
-    compute_inv_vandermonde,
-    compute_lagrange_basis,
-    eval_coeffs,
-)
+from zorch.poly.univariate import eval_coeffs
+from zorch.sumcheck.domain import EvalDomain
 
 
 class GruenSummand(Protocol):
@@ -77,39 +72,20 @@ class GruenSummand(Protocol):
     def extra_ts(self, dtype: Any) -> tuple[Array, ...]: ...
 
 
-@cache
-def _interp_constants(degree: int, dtype: Any) -> tuple[Array, Array]:
-    """Lagrange ``naturals`` ({0..degree}) and the inverse Vandermonde,
-    memoized per (degree, dtype): `compute_inv_vandermonde` is an O(degree^2)
-    numpy coefficient build, pure redundant host work per round without the
-    memo."""
-    # Force concrete eval: `@cache` memoizes the result, so building it inside
-    # a jit trace would cache a tracer that then escapes the trace
-    # (UnexpectedTracerError). The constants are trace-independent anyway.
-    with jax.ensure_compile_time_eval():
-        naturals = jnp.stack([jnp.array(j, dtype) for j in range(degree + 1)])
-        inv_vand = compute_inv_vandermonde(degree, dtype)
-    return naturals, inv_vand
-
-
 def interp_matrix(extra_ts: Sequence[Array], z: Array) -> Array:
     """The Gruen value-to-coefficient matrix for one round: maps the value
     vector ``[s(0), s(1), *extra_ys, 0]`` on the domain ``{0, 1, *extra_ts,
     eq_root(z)}`` to ascending coefficients, shape ``(degree + 1, degree + 1)``
     with ``degree = len(extra_ts) + 2``.
 
-    Depends only on ``z`` and the static ``extra_ts``, so a fixed-shape scan
-    driver precomputes it per round OUTSIDE the scan (``jax.vmap`` over the
-    stacked round coordinates) and feeds it through the scan's xs; a
-    host-relaunch driver just calls `round_coeffs`, which composes this with
-    the value assembly."""
+    The Gruen node set is one EvalDomain instance. Depends only on ``z`` and the
+    static ``extra_ts``, so a fixed-shape scan driver precomputes it per round
+    OUTSIDE the scan (``jax.vmap`` over the stacked round coordinates) and feeds it
+    through the scan's xs; a host-relaunch driver just calls `round_coeffs`, which
+    composes this with the value assembly."""
     dtype = z.dtype
-    one = jnp.ones((), dtype)
-    zero = jnp.zeros((), dtype)
-    xs = jnp.stack([zero, one, *extra_ts, eq_root(z)])
-    naturals, inv_vand = _interp_constants(len(extra_ts) + 2, dtype)
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
-    return jnp.dot(inv_vand, lagrange)
+    xs = jnp.stack([jnp.zeros((), dtype), jnp.ones((), dtype), *extra_ts, eq_root(z)])
+    return EvalDomain(xs).coeff_matrix()
 
 
 def round_coeffs_from_matrix(

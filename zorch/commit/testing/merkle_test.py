@@ -23,7 +23,6 @@ from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix
 from zorch.hash.poseidon2.poseidon2 import (
     POSEIDON2_MARKER,
-    SPONGE_HASH_MARKER,
     Poseidon2,
 )
 from zorch.hash.poseidon2.testing.koalabear16 import (
@@ -31,7 +30,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 
 
 def _non_standard_perm() -> Poseidon2:
@@ -343,9 +342,8 @@ class MerkleTreeTest(absltest.TestCase):
 class KaryMerkleTreeTest(absltest.TestCase):
     """k-ary commit/open/reconstruct — structural, like the binary suite.
 
-    The k-ary layout's byte-match against a concrete scheme (pil2-stark's
-    arity-2/3/4 trees) lives in its consumer (zisk-zorch), keeping this suite
-    scheme-agnostic."""
+    The k-ary layout's byte-match against a concrete scheme lives in the
+    consumer, keeping this suite scheme-agnostic."""
 
     def test_commit_layer_shapes_arity4(self) -> None:
         _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)

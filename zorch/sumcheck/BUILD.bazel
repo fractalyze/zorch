@@ -7,18 +7,22 @@ py_library(
     name = "sumcheck",
     srcs = [
         "__init__.py",
+        "domain.py",
         "field_ops.py",
         "gruen.py",
         "prover.py",
+        "sqrt_space.py",
         "verifier.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:fusion",
+        "//zorch:prove",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/poly",
         "//zorch/utils:bits",
+        "//zorch/utils:field",
         requirement("jax"),
     ],
 )

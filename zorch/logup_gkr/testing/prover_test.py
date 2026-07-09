@@ -28,7 +28,6 @@ from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_la
 from zorch.poly.univariate import eval_univariate
 from zorch.prove import fold_rounds
 from zorch.round import ProveChain
-from zorch.sumcheck.prover import prove
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -37,9 +36,9 @@ from zorch.transcript import Transcript
 KB = zk_dtypes.koalabear_mont
 
 
-def _state(seed: int, width: int) -> list[Array]:
-    """Five MLE-eval factors in combine order [eq, n0, d1, n1, d0]."""
-    return [rand_field(seed + i, (width,), KB) for i in range(5)]
+def _state(seed: int, width: int) -> Array:
+    """Five MLE-eval factors [eq, n0, d1, n1, d0], stacked (5, width)."""
+    return jnp.stack([rand_field(seed + i, (width,), KB) for i in range(5)])
 
 
 class LogupSummandTest(absltest.TestCase):
@@ -76,13 +75,6 @@ class LogupSumcheckRoundTest(absltest.TestCase):
             want = jnp.sum(rnd._combine(*folded))
             self.assertTrue(bool(msg[u] == want))
 
-    def test_round_poly_with_batch_dimension(self) -> None:
-        # Leading batch dims must broadcast: msg is (degree+1, *batch).
-        batch = 3
-        st = [x.reshape(batch, -1) for x in _state(20, 24)]
-        msg = LogupSumcheckRound(jnp.array(7, KB))._round_poly(st)
-        self.assertEqual(msg.shape, (4, batch))
-
     def test_sumcheck_invariant_s0_plus_s1(self) -> None:
         st = _state(40, 16)
         rnd = LogupSumcheckRound(jnp.array(9, KB))
@@ -118,31 +110,12 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
         self.assertTrue(bool(rnd._combine(*state)[0] == claim))
 
-        # `fold_rounds` collects the round polys and the bound point, and the
-        # homogeneous scan driver `prove` (what GkrLayerRound uses) is byte-identical
-        # to that loop -- same Fiat-Shamir order over an identical fresh sponge, so
-        # same round polys + point.
+        # `fold_rounds` collects the round polys and the bound point over the same
+        # Fiat-Shamir order and fresh sponge, so its round polys match the replayed
+        # loop above.
         _, _, msgs = fold_rounds(rnd, st, cheap_transcript(KB), n)
         round_polys = jnp.stack([m.round_poly for m in msgs])
-        point = jnp.stack([m.challenge for m in msgs])
         self.assertEqual(round_polys.shape, (n, 4))
-        _, _, scan_msgs = prove(rnd, st, cheap_transcript(KB))
-        self.assertTrue(bool(jnp.all(scan_msgs.round_poly == round_polys)))
-        self.assertTrue(bool(jnp.all(scan_msgs.challenge == point)))
-
-    def test_scan_prove_is_flat_in_variable_count(self) -> None:
-        # The per-variable LogUp loop scans rather than unrolls: the prove jaxpr
-        # equation count is invariant under the variable count (#58), the compile
-        # win the scan driver buys over the old unrolled fold_rounds. Trace only,
-        # no execution, so it runs on any backend.
-        def eqn_count(num_vars: int) -> int:
-            st = _state(7, 1 << num_vars)
-            jaxpr = jax.make_jaxpr(
-                lambda s, t: prove(LogupSumcheckRound(jnp.array(3, KB)), s, t)
-            )(st, cheap_transcript(KB))
-            return len(jaxpr.jaxpr.eqns)
-
-        self.assertEqual(eqn_count(3), eqn_count(5))
 
     def test_round_poly_is_fusion_ready(self) -> None:
         # Straight-line element-wise field ops + the one inherent Sigma; see

@@ -31,7 +31,7 @@ from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, Ligeri
 from zorch.pcs.ligerito.prover import MakeCode
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.sumcheck import prover as sc_prover
-from zorch.sumcheck.prover import fold as sc_fold
+from zorch.sumcheck.domain import fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
 from zorch.transcript import Transcript
 
@@ -42,7 +42,7 @@ _ROUND = SumcheckRound(degree=2)
 _COMPRESSED_ROUND = CompressedCoeffsSumcheckRound()
 # Prover-round duals, for the eager policy's terminal pin: the last emitted
 # message is the residual state's round poly, recomputable in the clear.
-_P_ROUND = sc_prover.SumcheckRound(degree=2)
+_P_ROUND = sc_prover.StandardRound(sc_prover.ProductSummand(degree=2))
 _P_COMPRESSED_ROUND = sc_prover.CompressedProductRound()
 
 
@@ -202,7 +202,7 @@ def _verify(
             ok = ok & ok_round
             # The round verifier reduces only the claim; fold the public basis B
             # by the same challenge so it tracks the prover's folded B.
-            B = sc_fold([B], r)[0]
+            B = fold(B, r)
             challenges.append(r)
             if eager:
                 t, cur = take(t)
@@ -261,7 +261,7 @@ def _verify(
                     if cfg.compressed_sumcheck_messages
                     else _P_ROUND
                 )
-                ok = ok & jnp.all(cur == p_round._round_poly([residual, B]))
+                ok = ok & jnp.all(cur == p_round._round_poly(jnp.stack([residual, B])))
             break
 
         # Induce the batched proximity claim into the running sumcheck (mirror

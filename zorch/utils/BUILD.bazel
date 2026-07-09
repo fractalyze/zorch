@@ -1,4 +1,5 @@
 load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
 
 py_library(
     name = "bits",
@@ -7,4 +8,17 @@ py_library(
         "bits.py",
     ],
     visibility = ["//visibility:public"],
+)
+
+py_library(
+    name = "field",
+    srcs = [
+        "__init__.py",
+        "field.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
 )

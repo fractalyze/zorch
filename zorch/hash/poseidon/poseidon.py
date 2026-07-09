@@ -19,8 +19,9 @@ only), then `full_rounds/2` full rounds — and the dense MDS runs every round.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import jax
 import jax.numpy as jnp
@@ -30,11 +31,6 @@ from jax import Array
 from zorch.fusion import fused_region
 from zorch.hash.poseidon.linear import apply_dense_mds
 from zorch.hash.poseidon.params import PoseidonParams
-from zorch.hash.sponge import (
-    SPONGE_HASH_MARKER,
-    SPONGE_HASH_MARKER_VERSION,
-    _absorb_symbolic,
-)
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
@@ -86,13 +82,18 @@ class Poseidon:
             )
         return _permute_body(self, state)
 
-    def sponge_hash(self, input: Array, rate: int, out: int) -> Array:
-        """Absorb `input` and squeeze `out` lanes as ONE `zorch.sponge_hash`
-        region (fused kernel, state register-resident) — byte-identical to
-        `Sponge.hash`. Lowers under symbolic `len(input)` for export."""
-        if input.ndim != 1:
-            raise ValueError(f"input must be 1-D, got ndim={input.ndim}")
-        return _sponge_hash_body(self, input, rate, out)
+    # Fused-region ABI (see `Permutation.fused_region_spec`).
+    def fused_region_spec(
+        self, leading: Array
+    ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
+        """The classic-Poseidon ABI: operands `(leading, round_constants)`, the
+        full/partial/full dense-MDS permute, and attrs whose `mds` names the linear
+        layer."""
+        return (
+            (leading, self._p.round_constants.reshape(-1)),
+            partial(_permute_from_rc, self),
+            {"permutation": "poseidon", **_poseidon_marker_attrs(self)},
+        )
 
 
 # The classic Poseidon permute on `s` given round constants flattened row-major
@@ -177,40 +178,6 @@ def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
         "alpha": p.alpha,
         "mds": np.array(perm._mds_rows, dtype=np.int64).flatten(),
     }
-
-
-def _sponge_hash_body(perm: "Poseidon", input: Array, rate: int, out: int) -> Array:
-    """Classic-Poseidon sponge: absorb+squeeze as ONE `zorch.sponge_hash` region.
-
-    Byte-identical to `Sponge.hash`. The region carries the ABI operands
-    [input, round_constants] explicitly (a `lax.composite` would lift the
-    closed-over constants and break the operand ABI the recognizer expects). The
-    `mds` rides as a marker attribute; `permutation="poseidon"` is the required
-    discriminator that routes the recognizer to the classic-permute config arm.
-    """
-    p = perm._p
-    w = perm.width
-
-    def sponge(inp: Array, rc_flat: Array, **_attrs: object) -> Array:
-        state = jnp.zeros(w, dtype=inp.dtype)
-        return _absorb_symbolic(
-            inp, state, rate, out, lambda s: _permute_from_rc(perm, s, rc_flat)
-        )
-
-    operands = (input, p.round_constants.reshape(-1))
-    marker_attrs: dict[str, object] = {
-        "permutation": "poseidon",
-        "rate": rate,
-        "digest_elems": out,
-        **_poseidon_marker_attrs(perm),
-    }
-    return fused_region(
-        sponge,
-        *operands,
-        name=SPONGE_HASH_MARKER,
-        version=SPONGE_HASH_MARKER_VERSION,
-        **marker_attrs,
-    )
 
 
 if TYPE_CHECKING:
