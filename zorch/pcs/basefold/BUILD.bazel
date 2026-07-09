@@ -6,7 +6,9 @@ py_library(
     srcs = [
         "__init__.py",
         "batching.py",
+        "choreography.py",
         "config.py",
+        "kernel.py",
         "prover.py",
         "verifier.py",
     ],
