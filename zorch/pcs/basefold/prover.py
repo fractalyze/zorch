@@ -290,14 +290,17 @@ def _open_with_basis_cadence(
     n_pos = code.block_len
     num_ntts = 1 << prefix
     # Fail loud on a scheduled grind BEFORE producing any bytes, symmetric to the
-    # native path's pow-witness refusal (`CadenceProof` carries no pow field). The
-    # schedule count comes off the choreography's bits methods (`num_pow_witnesses`)
-    # so this and the native/verifier guards share one source of truth.
+    # native path's refusal: `CadenceProof.pow_witnesses` is the frozen wire slot,
+    # but the cadence open does not populate it yet (grind production is a deferred
+    # delta). The schedule count comes off the choreography's bits methods
+    # (`num_pow_witnesses`) so this and the native/verifier guards share one
+    # source of truth.
     if chor.num_pow_witnesses(config) > 0:
         raise NotImplementedError(
             "the choreography schedules a grind, but the non-native cadence open "
-            "drops no witness into CadenceProof (it carries no pow field); the "
-            "grind wire is a deferred consumer delta, symmetric to the native path"
+            "does not populate CadenceProof.pow_witnesses yet (the field is the "
+            "wire slot; the grind production is a deferred delta, symmetric to the "
+            "native path)"
         )
 
     # Initial commit (leaf = the interleave lanes of one position). Re-derived
@@ -457,17 +460,18 @@ def _fold_and_query(
     kernel = prover.kernel
     num_vars = config.num_vars
 
-    # Fail loud on a scheduled grind BEFORE the fold loop (not after): a grind
-    # produces a pow witness, but `BasefoldProof` has no pow field to carry it
-    # (the native wire grinds nothing), so refuse without wasted fold work. The
-    # count comes off the choreography's bits methods (`num_pow_witnesses`), the
-    # one source of truth shared with the cadence + verifier guards; the grind
-    # wire is a deferred consumer delta.
+    # Fail loud on a scheduled grind BEFORE the fold loop (not after): the fold
+    # round produces a pow witness, but the native driver does not yet collect it
+    # into `BasefoldProof.pow_witnesses` (the field is the frozen wire slot; the
+    # grind production is a deferred delta), so refuse without wasted fold work
+    # rather than drop witnesses silently. The count comes off the choreography's
+    # bits methods (`num_pow_witnesses`), the one source of truth shared with the
+    # cadence + verifier guards.
     if chor.num_pow_witnesses(config) > 0:
         raise NotImplementedError(
-            "scheduled grind produced pow witnesses, but BasefoldProof carries "
-            "no pow field yet (the native wire grinds nothing); the grind wire "
-            "is a deferred consumer delta"
+            "scheduled grind produces pow witnesses, but the native open does not "
+            "collect them into BasefoldProof.pow_witnesses yet (the field is the "
+            "wire slot; the grind production is a deferred delta)"
         )
 
     # Interleaved sumcheck + pre-fold pair-leaf FRI fold, num_vars rounds. Every

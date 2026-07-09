@@ -7,7 +7,7 @@ both `open` and `verify` derive live in `pcs/basefold/batching.py`."""
 from __future__ import annotations
 
 import itertools
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, TypeAlias
 
@@ -28,6 +28,7 @@ BasefoldCommitment: TypeAlias = Array
         "final_poly",
         "component_openings",
         "query_openings",
+        "pow_witnesses",
     ],
     meta_fields=[],
 )
@@ -49,6 +50,13 @@ class BasefoldProof:
         verifier staggered-RLCs them into the batched value at each position.
     query_openings: one `Opening` per fold round, the batched codeword's opened
         pair-leaf (`row` is `[Q, 2]`).
+    pow_witnesses: proof-of-work witnesses, one per grind the choreography
+        schedules (`BasefoldChoreography.fold_grind_bits` / `query_grind_bits`),
+        in schedule order — the wire slot mirroring `LigeritoProof.pow_witnesses`.
+        Empty on the native wire, which grinds nothing; a scheduled grind is
+        currently refused by the prover (this freezes the proof shape, but the
+        grind production + verifier `check_grind` are a deferred delta — see the
+        grind guards in `prover.py` / `verifier.py`).
     """
 
     univariate_messages: list[tuple[Array, Array]]
@@ -56,6 +64,7 @@ class BasefoldProof:
     final_poly: Array
     component_openings: list[Opening]
     query_openings: list[Opening]
+    pow_witnesses: list[Array] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,11 @@ class CadenceProof:
         (leaf index = the full position), layer 1 the post-prefix commit, layers
         2+ the per-epoch commits (leaf index = position >> the layer's shift).
     positions: the sampled query positions (full index).
+    pow_witnesses: proof-of-work witnesses, one per grind the choreography
+        schedules, in schedule order — the wire slot symmetric to
+        `BasefoldProof.pow_witnesses`. Empty today; the cadence open refuses a
+        scheduled grind (the grind production is a deferred delta), so this
+        freezes the artifact shape without wiring the grind.
     """
 
     round_messages: list[tuple]
@@ -89,6 +103,7 @@ class CadenceProof:
     layer_positions: list[Array]
     layer_num_leaves: list[int]
     positions: Array
+    pow_witnesses: list[Array] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
