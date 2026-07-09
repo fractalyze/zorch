@@ -3,6 +3,35 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
+    name = "byte_transcript_test",
+    size = "small",
+    srcs = ["byte_transcript_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/hash:byte_hash",
+        "//zorch/hash:sha256",
+        requirement("absl_py"),
+    ],
+)
+
+py_test(
+    name = "sha256_field_transcript_test",
+    size = "small",
+    srcs = ["sha256_field_transcript_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch:prove",
+        "//zorch:sha256_field_transcript",
+        "//zorch/hash:sha256",
+        "//zorch/sumcheck",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
     name = "_composite_test",
     size = "small",
     srcs = ["_composite_test.py"],

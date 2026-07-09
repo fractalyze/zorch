@@ -16,6 +16,22 @@ full dense MDS every round, full/partial round split) is a second; any other
 fixed-width permutation drops into the same seam unchanged. This is how the
 symmetric layer stays proving-scheme- and zkVM-agnostic — the non-negotiable.
 
+**A second seam for byte hashes: `ByteHash`.** SHA-256 (and BLAKE3, Keccak) is a
+*byte* hash, not an algebraic `Permutation`: it maps a batch of equal-length byte
+messages to digests — `digest(uint8[B, L]) -> uint8[B, digest_size]` — with its
+construction (Merkle–Damgård / tree / sponge) hidden behind `digest`. `ByteHash`
+is the byte sibling of `Permutation`: the byte Fiat-Shamir transcript
+(`ByteHashTranscript`) and byte Merkle read `digest_size` and call `digest`,
+naming no concrete hash. `Sha256` (the `zorch.sha256` device marker) and
+`HostSha256` (host `hashlib`) are two implementations of the same FIPS 180-4
+bytes that differ only in substrate — carried by `has_dedicated_fusion`, exactly
+as on the permutation side, so `has_dedicated_fusion` delegates from the injected
+hash the way `DuplexSponge`'s does from its `Permutation`. A shared *streaming*
+surface is deliberately absent from the seam: the incremental midstate shape
+differs per construction, so only `digest` generalizes. SHA-256's streaming core
+(`Sha256State`) lives in `sha256.py` and backs the scan-threadable
+`Sha256FieldTranscript`.
+
 **Width from the permutation; the rest are free params on a frozen object.**
 `rate`/`out` (`SpongeParams`) and `arity`/`chunk` (`CompressionParams`) are the
 only knobs, carried like `Poseidon2Params`. Width is *not* a free param — it is

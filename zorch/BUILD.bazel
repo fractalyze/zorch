@@ -50,6 +50,42 @@ py_library(
     ],
 )
 
+# Host-side byte-oriented Fiat-Shamir (SHA-256 Merlin duplex). Pure-Python /
+# hashlib — no jax, no zk_dtypes, no x64. The byte sibling of `transcript.py`;
+# see docs/transcript.md for the two-transcript taxonomy.
+# Merlin-over-hash byte duplex (`ByteHashTranscript`) parameterized by a `ByteHash`
+# — one class backs both the host (`HostSha256`) and device (`Sha256` marker)
+# byte challengers; the substrate is a value it carries, not a class it hardcodes.
+py_library(
+    name = "byte_transcript",
+    srcs = [
+        "__init__.py",
+        "byte_transcript.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/hash:byte_hash",
+        requirement("numpy"),
+    ],
+)
+
+# Field-element `Transcript` surface over the streaming SHA-256 core: the device
+# SHA-256 sibling of the algebraic `DuplexTranscript`, scan-threadable under @jit.
+py_library(
+    name = "sha256_field_transcript",
+    srcs = [
+        "__init__.py",
+        "sha256_field_transcript.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_transcript",
+        "//zorch/hash:sha256",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
 py_library(
     name = "round",
     srcs = ["round.py"],
