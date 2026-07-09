@@ -103,6 +103,26 @@ class Sha256FieldTranscript:
     def _item_bytes(self) -> int:
         return int(np.dtype(self.dtype).itemsize)
 
+    def _elems_to_u8(self, values: Array) -> Array:
+        """Element array -> flat uint8, routed through uint32 lanes. The direct
+        wide-binary-field <-> uint8 bitcast miscompiles on the CPU PJRT backend
+        (flock-zorch#75); uint32 is the dtype's native lane width and is correct
+        on both backends. A uint32-native challenge dtype takes the first bitcast
+        as the identity, so the routing is a no-op there."""
+        u32 = lax.bitcast_convert_type(values, jnp.uint32)
+        return lax.bitcast_convert_type(u32, jnp.uint8).reshape(-1)
+
+    def _u8_to_elems(self, u8: Array, n: int) -> Array:
+        """Flat uint8 `[n * itemsize]` -> `[n]` `dtype` elements, via uint32 lanes
+        (the inverse of `_elems_to_u8`; CPU-safe, flock-zorch#75). `bitcast` groups
+        exactly the trailing 4 bytes into one uint32, so the byte axis is `4` (a
+        `[n, lanes, 4]` view), not the full `itemsize`."""
+        lanes = self._item_bytes() // 4
+        u32 = lax.bitcast_convert_type(
+            u8.reshape(n, lanes, 4), jnp.uint32
+        )  # [n, lanes]
+        return lax.bitcast_convert_type(u32, self.dtype).reshape(n)
+
     def _absorb(self, payload: Array) -> Sha256FieldTranscript:
         return replace(self, state=sha256_stream_absorb(self.state, payload))
 
@@ -120,7 +140,7 @@ class Sha256FieldTranscript:
         """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
         len8(count) || lo‖hi-serialized bytes`. Byte-identical to the byte
         transcript's `observe_slice` of the same serialized bytes."""
-        vals_u8 = lax.bitcast_convert_type(values, jnp.uint8).reshape(-1)
+        vals_u8 = self._elems_to_u8(values)
         count = int(vals_u8.shape[0]) // self._item_bytes()
         framing = _const_u8(bytes([OP_OBSERVE, KIND_SLICE]) + _len8(count))
         return self._absorb(jnp.concatenate([framing, vals_u8]))
@@ -130,7 +150,7 @@ class Sha256FieldTranscript:
         elem_bytes` — no length prefix, a scalar's width being implicit in the
         dtype. Byte-identical to the byte transcript's `observe_scalar`; distinct
         from `observe` of a length-1 slice (the KIND tag differs)."""
-        vbytes = lax.bitcast_convert_type(value, jnp.uint8).reshape(-1)
+        vbytes = self._elems_to_u8(value)
         framing = _const_u8(bytes([OP_OBSERVE, KIND_SCALAR]))
         return self._absorb(jnp.concatenate([framing, vbytes]))
 
@@ -158,7 +178,7 @@ class Sha256FieldTranscript:
         t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(n)))
         squeezed = t._squeeze_bytes(n * self._item_bytes())
         t = t._absorb(squeezed)
-        return t, squeezed.view(self.dtype)
+        return t, self._u8_to_elems(squeezed, n)
 
     def sample_scalar(self) -> tuple[Sha256FieldTranscript, Array]:
         """Squeeze one challenge under scalar framing: absorb `[OP_SQUEEZE,
@@ -168,7 +188,7 @@ class Sha256FieldTranscript:
         t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])))
         squeezed = t._squeeze_bytes(self._item_bytes())
         t = t._absorb(squeezed)
-        return t, squeezed.view(self.dtype)[0]
+        return t, self._u8_to_elems(squeezed, 1)[0]
 
     def observe_and_sample(
         self, values: Array, n: int = 1

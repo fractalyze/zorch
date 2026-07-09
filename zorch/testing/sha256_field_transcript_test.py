@@ -97,6 +97,27 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             _, vf_ch = vf.sample_scalar()
             self.assertEqual(np.asarray(vf_ch).astype("<u4").tobytes(), b_ch)
 
+    def test_ghash_dtype_matches_byte_transcript_via_uint32_lanes(self) -> None:
+        # flock-zorch#75: ghash <-> bytes routes through uint32 lanes to stay
+        # correct on the CPU PJRT backend. Observe a ghash element and sample
+        # ghash challenges; the wire bytes match the byte transcript over the same
+        # 16-byte serialization, and the samples come back as device ghash.
+        import zk_dtypes  # noqa: F401  (registers jnp.binary_field_ghash)
+
+        gh = jnp.binary_field_ghash
+        lanes = np.array([1, 2, 3, 0xDEADBEEF], dtype=np.uint32)  # one 16-byte elem
+        v_host = lanes.view(np.dtype(gh))  # shape (1,), known LE bytes
+        vbytes = lanes.tobytes()  # 16 LE bytes
+
+        b = ByteHashTranscript.new(b"gh", Sha256()).observe_slice(vbytes, 1)
+        b, b_sq = b.sample_slice(2, 16)  # two ghash-width challenges
+
+        f = Sha256FieldTranscript.new(b"gh", gh)
+        f, f_el = f.observe(jnp.asarray(v_host)).sample(2)
+        self.assertEqual(np.asarray(f_el).dtype, np.dtype(gh))  # device ghash
+        self.assertEqual(f_el.shape, (2,))
+        self.assertEqual(np.asarray(f_el).tobytes(), b_sq)
+
     def test_threads_under_jit(self) -> None:
         vals = np.arange(6, dtype=np.uint32)
 

@@ -20,12 +20,14 @@ py_test(
     srcs = ["sha256_field_transcript_test.py"],
     deps = [
         "//zorch:byte_transcript",
+        "//zorch:prove",
         "//zorch:sha256_field_transcript",
         "//zorch/hash:sha256",
         "//zorch/sumcheck",
         requirement("absl_py"),
         requirement("jax"),
         requirement("numpy"),
+        requirement("zk_dtypes"),
     ],
 )
 
