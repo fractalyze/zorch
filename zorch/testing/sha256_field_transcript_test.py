@@ -41,6 +41,25 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         f, f2 = f.sample(4)
         self.assertEqual(np.asarray(f2).astype("<u4").tobytes(), b2)
 
+    def test_scalar_framing_matches_byte_transcript(self) -> None:
+        # observe_scalar/sample_scalar use the byte transcript's scalar framing
+        # (KIND_SCALAR, no length prefix), so the squeezed bytes match — and must
+        # DIFFER from the slice framing of the same single element.
+        v = np.uint32(0xDEADBEEF)
+
+        b = ByteHashTranscript.new(b"dom", Sha256()).observe_scalar(v.tobytes())
+        b, b_sq = b.sample_scalar(4)  # itemsize bytes
+
+        f = Sha256FieldTranscript.new(b"dom", np.uint32)
+        f, f_el = f.observe_scalar(jnp.asarray(v)).sample_scalar()
+        self.assertEqual(f_el.shape, ())  # scalar squeeze is 0-D
+        self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
+
+        # Same element, but sampled/observed under SLICE framing — must diverge.
+        g = Sha256FieldTranscript.new(b"dom", np.uint32)
+        g, g_sl = g.observe(jnp.asarray(v).reshape(1)).sample(1)
+        self.assertNotEqual(np.asarray(f_el).tobytes(), np.asarray(g_sl).tobytes())
+
     def test_threads_under_jit(self) -> None:
         vals = np.arange(6, dtype=np.uint32)
 
