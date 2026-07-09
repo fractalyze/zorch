@@ -272,10 +272,15 @@ def stacked_basefold_open(
         raise ValueError(f"every round mle must stack to height {stacking}")
     # mle.T is the [K, S] message the commit encoded; the trailing .T lands the
     # [S*blowup, K] leaf-major layout whose bit-reversed rows are the committed
-    # leaves, so these paths authenticate against the same digest tree.
+    # leaves, so these paths authenticate against the same digest tree. Kept
+    # per round only for the query-phase openings below.
     round_codewords = [code.encode(rd.mle.T).T for rd in rounds]
     mle = batch_staggered([rd.mle for rd in rounds], coeffs)
-    codeword = batch_staggered(round_codewords, coeffs)
+    # By code linearity the batched codeword is encode(mle), not
+    # Σ coeffs·encode(columns) — the latter materializes the [S*blowup, K] EF
+    # product (~25 GiB on wide shards) the reduce can't fuse (NTT lays the leaf
+    # axis contiguous, not K).
+    codeword = code.encode(mle)
     claim = batch_staggered(batch_evals, coeffs)
 
     # Domain separation: bind the fold-round count (mirrors the reference).
