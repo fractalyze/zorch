@@ -15,6 +15,7 @@ ______________________________________________________________________
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
 | Polynomial primitives — `eq`, multilinear eval/fold, and the ZKX field-dtype gotchas | [`poly.md`](poly.md)                                  |
 | Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2 | [`hash.md`](hash.md)                                          |
+| Fiat-Shamir transcripts — the device-algebraic vs host-byte (SHA-256) taxonomy | [`transcript.md`](transcript.md)                                    |
 | Merkle commitment — binary tree on Sponge + Compression         | [`commit.md`](commit.md)                                             |
 | Polynomial commitment seam — `PcsProver`/`PcsVerifier`, with KZG (pairing) and FRI (transparent) instances | [`pcs.md`](pcs.md)                  |
 | Jagged Little Polynomial — verifier point-eval (branching program) | [`jagged.md`](jagged.md)                                          |

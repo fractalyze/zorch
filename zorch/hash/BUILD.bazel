@@ -40,3 +40,32 @@ py_library(
         requirement("jax"),
     ],
 )
+
+# The ByteHash seam — the byte sibling of Permutation. A byte hash is
+# digest(uint8[B, L]) -> uint8[B, digest_size]; SHA-256 (sha256.py) is one impl,
+# BLAKE3 / Keccak drop in unchanged, the construction hidden behind digest.
+py_library(
+    name = "byte_hash",
+    srcs = ["byte_hash.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
+
+# Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash, the streaming
+# Merkle-Damgard midstate (scan-threadable core), and the `Sha256` / `HashlibSha256`
+# ByteHash impls. A standalone hash, not a Permutation; no zk_dtypes / x64 dep. Used
+# by the byte-duplex Fiat-Shamir transcript and batched Merkle-over-SHA256.
+py_library(
+    name = "sha256",
+    srcs = ["sha256.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_hash",
+        "//zorch:fusion",
+        requirement("jax"),
+        requirement("numpy"),
+    ],
+)
