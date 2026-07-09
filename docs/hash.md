@@ -23,7 +23,7 @@ construction (Merkle–Damgård / tree / sponge) hidden behind `digest`. `ByteHa
 is the byte sibling of `Permutation`: the byte Fiat-Shamir transcript
 (`ByteHashTranscript`) and byte Merkle read `digest_size` and call `digest`,
 naming no concrete hash. `Sha256` (the `zorch.sha256` device marker) and
-`HashlibSha256` (host `hashlib`) are two implementations of the same FIPS 180-4
+`HostSha256` (host `hashlib`) are two implementations of the same FIPS 180-4
 bytes that differ only in substrate — carried by `has_dedicated_fusion`, exactly
 as on the permutation side, so `has_dedicated_fusion` delegates from the injected
 hash the way `DuplexSponge`'s does from its `Permutation`. A shared *streaming*

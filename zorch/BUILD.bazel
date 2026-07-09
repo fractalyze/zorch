@@ -54,7 +54,7 @@ py_library(
 # hashlib — no jax, no zk_dtypes, no x64. The byte sibling of `transcript.py`;
 # see docs/transcript.md for the two-transcript taxonomy.
 # Merlin-over-hash byte duplex (`ByteHashTranscript`) parameterized by a `ByteHash`
-# — one class backs both the host (`HashlibSha256`) and device (`Sha256` marker)
+# — one class backs both the host (`HostSha256`) and device (`Sha256` marker)
 # byte challengers; the substrate is a value it carries, not a class it hardcodes.
 py_library(
     name = "byte_transcript",

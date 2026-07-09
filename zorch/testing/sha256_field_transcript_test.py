@@ -16,7 +16,7 @@ import numpy as np
 from absl.testing import absltest
 
 from zorch.byte_transcript import ByteHashTranscript
-from zorch.hash.sha256 import HashlibSha256, Sha256
+from zorch.hash.sha256 import HostSha256, Sha256
 from zorch.sha256_field_transcript import Sha256FieldTranscript
 
 
@@ -80,7 +80,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # nonce, and the transcripts stay in lockstep (same challenge afterwards).
         root_u8 = jnp.asarray(np.frombuffer(b"root", np.uint8))
         for bits in (0, 8):
-            b = ByteHashTranscript.new(b"pow", HashlibSha256()).observe_bytes(b"root")
+            b = ByteHashTranscript.new(b"pow", HostSha256()).observe_bytes(b"root")
             b, b_nonce = b.grind_pow(bits)
             _, b_ch = b.sample_scalar(4)
 

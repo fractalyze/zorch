@@ -23,13 +23,13 @@ from zorch.byte_transcript import (
     ByteHashTranscript,
 )
 from zorch.hash.byte_hash import ByteHash
-from zorch.hash.sha256 import HashlibSha256, Sha256
+from zorch.hash.sha256 import HostSha256, Sha256
 
 
 def _new(domain: bytes) -> ByteHashTranscript:
     """A byte transcript on the host `hashlib` substrate — the framing under test
     is hash-agnostic; `test_device_substrate_matches_host` pins the marker."""
-    return ByteHashTranscript.new(domain, HashlibSha256())
+    return ByteHashTranscript.new(domain, HostSha256())
 
 
 def _le8(n: int) -> bytes:
@@ -173,7 +173,7 @@ class ByteTranscriptTest(absltest.TestCase):
             t, nonce = t.observe_bytes(b"root").grind_pow(10)
             return t.buffer, s0, s1, nonce
 
-        self.assertEqual(run(Sha256()), run(HashlibSha256()))
+        self.assertEqual(run(Sha256()), run(HostSha256()))
 
 
 if __name__ == "__main__":

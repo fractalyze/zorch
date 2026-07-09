@@ -55,7 +55,7 @@ py_library(
 )
 
 # Byte-oriented SHA-256 (FIPS 180-4): the `digest` batch hash, the streaming
-# Merkle-Damgard midstate (scan-threadable core), and the `Sha256` / `HashlibSha256`
+# Merkle-Damgard midstate (scan-threadable core), and the `Sha256` / `HostSha256`
 # ByteHash impls. A standalone hash, not a Permutation; no zk_dtypes / x64 dep. Used
 # by the byte-duplex Fiat-Shamir transcript and batched Merkle-over-SHA256.
 py_library(

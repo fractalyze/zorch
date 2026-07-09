@@ -450,7 +450,7 @@ class Sha256:
         return hash(Sha256)
 
 
-class HashlibSha256:
+class HostSha256:
     """`ByteHash` for host SHA-256 — `digest` loops `hashlib` per message on the
     host (eager, no device kernel), so `has_dedicated_fusion = False`. The fast
     path for a strictly-sequential byte challenger: `hashlib` on a small buffer
@@ -469,13 +469,13 @@ class HashlibSha256:
         return out
 
     def __eq__(self, other: object) -> bool:
-        return isinstance(other, HashlibSha256)
+        return isinstance(other, HostSha256)
 
     def __hash__(self) -> int:
-        return hash(HashlibSha256)
+        return hash(HostSha256)
 
 
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/conventions.md).
     _bh_marker: type[ByteHash] = Sha256
-    _bh_host: type[ByteHash] = HashlibSha256
+    _bh_host: type[ByteHash] = HostSha256
