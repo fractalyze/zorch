@@ -64,6 +64,15 @@ def _leading_zero_bits_ok(digests: np.ndarray, bits: int) -> np.ndarray:
     return ok
 
 
+def _validate_pow_bits(bits: int, digest_size: int) -> None:
+    """Reject a PoW target outside `[0, digest_size * 8]`: a negative count, or
+    more leading-zero bits than the digest carries (e.g. 264 on a 256-bit digest,
+    which `_leading_zero_bits_ok` would spuriously accept for an all-zero digest).
+    The byte sibling of `transcript._validate_pow_bits`."""
+    if not 0 <= bits <= digest_size * 8:
+        raise ValueError(f"bits must be in [0, {digest_size * 8}], got {bits}")
+
+
 class ByteTranscript(Protocol):
     """Byte-oriented Fiat-Shamir seam. `observe_*` append tagged, length-prefixed
     bytes; `sample_*` squeeze raw bytes (the consumer reinterprets to field
@@ -154,11 +163,15 @@ class ByteHashTranscript:
 
     # ---- sample (absorb tag, squeeze without mutating, re-absorb the squeeze) ----
     def sample_scalar(self, nbytes: int) -> tuple[ByteHashTranscript, bytes]:
+        if nbytes < 0:
+            raise ValueError(f"nbytes must be non-negative, got {nbytes}")
         t = self._absorb(bytes([OP_SQUEEZE, KIND_SCALAR]))
         buf = t._squeeze(nbytes)
         return t._absorb(buf), buf
 
     def sample_slice(self, count: int, width: int) -> tuple[ByteHashTranscript, bytes]:
+        if count < 0 or width < 0:
+            raise ValueError(f"count/width must be non-negative, got {count}/{width}")
         t = self._absorb(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(count))
         buf = t._squeeze(count * width)
         return t._absorb(buf), buf
@@ -188,12 +201,14 @@ class ByteHashTranscript:
     def grind_pow(self, bits: int) -> tuple[ByteHashTranscript, int]:
         """Lowest u64 nonce whose PoW passes (0 if bits==0), then absorb it via
         `observe_bytes` so subsequent challenges bind to it."""
+        _validate_pow_bits(bits, self.byte_hash.digest_size)
         nonce = 0 if bits == 0 else self._grind(self._digest(), bits)
         return self.observe_bytes(_len8(nonce)), nonce
 
     def verify_pow(self, nonce: int, bits: int) -> tuple[ByteHashTranscript, bool]:
         """Verifier mirror: check the PoW (bits==0 requires the canonical nonce 0),
         then absorb the nonce REGARDLESS so the transcript stays in lockstep."""
+        _validate_pow_bits(bits, self.byte_hash.digest_size)
         if bits == 0:
             ok = nonce == 0
         else:

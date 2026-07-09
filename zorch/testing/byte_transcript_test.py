@@ -152,11 +152,30 @@ class ByteTranscriptTest(absltest.TestCase):
         self.assertFalse(ok)
 
     def test_pow_zero_bits_requires_canonical_nonce(self) -> None:
-        mk = lambda: _new(b"pow").observe_bytes(b"root")
+        def mk() -> ByteHashTranscript:
+            return _new(b"pow").observe_bytes(b"root")
+
         self.assertEqual(mk().grind_pow(0)[1], 0)
         self.assertTrue(mk().verify_pow(0, 0)[1])
         for bad in (1, 42, 2**64 - 1):
             self.assertFalse(mk().verify_pow(bad, 0)[1])
+
+    def test_pow_bits_out_of_range_rejected(self) -> None:
+        # A 32-byte digest carries at most 256 leading-zero bits; a wider target
+        # (or a negative one) is impossible and must fail fast, not spuriously pass.
+        for bits in (-1, 257):
+            with self.assertRaises(ValueError):
+                _new(b"pow").grind_pow(bits)
+            with self.assertRaises(ValueError):
+                _new(b"pow").verify_pow(0, bits)
+
+    def test_negative_sample_sizes_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            _new(b"x").sample_scalar(-1)
+        with self.assertRaises(ValueError):
+            _new(b"x").sample_slice(-1, 4)
+        with self.assertRaises(ValueError):
+            _new(b"x").sample_slice(2, -1)
 
     # ---- the marker (device) substrate is byte-identical to host hashlib ----
     def test_device_substrate_matches_host(self) -> None:

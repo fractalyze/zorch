@@ -37,6 +37,7 @@ from zorch.byte_transcript import (
     OP_LABEL,
     OP_OBSERVE,
     OP_SQUEEZE,
+    _validate_pow_bits,
 )
 from zorch.hash.sha256 import (
     Sha256State,
@@ -44,6 +45,9 @@ from zorch.hash.sha256 import (
     sha256_stream_finalize,
     sha256_stream_init,
 )
+
+# SHA-256 digest width — the PoW state digest and every squeeze block are 32 B.
+_DIGEST_BYTES = 32
 
 
 def _len8(n: int) -> bytes:
@@ -209,6 +213,7 @@ class Sha256FieldTranscript:
         Host to start — a one-shot search, not per-round threading, so it does not
         break device graph capture; a device grind is a follow-up. Byte-identical
         to `ByteHashTranscript.grind_pow`."""
+        _validate_pow_bits(bits, _DIGEST_BYTES)
         nonce = 0 if bits == 0 else _grind_host(self._state_digest(), bits)
         return self.observe_bytes(_const_u8(_len8(nonce))), nonce
 
@@ -216,6 +221,7 @@ class Sha256FieldTranscript:
         """Verifier mirror of `grind_pow`: check the PoW (`bits == 0` requires the
         canonical nonce 0), then absorb the nonce REGARDLESS so the transcript stays
         in lockstep. Byte-identical to `ByteHashTranscript.verify_pow`."""
+        _validate_pow_bits(bits, _DIGEST_BYTES)
         if bits == 0:
             ok = nonce == 0
         else:

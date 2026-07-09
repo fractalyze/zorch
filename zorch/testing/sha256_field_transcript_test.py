@@ -97,6 +97,16 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             _, vf_ch = vf.sample_scalar()
             self.assertEqual(np.asarray(vf_ch).astype("<u4").tobytes(), b_ch)
 
+    def test_grind_bits_out_of_range_rejected(self) -> None:
+        # Mirrors the byte transcript: > 256 (or negative) leading-zero bits on a
+        # 32-byte digest is impossible and rejected up front.
+        t = Sha256FieldTranscript.new(b"pow", np.uint32)
+        for bits in (-1, 257):
+            with self.assertRaises(ValueError):
+                t.grind_pow(bits)
+            with self.assertRaises(ValueError):
+                t.verify_pow(0, bits)
+
     def test_ghash_dtype_matches_byte_transcript_via_uint32_lanes(self) -> None:
         # flock-zorch#75: ghash <-> bytes routes through uint32 lanes to stay
         # correct on the CPU PJRT backend. Observe a ghash element and sample
