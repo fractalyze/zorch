@@ -135,10 +135,10 @@ def _bp_eval_decomposition(
     symbolic export dim symbolic; the fixed automaton widths ride as attrs,
     swallowed by ``_attrs``.
     """
-    num_vars = jnp.maximum(z_row.shape[0], prefix_sum.shape[0])
     dtype = z_row.dtype
     r_dim, i_dim = z_row.shape[0], z_index.shape[0]
     p_dim, n_dim = prefix_sum.shape[0], next_prefix_sum.shape[0]
+    num_vars = jnp.maximum(r_dim, p_dim)
     zero = jnp.zeros([], dtype=dtype)
     # t_res: (NUM_MEMORY_STATES, NUM_BIT_STATES, NUM_MEMORY_STATES)
     t_res = t_matrix.reshape(NUM_MEMORY_STATES, NUM_BIT_STATES, NUM_MEMORY_STATES)
