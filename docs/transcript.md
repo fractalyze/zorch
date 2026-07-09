@@ -26,41 +26,56 @@ program (`zorch.sumcheck.prove`'s `lax.scan`). Its slice framing is byte-identic
 to `ByteHashTranscript`'s `observe_slice` / `sample_slice` — the field surface *is*
 the byte surface, made scan-threadable.
 
-## Why a byte transcript is exempt from the device-fusion clause
+## Device fusion: which transcripts meet it, and the host exemption
 
 The fusion non-negotiable (CLAUDE.md) reads: "an `absorb`/`squeeze` … must each
-lower to **one fused kernel**." That clause governs **device-lowered algebraic
-primitives** — the Poseidon2 duplex whose `observe`/`sample` are device ops fused
-into the same `@jit` region as the round body.
+lower to **one fused kernel**." It governs **device-lowered** Fiat-Shamir — the
+per-round `observe`/`sample` that thread the round body's `@jit` region.
 
-A SHA-256 byte Fiat-Shamir chain is a categorically different abstraction: a
-**host orchestrator**, not a device kernel. SHA-256 is a byte hash, not algebraic
-over the prime field, and the FS chain is strictly sequential (each squeeze depends
-on every prior byte) — it does not lower to a single GPU kernel. It is in the same
-family as the host steps `docs/conventions.md` already sanctions as interleaving
-the round loop (the eager `grind`, the `int(...)` query index, the heterogeneous
-Python driver). A scheme on this transcript is **per-island by construction**: the
-transcript runs on the host, and the fusion contract is met *at the level it
-applies* — the bulk arithmetic *between* challenges (NTT, sumcheck fold, Merkle
-build over 2^m elements) each still fuses into one kernel.
+Two of the three transcripts are device and **meet it**:
 
-`ByteHashTranscript.has_dedicated_fusion` therefore **delegates to the injected
-`ByteHash`**: `HostSha256` reports `False` — the type-level signal of a host
-orchestrator — so holding that configuration to the device-fusion clause would be
-a category error. Injecting `Sha256` reports `True` (the squeeze *does* lower via
-the `zorch.sha256` marker), but the chain is still host-driven per op, so the
-sequential byte challenger is not itself the perf win; single-dispatching the whole
-loop is, which is what `Sha256FieldTranscript` (device streaming midstate) is for.
-The *data-parallel* use of the same hash — `Sha256().digest` over a batch of Merkle
-leaves or a PoW window — fuses regardless.
+- `DuplexTranscript` (Poseidon2) — `observe`/`sample` are device ops; a whole
+  absorb+squeeze hop rides one `zorch.duplex_fs` marker.
+- `Sha256FieldTranscript` — the **device-native SHA-256 prover path**. Its
+  per-round `observe`/`sample` thread `zorch.sumcheck.prove`'s `lax.scan` as a
+  device carry over the streaming `Sha256State`, so the whole Fiat-Shamir round
+  loop folds into one device program with **no per-round host sync** — what a
+  cuda-graph-unified scheme (e.g. flock) needs. The SHA-256 compression lowers via
+  the `zorch.sha256` marker. Two honest caveats: there is no single whole-hop
+  fusion marker yet (it leans on the per-compression marker + XLA), and per-hash
+  SHA-256 is a worse GPU fit than Poseidon2's field mults — the win is keeping FS
+  *in* the graph, not raw hash throughput.
+
+The **exemption is only `ByteHashTranscript`** — the *host* byte transcript. It
+holds a growing `bytes` buffer and orchestrates the chain per-op on the host (one
+dispatch per squeeze), so it does not lower to a device kernel and must not be held
+to a clause about device kernels. It is in the same family as the host steps
+`docs/conventions.md` sanctions between round kernels (a one-shot `grind`, an
+`int(...)` query index, the heterogeneous Python driver). `has_dedicated_fusion`
+delegates to the injected `ByteHash`: `HostSha256` reports `False` (the type-level
+signal of a host orchestrator); injecting `Sha256` reports `True` — the squeeze
+*does* lower via the marker — but the chain is still host-driven per op, so
+single-dispatching the whole loop is the real win, and that is
+`Sha256FieldTranscript`'s job. The *data-parallel* use of the same hash
+(`Sha256().digest` over a batch of Merkle leaves or a PoW window) fuses regardless.
 
 ## Status / ratification
 
-Admitting a host-side byte Fiat-Shamir family widens zorch's remit from
-"algebraic, device-resident Fiat-Shamir" to "*also* host-side byte Fiat-Shamir."
-That is a deliberate scope decision (driven by binary-field provers like flock,
-whose verifier rests on a single SHA-256). **Flagged for ratification on epic
-[fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).** If declined,
-`byte_transcript.py` + `hash/byte_hash.py` + `hash/sha256.py` +
-`sha256_field_transcript.py` move to the consumer with ~no rework (they have no
+The SHA-256 Fiat-Shamir family is **device-first**: `Sha256FieldTranscript` is the
+prover path (device-resident, scan-threadable), and the host `ByteHashTranscript`
+is a **shrinking** surface — the correctness oracle
+(`test_device_substrate_matches_host` pins the device marker to stdlib `hashlib`),
+the verifier-side replay, and flock's legacy host challenger. That host surface is
+being **retired incrementally** as consumers move on-device: flock's prover
+challenger goes first (flock-zorch#9), the verifier later; `HostSha256` / `hashlib`
+stays at least as the correctness oracle. A device-side grind (matching
+`DuplexTranscript`) is a pending follow-up — today `Sha256FieldTranscript.grind` is
+a one-shot host search, which is soundness-neutral and not a per-round graph
+blocker.
+
+Admitting this SHA-256 family at all widens zorch's remit beyond "algebraic,
+device-resident Fiat-Shamir"; that scope decision is **flagged for ratification on
+epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).** If
+declined, `byte_transcript.py` + `hash/byte_hash.py` + `hash/sha256.py` +
+`sha256_field_transcript.py` move to the consumer with ~no rework (no
 zorch-internal dependencies beyond each other).
