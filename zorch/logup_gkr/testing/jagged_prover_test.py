@@ -718,6 +718,39 @@ class PyramidScanProveTest(absltest.TestCase):
         )
         self._assert_byte_match(got, want)
 
+    def test_scan_forced_on_small_pyramid(self) -> None:
+        # force_scan must exercise the scan even on a tiny pyramid the
+        # heuristic (nlayers > 1 under caps) would already route through the
+        # scan on its own -- byte-match still holds down at the smallest
+        # interior chain a `build_jagged_pyramid` floor-out produces.
+        layers = build_jagged_pyramid(random_jagged_layer(3, self.ROW_COUNTS))
+        caps = _caps_for(layers[0])
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        want = self._chain(layers, carry, t)
+        got = prove_jagged_pyramid(
+            list(reversed(layers[:-1])), carry, t, caps=caps, force_scan=True
+        )
+        self._assert_byte_match(got, want)
+
+    def test_scan_niv_zero_eq_int_width_one(self) -> None:
+        # A single-batch pyramid (num_batch_variables == 0, since niv derives
+        # from log2(len(row_counts)), not from the row-count shape): the
+        # scan's `eq_int` table must stay at its natural width-1
+        # "empty-product" value across every round (the `if niv:` fold skip
+        # in `_run_jagged_rounds_padded`) rather than collapsing to width 0
+        # and going out of bounds on the next `eq_int[col]` gather.
+        layers = build_jagged_pyramid(random_jagged_layer(9, (11,)))
+        self.assertEqual(layers[0].num_batch_variables, 0)
+        caps = _caps_for(layers[0])
+        output = extract_jagged_outputs(layers[-1])
+        carry, t = bind_output(output, cheap_transcript(KB))
+        want = self._chain(layers, carry, t)
+        got = prove_jagged_pyramid(
+            list(reversed(layers[:-1])), carry, t, caps=caps, force_scan=True
+        )
+        self._assert_byte_match(got, want)
+
     def test_scan_matches_chain_base_field_first_layer(self) -> None:
         # The BF->EF carve UNDER the scan: caps + force_scan routes the all-EF
         # interior through `_scan_pyramid` (the carve recursion forwards
