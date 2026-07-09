@@ -21,10 +21,10 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 
 from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
-from zorch.utils.field import naturals
+from zorch.utils.field import base_field, naturals
 
 
 @cache
@@ -201,3 +201,81 @@ def fold(arr: Array, r: Array, *, msb: bool = True) -> Array:
     boundary. ndim-agnostic: the leading factor/batch axes broadcast."""
     p0, p1 = split_halves(arr) if msb else split_pairs(arr)
     return p0 + r * (p1 - p0)
+
+
+# --- Subgroup (univariate-skip) domain: the value↔coeff map over the order-|D|
+# two-adic subgroup D, |D| = 2^skip_rounds. The finite EvalDomain above bridges
+# values→coeffs through the inverse Vandermonde, an O(|nodes|²) dense matrix fine for
+# the small Gruen / natural node sets but not for |D| = 2^skip_rounds; over a two-adic
+# subgroup that map IS the NTT, so the univariate skip's round 0 samples on D via
+# `lax.ntt` — the same native op the Reed-Solomon encoder hands its evaluation to
+# (coding/reed_solomon.py), auto-decomposing an extension field into base-field NTTs.
+
+
+def subgroup_to_coeffs(values: Array) -> Array:
+    """Ascending coefficients of the degree-<|D| univariate whose values on the
+    order-|D| two-adic subgroup D are `values` (last axis = D, |D| a power of two):
+    the iNTT over D, batched over the leading axes (the native op transforms the last
+    axis, like `coding.reed_solomon.encode`). The subgroup analogue of
+    `EvalDomain.to_coeffs` — the inverse Vandermonde does not scale to
+    |D| = 2^skip_rounds."""
+    return lax.ntt(values, ntt_type="INTT", ntt_length=values.shape[-1])
+
+
+def subgroup_evals(coeffs: Array, size: int) -> Array:
+    """Evaluate the univariate `coeffs` (ascending, last axis) on the order-`size`
+    two-adic subgroup, batched over the leading axes — zero-pad to `size` then NTT.
+    With `size > len(coeffs)` this is the low-degree extension onto a superset D' ⊇ D
+    the round-0 message needs, since `deg s₀ = degree·(|D|−1)` outgrows |D|; `size` must
+    be a power of two ≥ len(coeffs)."""
+    pad = coeffs.shape[-1]
+    if size < pad:
+        raise ValueError(f"subgroup_evals size {size} < coeff count {pad}")
+    tail = coeffs.shape[:-1] + (size - pad,)
+    padded = jnp.concatenate([coeffs, jnp.zeros(tail, coeffs.dtype)], axis=-1)
+    return lax.ntt(padded, ntt_type="NTT", ntt_length=size)
+
+
+def subgroup_sum(coeffs: Array, skip_rounds: int) -> Array:
+    """Σ_{z∈D} p(z) for the univariate `coeffs` (ascending, last axis) over the
+    order-2^skip_rounds subgroup D. Σ_{z∈D} zᵏ = |D| when |D| divides k, else 0 — so the
+    sum reads off the coefficients at multiples of |D|, scaled by |D|. |D| is built in
+    the field (a bare Python int would not Montgomery-encode)."""
+    size = 1 << skip_rounds
+    d_field = jnp.asarray(size, coeffs.dtype)
+    return d_field * jnp.sum(coeffs[..., ::size], axis=-1)
+
+
+@dataclass(frozen=True)
+class UnivariateSkipDomain:
+    """The univariate skip's round-0 evaluation domain: the order-2^skip_rounds two-adic
+    subgroup D, with the value↔coeff map carried by the NTT (`subgroup_to_coeffs` /
+    `subgroup_evals`) rather than the inverse Vandermonde a finite `EvalDomain` uses.
+    Holds the knob (`skip_rounds`, the number of collapsed leading rounds) and the
+    field; the round-0 arithmetic runs in the base field (`nodes` and the transforms are
+    base-field), extension arithmetic entering only once r₀ is bound at round 1."""
+
+    skip_rounds: int
+    dtype: Any
+
+    @property
+    def size(self) -> int:
+        """|D| = 2^skip_rounds."""
+        return 1 << self.skip_rounds
+
+    def nodes(self) -> Array:
+        """The |D| subgroup points in `lax.ntt` order — `ntt(e₁)` reads them off the
+        same transform the map uses (mirrors `coding.reed_solomon.eval_domain`)."""
+        base = base_field(self.dtype)
+        if self.size == 1:
+            return jnp.ones((1,), base)
+        e1 = jnp.zeros(self.size, base).at[1].set(jnp.ones((), base))
+        return lax.ntt(e1, ntt_type="NTT", ntt_length=self.size)
+
+    def to_coeffs(self, values: Array) -> Array:
+        """Value→coeff over D via the iNTT (`subgroup_to_coeffs`)."""
+        return subgroup_to_coeffs(values)
+
+    def sum_over_subgroup(self, coeffs: Array) -> Array:
+        """Σ_{z∈D} p(z) from ascending coeffs (`subgroup_sum`)."""
+        return subgroup_sum(coeffs, self.skip_rounds)

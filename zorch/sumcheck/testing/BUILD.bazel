@@ -17,6 +17,7 @@ py_test(
     deps = [
         "//zorch:transcript",
         "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         "//zorch/utils:bits",
         requirement("absl_py"),
@@ -31,6 +32,23 @@ py_test(
     srcs = ["domain_test.py"],
     deps = [
         "//zorch/sumcheck",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "univariate_skip_test",
+    size = "medium",
+    srcs = ["univariate_skip_test.py"],
+    deps = [
+        "//zorch:prove",
+        "//zorch/logup_gkr",
+        "//zorch/sumcheck",
+        "//zorch/testkit:fusion",
+        "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),

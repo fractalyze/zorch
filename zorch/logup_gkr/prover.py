@@ -100,6 +100,11 @@ class LogupSummand:
         (lam,) = scalars
         return logup_combine(lam, *factors)
 
+    def _combine(self, *factors: Array) -> Array:
+        """LogUp summand bound to its scalars (λ); the `_combine` seam a generic
+        round-poly builder reads, so `StandardRound` folds LogUp directly."""
+        return self.combine(self.combine_scalars(), *factors)
+
     @classmethod
     def extra_ts(cls, dtype: Any) -> tuple[Array, ...]:
         """The jagged round's one materialized extra point ``{1/2}`` — degree
@@ -322,6 +327,7 @@ class GkrLayerRound(Round):
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _summand: type[SumcheckSummand] = LogupSumcheckRound
+    _summand_value: type[SumcheckSummand] = LogupSummand
     _gruen_summand: type[GruenSummand] = LogupSummand
     _sumcheck_round: type[ProverRound] = LogupSumcheckRound
     _layer_round: type[ProverRound] = GkrLayerRound
