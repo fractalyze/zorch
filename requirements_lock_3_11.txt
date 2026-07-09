@@ -10,19 +10,19 @@ absl-py==2.4.0 \
     --hash=sha256:88476fd881ca8aab94ffa78b7b6c632a782ab3ba1cd19c9bd423abc4fb4cd28d \
     --hash=sha256:8c6af82722b35cf71e0f4d1d47dcaebfff286e27110a99fc359349b247dfb5d4
     # via -r requirements.in
-jax==0.10.0.dev20260709073514 \
-    --hash=sha256:5f6428f2a5c05246214f1b26e704eb736483cb5dcb248ca4232f3d4df56d8f66
+jax==0.10.0.dev20260709215621 \
+    --hash=sha256:5a29e79f00fdec3ce4d5e4f7b77de5db60f398e16e124373237e81fea97d27b1
     # via -r requirements.in
-jax-cuda12-pjrt==0.10.0.dev20260709073514 \
-    --hash=sha256:0b3a3cafc63d7a719892e6c1f132569dbf8d5e8bc339ed69868cbe0c0de187ed
+jax-cuda12-pjrt==0.10.0.dev20260709215621 \
+    --hash=sha256:fb24f38666b4eed8ed572611e97fbc2aced23cfb9c3b5f105778649185e00782
     # via
     #   -r requirements.in
     #   jax-cuda12-plugin
-jax-cuda12-plugin==0.10.0.dev20260709073514 \
-    --hash=sha256:d28020ed951ee57c91c4a137f3b20fe72eab349ff6180613ee277f1fd5a5510d
+jax-cuda12-plugin==0.10.0.dev20260709215621 \
+    --hash=sha256:2db9147786d00c00eff909328a7ab64dcd90833a368ced42dcb24eeaf442b0e0
     # via -r requirements.in
-jaxlib==0.10.0.dev20260709073514 \
-    --hash=sha256:17b30acdd3655039364f47f034865e27dee722d47ef86acf04c0bf7e9f2b75b2
+jaxlib==0.10.0.dev20260709215621 \
+    --hash=sha256:80d6360b49c8b21f0e19ae59662a2384e18fb666bc6a80c1b356fd51e31ed0dd
     # via
     #   -r requirements.in
     #   jax
@@ -219,10 +219,10 @@ scipy==1.17.1 \
     # via
     #   jax
     #   jaxlib
-zk-dtypes==0.0.8 \
-    --hash=sha256:1decf06b8bdfcd823a310ee1f7e12f6724ee0c4fabbe8dbb60f5c5c6b3548ade \
-    --hash=sha256:4226921fd5d991c71f68f289ccf301d35befd9dd1ee27b18a0c0daf96c59fb86 \
-    --hash=sha256:e4ed1828669c73e18b80308f358edceb94ffe86e9ceb950dcaffbb470a8a1bcd
+zk-dtypes==0.0.10 \
+    --hash=sha256:06b66ef88dd6394bf7b2a1183fc60c5679a1837fc1b223147807f0f961eac0f7 \
+    --hash=sha256:e462ab54e21ee3dec305854d857519749eef913d817355b75c9e67fbba2fbae3 \
+    --hash=sha256:f2edcaba0e920dddd8e77c86758d54d7e2d5df2bd1acfbadacf392a91e16b026
     # via
     #   -r requirements.in
     #   jax
