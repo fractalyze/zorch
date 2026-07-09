@@ -12,12 +12,14 @@ import zk_dtypes
 from absl.testing import absltest
 from jax import Array
 
-from zorch.pcs.jagged.poly import (
+from zorch.pcs.jagged.branching_program import (
     _TRANSITION_ROWS,
     NUM_BIT_STATES,
     NUM_MEMORY_STATES,
-    _offset_bit_tensor,
     bp_eval_core,
+)
+from zorch.pcs.jagged.poly import (
+    _offset_bit_tensor,
     build_jagged_layout,
     build_prefix_sums,
     partial_eval_core,
@@ -71,24 +73,23 @@ class BpEvalCoreTest(absltest.TestCase):
         dtype = EF
         n_d, n_r = 3, 2
         t_mat = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
-        num_vars = max(n_r, n_d)
         pl = _bits_msb(0, n_d, dtype)  # t_c = 0
         pr = _bits_msb(4, n_d, dtype)  # t_{c+1} = 4
         EF1 = jnp.array(1, dtype=dtype)
         EF0 = jnp.array(0, dtype=dtype)
         # match: i=2 (z_index), r=2 (z_row)
         ok = bp_eval_core(
-            _bits_msb(2, n_r, dtype), _bits_msb(2, n_d, dtype), pl, pr, t_mat, num_vars
+            _bits_msb(2, n_r, dtype), _bits_msb(2, n_d, dtype), pl, pr, t_mat
         )
         self.assertEqual(_field_val(ok), _field_val(EF1))
         # mismatch: i=2, r=1 → i - t_c = 2 ≠ r
         no = bp_eval_core(
-            _bits_msb(1, n_r, dtype), _bits_msb(2, n_d, dtype), pl, pr, t_mat, num_vars
+            _bits_msb(1, n_r, dtype), _bits_msb(2, n_d, dtype), pl, pr, t_mat
         )
         self.assertEqual(_field_val(no), _field_val(EF0))
         # out of range: i=5 ≥ t_{c+1}=4 → 0
         oor = bp_eval_core(
-            _bits_msb(5, n_r, dtype), _bits_msb(5, n_d, dtype), pl, pr, t_mat, num_vars
+            _bits_msb(5, n_r, dtype), _bits_msb(5, n_d, dtype), pl, pr, t_mat
         )
         self.assertEqual(_field_val(oor), _field_val(EF0))
 

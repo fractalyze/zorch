@@ -18,10 +18,9 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
+from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
 from zorch.pcs.jagged.poly import (
-    _TRANSITION_ROWS,
     _decode_prefix_sums,
-    bp_eval_core,
     build_jagged_layout,
 )
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -69,12 +68,11 @@ def eval_jagged_mle(
     small-l_max oracle)."""
     dtype = z_row.dtype
     t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
-    num_vars = max(cfg.n_r, cfg.n_d)
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # 2^{n_c}
     all_left = col_prefix_sums[: cfg.l_max]
     all_right = col_prefix_sums[1:]
     bp_evals = jax.vmap(
-        lambda pl, pr: bp_eval_core(z_row, z_index, pl, pr, t_matrix, num_vars),
+        lambda pl, pr: bp_eval_core(z_row, z_index, pl, pr, t_matrix),
         in_axes=(0, 0),
     )(all_left, all_right)
     return _reduce(

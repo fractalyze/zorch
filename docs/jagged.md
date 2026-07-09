@@ -94,6 +94,16 @@ so it carries no host control flow. It is verifier-once work, not a per-round ho
 path, so it is `@jit`'d directly rather than written for a fused-region marker
 (see the hub [fusion north star](README.md#fusion-north-star)).
 
+The per-column indicator fold `bp_eval_core` is the opposite case: the inner
+sumcheck `vmap`s it over every column each round, so its DP fold is the prover's
+launch-bound hot leaf — thousands of microscopic per-layer transition matmuls. It
+is wrapped in the name-routed `zorch.jagged_bp` composite so a vendor emitter fuses
+the whole `fori_loop` DP (a 4-vector through `num_vars` soft `[4, 4]` transitions)
+into one register-resident kernel, the way `zorch.poseidon2` fuses a permutation.
+The marker carries a byte-identical decomposition, so an emitter that does not
+recognize it inlines the fold unchanged — the fusion is a lowering property, never
+a behavior change.
+
 ## Gotchas
 
 The eval routes around three [ZKX field-dtype limits](poly.md#zkx-field-dtype-gotchas)
