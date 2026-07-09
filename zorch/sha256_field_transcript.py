@@ -31,7 +31,9 @@ from jax.tree_util import register_dataclass
 from zorch.byte_transcript import (
     KIND_SCALAR,
     KIND_SLICE,
+    OP_BYTES,
     OP_DOMAIN,
+    OP_LABEL,
     OP_OBSERVE,
     OP_SQUEEZE,
 )
@@ -107,6 +109,23 @@ class Sha256FieldTranscript:
         vbytes = lax.bitcast_convert_type(value, jnp.uint8).reshape(-1)
         framing = _const_u8(bytes([OP_OBSERVE, KIND_SCALAR]))
         return self._absorb(jnp.concatenate([framing, vbytes]))
+
+    def observe_label(self, label: bytes) -> Sha256FieldTranscript:
+        """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
+        A compile-time host constant (labels are literals), so the whole absorb
+        is one constant payload. Byte-identical to the byte transcript."""
+        return self._absorb(
+            _const_u8(bytes([OP_LABEL]) + _len8(len(label)) + bytes(label))
+        )
+
+    def observe_bytes(self, data: Array) -> Sha256FieldTranscript:
+        """Absorb opaque bytes (e.g. a Merkle root computed on-device) under
+        `[OP_BYTES] || len8(len) || data`. `data` is a uint8 array whose length is
+        static (it rides the framing prefix). Byte-identical to the byte
+        transcript's `observe_bytes` of the same bytes."""
+        data = jnp.asarray(data, jnp.uint8).reshape(-1)
+        framing = _const_u8(bytes([OP_BYTES]) + _len8(int(data.shape[0])))
+        return self._absorb(jnp.concatenate([framing, data]))
 
     def sample(self, n: int = 1) -> tuple[Sha256FieldTranscript, Array]:
         """Squeeze `n` challenge elements: absorb `[OP_SQUEEZE, KIND_SLICE] ||

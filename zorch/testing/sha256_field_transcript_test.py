@@ -60,6 +60,21 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         g, g_sl = g.observe(jnp.asarray(v).reshape(1)).sample(1)
         self.assertNotEqual(np.asarray(f_el).tobytes(), np.asarray(g_sl).tobytes())
 
+    def test_label_and_bytes_framing_match_byte_transcript(self) -> None:
+        # observe_label / observe_bytes reproduce the byte transcript's OP_LABEL /
+        # OP_BYTES framing, so a challenge squeezed after them matches.
+        label = b"flock-zerocheck-v0"
+        root = np.arange(32, dtype=np.uint8)  # a 32-byte on-device "root"
+
+        b = ByteHashTranscript.new(b"dom", Sha256())
+        b = b.observe_label(label).observe_bytes(root.tobytes())
+        b, b_sq = b.sample_slice(2, 4)
+
+        f = Sha256FieldTranscript.new(b"dom", np.uint32)
+        f = f.observe_label(label).observe_bytes(jnp.asarray(root))
+        f, f_el = f.sample(2)
+        self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
+
     def test_threads_under_jit(self) -> None:
         vals = np.arange(6, dtype=np.uint32)
 
