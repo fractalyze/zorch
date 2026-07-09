@@ -121,8 +121,8 @@ class _CadenceChoreography(BasefoldChoreography):
 @dataclass(frozen=True)
 class _GrindingCadenceChoreography(_CadenceChoreography):
     """The cadence wire above, but scheduling a query-phase grind — exercises
-    the cadence verify's grind guard (`CadenceProof` carries no pow-witness
-    field for a scheduled grind to land in)."""
+    the cadence verify's grind guard (`CadenceProof.pow_witnesses` is the wire
+    slot, but the grind production + check are a deferred delta)."""
 
     def query_grind_bits(self, level: int) -> int | None:
         del level
@@ -237,9 +237,9 @@ class BasefoldCadenceRoundTripTest(absltest.TestCase):
         self.assertFalse(self._verify(bad))
 
     def test_verify_with_basis_raises_on_scheduled_grind(self) -> None:
-        # A grind-scheduling choreography has nowhere to put a witness in
-        # `CadenceProof` (no pow-witness field) — the cadence verify must fail
-        # loud, symmetric to the prover's grind guard on
+        # `CadenceProof.pow_witnesses` is the frozen wire slot, but a scheduled
+        # grind's production + check are a deferred delta — the cadence verify
+        # must fail loud, symmetric to the prover's grind guard on
         # `_open_with_basis_cadence`.
         grinding_verifier = dataclasses.replace(
             self.verifier, choreography=_GrindingCadenceChoreography()

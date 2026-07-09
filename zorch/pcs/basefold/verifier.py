@@ -221,17 +221,16 @@ class BasefoldVerifier:
 
 
 def _require_no_grind(chor: BasefoldChoreography, config: BasefoldConfig) -> None:
-    """Fail loud on a scheduled grind: neither `BasefoldProof` nor `CadenceProof`
-    carries a pow-witness field (the native wire grinds nothing), so there is
-    nothing for the verifier to `check_grind` against. The schedule count comes
-    off the choreography's bits methods (`num_pow_witnesses`), the one source of
-    truth shared with the prover's guards. The grind-check wire is a deferred
-    consumer delta, symmetric to the prover's pow-witness NotImplementedError."""
+    """Fail loud on a scheduled grind: `BasefoldProof` / `CadenceProof` now carry a
+    `pow_witnesses` wire slot, but the prover does not populate it and the verifier
+    does not `check_grind` against it yet — the grind production + check are a
+    deferred delta. The schedule count comes off the choreography's bits methods
+    (`num_pow_witnesses`), the one source of truth shared with the prover's guards."""
     if chor.num_pow_witnesses(config) > 0:
         raise NotImplementedError(
-            "the choreography schedules a grind, but the proof carries no "
-            "pow-witness field for the verifier to check_grind against; the "
-            "grind-check wire is a deferred consumer delta"
+            "the choreography schedules a grind, but the verifier does not "
+            "check_grind against proof.pow_witnesses yet (the field is the wire "
+            "slot; the grind check is a deferred delta)"
         )
 
 
