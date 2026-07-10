@@ -30,7 +30,7 @@ inside are fine — `jit` unrolls them.
 
 A round's `_round_poly` / `_fold` are pure numeric and *could* be `@jit`'d,
 but are deliberately left undecorated: they are the bodies a future marked
-fused region (`stablehlo.composite`) + zkx emitter will lower to one kernel
+fused region (`stablehlo.composite`) + XLA emitter will lower to one kernel
 (see `sumcheck.md`), not blanket-`@jit` candidates.
 
 ### One `@jit` boundary per round — single-zone or per-island
@@ -87,7 +87,7 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
 - **`lax.scan` — homogeneous per-round loop inside one traced region.** When a
   round repeats with a **round-invariant output shape** and the loop is (or will
   be) one `jit`'d region, scan it: unrolling many rounds inflates the graph past
-  the ZKX PTX cliff (#58). `prove` / `verify` are the case — every variable's
+  the XLA PTX cliff (#58). `prove` / `verify` are the case — every variable's
   round poly has the same shape. A `scan` carry must keep a **fixed shape**, so a
   halving MLE state rides in a full-width buffer with the live prefix packed at the
   front and the dead tail masked (see [`prove.py`](../zorch/prove.py)). The round
@@ -269,7 +269,7 @@ signature. A prover round is `(state, transcript) -> (state, transcript, msg)`
 and its verifier dual `(claim, msg, transcript) -> (claim, transcript, r, ok)`,
 so the base can't name a single shape — the subclasses give the precise ones.
 
-mypy can't see through the ZKX `jax` fork (its shipped stubs don't parse) or
+mypy can't see through the Fractal XLA `jax` fork (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value
 is catching a missing or malformed annotation, not deep array-shape checking —
 write the precise type regardless; it is documentation that outlives the stubs.

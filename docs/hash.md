@@ -58,7 +58,7 @@ and field conversions live in the consumer, not here.
 ## Fusion by construction
 
 The **permutation is the fusion unit.** `Poseidon2.permute` wraps all rounds in
-one `fused_region` marker (`zorch/fusion.py`) that zkx lowers to a single
+one `fused_region` marker (`zorch/fusion.py`) that XLA lowers to a single
 custom-fusion kernel — one kernel *by construction*, not by a per-hash compiler
 pattern-match. What the block owes that path is a **straight-line body**: rounds
 unrolled, linear layers in normal form, nothing that lowers to a

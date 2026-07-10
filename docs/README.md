@@ -13,7 +13,7 @@ ______________________________________________________________________
 | What is `zorch`, the building blocks, and the design philosophy | [`../README.md`](../README.md)                                        |
 | New to JAX — the mental models behind the conventions, and the canonical references to learn from | [`jax.md`](jax.md)                  |
 | Detailed design — fusion contract, findings, open decisions     | epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1) |
-| Polynomial primitives — `eq`, multilinear eval/fold, and the ZKX field-dtype gotchas | [`poly.md`](poly.md)                                  |
+| Polynomial primitives — `eq`, multilinear eval/fold, and the field-dtype gotchas | [`poly.md`](poly.md)                                  |
 | Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2 | [`hash.md`](hash.md)                                          |
 | Fiat-Shamir transcripts — the device-algebraic vs host-byte (SHA-256) taxonomy | [`transcript.md`](transcript.md)                                    |
 | Merkle commitment — binary tree on Sponge + Compression         | [`commit.md`](commit.md)                                             |
@@ -39,12 +39,12 @@ Two enablers make a round capturable: (1) the **whole round body in one traced
 region** with a **device-side** transcript (so `observe`/`sample` are device
 ops, not host steps that break the capture), and (2) a `stablehlo.composite`
 marker the emitter lowers as one unit. Enabler (1) is in place
-(`DuplexTranscript`). Until (2) lands — the marker + generic zkx emitter,
+(`DuplexTranscript`). Until (2) lands — the marker + generic XLA emitter,
 Phase 3 — round bodies are written **fusion-ready**: element-wise field ops
 plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they drop into
 that path unchanged. See [`sumcheck.md`](sumcheck.md).
 
-**Measured (ZKX GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
+**Measured (Fractal XLA GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
 compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
 `Σ`, no marker needed — and `_fold` to a single element-wise (`kLoop`) kernel. A full round
 (`_round_poly` + `_fold`) is **two** kernels (its message and folded state are disjoint
@@ -66,7 +66,7 @@ stays in the code and its tests, not here.
 
 ## Dev environment
 
-Per-workspace venv pinning, the ZKX GPU plugin, and the JAX compile-cache rule
+Per-workspace venv pinning, the Fractal XLA GPU plugin, and the JAX compile-cache rule
 live in [`dev-env.md`](dev-env.md).
 
 ______________________________________________________________________

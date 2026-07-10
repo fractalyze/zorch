@@ -3,7 +3,7 @@
 JAX-native building blocks for Modern SNARKs. `zorch` sits between
 [JAX](https://github.com/jax-ml/jax) and the proof systems that consume it
 (e.g. [`whir-zorch`](https://github.com/fractalyze/whir-zorch)): JAX provides
-tracing and codegen (via [ZKX](https://github.com/fractalyze/zkx), Fractalyze's
+tracing and codegen (via [Fractal XLA](https://github.com/fractalyze/xla), Fractalyze's
 XLA fork with native finite-field dtypes); `zorch` provides the reusable pieces
 a proof system is assembled from.
 
@@ -47,7 +47,7 @@ milestone `spine: core + poseidon2 v1`, epic issue
 
 ## Development
 
-`zorch` is pure Python on JAX, run against the ZKX GPU plugin. A virtualenv with
+`zorch` is pure Python on JAX, run against the Fractal XLA GPU plugin. A virtualenv with
 the pinned toolchain:
 
 ```sh
@@ -56,7 +56,7 @@ pip install -r requirements.in \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The dev loop — per-workspace venvs, developing against a local ZKX build, the
+The dev loop — per-workspace venvs, developing against a local Fractal XLA build, the
 JAX compile-cache rule — lives in [`docs/dev-env.md`](docs/dev-env.md).
 
 ## Documentation

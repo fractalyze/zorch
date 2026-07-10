@@ -50,7 +50,7 @@ ______________________________________________________________________
 | Interaction argument | the reusable circuit + layer rounds | the interaction model that feeds it |
 | Composition | the `Round` abstraction + chains | the actual stage sequence and the carry between stages |
 | Constraints | — | the constraint system, its evaluator, the quotient/zero-check shape |
-| Field | works over any ZKX field dtype | the choice of base/extension dtype |
+| Field | works over any field dtype | the choice of base/extension dtype |
 
 The right-hand column is the entire surface a new prover writes. The left-hand
 column it imports.
@@ -70,7 +70,7 @@ nothing in `zorch`'s hashing code changes between two provers — only the param
 object does. A consumer that uses a different permutation family entirely
 supplies a different `Permutation` impl behind the same seam.
 
-### 2. The field — a ZKX dtype, threaded as data
+### 2. The field — a field dtype, threaded as data
 
 Blocks are written over "whatever dtype the arrays carry," so the consumer
 picks the base/extension dtypes and `zorch`'s NTT, sponge, and sumcheck follow
