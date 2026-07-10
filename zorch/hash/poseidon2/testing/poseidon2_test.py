@@ -62,12 +62,13 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertIn(f'"{POSEIDON2_MARKER}"', composite_line)
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, composite_line)
         self.assertIn(f"version = {POSEIDON2_MARKER_VERSION}", composite_line)
-        # Exactly the 6 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
-        # diag, off_diag]. A closed-over external matrix is lifted to a leading
-        # 7th operand (jax.lax.composite prepends consts) and breaks the
-        # Poseidon2Fusion operand ABI — the e2e GPU failure this guards against.
+        # Exactly the 5 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
+        # diag]. The internal J scale rides as the `internal_j_scale` attribute,
+        # not a 6th operand (issue #440). A closed-over external matrix would be
+        # lifted to a leading 6th operand (jax.lax.composite prepends consts) and
+        # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
-        self.assertEqual(operands.count("%"), 6, composite_line)
+        self.assertEqual(operands.count("%"), 5, composite_line)
 
     def test_vmap_permute_keeps_dedicated_marker(self) -> None:
         # If jax's composite batching rule regresses, vmap silently falls back to

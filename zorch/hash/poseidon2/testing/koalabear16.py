@@ -24,11 +24,14 @@ _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 # survival test so the expected text lives once. `external_m4` is the base M4
 # (Plonky3's circ(2,3,1,1)) flattened row-major, which the emitter applies per
 # 4-block.
+# The default (identity) internal_j_scale carries its canonical value (1); the
+# recognizer value-encodes it per field (issue #440).
 KOALABEAR16_POSEIDON2_ATTRS = (
     f"composite_attributes = {{alpha = {_ALPHA} : i64,"
     " external_m4 = dense<[2, 3, 1, 1, 1, 2, 3, 1, 1, 1, 2, 3, 3, 1, 1, 2]> :"
     " tensor<16xi64>,"
     f" external_rounds = {_ER} : i64,"
+    " internal_j_scale = 1 : i64,"
     f" internal_rounds = {_IR} : i64, width = {_WIDTH} : i64}}"
 )
 
