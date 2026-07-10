@@ -19,8 +19,18 @@ import jax.numpy as jnp
 import numpy as np
 from jax import Array
 
+from zorch.fusion import fused_region
 from zorch.pcs.jagged.dense import log_area_tier
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.utils.bits import log2_ceil_usize
+
+# Name-routed composite for the jagged outer indicator: a vendor fuses the whole
+# scatter (searchsorted owning-column lookup + per-row eq over 2ⁿᵈ) into one
+# kernel, the dominant warm leaf at shard scale. An unrecognized marker inlines the
+# byte-identical decomposition, so lowering is unchanged without a vendor.
+JAGGED_INDICATOR_MARKER = "zorch.jagged_indicator"
+# Producer and the xla recognizer move together; bump only on an ABI break.
+JAGGED_INDICATOR_MARKER_VERSION = 1
 
 
 def msb_first_bits(values: Any, num_bits: int) -> np.ndarray:
@@ -115,50 +125,44 @@ def _count_leq_sorted(sorted_arr: Array, queries: Array, n_steps: int) -> Array:
     return lo
 
 
-def partial_eval_core(
-    col_prefix_sums: Array,
+def _partial_eval_decomposition(
+    prefix_sums_int: Array,
+    col_eq: Array,
     z_row: Array,
-    z_col: Array,
-    size: Any,
+    *,
+    size: int,
+    search_steps: int,
+    **_attrs: object,
 ) -> Array:
-    """J̃(z_row, z_col, ·) over the first ``size`` dense indices, shape-polymorphic
-    in the column count ``col_prefix_sums.shape[0]`` and the prefix-bit width
-    ``n_d = col_prefix_sums.shape[1]``. Output shape ``(size,)``.
+    """Decomposition of the jagged_indicator marker: J tilde over the first size
+    dense indices. An unrecognized marker inlines this unchanged, so it stays
+    byte-identical to the pre-marker body.
 
-    Building only ``[0, size)`` (the caller's dense area) rather than the full
-    ``2^n_d`` then slicing is what lets ``n_d`` be symbolic: ``2^n_d`` is
-    exponential in ``n_d``, but over ``size`` it survives only as the decode bit
-    width. Every nonzero indicator entry lands below ``total_area <= size``, so
-    this is byte-identical to the full-domain-then-slice form."""
+    Operand order is the emitter's positional contract: prefix_sums_int the (L+1,)
+    int32 column boundaries -- heights ride here as data, never a static key --
+    col_eq the column-eq table, z_row the row point. size and search_steps ride as
+    static attrs; the decode and eq table stay outside the marker."""
     dtype = z_row.dtype
     one = jnp.ones([], dtype=dtype)
-    n_d = col_prefix_sums.shape[1]
     n_r = z_row.shape[0]
-    row_len = jnp.left_shift(jnp.int32(1), n_r)  # 2^n_r, as a value (n_r symbolic)
-
-    prefix_sums_int = _decode_prefix_sums(col_prefix_sums, n_d)
-
-    col_eq = expand_eq_to_hypercube(z_col, one)  # [2^n_c] (n_c static, a table)
+    row_len = jnp.left_shift(jnp.int32(1), n_r)  # 2ⁿʳ, as a value (n_r symbolic)
 
     # c_idx = owning column = (#prefix entries ≤ i) − 1 (searchsorted side="right";
     # duplicate prefixes from zero-height columns resolve to the real owner). No
-    # clamp: the tail i ≥ t_L lands at the last index, where the default OOB gather
-    # and the height mask zero it — byte-identical to clamping.
+    # clamp: the tail i ≥ t_L lands at the last index, where the height mask zeros
+    # it. `search_steps` covers the prefix array (>= ⌈log2(len)⌉).
     i_idx = jnp.arange(size, dtype=jnp.int32)
-    # n_c+2 steps (not n_c+1): l_max==1 gives n_c==0, where one step under-searches
-    # the 2 prefix entries; over-provisioned steps are no-ops.
-    c_idx = _count_leq_sorted(prefix_sums_int, i_idx, z_col.shape[0] + 2) - 1
+    c_idx = _count_leq_sorted(prefix_sums_int, i_idx, search_steps) - 1
     t_c = prefix_sums_int[c_idx]
     h = prefix_sums_int[c_idx + 1] - t_c  # column height (0 for padding columns)
     local = i_idx - t_c
-    # min(h, row_len): the row eq covers 2^n_r rows, so a taller-than-capacity
+    # min(h, row_len): the row eq covers 2ⁿʳ rows, so a taller-than-capacity
     # column truncates — identical to the scatter form's fixed-width window.
     mask = local < jnp.minimum(h, row_len)
 
-    # eq(z_row, local) per element instead of a 2^n_r gather table, so n_r can be
-    # symbolic (2^n_r is exponential in n_r). row_eq[j] = ∏_k eq(z_row[k],
-    # bit_{n_r-1-k}(j)), MSB-first per expand_eq_to_hypercube. A lax.scan over the
-    # n_r bits gives a symbolic trip count; the product commutes, so order is moot.
+    # eq(z_row, local) per element instead of a 2ⁿʳ gather table, so n_r can be
+    # symbolic. row_eq[j] = ∏_k eq(z_row[k], bit_{n_r-1-k}(j)), MSB-first per
+    # expand_eq_to_hypercube. The product commutes, so scan order is moot.
     def _eq_bit(acc: Array, k: Array) -> tuple[Array, None]:
         bit = ((local >> (n_r - 1 - k)) & 1).astype(dtype)
         z_k = z_row[k]
@@ -169,3 +173,38 @@ def partial_eval_core(
     )
     val = col_eq[c_idx] * row_vals
     return jnp.where(mask, val, jnp.zeros([], dtype=dtype))
+
+
+def partial_eval_core(
+    col_prefix_sums: Array,
+    z_row: Array,
+    z_col: Array,
+    size: Any,
+) -> Array:
+    """J tilde over the first size dense indices -- the jagged outer indicator the
+    outer Hadamard sumcheck folds against D.
+
+    Decodes the prefix tensor and builds the column-eq table (both cheap, kept
+    outside the marker), then wraps the 2ⁿᵈ scatter in the jagged_indicator
+    composite for a vendor to fuse. Heights ride as data, so the compile keys only
+    on the n_d class, never the per-column heights."""
+    n_d = col_prefix_sums.shape[1]
+    prefix_sums_int = _decode_prefix_sums(col_prefix_sums, n_d)
+    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=z_row.dtype))
+    # Search depth from the real column count when static, so a cap far above 2ⁿᶜ
+    # is searched fully; +2 keeps l_max==1 safe. Symbolic L has no static length, so
+    # it falls back to the n_c+2 proxy.
+    ncols = col_prefix_sums.shape[0]
+    search_steps = (
+        log2_ceil_usize(ncols) + 2 if isinstance(ncols, int) else z_col.shape[0] + 2
+    )
+    return fused_region(
+        _partial_eval_decomposition,
+        prefix_sums_int,
+        col_eq,
+        z_row,
+        name=JAGGED_INDICATOR_MARKER,
+        version=JAGGED_INDICATOR_MARKER_VERSION,
+        size=size,
+        search_steps=search_steps,
+    )
