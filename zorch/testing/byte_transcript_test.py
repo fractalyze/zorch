@@ -144,6 +144,21 @@ class ByteTranscriptTest(absltest.TestCase):
             # Subsequent challenges agree on both sides.
             self.assertEqual(p.sample_scalar(16)[1], v.sample_scalar(16)[1])
 
+    def test_pow_fused_grind_matches_host(self) -> None:
+        # The device while_loop search must return the host grind's exact
+        # nonce (lowest hit) and leave byte-identical transcripts.
+        for bits in (0, 5, 10, 14):
+            hp = ByteHashTranscript.new(b"pow", HostSha256()).observe_bytes(b"root")
+            hp, h_nonce = hp.grind_pow(bits)
+            dp = ByteHashTranscript.new(
+                b"pow", HostSha256(), grind_hash=Sha256()
+            ).observe_bytes(b"root")
+            dp, d_nonce = dp.grind_pow(bits)
+            self.assertEqual(d_nonce, h_nonce, f"bits={bits}")
+            self.assertEqual(
+                hp.sample_scalar(16)[1], dp.sample_scalar(16)[1], f"bits={bits}"
+            )
+
     def test_pow_rejects_wrong_nonce(self) -> None:
         p = _new(b"pow").observe_bytes(b"root")
         _, nonce = p.grind_pow(10)

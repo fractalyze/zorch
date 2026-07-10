@@ -26,9 +26,13 @@ serialization (see flock-zorch's `challenger.py`, an F128 (16-byte lo||hi) surfa
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import TYPE_CHECKING, Protocol, Self
 
+import jax
+import jax.numpy as jnp
 import numpy as np
+from jax import Array, lax
 
 if TYPE_CHECKING:
     from zorch.hash.byte_hash import ByteHash
@@ -42,10 +46,12 @@ OP_BYTES = 0x05
 KIND_SCALAR = 0x01
 KIND_SLICE = 0x02
 
-# Proof-of-work: nonces a device batch tests per `digest` call. A `bits`-hit lands
-# in the first window for any practical `bits`, so a fusion hash normally grinds in
-# one marker call; a host hash uses window 1 (sequential early-exit, like hashlib).
-_GRIND_WINDOW = 1 << 16
+# Proof-of-work: nonces a fused-search `lax.while_loop` step tests in parallel
+# (static shape); a host hash uses window 1 (sequential early-exit, like
+# hashlib). 2^12 balances the fused digest's latency floor (~0.15 ms/window on
+# GPU) against hashes wasted past the hit: typical grinds are 2^10..2^14
+# expected work, so low-bit grinds stay one cheap window and high-bit ones tile.
+_GRIND_WINDOW = 1 << 12
 
 
 def _len8(n: int) -> bytes:
@@ -54,13 +60,15 @@ def _len8(n: int) -> bytes:
     return int(n).to_bytes(8, "little")
 
 
-def _leading_zero_bits_ok(digests: np.ndarray, bits: int) -> np.ndarray:
+def _leading_zero_bits_ok(digests: np.ndarray | Array, bits: int) -> np.ndarray | Array:
     """Vectorized PoW predicate: whether each digest (uint8 `[B, digest_size]`) has
-    >= `bits` leading zero bits, big-endian (digest[0] most significant)."""
+    >= `bits` leading zero bits, big-endian (digest[0] most significant).
+    Array-agnostic (numpy or jax input) so the host `verify_pow` and the fused
+    grind search share ONE definition and can never drift."""
     full, extra = divmod(bits, 8)
-    ok = np.all(digests[:, :full] == 0, axis=1)
+    ok = (digests[:, :full] == 0).all(axis=1)
     if extra:
-        ok &= (digests[:, full] >> np.uint8(8 - extra)) == 0
+        ok = ok & ((digests[:, full] >> np.uint8(8 - extra)) == 0)
     return ok
 
 
@@ -96,6 +104,53 @@ class ByteGrindingTranscript(ByteTranscript, Protocol):
     def verify_pow(self, nonce: int, bits: int) -> tuple[Self, bool]: ...
 
 
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def _fused_grind_search(
+    state: np.ndarray, grind_hash: ByteHash, bits: int, window: int
+) -> Array:
+    """Device grind search, the byte-transcript twin of
+    `DuplexTranscript._grind_search`: each `lax.while_loop` step hashes a
+    `window`-wide nonce batch through the fused digest IN PARALLEL and keeps the
+    lowest-index hit; the loop tiles windows (early-exiting on the first hit,
+    which for typical `bits` is the first window) and caps `base` below the u64
+    wrap so `base + window` stays in range. Candidate rows are
+    `state || nonce_le8` — `bitcast_convert_type` iterates bytes LSB-first,
+    matching `_len8`. The hit predicate is the shared
+    `_leading_zero_bits_ok`."""
+    # uint32 search, like `DuplexTranscript._grind_search`: runs with jax x64
+    # off, and 2^32 nonces is far beyond any practical `bits`. `nonce_le8`'s
+    # high four bytes are therefore constant zero.
+    state_dev = jnp.asarray(state, dtype=jnp.uint8)
+    offsets = jnp.arange(window, dtype=jnp.uint32)
+    bound = jnp.uint32(2**32 - window)
+    zeros_hi = jnp.zeros((window, 4), dtype=jnp.uint8)
+
+    def cond(carry: tuple[Array, Array, Array]) -> Array:
+        found, base, _ = carry
+        return jnp.logical_and(jnp.logical_not(found), base < bound)
+
+    def body(carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
+        found, base, best = carry
+        nonces = base + offsets
+        tail = lax.bitcast_convert_type(nonces, jnp.uint8)  # [window, 4] LSB-first
+        rows = jnp.concatenate(
+            [jnp.broadcast_to(state_dev, (window, state_dev.size)), tail, zeros_hi],
+            axis=1,
+        )
+        hits = _leading_zero_bits_ok(grind_hash.digest(rows), bits)
+        any_hit = jnp.any(hits)
+        first = jnp.min(jnp.where(hits, offsets, jnp.uint32(window)))
+        return (
+            jnp.logical_or(found, any_hit),
+            base + jnp.uint32(window),
+            jnp.where(any_hit, base + first, best),
+        )
+
+    init = (jnp.bool_(False), jnp.uint32(0), jnp.uint32(0))
+    _found, _base, nonce = lax.while_loop(cond, body, init)
+    return nonce
+
+
 @dataclass(frozen=True)
 class ByteHashTranscript:
     """Merlin-style byte duplex over an injected `ByteHash`. Functional: every op
@@ -106,6 +161,12 @@ class ByteHashTranscript:
 
     buffer: bytes
     byte_hash: ByteHash
+    # The PoW grind's hash, when it should differ from the stream's: the byte
+    # stream is strictly sequential (a host hash wins — a per-absorb device hop
+    # regresses it) while the grind is embarrassingly parallel (a fused hash
+    # wins). None means "same as byte_hash". Both substrates hash to identical
+    # bytes, so the split is invisible on the wire.
+    grind_hash: ByteHash | None = None
 
     @property
     def has_dedicated_fusion(self) -> bool:
@@ -114,14 +175,25 @@ class ByteHashTranscript:
         return self.byte_hash.has_dedicated_fusion
 
     @classmethod
-    def new(cls, domain: bytes, byte_hash: ByteHash) -> ByteHashTranscript:
+    def new(
+        cls,
+        domain: bytes,
+        byte_hash: ByteHash,
+        grind_hash: ByteHash | None = None,
+    ) -> ByteHashTranscript:
         """Seed with a length-prefixed domain so prefix domains can't collide:
         `[OP_DOMAIN] || len8(domain) || domain`."""
-        return cls(bytes([OP_DOMAIN]) + _len8(len(domain)) + bytes(domain), byte_hash)
+        return cls(
+            bytes([OP_DOMAIN]) + _len8(len(domain)) + bytes(domain),
+            byte_hash,
+            grind_hash,
+        )
 
     # ---- internal absorb / squeeze (over byte_hash.digest) ----
     def _absorb(self, payload: bytes) -> ByteHashTranscript:
-        return ByteHashTranscript(self.buffer + payload, self.byte_hash)
+        return ByteHashTranscript(
+            self.buffer + payload, self.byte_hash, self.grind_hash
+        )
 
     def _digest(self) -> bytes:
         """`HASH(buffer)` — the proof-of-work state digest (no counter, no tag)."""
@@ -179,24 +251,26 @@ class ByteHashTranscript:
     # ---- proof-of-work ----
     def _grind(self, state_digest: bytes, bits: int) -> int:
         """Lowest u64 nonce with `HASH(state_digest || nonce_le8)` having `bits`
-        leading zero bits. Tests a window of nonces per `digest` call (window 1 for
-        a host hash = sequential early-exit); tiles windows until a hit — unbounded,
-        never returns an unchecked nonce."""
-        window = _GRIND_WINDOW if self.byte_hash.has_dedicated_fusion else 1
+        leading zero bits. A fused grind hash searches on device
+        (`_fused_grind_search`, one dispatch); a host hash tests nonces
+        sequentially with early exit. Both tile until a hit — unbounded, never
+        returning an unchecked nonce."""
+        grind_hash = self.grind_hash or self.byte_hash
+        if grind_hash.has_dedicated_fusion:
+            return int(
+                _fused_grind_search(
+                    np.frombuffer(state_digest, dtype=np.uint8),
+                    grind_hash,
+                    bits,
+                    _GRIND_WINDOW,
+                )
+            )
         base = 0
         while True:
-            batch = np.stack(
-                [
-                    np.frombuffer(state_digest + _len8(base + i), dtype=np.uint8)
-                    for i in range(window)
-                ]
-            )  # [window, len(state_digest)+8]
-            hits = np.flatnonzero(
-                _leading_zero_bits_ok(np.asarray(self.byte_hash.digest(batch)), bits)
-            )
-            if hits.size:
-                return base + int(hits[0])
-            base += window
+            row = np.frombuffer(state_digest + _len8(base), dtype=np.uint8)[None, :]
+            if _leading_zero_bits_ok(np.asarray(grind_hash.digest(row)), bits)[0]:
+                return base
+            base += 1
 
     def grind_pow(self, bits: int) -> tuple[ByteHashTranscript, int]:
         """Lowest u64 nonce whose PoW passes (0 if bits==0), then absorb it via

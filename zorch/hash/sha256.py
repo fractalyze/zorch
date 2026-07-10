@@ -282,8 +282,29 @@ def digest(msg: ArrayLike) -> jnp.ndarray:
 
     Byte-identical to the FIPS 180-4 standard per message. The device compression
     is emitted as the name-routed `zorch.sha256` marker (host padding stays out of
-    the region, since it is static and data-independent).
+    the region, since it is static and data-independent). Jit-traceable: under a
+    tracer the data-independent pad becomes a constant tail computed from the
+    static length, so a fused caller (e.g. the grind search's `lax.while_loop`)
+    can keep the whole batch on device.
     """
+    if isinstance(msg, jax.core.Tracer):
+        b, length = msg.shape
+        # padded layout for this length, from a zero probe: everything past the
+        # message bytes is data-independent (0x80, zeros, bit-length).
+        probe = _pad(np.zeros((1, length), dtype=np.uint8))  # [1, nblocks, 16]
+        nblocks = probe.shape[1]
+        padded = jnp.zeros((b, nblocks * 64), dtype=jnp.uint8)
+        padded = padded.at[:, :length].set(msg)
+        words = padded.reshape(b, nblocks, 16, 4).astype(jnp.uint32)
+        be = (
+            (words[..., 0] << 24)
+            | (words[..., 1] << 16)
+            | (words[..., 2] << 8)
+            | words[..., 3]
+        )
+        # OR in the constant pad words (zero where message bytes live).
+        blocks = be | jnp.broadcast_to(jnp.asarray(probe, jnp.uint32), be.shape)
+        return _digest_words_marked(blocks)
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
     return _digest_words_marked(blocks)
