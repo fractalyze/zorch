@@ -83,6 +83,45 @@ _ROUND = StandardRound(ProductSummand(degree=2))
 _COMPRESSED_ROUND = CompressedProductRound()
 
 
+@partial(jax.jit, static_argnums=(0, 1, 2, 3))
+def _fold_round(
+    chor: LigeritoChoreography,
+    round_: StandardRound | CompressedProductRound,
+    j: int,
+    i: int,
+    t: Transcript,
+    W: Array,
+    B: Array,
+) -> tuple[Transcript, Array, Array, list[Array], list[Array]]:
+    """One fold round as ONE device program: the (lazy-policy) message, the
+    tapered fold grind, the challenge, the fold, and the eager policy's
+    post-fold emission — five-plus transcript/compute hops that would each
+    dispatch separately when run eagerly. The choreography and round are
+    static (value-hashable / module singletons), so the grind schedule and
+    message policy resolve at trace time. Per-round, not per-level: a whole
+    level in one program made XLA's temp arena (folded states, grind windows,
+    absorb payloads, all rounds' live ranges) exceed device memory at
+    prover-scale m."""
+    msgs, pows = [], []
+    msg = None
+    if not chor.eager_messages:
+        msg = round_._round_poly(jnp.stack([W, B]))
+        msgs.append(msg)
+    bits = chor.fold_grind_bits(j, i)
+    if bits is not None:
+        t, witness = chor.grind(t, bits)
+        pows.append(witness)
+    t, r = chor.fold_challenge(t, msg, j, i)
+    W, B = fold(jnp.stack([W, B]), r)
+    if chor.eager_messages:
+        # The freshly folded state's message — the terminal residual state's
+        # included (the verifier recomputes that one in the clear).
+        msg = round_._round_poly(jnp.stack([W, B]))
+        msgs.append(msg)
+        t = chor.observe_message(t, msg)
+    return t, W, B, msgs, pows
+
+
 # Jitted commit body, keyed on code + tree + interleave by value (#214): commit
 # never reads the query count, so provers differing only in `queries` reuse this
 # compiled function rather than re-tracing. `basis` is static too — its `.pre` is
@@ -259,19 +298,14 @@ def _open(
     num_vars = cfg.num_vars
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
-        # --- fold this level's k_j lane variables through the product sumcheck ---
+        # --- fold this level's k_j lane variables through the product sumcheck,
+        # one jitted program per round (messages, grinds, challenges, folds —
+        # the choreography's fold-phase ops are all traceable; commits and
+        # query sampling stay at the level boundary) ---
         for i in range(k_j):
-            msg: Array | None = None  # eager: this round's is already absorbed
-            if not eager:
-                msg = round_._round_poly(jnp.stack([W, B]))
-                sumcheck_messages.append(msg)
-            t = grind(t, chor.fold_grind_bits(j, i))
-            t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = fold(jnp.stack([W, B]), r)
-            if eager:
-                # The freshly folded state's — the terminal residual state's
-                # included (the verifier recomputes that one in the clear).
-                t = emit(t, W, B)
+            t, W, B, round_msgs, round_pows = _fold_round(chor, round_, j, i, t, W, B)
+            sumcheck_messages.extend(round_msgs)
+            pow_witnesses.extend(round_pows)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---

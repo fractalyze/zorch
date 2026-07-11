@@ -20,9 +20,14 @@ from collections.abc import Callable
 import jax.numpy as jnp
 from jax import Array, lax
 
-# Counters a while_loop step tests in parallel: one window covers any practical
-# difficulty (expected work 2^bits), so the loop normally runs once.
-GRIND_WINDOW = 1 << 16
+# Counters a while_loop step tests in parallel. 2^12 balances the batch's
+# device-graph footprint (the search body is captured inside its caller's
+# program — a 2^16 SHA-256 window alone exhausts CUDA command-buffer memory at
+# instantiation) against wasted hashes past the hit: typical difficulties are
+# 2^10..2^14 expected work, so low-bit grinds stay one window and high-bit
+# ones tile a few ms-scale steps. Window size never changes the result — the
+# lowest hit is the lowest hit under any grouping.
+GRIND_WINDOW = 1 << 12
 
 
 def grind_search(
