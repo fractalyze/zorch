@@ -40,8 +40,9 @@ if TYPE_CHECKING:
 POSEIDON2_MARKER = "zorch.poseidon2"
 # Marker revision riding as `composite.version`. zkx recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
-# a future contract change can be staged without renaming the marker.
-POSEIDON2_MARKER_VERSION = 1
+# a future contract change can be staged without renaming the marker. v2: J scale
+# is the `internal_j_scale` attribute, not an operand (#440).
+POSEIDON2_MARKER_VERSION = 2
 
 
 class Poseidon2:
@@ -116,6 +117,7 @@ class Poseidon2:
             "internal_rounds": p.internal_rounds,
             "alpha": p.alpha,
             "external_m4": _external_m4_attr(self),
+            "internal_j_scale": _internal_j_scale_attr(self),
         }
         return _abi_operands(self, leading), partial(_permutation_body, self), attrs
 
@@ -127,11 +129,11 @@ def _permutation_body(
     int_rc: Array,
     ext_term_rc: Array,
     diag: Array,
-    off_diag: Array,
 ) -> Array:
     """The straight-line permute on a single `(width,)` state, taking the
     Poseidon2Fusion ABI operands explicitly: round constants flattened row-major,
-    int_rc the lane-0 column, off_diag scaling the internal J term.
+    int_rc the lane-0 column. The internal J scale rides as the `internal_j_scale`
+    marker attribute (a scalar constant survives `lax.scan`; #440).
 
     The decomposition every `zorch.poseidon2` region runs, spliced inline (the
     generic marker's single-kernel requirement allows no call). A batch is
@@ -142,8 +144,8 @@ def _permutation_body(
 
     # The external MDS must not be a closed-over array on the named-emitter
     # path: jax.lax.composite lifts closed-over consts to leading operands, so
-    # the matrix would leak in as a 7th operand and break the Poseidon2Fusion
-    # 6-operand ABI. An M4-block-structured matrix applies via integer literals
+    # the matrix would leak in as a 6th operand and break the Poseidon2Fusion
+    # 5-operand ABI. An M4-block-structured matrix applies via integer literals
     # (the 4×4 M4, no array capture) and rides as a marker attribute; a free-form
     # matrix takes the generic LoopFusion fallback, which lowers the real body, so
     # the closed array is harmless there.
@@ -164,7 +166,16 @@ def _permutation_body(
     def external_round(state: Array, rc: Array) -> Array:
         return apply_external(jnp.power(state + rc, alpha))
 
-    # +rc(lane0) -> sbox(lane0) -> diffusion (off_diag scales the J term)
+    # +rc(lane0) -> sbox(lane0) -> diffusion. Rebuild the J scale in-trace from its
+    # host-side value: a closed-over array lifts back into the operand list, which
+    # is what #440 moved it out of. Identity (the default) skips the multiply.
+    j_scale_canonical = _internal_j_scale_attr(perm)
+    off_diag = (
+        None
+        if j_scale_canonical == 1
+        else jnp.asarray(j_scale_canonical, dtype=p.dtype)
+    )
+
     def internal_round(state: Array, rc0: Array) -> Array:
         s0 = jnp.power(state[0] + rc0, alpha)
         # concatenate, not state.at[0].set: a static-index set lowers to scatter,
@@ -186,10 +197,10 @@ def _permutation_body(
 
 def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
     """The Poseidon2Fusion ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
-    diag, off_diag]; `state` is `(width,)` single or `(n, width)` batched, the
-    constants identical either way. The internal matrix is
-    internal_j_scale*J + Diag(internal_diag); the ABI's off_diag operand carries
-    the J scale (params normalize None to 1)."""
+    diag]; `state` is `(width,)` single or `(n, width)` batched, the constants
+    identical either way. The internal matrix is internal_j_scale*J +
+    Diag(internal_diag); the J scale rides as the `internal_j_scale` attribute — a
+    scalar constant survives `lax.scan` where an operand would be hoisted (#440)."""
     p = perm._p
     return (
         state,
@@ -197,7 +208,6 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
         p.internal_constants[:, 0],
         p.external_constants_terminal.reshape(-1),
         p.internal_diag,
-        p.internal_j_scale,
     )
 
 
@@ -208,6 +218,15 @@ def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
     guards on `has_dedicated_fusion`."""
     assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
     return np.array(perm._external_m4, dtype=np.int64).flatten()
+
+
+def _internal_j_scale_attr(perm: Poseidon2) -> int:
+    """The J scale's canonical value, for the `internal_j_scale` marker attribute
+    and the reference body's in-trace constant. A numpy object cast Montgomery-
+    decodes without jax x64 (as `Poseidon2Params.external_m4` does); the recognizer
+    value-encodes it back per field, so the wire value is field-representation-
+    independent (e.g. plain `1` for identity)."""
+    return int(np.asarray(perm._p.internal_j_scale).astype(object))
 
 
 def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
@@ -226,6 +245,7 @@ def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
         "internal_rounds": perm._p.internal_rounds,
         "alpha": perm._p.alpha,
         "external_m4": _external_m4_attr(perm),
+        "internal_j_scale": _internal_j_scale_attr(perm),
     }
     return attrs, POSEIDON2_MARKER_VERSION
 
@@ -246,16 +266,13 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         int_rc: Array,
         ext_term_rc: Array,
         diag: Array,
-        off_diag: Array,
         **_attrs: object,
     ) -> Array:
-        # `_attrs` is marker metadata passed through — the decomposition itself
-        # does not read it. Inlined here so the single-state region stays one
-        # straight-line body (the generic marker's single-kernel requirement
-        # allows no call).
-        return _permutation_body(
-            perm, s, ext_init_rc, int_rc, ext_term_rc, diag, off_diag
-        )
+        # `_attrs` is marker metadata passed through (incl. `internal_j_scale`) —
+        # the decomposition itself does not read it. Inlined here so the
+        # single-state region stays one straight-line body (the generic marker's
+        # single-kernel requirement allows no call).
+        return _permutation_body(perm, s, ext_init_rc, int_rc, ext_term_rc, diag)
 
     attrs, version = _marker_attrs(perm)
     return fused_region(
