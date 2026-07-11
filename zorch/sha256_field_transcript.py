@@ -1,25 +1,38 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Field-element `Transcript` surface over the streaming SHA-256 core.
 
-`zorch.sumcheck.prove` threads a transcript through a `lax.scan` via
-`observe(Array)` / `sample(n)` / `observe_and_sample`. `Sha256FieldTranscript`
-implements that protocol on the fixed-shape `Sha256State` (`hash/sha256.py`), in
-pure JAX, so it is a valid scan carry — the device SHA-256 sibling of the algebraic
-`transcript.DuplexTranscript`. It keeps the same Merlin slice framing as the byte
-transcript (op tag, u64-LE count, `SHA256(buffer ‖ ctr)` counter-squeeze,
-re-absorb), so a slice observe / sample is byte-identical to `ByteHashTranscript`'s
-`observe_slice` / `sample_slice` — but now scan-threadable, collapsing a byte
-Fiat-Shamir round loop into one device program.
+The SHA-256 sibling of the algebraic `transcript.DuplexTranscript`, and shaped
+like it: a frozen pytree dataclass whose methods are plain traced state
+transitions — jit-first, scan-threadable, no host substrate anywhere. It keeps
+the Merlin byte framing (op tag, u64-LE count, `SHA256(buffer ‖ ctr)`
+counter-squeeze, re-absorb) on the fixed-shape `Sha256State`
+(`hash/sha256.py`), so a slice observe / sample is byte-identical to
+`ByteHashTranscript`'s `observe_slice` / `sample_slice`, and the proof-of-work
+grind is `grind`/`check_witness` with `DuplexTranscript`'s exact semantics
+(device windowed search via `zorch.grind`; the advanced transcript absorbs the
+witness regardless, and `check_witness` is the soundness gate).
 
 Scheme-agnostic: `dtype` is the challenge element's (scalar) type. `observe`
 bitcasts values to bytes and `sample` reinterprets squeezed bytes back, so the
-element width is `dtype.itemsize`. A binary-field element wider than a scalar dtype
-(e.g. a `uint64[2]` pair) rides the sumcheck only through a field-ops seam the
-consumer supplies; a byte-framed challenger can use `ByteHashTranscript` instead.
+element width is `dtype.itemsize`. A binary-field element wider than a scalar
+dtype (e.g. a `uint64[2]` pair) rides the sumcheck only through a field-ops
+seam the consumer supplies; a byte-framed challenger can use
+`ByteHashTranscript` instead.
+
+The observe/sample surface is exactly the Merlin wire's op vocabulary — one
+method per op tag, because the tag is transcript-semantic (two ops with the
+same payload and different tags produce different challenge streams), and a
+mode flag would be the same arity hidden in an argument:
+
+    observe(values)        [OP_OBSERVE, KIND_SLICE]  count-prefixed vector
+    observe_scalar(value)  [OP_OBSERVE, KIND_SCALAR] per element, no prefix
+    observe_label(label)   [OP_LABEL]                domain separation
+    observe_bytes(data)    [OP_BYTES]                opaque bytes (roots, PoW)
+    sample(n)              [OP_SQUEEZE, KIND_SLICE]  count-prefixed squeeze
+    sample_scalar()        [OP_SQUEEZE, KIND_SCALAR] one-element squeeze
 """
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
@@ -39,6 +52,7 @@ from zorch.byte_transcript import (
     OP_SQUEEZE,
     _validate_pow_bits,
 )
+from zorch.grind import GRIND_WINDOW, grind_search
 from zorch.hash.sha256 import (
     Sha256State,
     sha256_stream_absorb,
@@ -61,35 +75,29 @@ def _const_u8(data: bytes) -> Array:
     return jnp.asarray(np.frombuffer(data, dtype=np.uint8))
 
 
-def _leading_zero_bits_ok(digest: bytes, bits: int) -> bool:
-    """Whether `digest` has >= `bits` leading zero bits, big-endian. The host PoW
-    predicate — byte-identical to `byte_transcript._leading_zero_bits_ok`; the
-    grind oracle test pins the two together."""
+def _u32_le_bytes(values: Array) -> Array:
+    """uint32 `[...]` -> uint8 `[..., 4]`, little-endian."""
+    return lax.bitcast_convert_type(values, jnp.uint8)
+
+
+def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
+    """Whether each digest (uint8 `[B, 32]`) has >= `bits` leading zero bits,
+    big-endian (digest[..., 0] most significant). Traceable; byte-identical to
+    `byte_transcript._leading_zero_bits_ok`."""
     full, extra = divmod(bits, 8)
-    if any(digest[:full]):
-        return False
-    return extra == 0 or (digest[full] >> (8 - extra)) == 0
-
-
-def _grind_host(state_digest: bytes, bits: int) -> int:
-    """Lowest u64 nonce with `SHA256(state_digest || nonce_le8)` having `bits`
-    leading zero bits — a host sequential search (hashlib), byte-identical to
-    `ByteHashTranscript`'s host grind (window 1). Unbounded; never returns an
-    unchecked nonce."""
-    nonce = 0
-    while True:
-        d = hashlib.sha256(state_digest + _len8(nonce)).digest()
-        if _leading_zero_bits_ok(d, bits):
-            return nonce
-        nonce += 1
+    ok = jnp.all(digests[:, :full] == 0, axis=1)
+    if extra:
+        ok = ok & ((digests[:, full] >> np.uint8(8 - extra)) == 0)
+    return ok
 
 
 @partial(register_dataclass, data_fields=["state"], meta_fields=["dtype"])
 @dataclass(frozen=True)
 class Sha256FieldTranscript:
     """Device SHA-256 transcript satisfying `transcript.Transcript`, threadable
-    through `zorch.sumcheck.prove` under `@jit`. State is the streaming
-    `Sha256State` pytree; `dtype` (static) is the challenge element type."""
+    through a `lax.scan` / `@jit` like `DuplexTranscript`. State is the
+    streaming `Sha256State` pytree; `dtype` (static) is the challenge element
+    type."""
 
     state: Sha256State
     dtype: Any
@@ -107,32 +115,12 @@ class Sha256FieldTranscript:
     def _item_bytes(self) -> int:
         return int(np.dtype(self.dtype).itemsize)
 
-    def _elems_to_u8(self, values: Array) -> Array:
-        """Element array -> flat uint8, routed through uint32 lanes. The direct
-        wide-binary-field <-> uint8 bitcast miscompiles on the CPU PJRT backend
-        (flock-zorch#75); uint32 is the dtype's native lane width and is correct
-        on both backends. A uint32-native challenge dtype takes the first bitcast
-        as the identity, so the routing is a no-op there."""
-        u32 = lax.bitcast_convert_type(values, jnp.uint32)
-        return lax.bitcast_convert_type(u32, jnp.uint8).reshape(-1)
-
-    def _u8_to_elems(self, u8: Array, n: int) -> Array:
-        """Flat uint8 `[n * itemsize]` -> `[n]` `dtype` elements, via uint32 lanes
-        (the inverse of `_elems_to_u8`; CPU-safe, flock-zorch#75). `bitcast` groups
-        exactly the trailing 4 bytes into one uint32, so the byte axis is `4` (a
-        `[n, lanes, 4]` view), not the full `itemsize`."""
-        lanes = self._item_bytes() // 4
-        u32 = lax.bitcast_convert_type(
-            u8.reshape(n, lanes, 4), jnp.uint32
-        )  # [n, lanes]
-        return lax.bitcast_convert_type(u32, self.dtype).reshape(n)
-
     def _absorb(self, payload: Array) -> Sha256FieldTranscript:
         return replace(self, state=sha256_stream_absorb(self.state, payload))
 
     def _squeeze_bytes(self, nbytes: int) -> Array:
         """`nbytes` counter-squeeze bytes from the CURRENT state (no mutation) —
-        `SHA256(buffer ‖ ctr_le8)` for ctr=0,1,…, one batched finalize."""
+        `SHA256(buffer ‖ ctr)` for ctr=0,1,…, one batched finalize."""
         nblocks = (nbytes + 31) // 32
         extras = _const_u8(b"".join(_len8(ctr) for ctr in range(nblocks))).reshape(
             nblocks, 8
@@ -142,21 +130,25 @@ class Sha256FieldTranscript:
 
     def observe(self, values: Array) -> Sha256FieldTranscript:
         """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
-        len8(count) || lo‖hi-serialized bytes`. Byte-identical to the byte
+        len8(count) || serialized bytes`. Byte-identical to the byte
         transcript's `observe_slice` of the same serialized bytes."""
-        vals_u8 = self._elems_to_u8(values)
+        vals_u8 = self._elem_bytes(values).reshape(-1)
         count = int(vals_u8.shape[0]) // self._item_bytes()
         framing = _const_u8(bytes([OP_OBSERVE, KIND_SLICE]) + _len8(count))
         return self._absorb(jnp.concatenate([framing, vals_u8]))
 
     def observe_scalar(self, value: Array) -> Sha256FieldTranscript:
-        """Absorb one element under scalar framing `[OP_OBSERVE, KIND_SCALAR] ||
-        elem_bytes` — no length prefix, a scalar's width being implicit in the
-        dtype. Byte-identical to the byte transcript's `observe_scalar`; distinct
-        from `observe` of a length-1 slice (the KIND tag differs)."""
-        vbytes = self._elems_to_u8(value)
-        framing = _const_u8(bytes([OP_OBSERVE, KIND_SCALAR]))
-        return self._absorb(jnp.concatenate([framing, vbytes]))
+        """Absorb under scalar framing `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
+        — no length prefix, a scalar's width being implicit in the dtype. A 0-d
+        `value` is one op; an `[n]` array is n ops (one per element, in order),
+        built as ONE absorb payload. Byte-identical to the byte transcript's
+        `observe_scalar` per element; distinct from `observe` (the KIND tag
+        differs)."""
+        vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
+        framing = jnp.broadcast_to(
+            _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
+        )
+        return self._absorb(jnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
 
     def observe_label(self, label: bytes) -> Sha256FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -168,8 +160,8 @@ class Sha256FieldTranscript:
 
     def observe_bytes(self, data: Array) -> Sha256FieldTranscript:
         """Absorb opaque bytes (e.g. a Merkle root computed on-device) under
-        `[OP_BYTES] || len8(len) || data`. `data` is a uint8 array whose length is
-        static (it rides the framing prefix). Byte-identical to the byte
+        `[OP_BYTES] || len8(len) || data`. `data` is a uint8 array whose length
+        is static (it rides the framing prefix). Byte-identical to the byte
         transcript's `observe_bytes` of the same bytes."""
         data = jnp.asarray(data, jnp.uint8).reshape(-1)
         framing = _const_u8(bytes([OP_BYTES]) + _len8(int(data.shape[0])))
@@ -186,8 +178,8 @@ class Sha256FieldTranscript:
 
     def sample_scalar(self) -> tuple[Sha256FieldTranscript, Array]:
         """Squeeze one challenge under scalar framing: absorb `[OP_SQUEEZE,
-        KIND_SCALAR]`, counter-squeeze `itemsize` bytes, re-absorb, reinterpret to
-        one `dtype` element (0-D). Byte-identical to the byte transcript's
+        KIND_SCALAR]`, counter-squeeze `itemsize` bytes, re-absorb, reinterpret
+        to one `dtype` element (0-D). Byte-identical to the byte transcript's
         `sample_scalar`; distinct from `sample(1)` (the KIND tag differs)."""
         t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])))
         squeezed = t._squeeze_bytes(self._item_bytes())
@@ -199,32 +191,86 @@ class Sha256FieldTranscript:
     ) -> tuple[Sha256FieldTranscript, Array]:
         return self.observe(values).sample(n)
 
-    # ---- proof-of-work (host to start; a device grind is a follow-up) ----
-    def _state_digest(self) -> bytes:
-        """`SHA256(buffer)` — the PoW base: a non-mutating finalize of the current
-        streaming state (no counter, no extras), materialized to host bytes for the
-        host grind. Matches the byte transcript's `_digest`."""
-        dig = sha256_stream_finalize(self.state, jnp.zeros((1, 0), dtype=jnp.uint8))
-        return bytes(np.asarray(dig)[0])
+    # ---- proof-of-work (DuplexTranscript's grind/check_witness shape) ----
+    def _pow_state(self) -> Sha256State:
+        """A fresh stream over the PoW state digest `SHA256(buffer)`: candidate
+        digests are `finalize(pow_state, counter_le8)` batches. Matches the byte
+        transcript's `HASH(state_digest || nonce_le8)`."""
+        digest = sha256_stream_finalize(self.state, jnp.zeros((1, 0), dtype=jnp.uint8))[
+            0
+        ]
+        return sha256_stream_absorb(sha256_stream_init(), digest)
 
-    def grind_pow(self, bits: int) -> tuple[Sha256FieldTranscript, int]:
-        """Host proof-of-work grind: the lowest u64 nonce whose PoW passes (0 when
-        `bits == 0`), absorbed via `observe_bytes` so later challenges bind to it.
-        Host to start — a one-shot search, not per-round threading, so it does not
-        break device graph capture; a device grind is a follow-up. Byte-identical
-        to `ByteHashTranscript.grind_pow`."""
-        _validate_pow_bits(bits, _DIGEST_BYTES)
-        nonce = 0 if bits == 0 else _grind_host(self._state_digest(), bits)
-        return self.observe_bytes(_const_u8(_len8(nonce))), nonce
+    def _witness_bytes(self, witness: Array) -> Array:
+        """The u64-LE nonce wire bytes of a uint32 witness (high 4 bytes zero —
+        the search domain is uint32, like `DuplexTranscript._grind_search`)."""
+        lo4 = _u32_le_bytes(jnp.asarray(witness, jnp.uint32).reshape(1))[0]
+        return jnp.concatenate([lo4, jnp.zeros(4, jnp.uint8)])
 
-    def verify_pow(self, nonce: int, bits: int) -> tuple[Sha256FieldTranscript, bool]:
-        """Verifier mirror of `grind_pow`: check the PoW (`bits == 0` requires the
-        canonical nonce 0), then absorb the nonce REGARDLESS so the transcript stays
-        in lockstep. Byte-identical to `ByteHashTranscript.verify_pow`."""
-        _validate_pow_bits(bits, _DIGEST_BYTES)
-        if bits == 0:
-            ok = nonce == 0
+    def _absorb_witness(self, witness: Array) -> Sha256FieldTranscript:
+        framing = _const_u8(bytes([OP_BYTES]) + _len8(8))
+        return self._absorb(jnp.concatenate([framing, self._witness_bytes(witness)]))
+
+    def grind(
+        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """Find a proof-of-work witness — the lowest nonce whose
+        `SHA256(state_digest || nonce_le8)` has `pow_bits` leading zero bits —
+        and return the transcript advanced past it (the nonce absorbed under
+        flock's `OP_BYTES` wire), plus the witness. Fully traceable
+        (`zorch.grind.grind_search` windowed device search); does not raise on
+        an exhausted search: `check_witness` is the soundness gate, so which
+        witness the search returns is soundness-neutral."""
+        _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        if pow_bits == 0:
+            # No work required: the canonical zero witness always passes.
+            witness = jnp.zeros((), jnp.uint32)
+            return self._absorb_witness(witness), witness
+        pow_state = self._pow_state()
+
+        def check_batch(counters: Array) -> Array:
+            nonce8 = jnp.concatenate(
+                [_u32_le_bytes(counters), jnp.zeros((counters.shape[0], 4), jnp.uint8)],
+                axis=1,
+            )
+            return _leading_zero_bits_ok(
+                sha256_stream_finalize(pow_state, nonce8), pow_bits
+            )
+
+        witness = grind_search(check_batch, 2**32, chunk)
+        return self._absorb_witness(witness), witness
+
+    def check_witness(
+        self, witness: Array, pow_bits: int
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """Verifier mirror of `grind`: check the PoW (`pow_bits == 0` requires
+        the canonical witness 0), then absorb the witness REGARDLESS so the
+        transcript stays in lockstep. Returns the advanced transcript and the
+        device boolean verdict."""
+        _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        witness = jnp.asarray(witness, jnp.uint32).reshape(())
+        if pow_bits == 0:
+            ok = witness == jnp.uint32(0)
         else:
-            d = hashlib.sha256(self._state_digest() + _len8(nonce)).digest()
-            ok = _leading_zero_bits_ok(d, bits)
-        return self.observe_bytes(_const_u8(_len8(nonce))), ok
+            nonce8 = self._witness_bytes(witness)[None, :]
+            digs = sha256_stream_finalize(self._pow_state(), nonce8)
+            ok = _leading_zero_bits_ok(digs, pow_bits)[0]
+        return self._absorb_witness(witness), ok
+
+    # ---- element <-> byte serde (via uint32 lanes) ----
+    def _elem_bytes(self, values: Array) -> Array:
+        """Element array -> uint8 `[..., itemsize]`, routed through uint32
+        lanes: the direct wide-binary-field <-> uint8 bitcast miscompiles on
+        the CPU PJRT backend (flock-zorch#75); uint32 is the dtype's native
+        lane width and is correct on both backends. A uint32-native dtype
+        takes the lane bitcast as identity."""
+        u32 = lax.bitcast_convert_type(values, jnp.uint32)
+        lanes = self._item_bytes() // 4
+        return _u32_le_bytes(u32).reshape(*values.shape, lanes * 4)
+
+    def _u8_to_elems(self, u8: Array, n: int) -> Array:
+        """Flat uint8 `[n * itemsize]` -> `[n]` `dtype` elements (inverse of
+        `_elem_bytes`; CPU-safe uint32 routing, flock-zorch#75)."""
+        lanes = self._item_bytes() // 4
+        u32 = lax.bitcast_convert_type(u8.reshape(n, lanes, 4), jnp.uint32)
+        return lax.bitcast_convert_type(u32, self.dtype).reshape(n)
