@@ -83,4 +83,4 @@ missing optimization.
 The round polynomial evaluates its whole `u`-domain `[0, …, degree]` in one
 batched reduction; `us` is built with `jnp.stack`, not `jnp.arange` (iota is
 unsupported for extension dtypes — see
-[`poly.md`](poly.md#zkx-field-dtype-gotchas)).
+[`poly.md`](poly.md#field-dtype-gotchas)).

@@ -106,7 +106,7 @@ a behavior change.
 
 ## Gotchas
 
-The eval routes around three [ZKX field-dtype limits](poly.md#zkx-field-dtype-gotchas)
+The eval routes around three [field-dtype limits](poly.md#field-dtype-gotchas)
 — `jnp.tile`, extension `reduce_sum`, and `lax.shift` — with the standard
 workarounds (a `vmap`'d matmul, host-side `numpy` bit decomposition). One has a
 jagged-specific cost worth flagging: the `reduce_sum` workaround unrolls the

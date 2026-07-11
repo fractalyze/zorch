@@ -43,9 +43,9 @@ of their own (the `@jit` guidance in [`conventions.md`](conventions.md#jit)
 applies). They carry no host control flow, so they drop unchanged into the
 [fusion north star](README.md#fusion-north-star) path.
 
-## ZKX field-dtype gotchas
+## Field-dtype gotchas
 
-The canonical list the other blocks point to. ZKX's finite-field dtypes are not
+The canonical list the other blocks point to. The finite-field dtypes are not
 general integer arrays:
 
 - **No iota over an extension dtype.** `jnp.arange(dtype=<extension field>)`

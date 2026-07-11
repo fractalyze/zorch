@@ -12,7 +12,7 @@ maintain, not value.
 
 ## The one rule: don't hand-roll the NTT
 
-In the ZKX-patched JAX, `jax.lax.fft` **is** the native finite-field NTT — field
+In Fractal XLA's patched JAX, `jax.lax.fft` **is** the native finite-field NTT — field
 dtype in and out, a `generator` argument selecting the root, extension fields
 auto-decomposed into prime-field NTTs, and the whole thing lowered to a single
 fused kernel. Reed-Solomon `encode` therefore hands its evaluation to `lax.fft`
@@ -21,7 +21,7 @@ and adds only a pad and an optional scale around it.
 A hand-rolled radix-2 butterfly would be the opposite: `log(n)` separate,
 unfused kernels that the compiler cannot recognize as an NTT. It is slower and
 it breaks fusion-by-construction. This is the same stance poseidon2 takes —
-express the algebra in its natural form and let zkx lower it, rather than
+express the algebra in its natural form and let XLA lower it, rather than
 fighting the compiler with a pattern it must re-discover. Any future code that
 needs a transform follows this rule.
 
@@ -117,7 +117,7 @@ binary round the same additive way.
 
 The coset power ramp `[1, h, h², …]` is built with `jnp.cumprod` — `jnp.arange` /
 `jnp.power` over a field dtype both fail (see the
-[ZKX field-dtype gotchas](poly.md#zkx-field-dtype-gotchas)).
+[field-dtype gotchas](poly.md#field-dtype-gotchas)).
 
 ## Deliberately out of scope
 

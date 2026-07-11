@@ -159,7 +159,7 @@ gotcha — live in [`conventions.md` → Pytree registration](conventions.md#pyt
   per-call inner `def`.
 - **Field dtypes have extra sharp edges.** `jnp.arange`/`jnp.power`/`np.iinfo`
   over a zk field dtype fail; build ramps with `cumprod`, gather with explicit
-  bounds modes. See [`poly.md` → ZKX field-dtype gotchas](poly.md#zkx-field-dtype-gotchas).
+  bounds modes. See [`poly.md` → field-dtype gotchas](poly.md#field-dtype-gotchas).
 
 ## When `jit` is slow: diagnose, don't guess
 

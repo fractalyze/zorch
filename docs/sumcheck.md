@@ -50,10 +50,10 @@ not `degree+1` wide) is a structural error, not a soundness one — that raises.
 
 `_round_poly` / `_fold` stay to element-wise field ops plus the one inherent `Σ`
 — no gratuitous `reduce` / `gather` — so a round body is foldable without a marker
-or a `@jit` decorator. Measured on ZKX GPU, `_round_poly` lowers to one reduction
+or a `@jit` decorator. Measured on Fractal XLA GPU, `_round_poly` lowers to one reduction
 (`kInput`) kernel and `_fold` to one element-wise (`kLoop`) kernel; a full round
 is **two** kernels, since its message and folded state are disjoint outputs.
-Collapsing a round into one replayed unit is the marker + generic zkx emitter
+Collapsing a round into one replayed unit is the marker + generic XLA emitter
 step (Phase 3, cross-repo).
 
 ## Gotchas
@@ -61,7 +61,7 @@ step (Phase 3, cross-repo).
 - **The sumcheck domain is built in the base field, not via `jnp.arange`.** Iota
   is unimplemented for extension dtypes, so index/domain arrays are built in the
   base field and `.astype(EF)` (or `jnp.stack`) — one of the
-  [ZKX field-dtype gotchas](poly.md#zkx-field-dtype-gotchas). Extension arithmetic
+  [field-dtype gotchas](poly.md#field-dtype-gotchas). Extension arithmetic
   and base→extension embedding otherwise work, so a base-field MLE folds correctly
   against extension-field challenges.
 - **Prover and verifier must start the transcript in the same state.** That
