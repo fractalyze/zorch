@@ -21,6 +21,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import (
     KOALABEAR16_POSEIDON2_ATTRS,
     koalabear16_params,
     koalabear16_perm,
+    koalabear16_scaled_perm,
 )
 from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 from zorch.testkit.jit_cache import assert_single_trace
@@ -67,6 +68,21 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # not a 6th operand (issue #440). A closed-over external matrix would be
         # lifted to a leading 6th operand (jax.lax.composite prepends consts) and
         # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
+        operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
+        self.assertEqual(operands.count("%"), 5, composite_line)
+
+    def test_non_identity_j_scale_stays_five_operands_canonical(self) -> None:
+        # A non-identity J scale must ride as the CANONICAL attribute value and
+        # still emit exactly 5 operands (materialized in-trace, never lifted to a
+        # 6th operand). koalabear16_scaled_perm's scale is R⁻¹: canonical
+        # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
+        # not the storage 1 a raw-bits/canonical mixup would emit (fractalyze/xla#206).
+        p = koalabear16_scaled_perm()
+        txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        self.assertIn("internal_j_scale = 1057030144 : i64", composite_line)
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 5, composite_line)
 
