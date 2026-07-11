@@ -29,6 +29,7 @@ from zk_dtypes import koalabear_mont, koalabearx4_mont
 from zorch.pcs.jagged.prover import (
     JaggedEvalInputs,
     JaggedEvalRound,
+    _eval_inputs,
     assemble_columns,
 )
 from zorch.round import ProveChain
@@ -153,15 +154,6 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         _, _, msgs = chain(carry, _ScriptedTranscript.create(script))
         cls.msg = msgs[0]
 
-        # Column-cap variant: padding every L-indexed operand to a fixed
-        # cap with fold-neutral empty-range columns must byte-match the exact
-        # layout, so one whole-layer compile serves every shard's column count.
-        cap_l = 1 << len(col_heights).bit_length()  # next pow2 > L
-        _, _, msgs_cap = ProveChain([JaggedEvalRound(dtype=EF)])(
-            replace(carry, cap_l=cap_l), _ScriptedTranscript.create(script)
-        )
-        cls.msg_cap = msgs_cap[0]
-
     def _expect(self, name: str) -> np.ndarray:
         return np.load(_FIXTURE / "outputs" / name).reshape(-1)
 
@@ -193,19 +185,6 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
 
     def test_inner_point(self) -> None:
         self._assert_match(self.msg.inner_point, "inner_point.npy")
-
-    def test_column_cap_byte_matches_exact(self) -> None:
-        """Every message field is byte-identical under the fixed column cap."""
-        for got, name in [
-            (self.msg_cap.outer_sumcheck_claim, "outer_sumcheck_claim.npy"),
-            (self.msg_cap.outer_sumcheck_polys, "outer_sumcheck_polys.npy"),
-            (self.msg_cap.outer_sumcheck_point, "outer_sumcheck_point.npy"),
-            (self.msg_cap.dense_eval, "dense_eval.npy"),
-            (self.msg_cap.inner_claimed_sum, "inner_claimed_sum.npy"),
-            (self.msg_cap.inner_sumcheck_polys, "inner_sumcheck_polys.npy"),
-            (self.msg_cap.inner_point, "inner_point.npy"),
-        ]:
-            self._assert_match(got, name)
 
 
 class ChallengeRuleTest(absltest.TestCase):
@@ -256,6 +235,20 @@ class ChallengeRuleTest(absltest.TestCase):
         # (fractalyze/sp1-zorch#90).
         t = t.observe(msg.inner_claimed_sum)
         replay_rounds(t, msg.inner_sumcheck_polys, msg.inner_point, "inner")
+
+
+class EvalInputsGuardTest(absltest.TestCase):
+    """`_eval_inputs` fails loud when z_col carries too few variables for L:
+    col_eq = expand_eq(z_col) then has < L entries, silently truncating weights."""
+
+    _HEIGHTS = (3, 5, 2, 7)  # L=4 -> needs ceil(log2 4) = 2 z_col variables
+
+    def test_exact_z_col_count_ok(self) -> None:
+        _eval_inputs(self._HEIGHTS, jnp.zeros((2,), EF), EF)  # no raise
+
+    def test_too_few_z_col_raises(self) -> None:
+        with self.assertRaises(ValueError):
+            _eval_inputs(self._HEIGHTS, jnp.zeros((1,), EF), EF)
 
 
 if __name__ == "__main__":

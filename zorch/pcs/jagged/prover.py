@@ -72,11 +72,6 @@ class JaggedEvalInputs:
     z_row: Array
     z_col: Array
     dense: Array
-    # Column-count cap (size-invariance): when set, every L-indexed
-    # operand is padded to `cap_l` with fold-neutral empty-range columns so the
-    # whole-layer eval zone keys on the cap, not the true column count -- one
-    # compile per cap class serves every shard. None runs the exact layout.
-    cap_l: int | None = None
 
 
 @partial(
@@ -179,9 +174,6 @@ def outer_sumcheck_claim(all_claims: Array, z_col: Array) -> Array:
     symbolic-length pad-and-concatenate does not lower to a static width."""
     dtype = z_col.dtype
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))  # (2ⁿᶜ,)
-    # col_eq spans 2ⁿᶜ >= len(all_claims) in every layout (a column cap raises
-    # n_c to log2_ceil(cap) alongside the pad), so the slice is always in-bounds;
-    # the eq tail past the real columns multiplies zero-padded claims.
     return jnp.sum(col_eq[: all_claims.shape[0]] * all_claims)
 
 
@@ -368,30 +360,25 @@ def eval_round_core(
 
 
 def _eval_inputs(
-    col_heights: Sequence[int], z_col: Array, dtype: Any, *, cap_l: int | None = None
+    col_heights: Sequence[int], z_col: Array, dtype: Any
 ) -> tuple[Array, Array, Array]:
     """Host-build the column arrays ``eval_round_core`` consumes: the canonical-limb
     offset tensor ``(L+1, n_d)``, the merged prefix-bit buffer ``(L, 2·n_d)``, and
     the column-eq weights ``col_eq[:L]``. ``n_d`` (= log-area tier) is the only
-    static dim; the shape-polymorphic cores derive the rest from these shapes.
-
-    With cap_l set every L-indexed output is laid at the fixed width cap_l: pad
-    columns are empty ranges (0-height, so t_c = t_{c+1} → BP indicator 0) and the
-    weights zero-extend, both fold-neutral, so the outputs stay byte-identical to
-    the exact layout but ride one static shape."""
+    static dim; the shape-polymorphic cores derive the rest from these shapes."""
     heights = list(col_heights)
-    true_l = len(heights)
-    if cap_l is not None:
-        if cap_l < true_l:
-            raise ValueError(f"cap_l {cap_l} < column count {true_l}")
-        heights = heights + [0] * (cap_l - true_l)  # empty-range pad (BP -> 0)
     l_max = len(heights)
+    # col_eq = expand_eq(z_col) has 2^len(z_col) entries; too few z_col vars would
+    # silently truncate weights[:l_max] below l_max and mismatch merged downstream.
+    if z_col.shape[0] < log2_ceil_usize(l_max):
+        raise ValueError(
+            f"z_col has {z_col.shape[0]} variables, too few for {l_max} columns "
+            f"(need ≥ {log2_ceil_usize(l_max)})"
+        )
     _, n_d = build_jagged_layout(heights, l_max, dtype)
     offsets = _offset_bit_tensor(heights, l_max, n_d, dtype)
     merged = merged_prefix_bits(heights, n_d, dtype=dtype)
-    weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:true_l]
-    if cap_l is not None:
-        weights = jnp.concatenate([weights, jnp.zeros((cap_l - true_l,), dtype)])
+    weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:l_max]
     return offsets, merged, weights
 
 
@@ -414,34 +401,17 @@ class JaggedEvalRound(Round):
     def __call__(
         self, carry: JaggedEvalInputs, transcript: Transcript
     ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
-        z_col = carry.z_col
-        all_claims = carry.all_claims
-        if carry.cap_l is not None:
-            # n_c = ⌈log2 L⌉ tracks the true column count, so cap it alongside L.
-            # PREPEND the extra challenge coords as zeros: they are the high-order
-            # column bits, and every real column index c < 2ⁿᶜ has those bits 0,
-            # so `eq(0, 0) = 1` leaves col_eq[c] unchanged -- only the masked pad
-            # columns see the new coords. Byte-identical, one static z_col shape.
-            cap_nc = log2_ceil_usize(carry.cap_l)
-            npad = cap_nc - z_col.shape[0]
-            if npad:
-                z_col = jnp.concatenate([jnp.zeros((npad,), self._dtype), z_col])
-            if all_claims.shape[0] < carry.cap_l:
-                pad = carry.cap_l - all_claims.shape[0]
-                all_claims = jnp.concatenate(
-                    [all_claims, jnp.zeros((pad,), self._dtype)]
-                )
         offsets, merged, weights = _eval_inputs(
-            carry.col_heights, z_col, self._dtype, cap_l=carry.cap_l
+            carry.col_heights, carry.z_col, self._dtype
         )
         msg, transcript = eval_round_core(
             offsets,
             merged,
             weights,
-            all_claims,
+            carry.all_claims,
             carry.dense,
             carry.z_row,
-            z_col,
+            carry.z_col,
             transcript,
             dtype=self._dtype,
         )
