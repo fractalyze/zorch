@@ -20,6 +20,7 @@ from jax.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
 
 from zorch.fusion import fused_region
+from zorch.grind import grind_search
 from zorch.hash.permutation import Permutation
 
 # Candidate window for the grind search: each `lax.while_loop` step tests this
@@ -373,48 +374,24 @@ class DuplexTranscript:
     @partial(jit, static_argnames=("pow_bits", "chunk"))
     def _grind_search(self, pow_bits: int, chunk: int) -> Array:
         """Search canonical witnesses `0, 1, 2, ...` for the lowest one whose
-        challenge has `pow_bits` zero low bits. Each `lax.while_loop` step tests
-        a whole `chunk`-wide window IN PARALLEL -- `vmap` over the window, not a
-        sequential `lax.map` -- and keeps the lowest-index hit; the loop only
-        tiles windows because the full field cannot be vmapped at once (memory),
-        and it early-exits at the first window that hits. For a typical
-        `pow_bits` the hit is in the first window, so the loop runs once. Returns
-        the winning witness (or the trailing fallback on exhaustion -- `grind`
-        re-checks it before returning). Fields wider than 32 bits raise (the
-        uint32 counter/bit-check would need x64); koalabear-class fields are
-        searched in full."""
+        challenge has `pow_bits` zero low bits — `grind.grind_search` over the
+        challenge predicate (`vmap` over the window, not a sequential
+        `lax.map`). Returns the winning witness (or the trailing fallback on
+        exhaustion -- `grind` re-checks it before returning). Fields wider than
+        32 bits raise (the uint32 counter/bit-check would need x64);
+        koalabear-class fields are searched in full (`bound` = the field
+        order)."""
         field_dtype = self.state.sponge_state.dtype
         modulus = _require_uint32_field(field_dtype)
-        # Search the whole field, but cap `base` below the uint32 wrap point so
-        # `base + chunk` stays in range. For a koalabear-class field this is the
-        # field order; the cap only bites a field whose order nears 2**32.
-        bound = jnp.uint32(min(modulus, 2**32 - chunk))
-        offsets = jnp.arange(chunk, dtype=jnp.uint32)
 
         def satisfies(witness: Array) -> Array:
             _, sample = self.observe(witness).sample(1)
             return _pow_satisfied(sample[0], pow_bits)
 
-        def cond(carry: tuple[Array, Array, Array]) -> Array:
-            found, base, _ = carry
-            return jnp.logical_and(jnp.logical_not(found), base < bound)
+        def check_batch(counters: Array) -> Array:
+            return vmap(satisfies)(counters.astype(field_dtype))
 
-        def body(carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
-            found, base, best = carry
-            candidates = (base + offsets).astype(field_dtype)
-            hits = vmap(satisfies)(candidates)
-            any_hit = jnp.any(hits)
-            first = jnp.min(jnp.where(hits, offsets, jnp.uint32(chunk)))
-            index = jnp.where(any_hit, first, jnp.uint32(0)).astype(jnp.int32)
-            return (
-                jnp.logical_or(found, any_hit),
-                base + jnp.uint32(chunk),
-                jnp.where(any_hit, candidates[index], best),
-            )
-
-        init = (jnp.bool_(False), jnp.uint32(0), jnp.zeros((), field_dtype))
-        _found, _base, witness = lax.while_loop(cond, body, init)
-        return witness
+        return grind_search(check_batch, modulus, chunk).astype(field_dtype)
 
     def grind(
         self, pow_bits: int, *, chunk: int = _GRIND_CHUNK

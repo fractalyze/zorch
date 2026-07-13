@@ -158,8 +158,10 @@ def _pad(msg: np.ndarray) -> np.ndarray:
     return be  # [B, nblocks, 16]
 
 
-def _compress(state: Array, w16: Array) -> Array:
+def _compress(state: Array, w16: Array, k: Array) -> Array:
     """One block: state [B, 8] (a..h) + message words w16 [B, 16] -> state [B, 8].
+    `k` is the [64] round-constant table (an explicit operand so the marked
+    region passes it in the recognizer ABI order and captures nothing).
 
     The 64-round compression and the message schedule are fused into ONE
     `fori_loop` carrying a [B, 16] shift-register window: round t uses the oldest
@@ -171,7 +173,7 @@ def _compress(state: Array, w16: Array) -> Array:
     def round_t(t: Array, carry: tuple) -> tuple:
         a, b, c, d, e, f, g, h, w = carry
         word = w[:, 0]
-        kt = _Kd[t]
+        kt = k[t]
         S1 = _rotr(e, 6) ^ _rotr(e, 11) ^ _rotr(e, 25)
         ch = (e & f) ^ (~e & g)
         t1 = h + S1 + ch + kt + word
@@ -214,13 +216,16 @@ def block_to_words(blocks: Array) -> Array:
     )
 
 
-def compress(state: Array, blocks_words: Array) -> Array:
+def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array:
     """Fold `blocks_words` (uint32 [B, nblocks, 16] big-endian) into the SHA-256
     midstate `state` (uint32 [B, 8]), block by block. `INITIAL_STATE` broadcast is
-    the standard start; a streaming hash resumes from a prior midstate."""
+    the standard start; a streaming hash resumes from a prior midstate. `k`
+    defaults to the module `_Kd`; the marked region passes its `k` operand
+    explicitly so it captures nothing."""
+    kt = _Kd if k is None else k
     nblocks = blocks_words.shape[1]
     for i in range(nblocks):  # nblocks is static and small
-        state = _compress(state, blocks_words[:, i])
+        state = _compress(state, blocks_words[:, i], kt)
     return state
 
 
@@ -241,11 +246,20 @@ def serialize_digest(state: Array) -> Array:
     return out.reshape(b, 32)
 
 
-def _digest_words(blocks: Array) -> Array:
-    """blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32] big-endian digest."""
-    b = blocks.shape[0]
-    state = jnp.broadcast_to(INITIAL_STATE, (b, 8))
-    return serialize_digest(compress(state, blocks))
+def deserialize_digest(digest: Array) -> Array:
+    """uint8 [B, 32] big-endian digest -> SHA-256 midstate uint32 [B, 8] — the
+    inverse of `serialize_digest`. A digest IS the serialized final midstate (the
+    per-block feedforward is inside the compression), so unpacking one resumes
+    the stream: a streaming absorb rides the digest-shaped marker and reads the
+    next midstate back out."""
+    b = digest.shape[0]
+    w = digest.reshape(b, 8, 4).astype(U32)
+    return (
+        (w[..., 0] << U32(24))
+        | (w[..., 1] << U32(16))
+        | (w[..., 2] << U32(8))
+        | w[..., 3]
+    )
 
 
 # Module-level jit zone: `lax.composite` re-traces its decomposition on every
@@ -253,24 +267,33 @@ def _digest_words(blocks: Array) -> Array:
 # commit plus each transcript squeeze — so the uncached re-trace of the 64-round
 # body would dominate the first-trace floor (cf. poseidon2._permute_body, #216).
 # `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
-# module (one composite marker per digest) is unchanged.
+# module (one composite marker per chain) is unchanged.
 @partial(jax.jit, inline=True)
-def _digest_words_marked(blocks: Array) -> Array:
-    """`_digest_words`, wrapped in the name-routed `zorch.sha256` composite.
-
-    blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32]. SHA-256 is Merkle-Damgard —
-    a 64-round compression over a `fori_loop`, not straight-line — so it takes the
-    *name-routed* marker (exempt from the generic single-kernel rule, the way
-    `zorch.poseidon2` is) and routes to a dedicated zkx Sha256Fusion emitter. With
+def sha256_chain(h0: Array, blocks: Array) -> Array:
+    """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
+    the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
+    serialized final state, as the name-routed `zorch.sha256` composite. SHA-256
+    is Merkle-Damgard (a 64-round compression, not straight-line), so it takes the
+    name-routed marker (exempt from the generic single-kernel rule, the way
+    `zorch.poseidon2` is) and routes to the dedicated Sha256Fusion emitter; with
     no emitter wired the marker inlines its decomposition, so the bytes are
-    unchanged. The emitter reads the block count from the operand's shape.
-    """
+    unchanged.
 
-    def decomposition(b: Array, **_attrs: object) -> Array:
-        return _digest_words(b)
+    `h0 = INITIAL_STATE` is a whole-message digest; any other midstate resumes a
+    stream (`deserialize_digest` of the result is the next midstate), so the
+    streaming transcript and the batch digest share this one marker. Operands are
+    explicit in the recognizer's positional ABI order [h0, k, blocks]; passing
+    all three (rather than capturing `_Kd`) keeps that order — a captured
+    constant would prepend and land at operand 0."""
+
+    def decomposition(h0: Array, k: Array, blocks: Array, **_attrs: object) -> Array:
+        state = jnp.broadcast_to(h0, (blocks.shape[0], 8))
+        return serialize_digest(compress(state, blocks, k))
 
     return fused_region(
         decomposition,
+        h0,
+        _Kd,
         blocks,
         name=SHA256_MARKER,
         version=SHA256_MARKER_VERSION,
@@ -286,7 +309,7 @@ def digest(msg: ArrayLike) -> jnp.ndarray:
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
-    return _digest_words_marked(blocks)
+    return sha256_chain(INITIAL_STATE, blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -347,21 +370,35 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
     combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
 
-    h = state.h.reshape(1, 8)
-    for k in range(max_blocks):
-        block = combined[k * _BLOCK : (k + 1) * _BLOCK]  # static slice [64]
-        words = block_to_words(block.reshape(1, _BLOCK))
-        h_new = compress(h, words)
-        # Blocks past the live count are padding-only: leave the midstate untouched.
-        h = jnp.where(jnp.int32(k) < active_blocks, h_new, h)
+    # Fold the newly-complete blocks through the marked chain. The live block
+    # count depends on pending_len by AT MOST one — (pl + L) // 64 spans
+    # {L // 64, (63 + L) // 64} — so run the chain at both static candidate
+    # counts and select; the discarded candidate is the only one that ever sees
+    # the gap-shifted junk tail block.
+    h = state.h
+    min_blocks = length // _BLOCK
+    if max_blocks == 0:
+        h_new = h
+    else:
+        words = block_to_words(
+            combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
+        )  # [1, max_blocks, 16]
+        h_hi = deserialize_digest(sha256_chain(h, words))[0]
+        if min_blocks == max_blocks:
+            h_new = h_hi
+        else:
+            h_lo = (
+                deserialize_digest(sha256_chain(h, words[:, :min_blocks]))[0]
+                if min_blocks > 0
+                else h
+            )
+            h_new = jnp.where(active_blocks == max_blocks, h_hi, h_lo)
 
     tail_len = new_len - active_blocks * _BLOCK
     tail = jax.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
     slot = jnp.arange(_BLOCK, dtype=jnp.int32)
     pending = jnp.where(slot < tail_len, tail, jnp.uint8(0))
-    return Sha256State(
-        h.reshape(8), pending, tail_len, state.total_len + jnp.int32(length)
-    )
+    return Sha256State(h_new, pending, tail_len, state.total_len + jnp.int32(length))
 
 
 def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
@@ -421,10 +458,12 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
         jnp.where(is_pad80, jnp.uint8(0x80), jnp.where(is_len, len_val, jnp.uint8(0))),
     )  # [B, 128]
 
-    h = jnp.broadcast_to(state.h, (batch, 8))
-    h1 = compress(h, block_to_words(region[:, 0:_BLOCK]))
-    h2 = compress(h1, block_to_words(region[:, _BLOCK:128]))
-    return serialize_digest(jnp.where(two_blocks, h2, h1))
+    # Both finalize shapes ride the marked chain from the shared midstate; the
+    # 1-vs-2-block choice is data-dependent, so emit both and select.
+    words = block_to_words(region)  # [B, 2, 16]
+    d2 = sha256_chain(state.h, words)
+    d1 = sha256_chain(state.h, words[:, :1])
+    return jnp.where(two_blocks, d2, d1)
 
 
 # ---------------------------------------------------------------------------

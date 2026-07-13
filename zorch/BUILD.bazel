@@ -35,6 +35,17 @@ py_library(
 # targets (and downstream consumers via @zorch) can depend on them; the round
 # bodies themselves are exercised under pytest.
 
+# The one windowed PoW grind search engine every transcript's grind runs on.
+py_library(
+    name = "grind",
+    srcs = [
+        "__init__.py",
+        "grind.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [requirement("jax")],
+)
+
 py_library(
     name = "transcript",
     srcs = [
@@ -44,6 +55,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":fusion",
+        ":grind",
         "//zorch/hash:permutation",
         requirement("jax"),
         requirement("zk_dtypes"),
@@ -80,6 +92,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":byte_transcript",
+        ":grind",
         "//zorch/hash:sha256",
         requirement("jax"),
         requirement("numpy"),

@@ -68,10 +68,10 @@ is a **shrinking** surface — the correctness oracle
 the verifier-side replay, and flock's legacy host challenger. That host surface is
 being **retired incrementally** as consumers move on-device: flock's prover
 challenger goes first (flock-zorch#9), the verifier later; `HostSha256` / `hashlib`
-stays at least as the correctness oracle. A device-side grind (matching
-`DuplexTranscript`) is a pending follow-up — today `Sha256FieldTranscript.grind` is
-a one-shot host search, which is soundness-neutral and not a per-round graph
-blocker.
+stays at least as the correctness oracle. The grind is `grind`/`check_witness`
+with `DuplexTranscript`'s exact semantics, running the shared `zorch.grind`
+windowed device search — there is no host path anywhere in the field
+transcript.
 
 Admitting this SHA-256 family at all widens zorch's remit beyond "algebraic,
 device-resident Fiat-Shamir"; that scope decision is **flagged for ratification on

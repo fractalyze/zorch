@@ -60,6 +60,21 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         g, g_sl = g.observe(jnp.asarray(v).reshape(1)).sample(1)
         self.assertNotEqual(np.asarray(f_el).tobytes(), np.asarray(g_sl).tobytes())
 
+    def test_vector_observe_scalar_matches_scalar_chain(self) -> None:
+        # observe_scalar of an [n] array frames each element as its own scalar
+        # op, byte-identical to chaining n 0-d observes — same state, so the
+        # next squeeze matches.
+        vals = jnp.asarray(np.array([7, 0xDEADBEEF, 0, 42], dtype=np.uint32))
+
+        chained = Sha256FieldTranscript.new(b"dom", np.uint32)
+        for v in vals:
+            chained = chained.observe_scalar(v)
+        chained, c_el = chained.sample_scalar()
+
+        batched = Sha256FieldTranscript.new(b"dom", np.uint32)
+        batched, b_el = batched.observe_scalar(vals).sample_scalar()
+        self.assertEqual(np.asarray(c_el).tobytes(), np.asarray(b_el).tobytes())
+
     def test_label_and_bytes_framing_match_byte_transcript(self) -> None:
         # observe_label / observe_bytes reproduce the byte transcript's OP_LABEL /
         # OP_BYTES framing, so a challenge squeezed after them matches.
@@ -75,9 +90,11 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         f, f_el = f.sample(2)
         self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
 
-    def test_grind_verify_match_byte_transcript(self) -> None:
-        # Host grind/verify reproduce ByteHashTranscript's u64-nonce PoW: same
-        # nonce, and the transcripts stay in lockstep (same challenge afterwards).
+    def test_grind_check_witness_match_byte_transcript(self) -> None:
+        # The device grind reproduces ByteHashTranscript's u64-nonce PoW: same
+        # (lowest) nonce, and the transcripts stay in lockstep (same challenge
+        # afterwards). check_witness accepts the honest witness, rejects a
+        # tampered one, and advances regardless (the DuplexTranscript contract).
         root_u8 = jnp.asarray(np.frombuffer(b"root", np.uint8))
         for bits in (0, 8):
             b = ByteHashTranscript.new(b"pow", HostSha256()).observe_bytes(b"root")
@@ -85,17 +102,20 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             _, b_ch = b.sample_scalar(4)
 
             f = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
-            f, f_nonce = f.grind_pow(bits)
-            self.assertEqual(f_nonce, b_nonce)
+            f, witness = f.grind(bits)
+            self.assertEqual(int(witness), b_nonce)
             _, f_ch = f.sample_scalar()
             self.assertEqual(np.asarray(f_ch).astype("<u4").tobytes(), b_ch)
 
-            # Verifier mirror accepts the honest nonce and reaches the same state.
+            # Verifier mirror accepts the honest witness and reaches the same state.
             vf = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
-            vf, ok = vf.verify_pow(int(f_nonce), bits)
-            self.assertTrue(ok)
+            vf, ok = vf.check_witness(witness, bits)
+            self.assertTrue(bool(ok))
             _, vf_ch = vf.sample_scalar()
             self.assertEqual(np.asarray(vf_ch).astype("<u4").tobytes(), b_ch)
+        bad = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
+        _, bad_ok = bad.check_witness(int(witness) + 1, 8)
+        self.assertFalse(bool(bad_ok))
 
     def test_grind_bits_out_of_range_rejected(self) -> None:
         # Mirrors the byte transcript: > 256 (or negative) leading-zero bits on a
@@ -103,9 +123,9 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         t = Sha256FieldTranscript.new(b"pow", np.uint32)
         for bits in (-1, 257):
             with self.assertRaises(ValueError):
-                t.grind_pow(bits)
+                t.grind(bits)
             with self.assertRaises(ValueError):
-                t.verify_pow(0, bits)
+                t.check_witness(0, bits)
 
     def test_ghash_dtype_matches_byte_transcript_via_uint32_lanes(self) -> None:
         # flock-zorch#75: ghash <-> bytes routes through uint32 lanes to stay
@@ -138,6 +158,27 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
 
         eager = np.asarray(run(jnp.asarray(vals)))
         jitted = np.asarray(jax.jit(run)(jnp.asarray(vals)))
+        self.assertEqual(eager.tobytes(), jitted.tobytes())
+
+    def test_ghash_threads_under_jit(self) -> None:
+        # The 16-byte-element serde must be byte-identical under `@jit` — the
+        # bitcast-chain simplification path has regressed before (xla#259).
+        # Eager is the pinned reference
+        # (test_ghash_dtype_matches_byte_transcript_via_uint32_lanes).
+        import zk_dtypes  # noqa: F401  (registers jnp.binary_field_ghash)
+
+        gh = jnp.binary_field_ghash
+        v = np.array([1, 2, 3, 0xDEADBEEF], dtype=np.uint32).view(np.dtype(gh))
+
+        def run(x: jnp.ndarray) -> jnp.ndarray:
+            f = Sha256FieldTranscript.new(b"gh", gh)
+            f = f.observe_scalar(x[0]).observe(x)
+            f, one = f.sample_scalar()
+            _, vec = f.sample(2)
+            return jnp.concatenate([one.reshape(1), vec])
+
+        eager = np.asarray(run(jnp.asarray(v)))
+        jitted = np.asarray(jax.jit(run)(jnp.asarray(v)))
         self.assertEqual(eager.tobytes(), jitted.tobytes())
 
     def test_threads_through_sumcheck_prove(self) -> None:
