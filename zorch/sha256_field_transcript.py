@@ -216,12 +216,14 @@ class Sha256FieldTranscript:
     ) -> tuple[Sha256FieldTranscript, Array]:
         """Find a proof-of-work witness — the lowest nonce whose
         `SHA256(state_digest || nonce_le8)` has `pow_bits` leading zero bits —
-        and return the transcript advanced past it (the nonce absorbed under
-        flock's `OP_BYTES` wire), plus the witness. Fully traceable
+        and return the transcript advanced past it (the nonce absorbed under the
+        `OP_BYTES` wire), plus the witness. Fully traceable
         (`zorch.grind.grind_search` windowed device search); does not raise on
         an exhausted search: `check_witness` is the soundness gate, so which
         witness the search returns is soundness-neutral."""
         _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        if chunk < 1:
+            raise ValueError(f"chunk must be >= 1, got {chunk}")
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
             witness = jnp.zeros((), jnp.uint32)
