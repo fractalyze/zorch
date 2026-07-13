@@ -202,14 +202,13 @@ class ReedSolomon:
         batch axes are preserved). Natural order in and out.
 
         Equivalent to `encode(lax.ntt(evals, INTT))` (interpolate to coefficients,
-        then coset-evaluate) but fused on the bit-reversed-intermediate schedule
-        of pil2/sppark's `extendPol`: a Gentleman-Sande DIF interpolation feeds a
-        Cooley-Tukey DIT coset evaluation with the coefficients kept bit-reversed
-        between them, so the NTT-fusion rewriter folds away both standalone
-        bit-reverse permute kernels (each a pure-permutation HBM round-trip with
-        no arithmetic). The additive (binary-field) NTT is natural order in and
-        out, so it takes the plain interpolate-then-encode path — no permute to
-        fold.
+        then coset-evaluate) but fused on a bit-reversed-intermediate schedule: a
+        Gentleman-Sande DIF interpolation feeds a Cooley-Tukey DIT coset
+        evaluation with the coefficients kept bit-reversed between them, so the
+        NTT-fusion rewriter folds away both standalone bit-reverse permute kernels
+        (each a pure-permutation HBM round-trip with no arithmetic). The additive
+        (binary-field) NTT is natural order in and out, so it takes the plain
+        interpolate-then-encode path — no permute to fold.
         """
         if evals.shape[-1] != self.message_len:
             raise ValueError(
@@ -232,12 +231,14 @@ class ReedSolomon:
         # Zero-extend n -> n_ext as a stride-blowup upsample: because
         # bitrev_{n_ext}(i) = bitrev_n(i)*blowup for i < n, a bit-reversed
         # zero-pad interleaves each coeff with blowup-1 zeros, not a trailing pad.
-        padded = (
-            jnp.zeros(coeffs.shape[:-1] + (n, blowup), self.dtype)
-            .at[..., 0]
-            .set(coeffs)
-            .reshape(coeffs.shape[:-1] + (n_ext,))
-        )
+        # A static concatenate (not `.at[].set`) so it stays a pure interleave.
+        padded = jnp.concatenate(
+            [
+                coeffs[..., None],
+                jnp.zeros(coeffs.shape[:-1] + (n, blowup - 1), self.dtype),
+            ],
+            axis=-1,
+        ).reshape(coeffs.shape[:-1] + (n_ext,))
         # DIT coset evaluation on the bit-reversed input -> natural-order codeword.
         return lax.ntt(
             lax.bit_reverse(padded, dimensions=(padded.ndim - 1,)),
