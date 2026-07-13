@@ -62,8 +62,8 @@ class StructuralCrossCheckTest(absltest.TestCase):
             [e, az, bz, cz], lambda e, a, b, c: e * (a * b - c), 3, list(ch["r_x"])
         )
         got = proof.messages[0][0]
-        for j, ref in enumerate(ref_polys):
-            self.assertTrue(bool(jnp.all(got[j] == ref)), f"outer round {j}")
+        for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
+            self.assertTrue(bool(jnp.all(g == ref)), f"outer round {j}")
         # final claimed evals == (Az,Bz,Cz)(r_x).
         claims = proof.messages[0][1]
         self.assertTrue(
@@ -98,8 +98,8 @@ class StructuralCrossCheckTest(absltest.TestCase):
         m = inst.combined_row_mle(ch["r_x"], ch["r_batch"])
         ref_polys, _ = naive_round_polys([m, z], lambda a, b: a * b, 2, list(ch["r_y"]))
         got = proof.messages[2]
-        for j, ref in enumerate(ref_polys):
-            self.assertTrue(bool(jnp.all(got[j] == ref)), f"inner round {j}")
+        for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
+            self.assertTrue(bool(jnp.all(g == ref)), f"inner round {j}")
 
     def test_inner_final_identity(self) -> None:
         # inner_final == eval_ABC · z̃(r_y).
