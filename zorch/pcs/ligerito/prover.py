@@ -60,6 +60,7 @@ from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.round import ProveChain, Round
 from zorch.sumcheck.domain import fold
 from zorch.sumcheck.prover import (
     CompressedProductRound,
@@ -83,43 +84,63 @@ _ROUND = StandardRound(ProductSummand(degree=2))
 _COMPRESSED_ROUND = CompressedProductRound()
 
 
-@partial(jax.jit, static_argnums=(0, 1, 2, 3))
-def _fold_round(
-    chor: LigeritoChoreography,
-    round_: StandardRound | CompressedProductRound,
-    j: int,
-    i: int,
-    t: Transcript,
-    W: Array,
-    B: Array,
-) -> tuple[Transcript, Array, Array, list[Array], list[Array]]:
-    """One fold round as ONE device program: the (lazy-policy) message, the
-    tapered fold grind, the challenge, the fold, and the eager policy's
-    post-fold emission — five-plus transcript/compute hops that would each
-    dispatch separately when run eagerly. The choreography and round are
-    static (value-hashable / module singletons), so the grind schedule and
-    message policy resolve at trace time. Per-round, not per-level: a whole
-    level in one program made XLA's temp arena (folded states, grind windows,
-    absorb payloads, all rounds' live ranges) exceed device memory at
-    prover-scale m."""
-    msgs, pows = [], []
-    msg = None
-    if not chor.eager_messages:
-        msg = round_._round_poly(jnp.stack([W, B]))
-        msgs.append(msg)
-    bits = chor.fold_grind_bits(j, i)
-    if bits is not None:
-        t, witness = chor.grind(t, bits)
-        pows.append(witness)
-    t, r = chor.fold_challenge(t, msg, j, i)
-    W, B = fold(jnp.stack([W, B]), r)
-    if chor.eager_messages:
-        # The freshly folded state's message — the terminal residual state's
-        # included (the verifier recomputes that one in the clear).
-        msg = round_._round_poly(jnp.stack([W, B]))
-        msgs.append(msg)
-        t = chor.observe_message(t, msg)
-    return t, W, B, msgs, pows
+class FoldRound(Round):
+    """One Ligerito fold round as ONE device program: the (lazy-policy)
+    message, the tapered fold grind, the challenge, the fold, and the eager
+    policy's post-fold emission — five-plus transcript/compute hops that would
+    each dispatch separately when run eagerly. The round is static under the
+    jit (value-keyed, #214: choreography and product round are value-hashable /
+    module singletons), so the grind schedule and message policy resolve at
+    trace time. Per-round, not per-level: a whole level in one program made
+    XLA's temp arena (folded states, grind windows, absorb payloads, all
+    rounds' live ranges) exceed device memory at prover-scale m.
+
+    `ProverRound` shape: carry = `(W, B)`, msg = `(msgs, pows)` (0-1 sumcheck
+    message and 0-1 grind witness, by policy and schedule)."""
+
+    def __init__(
+        self,
+        chor: LigeritoChoreography,
+        round_: StandardRound | CompressedProductRound,
+        j: int,
+        i: int,
+    ) -> None:
+        self.chor, self.round_, self.j, self.i = chor, round_, j, i
+
+    def _value_key(self) -> tuple:
+        return (self.chor, self.round_, self.j, self.i)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, FoldRound):
+            return NotImplemented
+        return self._value_key() == other._value_key()
+
+    def __hash__(self) -> int:
+        return hash(self._value_key())
+
+    @partial(jax.jit, static_argnums=0)
+    def __call__(
+        self, state: tuple[Array, Array], t: Transcript
+    ) -> tuple[tuple[Array, Array], Transcript, tuple[list[Array], list[Array]]]:
+        W, B = state
+        msgs, pows = [], []
+        msg = None
+        if not self.chor.eager_messages:
+            msg = self.round_._round_poly(jnp.stack([W, B]))
+            msgs.append(msg)
+        bits = self.chor.fold_grind_bits(self.j, self.i)
+        if bits is not None:
+            t, witness = self.chor.grind(t, bits)
+            pows.append(witness)
+        t, r = self.chor.fold_challenge(t, msg, self.j, self.i)
+        W, B = fold(jnp.stack([W, B]), r)
+        if self.chor.eager_messages:
+            # The freshly folded state's message — the terminal residual
+            # state's included (the verifier recomputes that one in the clear).
+            msg = self.round_._round_poly(jnp.stack([W, B]))
+            msgs.append(msg)
+            t = self.chor.observe_message(t, msg)
+        return (W, B), t, (msgs, pows)
 
 
 # Jitted commit body, keyed on code + tree + interleave by value (#214): commit
@@ -299,11 +320,11 @@ def _open(
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck,
-        # one jitted program per round (messages, grinds, challenges, folds —
-        # the choreography's fold-phase ops are all traceable; commits and
-        # query sampling stay at the level boundary) ---
-        for i in range(k_j):
-            t, W, B, round_msgs, round_pows = _fold_round(chor, round_, j, i, t, W, B)
+        # one jitted FoldRound per variable (commits and query sampling stay at
+        # the level boundary) ---
+        chain = ProveChain(FoldRound(chor, round_, j, i) for i in range(k_j))
+        (W, B), t, level_msgs = chain((W, B), t)
+        for round_msgs, round_pows in level_msgs:
             sumcheck_messages.extend(round_msgs)
             pow_witnesses.extend(round_pows)
         num_vars -= k_j
