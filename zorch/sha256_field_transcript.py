@@ -257,20 +257,17 @@ class Sha256FieldTranscript:
             ok = _leading_zero_bits_ok(digs, pow_bits)[0]
         return self._absorb_witness(witness), ok
 
-    # ---- element <-> byte serde (via uint32 lanes) ----
+    # ---- element <-> byte serde ----
     def _elem_bytes(self, values: Array) -> Array:
-        """Element array -> uint8 `[..., itemsize]`, routed through uint32
-        lanes: the direct wide-binary-field <-> uint8 bitcast miscompiles on
-        the CPU PJRT backend (flock-zorch#75); uint32 is the dtype's native
-        lane width and is correct on both backends. A uint32-native dtype
-        takes the lane bitcast as identity."""
-        u32 = lax.bitcast_convert_type(values, jnp.uint32)
-        lanes = self._item_bytes() // 4
-        return _u32_le_bytes(u32).reshape(*values.shape, lanes * 4)
+        """Element array -> uint8 `[..., itemsize]` — a direct bitcast to bytes.
+        (The wide-binary-field <-> uint8 bitcast once miscompiled on the CPU
+        PJRT backend, flock-zorch#75, forcing a uint32-lane detour; that is
+        fixed as of the dev20260713 stack.)"""
+        return lax.bitcast_convert_type(values, jnp.uint8)
 
     def _u8_to_elems(self, u8: Array, n: int) -> Array:
         """Flat uint8 `[n * itemsize]` -> `[n]` `dtype` elements (inverse of
-        `_elem_bytes`; CPU-safe uint32 routing, flock-zorch#75)."""
-        lanes = self._item_bytes() // 4
-        u32 = lax.bitcast_convert_type(u8.reshape(n, lanes, 4), jnp.uint32)
-        return lax.bitcast_convert_type(u32, self.dtype).reshape(n)
+        `_elem_bytes`)."""
+        return lax.bitcast_convert_type(
+            u8.reshape(n, self._item_bytes()), self.dtype
+        ).reshape(n)

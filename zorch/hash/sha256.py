@@ -246,42 +246,6 @@ def serialize_digest(state: Array) -> Array:
     return out.reshape(b, 32)
 
 
-def _digest_words(blocks: Array) -> Array:
-    """blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32] big-endian digest."""
-    b = blocks.shape[0]
-    state = jnp.broadcast_to(INITIAL_STATE, (b, 8))
-    return serialize_digest(compress(state, blocks))
-
-
-# Module-level jit zone: `lax.composite` re-traces its decomposition on every
-# emission, and one PCS open emits the leaf + every internal level of a Merkle
-# commit plus each transcript squeeze — so the uncached re-trace of the 64-round
-# body would dominate the first-trace floor (cf. poseidon2._permute_body, #216).
-# `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
-# module (one composite marker per digest) is unchanged.
-@partial(jax.jit, inline=True)
-def _digest_words_marked(blocks: Array) -> Array:
-    """`_digest_words`, wrapped in the name-routed `zorch.sha256` composite.
-
-    blocks: uint32 [B, nblocks, 16] -> uint8 [B, 32]. SHA-256 is Merkle-Damgard —
-    a 64-round compression over a `fori_loop`, not straight-line — so it takes the
-    *name-routed* marker (exempt from the generic single-kernel rule, the way
-    `zorch.poseidon2` is) and routes to a dedicated zkx Sha256Fusion emitter. With
-    no emitter wired the marker inlines its decomposition, so the bytes are
-    unchanged. The emitter reads the block count from the operand's shape.
-    """
-
-    def decomposition(b: Array, **_attrs: object) -> Array:
-        return _digest_words(b)
-
-    return fused_region(
-        decomposition,
-        blocks,
-        name=SHA256_MARKER,
-        version=SHA256_MARKER_VERSION,
-    )
-
-
 def deserialize_digest(digest: Array) -> Array:
     """uint8 [B, 32] big-endian digest -> SHA-256 midstate uint32 [B, 8] — the
     inverse of `serialize_digest`. A digest IS the serialized final midstate (the
@@ -298,17 +262,29 @@ def deserialize_digest(digest: Array) -> Array:
     )
 
 
+# Module-level jit zone: `lax.composite` re-traces its decomposition on every
+# emission, and one PCS open emits the leaf + every internal level of a Merkle
+# commit plus each transcript squeeze — so the uncached re-trace of the 64-round
+# body would dominate the first-trace floor (cf. poseidon2._permute_body, #216).
+# `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
+# module (one composite marker per chain) is unchanged.
 @partial(jax.jit, inline=True)
-def sha256_chain_marked(h0: Array, blocks: Array) -> Array:
+def sha256_chain(h0: Array, blocks: Array) -> Array:
     """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
-    serialized final state, as the name-routed `zorch.sha256` composite. Unlike
-    `_digest_words_marked` (whole-message, IV captured), `h0` is an explicit
-    operand so a runtime midstate can resume a stream — `deserialize_digest` of
-    the result is the next midstate. Operands are explicit in the recognizer's
-    positional ABI order [h0, k, blocks]; passing all three (rather than
-    capturing `_Kd`) keeps that order — a captured constant would prepend and
-    land at operand 0."""
+    serialized final state, as the name-routed `zorch.sha256` composite. SHA-256
+    is Merkle-Damgard (a 64-round compression, not straight-line), so it takes the
+    name-routed marker (exempt from the generic single-kernel rule, the way
+    `zorch.poseidon2` is) and routes to the dedicated Sha256Fusion emitter; with
+    no emitter wired the marker inlines its decomposition, so the bytes are
+    unchanged.
+
+    `h0 = INITIAL_STATE` is a whole-message digest; any other midstate resumes a
+    stream (`deserialize_digest` of the result is the next midstate), so the
+    streaming transcript and the batch digest share this one marker. Operands are
+    explicit in the recognizer's positional ABI order [h0, k, blocks]; passing
+    all three (rather than capturing `_Kd`) keeps that order — a captured
+    constant would prepend and land at operand 0."""
 
     def decomposition(h0: Array, k: Array, blocks: Array, **_attrs: object) -> Array:
         state = jnp.broadcast_to(h0, (blocks.shape[0], 8))
@@ -333,7 +309,7 @@ def digest(msg: ArrayLike) -> jnp.ndarray:
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
     blocks = jnp.asarray(_pad(msg_np))
-    return _digest_words_marked(blocks)
+    return sha256_chain(INITIAL_STATE, blocks)
 
 
 # ---------------------------------------------------------------------------
@@ -407,12 +383,12 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
         words = block_to_words(
             combined[: max_blocks * _BLOCK].reshape(1, max_blocks * _BLOCK)
         )  # [1, max_blocks, 16]
-        h_hi = deserialize_digest(sha256_chain_marked(h, words))[0]
+        h_hi = deserialize_digest(sha256_chain(h, words))[0]
         if min_blocks == max_blocks:
             h_new = h_hi
         else:
             h_lo = (
-                deserialize_digest(sha256_chain_marked(h, words[:, :min_blocks]))[0]
+                deserialize_digest(sha256_chain(h, words[:, :min_blocks]))[0]
                 if min_blocks > 0
                 else h
             )
@@ -485,8 +461,8 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     # Both finalize shapes ride the marked chain from the shared midstate; the
     # 1-vs-2-block choice is data-dependent, so emit both and select.
     words = block_to_words(region)  # [B, 2, 16]
-    d2 = sha256_chain_marked(state.h, words)
-    d1 = sha256_chain_marked(state.h, words[:, :1])
+    d2 = sha256_chain(state.h, words)
+    d1 = sha256_chain(state.h, words[:, :1])
     return jnp.where(two_blocks, d2, d1)
 
 

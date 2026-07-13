@@ -8,6 +8,7 @@ block multiples, and a multi-block message.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 
 import jax
@@ -46,15 +47,17 @@ class Sha256Test(parameterized.TestCase):
         # the unmarked compression at every padding boundary.
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
         blocks = jnp.asarray(sha256._pad(msg[None, :]))
-        marked = np.asarray(sha256._digest_words_marked(blocks))
-        inline = np.asarray(sha256._digest_words(blocks))
+        marked = np.asarray(sha256.sha256_chain(sha256.INITIAL_STATE, blocks))
+        state = jnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
+        inline = np.asarray(sha256.serialize_digest(sha256.compress(state, blocks)))
         np.testing.assert_array_equal(marked, inline)
 
     def test_emits_single_composite_marker(self) -> None:
         # digest lowers to exactly one stablehlo.composite, name-routed to the
         # dedicated zorch.sha256 emitter (parallel to zorch.poseidon2).
         blocks = jnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
-        txt = jax.jit(sha256._digest_words_marked).lower(blocks).as_text()
+        fn = functools.partial(sha256.sha256_chain, sha256.INITIAL_STATE)
+        txt = jax.jit(fn).lower(blocks).as_text()
         self.assertIn(sha256.SHA256_MARKER, txt)
         self.assertEqual(txt.count("stablehlo.composite"), 1)
 
