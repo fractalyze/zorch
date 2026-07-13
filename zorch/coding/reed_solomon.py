@@ -217,9 +217,7 @@ class ReedSolomon:
             )
         n, n_ext = self.message_len, self.block_len
         blowup = n_ext // n
-        coeffs = lax.ntt(
-            evals, ntt_type="INTT", ntt_length=n, generator=self.generator
-        )
+        coeffs = lax.ntt(evals, ntt_type="INTT", ntt_length=n, generator=self.generator)
         if self._binary:
             return self.encode(coeffs)
         # DIF interpolation: `bit_reverse(ntt(INTT))` is the pattern the rewriter
