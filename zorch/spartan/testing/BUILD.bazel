@@ -52,6 +52,21 @@ py_test(
 )
 
 py_test(
+    name = "engine_test",
+    size = "small",
+    srcs = ["engine_test.py"],
+    deps = [
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/sumcheck",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "zerocheck_test",
     size = "small",
     srcs = ["zerocheck_test.py"],

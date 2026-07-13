@@ -8,6 +8,7 @@ py_library(
     srcs = [
         "__init__.py",
         "carry.py",
+        "engine.py",
         "lincheck.py",
         "pcs_glue.py",
         "r1cs.py",

@@ -21,6 +21,7 @@ from jax import Array
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.round import ProveChain, VerifyChain
 from zorch.spartan.carry import SpartanCarry
+from zorch.spartan.engine import StageSumcheck
 from zorch.spartan.lincheck import (
     InnerProver,
     InnerVerifier,
@@ -60,17 +61,24 @@ def prove(
     io: Array,
     pcs_prover: PcsProver[Any, Any, Any],
     transcript: Transcript,
+    *,
+    outer: StageSumcheck | None = None,
+    inner: StageSumcheck | None = None,
 ) -> tuple[SpartanProof, Transcript]:
-    """Prove `(A·z)∘(B·z) = C·z` for the witness-first assignment `z = (W,1,X)`."""
+    """Prove `(A·z)∘(B·z) = C·z` for the witness-first assignment `z = (W,1,X)`.
+
+    `outer` / `inner` swap the zerocheck / lincheck sumcheck engine; pass the same
+    pair to `verify`.
+    """
     az, bz, cz = instance.matvecs(z)
     witness = z[: instance.num_vars_padded]
     commitment, prover_data = pcs_prover.commit([witness])
     transcript = _absorb_statement(transcript, commitment, io)
     chain = ProveChain(
         [
-            OuterProver(az, bz, cz),
+            OuterProver(az, bz, cz, sumcheck=outer),
             RlcProver(),
-            InnerProver(instance, z),
+            InnerProver(instance, z, sumcheck=inner),
             WitnessOpenProver(pcs_prover, prover_data),
         ]
     )
@@ -84,14 +92,18 @@ def verify(
     proof: SpartanProof,
     pcs_verifier: PcsVerifier[Any, Any],
     transcript: Transcript,
+    *,
+    outer: StageSumcheck | None = None,
+    inner: StageSumcheck | None = None,
 ) -> tuple[Array, Transcript]:
-    """Verify a `SpartanProof`; returns `(ok, transcript)`."""
+    """Verify a `SpartanProof`; returns `(ok, transcript)`. `outer` / `inner` must
+    match the engines passed to `prove`."""
     transcript = _absorb_statement(transcript, proof.commitment, io)
     chain = VerifyChain(
         [
-            OuterVerifier(),
+            OuterVerifier(sumcheck=outer),
             RlcVerifier(),
-            InnerVerifier(),
+            InnerVerifier(sumcheck=inner),
             WitnessOpenVerifier(pcs_verifier, proof.commitment, instance, io),
         ]
     )

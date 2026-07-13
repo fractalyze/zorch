@@ -21,7 +21,14 @@ scheme is assembled from, plus a thin assembly that owns only the schedule:
 - `OuterProver`/`OuterVerifier` (zerocheck), `InnerProver`/`InnerVerifier`
   (lincheck) — each a `zorch.round.Round` that runs the shared `zorch.sumcheck`
   machinery and adds only its schedule and terminal identity check. The
-  sum-check itself stays scheme-agnostic.
+  per-variable sum-check engine is **injected** as a matched (prover, verifier)
+  `StageSumcheck` pair (default `zerocheck_engine` / `lincheck_engine`), so a
+  caller swaps the sum-check algorithm, evaluation domain, or wire form (e.g. the
+  compressed coefficient wire) without touching the stage. The prover recovers its
+  bound point by replaying the injected *verifier* round, so point collection
+  stays wire-agnostic — no message form is baked into the stage. (The outer
+  summand `E·(A·B−C)` is mixed-degree, so a swapped outer engine must keep a
+  finite domain.)
 - `RlcProver`/`RlcVerifier` — the random-linear-combination combinator that
   folds N claims under one fresh challenge (powers of `r`). This is milestone
   #7's batching/RLC combinator; it is transcript-only glue, so it emits a `None`

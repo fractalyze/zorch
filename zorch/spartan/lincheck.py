@@ -8,7 +8,8 @@
 - **`Inner*`** — a degree-2 product sumcheck proving `joint = Σ_y M(y)·z̃(y)`, with
   `M(y) = Σ_i eq(r_x)_i·(A+rB+r²C)_{i,y}` the row-bound batched matrix. It reduces
   to `(r_y, inner_final)`; the terminal `inner_final == eval_ABC · z̃(r_y)` closes
-  in the PCS glue, once `z̃(r_y)` comes from the witness opening.
+  in the PCS glue. The per-variable engine is injected (`StageSumcheck`, default
+  `lincheck_engine`), so a caller can swap the algorithm / domain / wire form.
 """
 
 from __future__ import annotations
@@ -21,13 +22,10 @@ from jax import Array
 from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.spartan.carry import SpartanCarry, _require
+from zorch.spartan.engine import StageSumcheck, lincheck_engine
 from zorch.spartan.r1cs import R1CS
-from zorch.spartan.zerocheck import _collect_point
-from zorch.sumcheck.prover import ProductSummand, StandardRound
-from zorch.sumcheck.verifier import SumcheckRound
 from zorch.transcript import Transcript
-
-_INNER_DEGREE = 2
+from zorch.verify import verify
 
 
 def _joint_claim(claims_outer: Array, r: Array) -> Array:
@@ -65,24 +63,31 @@ class RlcVerifier(Round):
 
 class InnerProver(Round):
     """Prover for the lincheck stage; holds the instance and assignment `z` as
-    stage-local witness."""
+    stage-local witness. Inject `sumcheck` to swap the per-variable engine."""
 
-    def __init__(self, instance: R1CS, z: Array) -> None:
+    def __init__(
+        self, instance: R1CS, z: Array, *, sumcheck: StageSumcheck | None = None
+    ) -> None:
         self.instance = instance
         self.z = z
+        self.sumcheck = sumcheck or lincheck_engine()
 
     def __call__(
         self, carry: SpartanCarry, transcript: Transcript
     ) -> tuple[SpartanCarry, Transcript, Array]:
         r_x = _require(carry.r_x, "r_x", "outer")
         r = _require(carry.r_batch, "r_batch", "RLC")
+        joint = _require(carry.joint_claim, "joint_claim", "RLC")
         m = self.instance.combined_row_mle(r_x, r)
         state = jnp.stack([m, self.z])
         pre = transcript
-        rnd = StandardRound(ProductSummand(_INNER_DEGREE))
-        _, transcript, msgs = fold_rounds(rnd, state, pre, self.instance.s_y)
+        _, transcript, msgs = fold_rounds(
+            self.sumcheck.prover_round, state, pre, self.instance.s_y
+        )
         round_polys = jnp.stack(msgs)
-        r_y = _collect_point(pre, round_polys)
+        # Recover r_y by replaying the injected verifier round (point is
+        # independent of the claim value).
+        r_y, _, _, _ = verify(self.sumcheck.verifier_round, joint, round_polys, pre)
         carry = replace(carry, r_y=r_y)
         return carry, transcript, round_polys
 
@@ -91,18 +96,15 @@ class InnerVerifier(Round):
     """Verifier for the lincheck sumcheck: reduce `joint_claim` to `(r_y,
     inner_final)`. The terminal identity closes in the PCS glue."""
 
+    def __init__(self, *, sumcheck: StageSumcheck | None = None) -> None:
+        self.sumcheck = sumcheck or lincheck_engine()
+
     def __call__(
         self, carry: SpartanCarry, msg: Array, transcript: Transcript
     ) -> tuple[SpartanCarry, Transcript, Array]:
         joint = _require(carry.joint_claim, "joint_claim", "RLC")
-        r_y, inner_final, transcript, ok = _verify_inner(joint, msg, transcript)
+        r_y, inner_final, transcript, ok = verify(
+            self.sumcheck.verifier_round, joint, msg, transcript
+        )
         carry = replace(carry, r_y=r_y, inner_final=inner_final)
         return carry, transcript, ok
-
-
-def _verify_inner(
-    joint: Array, round_polys: Array, transcript: Transcript
-) -> tuple[Array, Array, Transcript, Array]:
-    from zorch.verify import verify
-
-    return verify(SumcheckRound(_INNER_DEGREE), joint, round_polys, transcript)
