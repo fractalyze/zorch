@@ -80,6 +80,11 @@ def eval_domain(
     return domain if shift is None else shift * domain
 
 
+# Keyed by code value-key: instances are transient (one per level, per prove —
+# #214), so a per-instance-only cache rebuilds the k encodes every prove.
+_BINARY_EVAL_TABLES: dict[tuple, Array] = {}
+
+
 class ReedSolomon:
     """Reed-Solomon code over `dtype`; implements FoldableCode.
 
@@ -223,10 +228,14 @@ class ReedSolomon:
         basis-power codewords, gathered from a table built on first use."""
         if self._binary:
             if self._binary_eval_table is None:
-                # Concrete even under an outer trace: a traced table stored on
-                # self would leak the tracer into later calls.
-                with jax.ensure_compile_time_eval():
-                    self._binary_eval_table = self._build_binary_eval_table()
+                table = _BINARY_EVAL_TABLES.get(self._value_key())
+                if table is None:
+                    # Concrete even under an outer trace: a traced table stored
+                    # on self would leak the tracer into later calls.
+                    with jax.ensure_compile_time_eval():
+                        table = self._build_binary_eval_table()
+                    _BINARY_EVAL_TABLES[self._value_key()] = table
+                self._binary_eval_table = table
             return self._binary_eval_table[positions]  # (*positions.shape, k)
         k = log2_strict_usize(self.message_len)
         cur = self.domain()[positions]  # (*positions.shape,) evaluation point(s)

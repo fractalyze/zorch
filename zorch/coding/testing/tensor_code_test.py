@@ -114,6 +114,14 @@ class TensorCodeTest(parameterized.TestCase):
         reused = code.eval_point(positions)  # eager, reuses the cached table
         self.assertTrue(bool(jnp.all(under_jit == reused)))
 
+    def test_binary_eval_table_shared_across_value_equal_instances(self) -> None:
+        positions = jnp.array([0, 1, 5])
+        first = ReedSolomon(32, 2, GH)
+        first.eval_point(positions)
+        second = ReedSolomon(32, 2, GH)
+        second.eval_point(positions)
+        self.assertIs(second._binary_eval_table, first._binary_eval_table)
+
 
 if __name__ == "__main__":
     absltest.main()
