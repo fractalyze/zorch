@@ -1,0 +1,31 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+# Generic Spartan R1CS combinators (zerocheck / RLC / lincheck / PCS-open glue)
+# and the thin `prove`/`verify` assembly that wires them into the Spartan PIOP.
+py_library(
+    name = "spartan",
+    srcs = [
+        "__init__.py",
+        "carry.py",
+        "engine.py",
+        "lincheck.py",
+        "pcs_glue.py",
+        "r1cs.py",
+        "spartan.py",
+        "summand.py",
+        "zerocheck.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:prove",
+        "//zorch:round",
+        "//zorch:transcript",
+        "//zorch:verify",
+        "//zorch/pcs:protocol",
+        "//zorch/poly",
+        "//zorch/sumcheck",
+        "//zorch/utils:bits",
+        requirement("jax"),
+    ],
+)

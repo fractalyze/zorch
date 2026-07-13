@@ -1,0 +1,165 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# Shared fixtures: a satisfying toy R1CS builder and the brute-force reference the
+# structural cross-check compares the production prover against.
+py_library(
+    name = "testing",
+    srcs = [
+        "__init__.py",
+        "reference.py",
+        "toy.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/spartan",
+        "//zorch/testkit:random_field",
+        requirement("jax"),
+    ],
+)
+
+# Ligerito-backed PCS bridge (base<->extension) — kept separate so only the
+# Ligerito integration test pulls the recursive-PCS deps.
+py_library(
+    name = "ligerito_pcs",
+    srcs = ["ligerito_pcs.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/coding:reed_solomon",
+        "//zorch/commit/testing:koalabear16",
+        "//zorch/pcs/ligerito",
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
+    name = "r1cs_test",
+    size = "small",
+    srcs = ["r1cs_test.py"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "engine_test",
+    size = "small",
+    srcs = ["engine_test.py"],
+    deps = [
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/sumcheck",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "zerocheck_test",
+    size = "small",
+    srcs = ["zerocheck_test.py"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/sumcheck",
+        "//zorch/testkit:fusion",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "lincheck_test",
+    size = "small",
+    srcs = ["lincheck_test.py"],
+    deps = [
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "pcs_glue_test",
+    size = "small",
+    srcs = ["pcs_glue_test.py"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "spartan_test",
+    size = "small",
+    srcs = ["spartan_test.py"],
+    deps = [
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "spartan_ligerito_test",
+    size = "large",
+    srcs = ["spartan_ligerito_test.py"],
+    deps = [
+        "//zorch:transcript",
+        "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/pcs/ligerito",
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/spartan/testing:ligerito_pcs",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "crosscheck_test",
+    size = "small",
+    srcs = ["crosscheck_test.py"],
+    deps = [
+        "//zorch/poly",
+        "//zorch/spartan",
+        "//zorch/spartan/testing",
+        "//zorch/sumcheck",
+        "//zorch/testkit:fusion",
+        "//zorch/testkit:random_field",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("jax"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
