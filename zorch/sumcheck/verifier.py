@@ -186,7 +186,8 @@ class UnivariateSkipRound(Round):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _eval_form: type[InnerVerifierRound] = SumcheckRound
     _coeffs_form: type[InnerVerifierRound] = CoeffsSumcheckRound
     _compressed_coeffs_form: type[InnerVerifierRound] = CompressedCoeffsSumcheckRound

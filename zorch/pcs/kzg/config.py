@@ -2,7 +2,7 @@
 """KZG wire types on the `pcs` seam. Both are bare arrays — the commitment is a
 batch of G1 points and the proof is the batch of quotient commitments π — so they
 are named aliases, not wrapper dataclasses (promoted only if a commitment ever
-gains structure; see docs/pcs.md "Instance anatomy")."""
+gains structure; see docs/blocks/pcs.md "Instance anatomy")."""
 
 from __future__ import annotations
 

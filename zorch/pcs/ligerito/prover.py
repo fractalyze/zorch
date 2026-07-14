@@ -351,7 +351,8 @@ def _open(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _pcs_prover: type[
         PcsProver[LigeritoCommitment, LigeritoProverData, LigeritoProof]
     ] = LigeritoProver

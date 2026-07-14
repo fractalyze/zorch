@@ -70,7 +70,8 @@ class Poseidon2:
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
-        # seat in `DuplexTranscript` (docs/conventions.md "Pytree registration").
+        # seat in `DuplexTranscript` (docs/reference/conventions.md
+        # "Pytree registration").
         if not isinstance(other, Poseidon2):
             return NotImplemented
         return self._p == other._p
@@ -285,5 +286,6 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[Permutation] = Poseidon2

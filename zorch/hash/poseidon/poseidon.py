@@ -67,7 +67,8 @@ class Poseidon:
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
-        # seat in `DuplexTranscript` (docs/conventions.md "Pytree registration").
+        # seat in `DuplexTranscript` (docs/reference/conventions.md
+        # "Pytree registration").
         if not isinstance(other, Poseidon):
             return NotImplemented
         return self._p == other._p
@@ -181,5 +182,6 @@ def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[Permutation] = Poseidon

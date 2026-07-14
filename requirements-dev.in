@@ -4,6 +4,6 @@
 #
 #   pip install -r requirements-dev.in
 #
-# Why xdist and how to invoke: docs/dev-env.md "Running the test suite".
+# Why xdist and how to invoke: docs/reference/development.md "Running the test suite".
 pytest
 pytest-xdist

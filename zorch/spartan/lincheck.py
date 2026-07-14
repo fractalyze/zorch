@@ -2,8 +2,9 @@
 """RLC combinator + inner sumcheck (lincheck) stages.
 
 - **`Rlc*`** — samples one batching challenge `r` and folds the three outer claims
-  into `joint = Az + r·Bz + r²·Cz` (`docs/stage-composition.md`'s "RLC openings
-  into claims under a fresh challenge"). Transcript-only glue, so it emits `None`.
+  into `joint = Az + r·Bz + r²·Cz`
+  (`docs/composition/stage-composition.md`'s "RLC openings into claims under a
+  fresh challenge"). Transcript-only glue, so it emits `None`.
 
 - **`Inner*`** — a degree-2 product sumcheck proving `joint = Σ_y M(y)·z̃(y)`, with
   `M(y) = Σ_i eq(r_x)_i·(A+rB+r²C)_{i,y}` the row-bound batched matrix. It reduces
@@ -53,7 +54,7 @@ class RlcVerifier(Round):
     def __call__(
         self, carry: SpartanCarry, msg: None, transcript: Transcript
     ) -> tuple[SpartanCarry, Transcript, Array]:
-        del msg  # glue round carries no proof
+        del msg  # transcript-only round — the prover sends no proof message
         claims = _require(carry.claims_outer, "claims_outer", "outer")
         transcript, r = transcript.sample(1)
         r = r[0]

@@ -325,7 +325,8 @@ class GkrLayerRound(Round):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _summand: type[SumcheckSummand] = LogupSumcheckRound
     _summand_value: type[SumcheckSummand] = LogupSummand
     _gruen_summand: type[GruenSummand] = LogupSummand

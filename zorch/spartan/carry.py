@@ -1,6 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""The Spartan chain's accumulating seam carry (`docs/stage-composition.md`, "The
-pipeline carry").
+"""The Spartan chain's accumulating seam carry
+(`docs/composition/stage-composition.md`, "The pipeline carry").
 
 One frozen pytree threaded through the chain, one field per seam-crossing value;
 each stage `replace`s its own fields and leaves a field `None` until its writer

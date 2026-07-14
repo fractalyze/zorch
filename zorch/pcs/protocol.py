@@ -22,10 +22,11 @@ layer that *uses* it, not in the primitive.
 commitment, retained prover data, and proof are scheme-defined: `PcsProver[C, D,
 P]` produces `C` and `D` from `commit` and `P` from `open`; `PcsVerifier[C, P]`
 consumes the two wire types. Each instance parameterizes its seam conformance
-pin (docs/conventions.md "Seam conformance pins") with them. A pin bites only on
-zorch-owned nominal types — which is why every scheme names its prover data
+pin (docs/reference/conventions.md "Seam conformance pins") with them. A pin
+bites only on zorch-owned nominal types — which is why every scheme names its
+prover data
 (`KzgProverData`, `FriProverData`, `BasefoldProverData`) instead of passing raw
-containers. See docs/pcs.md "Instance anatomy".
+containers. See docs/blocks/pcs.md "Instance anatomy".
 
 **Representation is the scheme's business.** The seam takes polynomials in whatever
 form the scheme needs: KZG wants the coefficient basis (powers-of-tau MSM), the

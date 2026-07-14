@@ -122,5 +122,6 @@ def _verify_body(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[PcsVerifier[LigeroCommitment, LigeroProof]] = LigeroVerifier
