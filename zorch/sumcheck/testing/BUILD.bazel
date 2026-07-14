@@ -32,6 +32,7 @@ py_test(
     srcs = ["domain_test.py"],
     deps = [
         "//zorch/sumcheck",
+        "//zorch/testkit:fusion",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("jax"),

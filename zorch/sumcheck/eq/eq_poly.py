@@ -90,9 +90,9 @@ def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, domain: EvalDomain) -> 
     they differ only in `domain`."""
     l_0, l_1 = l_evals[0], l_evals[1]
     l_diff = l_1 - l_0
-    finite_t = t_evals[1:] if domain.leading else t_evals
+    finite_t = t_evals[1:] if domain.inf_index is not None else t_evals
     finite = (l_0 + domain.nodes * l_diff) * finite_t
-    if domain.leading:
+    if domain.inf_index is not None:
         return jnp.concatenate([jnp.atleast_1d(l_diff * t_evals[0]), finite])
     return finite
 
@@ -152,11 +152,11 @@ class EqPolyRound(Round):
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
         p0s, diffs = _split_slope(p_stacked)
         w_i = self.w[i - 1]
-        full = EvalDomain(naturals(degree + 1, p_stacked.dtype), leading=True)
+        full = EvalDomain(naturals(degree + 1, p_stacked.dtype), inf_index=0)
         t = _weighted_summand(p0s, diffs, eq_w_l, eq_w_r, full, self.summand._combine)
         l_evals = expand_hypercube_step(eq_w_prev, w_i)  # lᵢ(0), lᵢ(1)
         s = sumcheck_poly_from_t(t, l_evals, full)
-        coeffs = EvalDomain(leading=True).to_coeffs(s)
+        coeffs = EvalDomain(inf_index=0).to_coeffs(s)
         return coeffs, (p0s, diffs, w_i)
 
     def _fold(

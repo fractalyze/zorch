@@ -55,12 +55,14 @@ class EvalDomain:
     ascending coefficients.
 
     nodes are the finite sample points — the Gruen set {0, 1, *extra, eq_root(z)},
-    or (when None) the naturals {0..}. leading prepends the value at infinity (the
-    leading coefficient) as the first sample. The polynomial's degree and field come
-    from the samples themselves, so nothing but the node shape is fixed here."""
+    or (when None) the naturals {0..}. inf_index is the index at which the value
+    at infinity — the leading coefficient (cheap for a product: the product of the
+    factor slopes) — sits among the samples: 0 first (Û), -1 last (the compressed
+    `[s(node), s(∞)]` wire), None for no ∞ sample. Degree and field come from the
+    samples, so only the node shape is fixed here."""
 
     nodes: Array | None = None
-    leading: bool = False
+    inf_index: int | None = None
 
     def coeff_matrix(self) -> Array:
         """Value → coefficient matrix for the explicit finite nodes — what a driver
@@ -72,11 +74,13 @@ class EvalDomain:
     def to_coeffs(self, values: Array) -> Array:
         """Ascending coefficients from this domain's samples of a round polynomial;
         the degree (len−1) and field come from values."""
-        if not self.leading:
+        if self.inf_index is None:
             return jnp.dot(self.coeff_matrix(), values)
-        # [∞, *finite]: the ∞ sample is the leading coefficient c_d, and the finite
+        # The ∞ sample (at `inf_index`) is the leading coefficient c_d; the finite
         # samples (naturals {0..d−1} unless given) interpolate the residual p − c_d·xᵈ.
-        v_inf, finite = values[0], values[1:]
+        pos = self.inf_index % values.shape[0]
+        v_inf = values[pos]
+        finite = jnp.concatenate([values[:pos], values[pos + 1 :]])
         d = finite.shape[0]
         if self.nodes is None:
             # Naturals domain: _finite_coeff_matrix(naturals(d)) is exactly the
@@ -96,7 +100,10 @@ class EvalDomain:
         assert self.nodes is not None, "a sampling domain needs an explicit node set"
         diff = p1 - p0
         finite = p0[None] + self.nodes.reshape((-1,) + (1,) * p0.ndim) * diff[None]
-        return jnp.concatenate([diff[None], finite]) if self.leading else finite
+        if self.inf_index is None:
+            return finite
+        pos = self.inf_index % (finite.shape[0] + 1)
+        return jnp.concatenate([finite[:pos], diff[None], finite[pos:]])
 
 
 def extend_to_round_domain(
@@ -135,7 +142,17 @@ def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
     ∞-leading, u=1 dropped (the verifier recovers s(1) from s(0)+s(1)=claim). The
     default sampling domain for the eq-poly / sqrt-space engines."""
     nat = naturals(degree, dtype)
-    return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), leading=True)
+    return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), inf_index=0)
+
+
+def compressed_domain(node: int, dtype: Any) -> EvalDomain:
+    """The two-point compressed product-round domain `[s(node), s(∞)]`: one finite
+    node (`0` → `s(0)=c_0`, `1` → `s(1)`) with `s(∞)` trailing. The third value of
+    the degree-2 round poly stays off the wire — the verifier recovers it from
+    `s(0)+s(1)=claim`."""
+    if node not in (0, 1):
+        raise ValueError(f"compressed node must be 0 or 1, got {node}")
+    return EvalDomain(naturals(node + 1, dtype)[node:], inf_index=-1)
 
 
 def split_halves(arr: Array) -> tuple[Array, Array]:
@@ -157,22 +174,35 @@ def split_pairs(arr: Array) -> tuple[Array, Array]:
 
 
 def summand_evals(
-    stacked: Array, combine: Callable[..., Array], domain: EvalDomain
+    stacked: Array,
+    combine: Callable[..., Array],
+    domain: EvalDomain,
+    *,
+    weight: Array | None = None,
+    msb: bool = True,
 ) -> Array:
-    """Σ_x' combine(f₁, …, f_m)(x') per point of `domain`: the m stacked factors
-    sampled at the domain's points (domain.sample), combined, then summed. The one
-    reduction body the round-message builders share — generic over BOTH the summand's
-    `combine` (Πₖ, LogUp, …) and the evaluation domain (∞-leading Û, Gruen, {0,½},
-    {0,2,4}, …).
+    """Σ_x' weight(x')·combine(f₁, …, f_m)(x') per point of `domain`: the m stacked
+    factors sampled at the domain's points (domain.sample), combined, optionally
+    weighted per hypercube point, then summed. The one reduction body the
+    round-message builders share — generic over the summand's `combine` (Πₖ, LogUp,
+    …), the evaluation domain (∞-leading Û, Gruen, {0,½}, {0,2,4}, …), and the bind
+    order.
+
+    `weight` (a length-N/2 vector over the folded hypercube) is the eq-weight of an
+    eq-weighted sumcheck — `Σ eq·Π` in one pass, no eq factor stacked into the state.
+    `msb=False` binds the LOW variable (split_pairs) instead of the high
+    (split_halves) — the LSB order the jagged / GHASH engines fold in.
 
     A leading (∞) node encodes s(∞) = combine(*slopes), the true leading coefficient
     only for a HOMOGENEOUS combine — every monomial a product of exactly `degree`
     factors (a plain product, or the LogUp combine); a mixed-degree combine like
     E·(A·B − C) is not. A finite domain carries no such restriction — any summand
     samples cleanly on it."""
-    p0, p1 = split_halves(stacked)
-    lifted = jax.vmap(domain.sample)(p0, p1)
-    return jnp.sum(combine(*lifted), axis=1)
+    p0, p1 = split_halves(stacked) if msb else split_pairs(stacked)
+    combined = combine(*jax.vmap(domain.sample)(p0, p1))
+    if weight is not None:
+        combined = combined * weight
+    return jnp.sum(combined, axis=1)
 
 
 def product_round_poly(stacked: Array) -> Array:
@@ -189,8 +219,8 @@ def product_round_coeffs(stacked: Array) -> Array:
     domain [∞, 0, 1, …, m−1] so it is fully determined, then mapped to coefficients —
     the wire form verifier.CoeffsSumcheckRound checks."""
     m = stacked.shape[0]
-    full = EvalDomain(naturals(m, stacked.dtype), leading=True)  # [∞, 0, 1, …, m−1]
-    return EvalDomain(leading=True).to_coeffs(summand_evals(stacked, _product, full))
+    full = EvalDomain(naturals(m, stacked.dtype), inf_index=0)  # [∞, 0, 1, …, m−1]
+    return EvalDomain(inf_index=0).to_coeffs(summand_evals(stacked, _product, full))
 
 
 def fold(arr: Array, r: Array, *, msb: bool = True) -> Array:
