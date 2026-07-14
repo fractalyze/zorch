@@ -10,3 +10,24 @@ compile_pip_requirements(
     extra_args = ["--extra-index-url=https://fractalyze.github.io/pypi/simple/"],
     requirements_txt = "requirements_lock_3_11.txt",
 )
+
+# Remote execution platform for Buildbarn RBE (--config=remote, see //.bazelrc.rbe).
+#
+# Buildbarn matches exec_properties EXACTLY against what workers advertise; any
+# extra key here strands every action with "No workers exist for platform". The
+# pool runs generic upstream Buildbarn images (CPU x86_64, no GPU), so only the
+# CPU leg executes remotely — the GPU leg falls back to local execution on the
+# self-hosted GPU runner (the spawn_strategy fallback in //.bazelrc.rbe).
+# Mirrors fractalyze/frx's remote platform.
+platform(
+    name = "linux_remote",
+    constraint_values = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+    exec_properties = {
+        "OSFamily": "Linux",
+        "cpu_arch": "x86_64",
+    },
+    visibility = ["//visibility:public"],
+)
