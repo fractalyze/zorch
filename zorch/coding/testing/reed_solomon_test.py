@@ -170,14 +170,15 @@ class ReedSolomonTest(absltest.TestCase):
                 msg=f"k={k} blowup={blowup} coset={shift is not None}",
             )
 
-    def test_extend_equals_encode_of_interpolation(self) -> None:
-        # The fused bit-reversed-intermediate schedule is byte-identical to the
-        # naive interpolate-then-encode, including over a leading batch axis.
+    def test_extend_preserves_leading_batch_axis(self) -> None:
+        # extend transforms only the last axis: a batched call must equal
+        # stacking the independent per-row single extends.
         k, blowup = 8, 2
         rs = ReedSolomon(k, blowup, F, coset_shift=jnp.asarray(7, F))
         evals = rand_field(6, (3, k), F)
-        naive = rs.encode(lax.ntt(evals, ntt_type="INTT", ntt_length=k))
-        self.assertTrue(bool(jnp.all(rs.extend(evals) == naive)))
+        batched = rs.extend(evals)
+        rows = jnp.stack([rs.extend(evals[i]) for i in range(evals.shape[0])])
+        self.assertTrue(bool(jnp.all(batched == rows)))
 
     def test_codeword_is_low_degree(self) -> None:
         k, blowup = 8, 2

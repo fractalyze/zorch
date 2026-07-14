@@ -201,51 +201,20 @@ class ReedSolomon:
         the `block_len` coset codeword, transforming the last axis (any leading
         batch axes are preserved). Natural order in and out.
 
-        Equivalent to `encode(lax.ntt(evals, INTT))` (interpolate to coefficients,
-        then coset-evaluate) but fused on a bit-reversed-intermediate schedule: a
-        Gentleman-Sande DIF interpolation feeds a Cooley-Tukey DIT coset
-        evaluation with the coefficients kept bit-reversed between them, so the
-        NTT-fusion rewriter folds away both standalone bit-reverse permute kernels
-        (each a pure-permutation HBM round-trip with no arithmetic). The additive
-        (binary-field) NTT is natural order in and out, so it takes the plain
-        interpolate-then-encode path — no permute to fold.
+        Interpolates to coefficients (`intt`), then coset-evaluates (`encode`) —
+        i.e. `encode(intt(evals))`.
         """
         if evals.shape[-1] != self.message_len:
             raise ValueError(
                 f"evals last axis must be {self.message_len}, got {evals.shape[-1]}"
             )
-        n, n_ext = self.message_len, self.block_len
-        blowup = n_ext // n
-        coeffs = lax.ntt(evals, ntt_type="INTT", ntt_length=n, generator=self.generator)
-        if self._binary:
-            return self.encode(coeffs)
-        # DIF interpolation: `bit_reverse(ntt(INTT))` is the pattern the rewriter
-        # reads to emit the decimation-in-frequency schedule and elide the permute.
-        coeffs = lax.bit_reverse(coeffs, dimensions=(coeffs.ndim - 1,))
-        if self._coset_powers is not None:
-            # Coeff at natural index i weighs h**i, so on bit-reversed coeffs the
-            # coset powers ride bit-reversed. Reuse the first `n` of the
-            # precomputed block_len powers (= powers(h, n)).
-            coset = lax.bit_reverse(self._coset_powers[:n], dimensions=(0,))
-            coeffs = coeffs * coset
-        # Zero-extend n -> n_ext as a stride-blowup upsample: because
-        # bitrev_{n_ext}(i) = bitrev_n(i)*blowup for i < n, a bit-reversed
-        # zero-pad interleaves each coeff with blowup-1 zeros, not a trailing pad.
-        # A static concatenate (not `.at[].set`) so it stays a pure interleave.
-        padded = jnp.concatenate(
-            [
-                coeffs[..., None],
-                jnp.zeros(coeffs.shape[:-1] + (n, blowup - 1), self.dtype),
-            ],
-            axis=-1,
-        ).reshape(coeffs.shape[:-1] + (n_ext,))
-        # DIT coset evaluation on the bit-reversed input -> natural-order codeword.
-        return lax.ntt(
-            lax.bit_reverse(padded, dimensions=(padded.ndim - 1,)),
-            ntt_type="NTT",
-            ntt_length=n_ext,
+        coeffs = lax.ntt(
+            evals,
+            ntt_type="INTT",
+            ntt_length=self.message_len,
             generator=self.generator,
         )
+        return self.encode(coeffs)
 
     def domain(self) -> Array:
         """The points `encode` evaluates on, coset shift included."""
