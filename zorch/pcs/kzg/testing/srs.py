@@ -2,10 +2,8 @@
 """Toy KZG SRS fixture: scalar-mul the bn254 generators by powers of a *known* τ.
 Tests only — a real SRS comes from a trusted-setup ceremony where τ is destroyed.
 
-Standard-domain bn254 dtypes, deliberately: `lax.pairing_check` mis-decodes
-Montgomery-form inputs (fractalyze/zkx#518), so a mont KZG round trip cannot
-verify yet. Switch to the `*_mont` test convention when that lands — the
-scalar-muls and `lax.msm` are already mont-correct."""
+Montgomery-domain bn254 dtypes: the scalar-muls, `lax.msm`, and
+`lax.pairing_check` are all mont-correct."""
 
 from __future__ import annotations
 
@@ -17,9 +15,9 @@ from frx import lax
 
 from zorch.pcs.kzg.setup import KzgProvingKey, KzgVerifierKey, setup
 
-SF = zk_dtypes.bn254_sf
-G1 = zk_dtypes.bn254_g1_affine
-G2 = zk_dtypes.bn254_g2_affine
+SF = zk_dtypes.bn254_sf_mont
+G1 = zk_dtypes.bn254_g1_affine_mont
+G2 = zk_dtypes.bn254_g2_affine_mont
 
 
 def toy_srs(tau: int, n: int) -> tuple[KzgProvingKey, KzgVerifierKey]:

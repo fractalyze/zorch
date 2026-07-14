@@ -12,9 +12,8 @@ This forces a **device split**: `lax.msm` is a GPU-only kernel while
 G1 combinations are computed on the GPU, their coordinates pulled to the host, and
 the points rebuilt on the CPU for the pairing — the split any pairing-based
 verifier on this stack must make. The verifier is O(1), so the round-trip is
-irrelevant. The rebuild is domain-faithful (`raw` → `from_raw` of the same
-dtype), so it is not the obstacle to Montgomery-form keys — `lax.pairing_check`'s
-mont mis-decode is (fractalyze/zkx#518).
+irrelevant. The rebuild is domain-faithful (`raw` → `from_raw` of the same dtype), so
+Montgomery-form keys verify correctly.
 """
 
 from __future__ import annotations

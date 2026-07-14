@@ -36,8 +36,6 @@ from zorch.transcript import DuplexTranscript, Transcript
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
-# Standard domain until lax.pairing_check decodes Montgomery inputs (zkx#518);
-# see the note in kzg/testing/srs.py.
 SF = zk_dtypes.bn254_sf_mont
 
 _GPU = frx.default_backend() == "gpu"

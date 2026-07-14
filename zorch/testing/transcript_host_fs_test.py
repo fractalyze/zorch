@@ -21,14 +21,11 @@ F = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 
 # Host-FS runs the sponge on the CPU inside the callback; on a CPU-only backend the
-# device and host sponges coincide (nothing to compare) and the run also hits the
-# FXLA CPU scan array-carry bug the duplex tests skip for (fractalyze/zkx#500).
+# device and host sponges coincide (nothing to compare).
 _CPU_BACKEND = frx.default_backend() == "cpu"
 
 
-@absltest.skipIf(
-    _CPU_BACKEND, "host-FS vs device sponge is only meaningful off CPU (zkx#500)"
-)
+@absltest.skipIf(_CPU_BACKEND, "host-FS vs device sponge is only meaningful off CPU")
 class TranscriptHostFsTest(parameterized.TestCase):
     """The `fs_on_host` opt-in: observe/sample/observe_and_sample/sample_challenge
     route to the host sponge and stay byte-identical to the device path."""

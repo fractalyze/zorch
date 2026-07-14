@@ -10,8 +10,7 @@ not flaky. Byte-identity (the sumcheck / logup-gkr roundtrip tests) separately
 proves the body genuinely runs R times: a hoisted or CSE'd carry would yield a
 wrong proof.
 
-Tracing only -- no execution -- so these run on every backend (the zkx#500 CPU
-while-emitter bug only bites at run time; see transcript_test).
+Tracing only -- no execution -- so these run on every backend.
 """
 
 from __future__ import annotations

@@ -214,7 +214,7 @@ class JaggedTransitionJitTest(absltest.TestCase):
 class MixedFieldFirstLayerTest(absltest.TestCase):
     """A first layer may hold base-field numerators under extension-field
     denominators; the transition's `n0*d1 + n1*d0` fold promotes to the common
-    field, byte-identically to folding an all-extension copy (zkx#681)."""
+    field, byte-identically to folding an all-extension copy."""
 
     def test_type_accepts_base_numerator_ef_denominator(self) -> None:
         # The shape-only `__post_init__` admits a layer whose numerator and
@@ -315,7 +315,7 @@ class BuildJaggedPyramidTest(absltest.TestCase):
         self._assert_matches_eager((7, 3, 5, 2, 6, 1, 4, 8))
 
     def test_matches_eager_base_field_first_layer(self) -> None:
-        # zkx#681: a base-field first-layer numerator under EF denominators.
+        # A base-field first-layer numerator under EF denominators.
         # Transition 0's fold promotes it to EF; the unrolled build handles the
         # dtype change inline (a `lax.scan` could not -- carry-out dtype would
         # differ from carry-in) and stays byte-identical to the eager build.

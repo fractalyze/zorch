@@ -54,8 +54,6 @@ class QuotientAndEvalTest(absltest.TestCase):
 
 # --- full commit -> open -> verify over bn254 (GPU: lax.msm is GPU-only) ---------
 
-# Standard domain until lax.pairing_check decodes Montgomery inputs (zkx#518);
-# see the note in testing/srs.py.
 SF = zk_dtypes.bn254_sf_mont
 G1 = zk_dtypes.bn254_g1_affine_mont
 

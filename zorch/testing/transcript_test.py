@@ -33,19 +33,7 @@ from zorch.transcript import (
 
 F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 
-# The duplex sponge's `lax.scan` absorb is correct on GPU but hits a FXLA CPU
-# while-emitter bug that drops the scan's array-carry update (eager runs go
-# non-deterministic). Skip the duplex tests on CPU until it lands. See
-# fractalyze/zkx#500.
-_CPU_BACKEND = frx.default_backend() == "cpu"
-_skip_on_cpu_scan_bug = absltest.skipIf(
-    _CPU_BACKEND,
-    "FXLA CPU scan array-carry bug (GPU-correct); remove when "
-    "fractalyze/zkx#500 lands",
-)
 
-
-@_skip_on_cpu_scan_bug
 class DuplexTranscriptTest(absltest.TestCase):
     """The real duplex-sponge transcript: a device-side JAX pytree that threads
     functionally under @jit. observe absorbs into the sponge; sample squeezes
@@ -224,8 +212,8 @@ class TranscriptJitCacheTest(absltest.TestCase):
     jagged verify replay whose kernels run in 20 ms)."""
 
     def test_fresh_cheap_transcripts_share_treedef(self) -> None:
-        # The cheap permutation has no jit-cache counterpart below (its scan
-        # hits the zkx#500 CPU bug), so treedef equality is its only guard.
+        # The cheap permutation has no jit-cache counterpart below, so treedef
+        # equality is its only guard.
         self.assertEqual(
             tree_util.tree_structure(cheap_transcript(F)),
             tree_util.tree_structure(cheap_transcript(F)),
@@ -251,10 +239,8 @@ class TranscriptJitCacheTest(absltest.TestCase):
         ]
         assert_single_trace(self, _sample_body, calls)
 
-    @_skip_on_cpu_scan_bug
     def test_observe_family_reuses_cached_zones(self) -> None:
-        # The scan-bearing ops (duplex-only: the cheap permutation's scan hits
-        # zkx#500 on CPU), same contract as sample above.
+        # The scan-bearing ops (duplex-only), same contract as sample above.
         v = rand_field(11, (5,), F)
         w = jnp.zeros((), F)
         new = functools.partial(DuplexTranscript.new, koalabear16_perm(), rate=8)
@@ -273,7 +259,6 @@ class TranscriptJitCacheTest(absltest.TestCase):
         )
 
 
-@_skip_on_cpu_scan_bug
 class GrindTest(absltest.TestCase):
     """Proof-of-work grind over the duplex sponge: search the full witness space
     for a witness whose squeezed challenge has `pow_bits` zero low bits, plus the
@@ -438,7 +423,6 @@ class CondToSelectByteIdentityTest(absltest.TestCase):
             ):
                 self.assertTrue(bool(jnp.all(a == b)), f"sample {i} state diverged")
 
-    @_skip_on_cpu_scan_bug
     def test_select_observe_matches_cond_reference(self) -> None:
         # 19 elements over rate 8: two full-block flushes (`full` True) plus a
         # 3-element tail (`full` False), so the run covers both branches of the
@@ -519,14 +503,12 @@ def _ref_sample(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, jnp.ndar
     return t, jnp.stack(outs)
 
 
-@_skip_on_cpu_scan_bug
 class RateBlockByteIdentityTest(absltest.TestCase):
     """Rate-block batching: `_observe_body` now permutes once per
     rate-block (not once per element) and `_sample_body` once per drained
     output-block (not once per limb). Both must be byte-for-byte identical to the
     captured pre-change references -- the transcript drives the prover's
-    Fiat-Shamir, so any drift breaks every proof. Pinned on GPU (the duplex
-    `lax.scan` hits the zkx#500 CPU bug)."""
+    Fiat-Shamir, so any drift breaks every proof."""
 
     def _new(self) -> DuplexTranscript:
         return DuplexTranscript.new(koalabear16_perm(), rate=8)
@@ -690,24 +672,11 @@ def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
 
 
 class CpuByteIdentityTest(absltest.TestCase):
-    """Rate-block byte-identity on CPU (NOT `@_skip_on_cpu_scan_bug`).
+    """Rate-block byte-identity against scan-free pure references.
 
-    The byte-identity suite above is GPU-pinned (its `lax.scan`/`lax.cond`
-    references hit the FXLA CPU scan bug, fractalyze/zkx#500), so the rate-block
-    ops were never byte-checked on the CPU backend the prover runs on. These
-    compare production `observe`/`sample` against scan-free, CPU-safe references
-    (`_pure_observe`, the per-limb `_sample_one` loop) so a future rate-block
-    LOGIC change is byte-checked on CPU as well as GPU.
-
-    SCOPE — do NOT over-trust these. They compile `observe`/`sample` in ISOLATION,
-    where the ops are correct even on the build that broke #292: zkx#500 is a
-    CONTEXT-DEPENDENT CPU codegen miscompile that only fires inside the full
-    prove's compilation. An isolated op — and even a transcript threaded through a
-    bare `lax.scan` — compiles correctly on CPU; the divergence appears only in
-    the rolled prove. So these guard rate-block LOGIC; the zkx#500 codegen
-    miscompile is gated ONLY by the consumer's full CPU prove (sp1-zorch
-    `logup_gkr:{prover,verifier}_test`, `shard_prover:verify_shard_test`), which
-    is where it surfaced. A zorch Fiat-Shamir change must be validated there.
+    Compares production `observe`/`sample` against scan-free references
+    (`_pure_observe`, the per-limb `_sample_one` loop) so a rate-block LOGIC
+    change is byte-checked independent of the scan-based path.
     """
 
     def _new(self) -> DuplexTranscript:

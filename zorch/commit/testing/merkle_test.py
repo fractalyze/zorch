@@ -384,11 +384,6 @@ class KaryMerkleTreeTest(absltest.TestCase):
         for i in range(4):
             self.assertTrue(bool(tree.verify(root, i, tree.open(matrix, layers, i))))
 
-    @absltest.skip(
-        "FXLA CPU mis-routes the batched k-ary compress permute to the binary "
-        "poseidon2_merkle_compress kernel (shape mismatch crash); single-index "
-        "reconstruct_root passes. Tracked as fractalyze/zkx#606."
-    )
     def test_vmap_open_reconstruct_arity4(self) -> None:
         # The k-ary fold must trace under vmap like the binary one: a batched
         # open -> reconstruct_root over every leaf recovers the committed root.
