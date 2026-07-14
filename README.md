@@ -38,10 +38,10 @@ is *built from* or *reduces to* (the split is below), not a sibling unit.
 `Round`s compose at three granularities. All three **are** `Round`s — chains
 nest — so they differ only in altitude:
 
-| Granularity      | What it is                                        | Example                                                      |
-| ---------------- | ------------------------------------------------- | ------------------------------------------------------------ |
-| **Stage**        | one phase of the argument, usually itself a chain | trace-commit · logup-gkr · zero-check · jagged-evals         |
-| **Bridge**       | connects stages; transcript-only                  | a grind, a sampled-and-discarded challenge, a framed observe |
+| Granularity | What it is                                        | Example                                                      |
+| ----------- | ------------------------------------------------- | ------------------------------------------------------------ |
+| **Stage**   | one phase of the argument, usually itself a chain | trace-commit · logup-gkr · zero-check · jagged-evals         |
+| **Bridge**  | connects stages; transcript-only                  | a grind, a sampled-and-discarded challenge, a framed observe |
 | **`Round`** | one step on the Fiat-Shamir schedule              | a per-variable sumcheck round                                |
 
 **The split criterion is the Fiat-Shamir schedule, nothing else.** The atomic

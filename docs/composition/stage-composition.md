@@ -142,15 +142,15 @@ kernel that defines one scheme's encoding is the consumer's; a
 mundane-but-universal structure like a Merkle tree, or a whole reusable PCS
 scheme, is zorch's.
 
-| Concern | zorch (generic) | Consumer (one scheme / application) |
-| --- | --- | --- |
-| Fiat-Shamir | the transcript + `grind` / `check_witness` | the rate/field parameterization and the observe/sample *order* |
-| Hashing | the `Permutation` seam, sponge, compression | the concrete permutation params (constants, width, field) |
-| Commitment | the Merkle tree(s) + reusable query/opening layout | which columns are committed, and the layout *schedule* |
-| Codes / PCS | the `LinearCode` / `PcsProver` / `PcsVerifier` seams + reusable instances and fold machinery | the per-prover stacking/region/batching schedule, any scheme-specific fold |
-| Sumcheck | the scan driver + per-variable rounds | the `combine` summand and the round wiring |
-| Composition | the `Round` abstraction + chains | the actual stage sequence and the carry between stages |
-| Constraints / field | works over any field dtype | the constraint system, the quotient/zero-check shape, the base/extension dtypes |
+| Concern             | zorch (generic)                                                                              | Consumer (one scheme / application)                                             |
+| ------------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Fiat-Shamir         | the transcript + `grind` / `check_witness`                                                   | the rate/field parameterization and the observe/sample *order*                  |
+| Hashing             | the `Permutation` seam, sponge, compression                                                  | the concrete permutation params (constants, width, field)                       |
+| Commitment          | the Merkle tree(s) + reusable query/opening layout                                           | which columns are committed, and the layout *schedule*                          |
+| Codes / PCS         | the `LinearCode` / `PcsProver` / `PcsVerifier` seams + reusable instances and fold machinery | the per-prover stacking/region/batching schedule, any scheme-specific fold      |
+| Sumcheck            | the scan driver + per-variable rounds                                                        | the `combine` summand and the round wiring                                      |
+| Composition         | the `Round` abstraction + chains                                                             | the actual stage sequence and the carry between stages                          |
+| Constraints / field | works over any field dtype                                                                   | the constraint system, the quotient/zero-check shape, the base/extension dtypes |
 
 A consumer never forks a block; it supplies only the differing *values* and
 *order* through four injection points: (1) a params object behind the

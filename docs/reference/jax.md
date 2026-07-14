@@ -204,38 +204,38 @@ the page was renamed — search the title.
 
 ### Start here (read both, in order)
 
-| Page | Read it for |
-| --- | --- |
+| Page                                                                                      | Read it for                                                                                        |
+| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | [🔪 The Sharp Bits 🔪](https://docs.jax.dev/en/latest/notebooks/Common_Gotchas_in_JAX.html) | Purity, no in-place, no value-branching, the gotcha catalog. The canonical "things that bite you." |
-| [How to Think in JAX](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html) | The trace/transform mental model vs numpy — idea #1 and #4 in one sitting. |
+| [How to Think in JAX](https://docs.jax.dev/en/latest/notebooks/thinking_in_jax.html)      | The trace/transform mental model vs numpy — idea #1 and #4 in one sitting.                         |
 
 ### Reference (reach for the relevant one)
 
-| Page | Read it for | Underpins |
-| --- | --- | --- |
-| [JIT mechanics: tracing & static args](https://docs.jax.dev/en/latest/jit-compilation.html) | Why a trace is shape-keyed; what recompiles | idea #2, `conventions.md` `@jit` |
-| [Control flow & logical operators](https://docs.jax.dev/en/latest/control-flow.html) | `scan`/`cond`/`fori_loop` vs Python loops | idea #4, `conventions.md` Loops |
-| [Pytrees](https://docs.jax.dev/en/latest/pytrees.html) | Registering custom nodes; flatten/unflatten | idea #3, `conventions.md` Pytree registration |
-| [Pseudorandom numbers](https://docs.jax.dev/en/latest/random-numbers.html) + [PRNG design JEP](https://docs.jax.dev/en/latest/jep/263-prng.html) | Explicit keys, splitting, *why* | the PRNG trap |
-| [FAQ](https://docs.jax.dev/en/latest/faq.html) | "Why does it recompile?", donation, sync | idea #2 |
-| [JEP index](https://docs.jax.dev/en/latest/jep/index.html) | Design rationale straight from the team | the "why" behind the API |
+| Page                                                                                                                                             | Read it for                                 | Underpins                                     |
+| ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------- | --------------------------------------------- |
+| [JIT mechanics: tracing & static args](https://docs.jax.dev/en/latest/jit-compilation.html)                                                      | Why a trace is shape-keyed; what recompiles | idea #2, `conventions.md` `@jit`              |
+| [Control flow & logical operators](https://docs.jax.dev/en/latest/control-flow.html)                                                             | `scan`/`cond`/`fori_loop` vs Python loops   | idea #4, `conventions.md` Loops               |
+| [Pytrees](https://docs.jax.dev/en/latest/pytrees.html)                                                                                           | Registering custom nodes; flatten/unflatten | idea #3, `conventions.md` Pytree registration |
+| [Pseudorandom numbers](https://docs.jax.dev/en/latest/random-numbers.html) + [PRNG design JEP](https://docs.jax.dev/en/latest/jep/263-prng.html) | Explicit keys, splitting, *why*             | the PRNG trap                                 |
+| [FAQ](https://docs.jax.dev/en/latest/faq.html)                                                                                                   | "Why does it recompile?", donation, sync    | idea #2                                       |
+| [JEP index](https://docs.jax.dev/en/latest/jep/index.html)                                                                                       | Design rationale straight from the team     | the "why" behind the API                      |
 
 ### `jit`, in depth (the trace → compile pipeline)
 
 Read in this order to actually *understand* `jit` rather than cargo-cult it.
 
-| Page | Read it for |
-| --- | --- |
-| [Key concepts](https://docs.jax.dev/en/latest/key-concepts.html) | The vocabulary: tracer, jaxpr, transformation, pytree. Everything below assumes it. |
-| [Tracing](https://docs.jax.dev/en/latest/tracing.html) | What "trace once with abstract values" actually does — the core mechanism. |
-| [How JAX primitives lower (jaxprs)](https://docs.jax.dev/en/latest/jaxpr.html) | The IR `jit` produces; reading a jaxpr is how you *see* what got traced (and what got unrolled). |
-| [Just-in-time compilation](https://docs.jax.dev/en/latest/jit-compilation.html) | `jit`, `static_argnums`, what's cached on what key. The primer. |
-| [Ahead-of-time compilation](https://docs.jax.dev/en/latest/aot.html) | `jit(f).lower(...).compile()` — splits trace/lower/compile so you can inspect each and pre-compile. |
-| [Stateful computations](https://docs.jax.dev/en/latest/stateful-computations.html) | How to carry "state" under `jit` without side effects — idea #3 applied. |
-| [Debugging slow tracing & compilation](https://docs.jax.dev/en/latest/debugging/slow_tracing_compilation.html) | The diagnostic playbook above, in full: the flags, the log signatures, the `lambda`-vs-`partial` / unrolling / varying-shape gotchas. |
-| [Config options](https://docs.jax.dev/en/latest/config_options.html) | Every diagnostic flag (`jax_log_compiles`, `jax_explain_cache_misses`, IR dumps). |
-| [Persistent compilation cache](https://docs.jax.dev/en/latest/persistent_compilation_cache.html) | Caching compiles across processes — and why a poisoned cache dir surfaces as a deserialization crash (see [`dev-env.md`](development.md)). |
-| [Compiling ML programs via high-level tracing](https://cs.stanford.edu/~rfrostig/pubs/jax-mlsys2018.pdf) (Frostig, Johnson, Leary — MLSys 2018) | The founding paper. `jit` *is* this paper; read it once for the model the whole system is built on. |
+| Page                                                                                                                                            | Read it for                                                                                                                                |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Key concepts](https://docs.jax.dev/en/latest/key-concepts.html)                                                                                | The vocabulary: tracer, jaxpr, transformation, pytree. Everything below assumes it.                                                        |
+| [Tracing](https://docs.jax.dev/en/latest/tracing.html)                                                                                          | What "trace once with abstract values" actually does — the core mechanism.                                                                 |
+| [How JAX primitives lower (jaxprs)](https://docs.jax.dev/en/latest/jaxpr.html)                                                                  | The IR `jit` produces; reading a jaxpr is how you *see* what got traced (and what got unrolled).                                           |
+| [Just-in-time compilation](https://docs.jax.dev/en/latest/jit-compilation.html)                                                                 | `jit`, `static_argnums`, what's cached on what key. The primer.                                                                            |
+| [Ahead-of-time compilation](https://docs.jax.dev/en/latest/aot.html)                                                                            | `jit(f).lower(...).compile()` — splits trace/lower/compile so you can inspect each and pre-compile.                                        |
+| [Stateful computations](https://docs.jax.dev/en/latest/stateful-computations.html)                                                              | How to carry "state" under `jit` without side effects — idea #3 applied.                                                                   |
+| [Debugging slow tracing & compilation](https://docs.jax.dev/en/latest/debugging/slow_tracing_compilation.html)                                  | The diagnostic playbook above, in full: the flags, the log signatures, the `lambda`-vs-`partial` / unrolling / varying-shape gotchas.      |
+| [Config options](https://docs.jax.dev/en/latest/config_options.html)                                                                            | Every diagnostic flag (`jax_log_compiles`, `jax_explain_cache_misses`, IR dumps).                                                          |
+| [Persistent compilation cache](https://docs.jax.dev/en/latest/persistent_compilation_cache.html)                                                | Caching compiles across processes — and why a poisoned cache dir surfaces as a deserialization crash (see [`dev-env.md`](development.md)). |
+| [Compiling ML programs via high-level tracing](https://cs.stanford.edu/~rfrostig/pubs/jax-mlsys2018.pdf) (Frostig, Johnson, Leary — MLSys 2018) | The founding paper. `jit` *is* this paper; read it once for the model the whole system is built on.                                        |
 
 ### Debugging (at runtime)
 
@@ -244,23 +244,23 @@ contents, so `print(x)` prints a tracer (at trace time) and `if x == 0: raise`
 is a `TracerBoolConversionError`. The fixes are functional equivalents — print
 and breakpoint via `jax.debug.*`, asserts via `checkify` — that survive `jit`.
 
-| Page | Read it for |
-| --- | --- |
-| [Introduction to debugging](https://docs.jax.dev/en/latest/debugging.html) | The runtime toolkit overview — what works under `jit` and what doesn't. |
-| [JAX errors](https://docs.jax.dev/en/latest/errors.html) | The exception glossary: paste your `TracerBoolConversionError` / `ConcretizationTypeError` / leaked-tracer message here for the cause + fix. The fastest way out of a stuck error. |
-| [`jax.debug.print` & `jax.debug.breakpoint`](https://docs.jax.dev/en/latest/debugging/print_breakpoint.html) | Printing a *value* (not a tracer) and dropping a breakpoint from inside a traced/`scan`'d body. |
-| [`checkify`](https://docs.jax.dev/en/latest/debugging/checkify_guide.html) | Functional runtime asserts under `jit` — the right way to guard a div-by-zero or a length mismatch without an un-`jit`-able `if … raise`. (Exactly the guards the logup_gkr review asks for.) |
-| [Debugging flags](https://docs.jax.dev/en/latest/debugging/flags.html) | `jax_debug_nans` (trap the first NaN at its source), `jax_disable_jit` (run eagerly with real values to bisect a bug), `jax_debug_infs`. |
-| [`jax.debug` API](https://docs.jax.dev/en/latest/jax.debug.html) | `debug.print` / `debug.callback` / `debug.breakpoint` signatures. |
+| Page                                                                                                         | Read it for                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Introduction to debugging](https://docs.jax.dev/en/latest/debugging.html)                                   | The runtime toolkit overview — what works under `jit` and what doesn't.                                                                                                                       |
+| [JAX errors](https://docs.jax.dev/en/latest/errors.html)                                                     | The exception glossary: paste your `TracerBoolConversionError` / `ConcretizationTypeError` / leaked-tracer message here for the cause + fix. The fastest way out of a stuck error.            |
+| [`jax.debug.print` & `jax.debug.breakpoint`](https://docs.jax.dev/en/latest/debugging/print_breakpoint.html) | Printing a *value* (not a tracer) and dropping a breakpoint from inside a traced/`scan`'d body.                                                                                               |
+| [`checkify`](https://docs.jax.dev/en/latest/debugging/checkify_guide.html)                                   | Functional runtime asserts under `jit` — the right way to guard a div-by-zero or a length mismatch without an un-`jit`-able `if … raise`. (Exactly the guards the logup_gkr review asks for.) |
+| [Debugging flags](https://docs.jax.dev/en/latest/debugging/flags.html)                                       | `jax_debug_nans` (trap the first NaN at its source), `jax_disable_jit` (run eagerly with real values to bisect a bug), `jax_debug_infs`.                                                      |
+| [`jax.debug` API](https://docs.jax.dev/en/latest/jax.debug.html)                                             | `debug.print` / `debug.callback` / `debug.breakpoint` signatures.                                                                                                                             |
 
 ### Go deep
 
-| Resource | Read it for |
-| --- | --- |
-| [Autodidax](https://docs.jax.dev/en/latest/autodidax.html) | JAX core (trace → transform → pytree) built from scratch. The single best doc for *why* purity + flat pytrees are load-bearing, not stylistic. |
+| Resource                                                                                                                          | Read it for                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Autodidax](https://docs.jax.dev/en/latest/autodidax.html)                                                                        | JAX core (trace → transform → pytree) built from scratch. The single best doc for *why* purity + flat pytrees are load-bearing, not stylistic.                       |
 | [Equinox — All of Equinox](https://docs.kidger.site/equinox/all-of-equinox/) + [tricks](https://docs.kidger.site/equinox/tricks/) | Patrick Kidger's "everything is a pytree, code is pure functions" — the strongest published statement of idea #3. Maps 1:1 onto zorch's registered-dataclass rounds. |
-| [How to Scale Your Model](https://jax-ml.github.io/scaling-book/) (DeepMind) | The performance mental model — what actually costs (host-sync, recompiles, layout, communication), not folklore. |
-| [awesome-jax](https://github.com/n2cholas/awesome-jax) | Curated index of further talks, posts, libraries. |
+| [How to Scale Your Model](https://jax-ml.github.io/scaling-book/) (DeepMind)                                                      | The performance mental model — what actually costs (host-sync, recompiles, layout, communication), not folklore.                                                     |
+| [awesome-jax](https://github.com/n2cholas/awesome-jax)                                                                            | Curated index of further talks, posts, libraries.                                                                                                                    |
 
 ## If you read three things
 
