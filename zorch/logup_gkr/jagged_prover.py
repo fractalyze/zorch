@@ -323,16 +323,12 @@ def _run_jagged_rounds(
     polys: list[Array] = []
     challenges: list[Array] = []
     prev_r = one  # unused until the first fold (round 1)
-    # z_cur is eval_point's coordinate for round k (== eval_point[-(k+1)]). Rather
-    # than a standalone `jnp.take` every round (a real ~22us gather dispatch, not a
-    # free buffer view), the coordinate is threaded device-resident: round 0 reads
-    # the last coordinate and each `_reduce_body` slices the next via a
-    # decremented `pos`, riding the fold's dispatch instead of its own. The fold stays
-    # on the compute device (a host CPU reduce forces the carry to round-trip back to
-    # GPU before each bind, which serializes the bind pipeline -- net slower).
-    pos = jnp.asarray(eval_point.shape[0] - 1, jnp.int32)
-    z_cur = jnp.take(eval_point, -1)
     for rnd in range(nrv + niv):
+        # z_cur = eval_point's coordinate for round rnd (== eval_point[-(rnd+1)]).
+        # `rnd` is a static Python loop index, so this is a compile-time slice --
+        # NOT a per-round `jnp.take`/`dynamic_index` (a real ~22us gather dispatch,
+        # ~one per round, one of the launch-flood kernels the eager fold pays).
+        z_cur = eval_point[-(rnd + 1)]
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
         dtype = claim.dtype
         if rnd == 0:
@@ -398,10 +394,10 @@ def _run_jagged_rounds(
                 planes, eq_int, prev_r, scalars, consts, live
             )
         # Device FS hop + reduce -- traced into the whole-layer jit (one fused
-        # region per round). Slices the next z_cur via the decremented `pos`,
-        # riding the fold's dispatch instead of a standalone gather.
-        transcript, r, claim, pad_adj, z_cur, pos = _fs_reduce(
-            poly, transcript, pad_adj, z_cur, eval_point, pos, challenge_limbs, dtype
+        # region per round). z_cur was sliced statically at the loop top, so no
+        # gather rides here.
+        transcript, r, claim, pad_adj = _fs_reduce(
+            poly, transcript, pad_adj, z_cur, challenge_limbs, dtype
         )
         polys.append(poly)
         challenges.append(r)
