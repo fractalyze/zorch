@@ -7,6 +7,7 @@ from absl.testing import absltest
 
 from zorch.sumcheck.domain import (
     EvalDomain,
+    compressed_domain,
     extend_to_round_domain,
     fold,
     product_round_coeffs,
@@ -15,6 +16,7 @@ from zorch.sumcheck.domain import (
     uhat_domain,
 )
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
+from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
@@ -52,7 +54,7 @@ class DomainTest(absltest.TestCase):
         )
         # ∞-led domain [∞,0,1]: recover from [leading, p(0), p(1)] = [3, 1, 6]; the
         # degree and field come from the values, so the domain takes no args.
-        led = EvalDomain(leading=True)
+        led = EvalDomain(inf_index=0)
         self.assertTrue(
             bool(jnp.array_equal(led.to_coeffs(jnp.array([3, 1, 6], dtype=KB)), want))
         )
@@ -101,6 +103,66 @@ class DomainTest(absltest.TestCase):
                     summand_evals(stacked, lambda x, y: x * y, uhat_domain(2, KB)),
                 )
             )
+        )
+
+    def test_inf_index_places_infinity(self) -> None:
+        # `inf_index` is the index of the ∞ (leading-coeff) sample: 0 first, -1 last.
+        # sample and to_coeffs are the reverse-order duals across the two.
+        p0, p1 = jnp.array([2], dtype=KB), jnp.array([5], dtype=KB)  # slope 3
+        first = EvalDomain(jnp.array([1], dtype=KB), inf_index=0)
+        last = EvalDomain(jnp.array([1], dtype=KB), inf_index=-1)
+        self.assertTrue(
+            bool(jnp.array_equal(last.sample(p0, p1)[::-1], first.sample(p0, p1)))
+        )
+        # p(x)=3+5x on {0} with ∞ last: values [p(0)=3, ∞=5] → coeffs [3, 5].
+        tail = EvalDomain(jnp.array([0], dtype=KB), inf_index=-1)
+        self.assertTrue(
+            bool(
+                jnp.array_equal(
+                    tail.to_coeffs(jnp.array([3, 5], dtype=KB)),
+                    jnp.array([3, 5], dtype=KB),
+                )
+            )
+        )
+
+    def test_compressed_domain_message(self) -> None:
+        # compressed_domain(node) via summand_evals is [s(node), s(∞)] of the
+        # 2-factor product — node 0 the [c_0, c_2] form, node 1 the [s(1), s(∞)] form.
+        a = jnp.array([1, 2, 3, 4], dtype=KB)
+        b = jnp.array([5, 6, 7, 8], dtype=KB)
+        stacked = jnp.stack([a, b])
+        prod = lambda x, y: x * y  # noqa: E731
+        s_inf = jnp.sum((a[2:] - a[:2]) * (b[2:] - b[:2]))
+        got0 = summand_evals(stacked, prod, compressed_domain(0, KB))
+        self.assertTrue(bool(got0[0] == jnp.sum(a[:2] * b[:2])))  # s(0)
+        self.assertTrue(bool(got0[1] == s_inf))  # s(∞)
+        got1 = summand_evals(stacked, prod, compressed_domain(1, KB))
+        self.assertTrue(bool(got1[0] == jnp.sum(a[2:] * b[2:])))  # s(1)
+        self.assertTrue(bool(got1[1] == s_inf))  # s(∞)
+
+    def test_summand_evals_weight_and_lsb(self) -> None:
+        # `weight` multiplies each hypercube point before the sum (the eq-weight of
+        # an eq-weighted sumcheck); `msb=False` binds the low variable (split_pairs).
+        a = jnp.array([1, 2, 3, 4], dtype=KB)
+        b = jnp.array([5, 6, 7, 8], dtype=KB)
+        stacked = jnp.stack([a, b])
+        prod = lambda x, y: x * y  # noqa: E731
+        w = jnp.array([2, 3], dtype=KB)
+        node0 = EvalDomain(jnp.array([0], dtype=KB))  # single finite node s(0)
+        msb = summand_evals(stacked, prod, node0, weight=w)
+        self.assertTrue(bool(msb[0] == jnp.sum(w * a[:2] * b[:2])))
+        lsb = summand_evals(stacked, prod, node0, weight=w, msb=False)
+        self.assertTrue(bool(lsb[0] == jnp.sum(w * a[0::2] * b[0::2])))
+
+    def test_summand_evals_weighted_lsb_is_fusion_ready(self) -> None:
+        # The weight= / msb=False branches stay one fused reduction, like the default.
+        stacked = jnp.stack([jnp.arange(1, 9, dtype=KB), jnp.arange(9, 17, dtype=KB)])
+        w = jnp.array([2, 3, 4, 5], dtype=KB)
+        dom = EvalDomain(jnp.array([0], dtype=KB))
+        assert_fusion_ready(
+            lambda s: summand_evals(s, lambda x, y: x * y, dom, weight=w, msb=False),
+            stacked,
+            reduces=1,
         )
 
     def test_product_coeffs_verify(self) -> None:
