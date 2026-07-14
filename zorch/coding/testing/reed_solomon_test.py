@@ -148,6 +148,38 @@ class ReedSolomonTest(absltest.TestCase):
         want = _horner(coeffs, _domain(k * blowup, F))
         self.assertTrue(bool(jnp.all(rs.encode(coeffs) == want)))
 
+    def test_extend_matches_coset_polynomial_evaluation(self) -> None:
+        # `extend` re-evaluates the base-subgroup evals' polynomial on the
+        # block-length (coset) domain. Oracle: interpolate to coefficients, then
+        # Horner on the independently recovered (coset) domain — shares no code
+        # with the bit-reversed-intermediate schedule.
+        for k, blowup, shift in [
+            (4, 2, None),
+            (8, 4, jnp.asarray(7, F)),
+            (16, 2, jnp.asarray(3, F)),
+        ]:
+            rs = ReedSolomon(k, blowup, F, coset_shift=shift)
+            evals = rand_field(5, (k,), F)
+            coeffs = lax.ntt(evals, ntt_type="INTT", ntt_length=k)
+            domain = _domain(k * blowup, F)
+            if shift is not None:
+                domain = shift * domain
+            want = _horner(coeffs, domain)
+            self.assertTrue(
+                bool(jnp.all(rs.extend(evals) == want)),
+                msg=f"k={k} blowup={blowup} coset={shift is not None}",
+            )
+
+    def test_extend_preserves_leading_batch_axis(self) -> None:
+        # extend transforms only the last axis: a batched call must equal
+        # stacking the independent per-row single extends.
+        k, blowup = 8, 2
+        rs = ReedSolomon(k, blowup, F, coset_shift=jnp.asarray(7, F))
+        evals = rand_field(6, (3, k), F)
+        batched = rs.extend(evals)
+        rows = jnp.stack([rs.extend(evals[i]) for i in range(evals.shape[0])])
+        self.assertTrue(bool(jnp.all(batched == rows)))
+
     def test_codeword_is_low_degree(self) -> None:
         k, blowup = 8, 2
         rs = ReedSolomon(k, blowup, F)

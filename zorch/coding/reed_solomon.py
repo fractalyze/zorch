@@ -196,6 +196,26 @@ class ReedSolomon:
             coeffs = coeffs * self._coset_powers
         return lax.ntt(coeffs, ntt_type="NTT", ntt_length=n, generator=self.generator)
 
+    def extend(self, evals: Array) -> Array:
+        """LDE `evals` — the `message_len` evaluations on the base subgroup — to
+        the `block_len` coset codeword, transforming the last axis (any leading
+        batch axes are preserved). Natural order in and out.
+
+        Interpolates to coefficients (`intt`), then coset-evaluates (`encode`) —
+        i.e. `encode(intt(evals))`.
+        """
+        if evals.shape[-1] != self.message_len:
+            raise ValueError(
+                f"evals last axis must be {self.message_len}, got {evals.shape[-1]}"
+            )
+        coeffs = lax.ntt(
+            evals,
+            ntt_type="INTT",
+            ntt_length=self.message_len,
+            generator=self.generator,
+        )
+        return self.encode(coeffs)
+
     def domain(self) -> Array:
         """The points `encode` evaluates on, coset shift included."""
         return eval_domain(
