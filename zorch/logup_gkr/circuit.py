@@ -369,55 +369,18 @@ def extract_jagged_outputs(layer: JaggedGkrLayer) -> LogUpGkrOutput:
     )
 
 
-@partial(jax.jit, static_argnames=("first_row_counts", "schedules"))
-def _build_pyramid_planes(
-    numerator_0: Array,
-    numerator_1: Array,
-    denominator_0: Array,
-    denominator_1: Array,
-    *,
-    first_row_counts: tuple[int, ...],
-    schedules: tuple[tuple[int, ...], ...],
-) -> list[tuple[Array, Array, Array, Array]]:
-    """Fold the chain one transition at a time, each layer at its NATURAL width.
-
-    One fused traced region keyed by the static schedule (O(1) dispatches
-    regardless of depth), NOT stacked into a uniform width: every layer keeps its
-    own geometrically-shrinking height, so peak residency is `sum(natural widths)`
-    ~= 2*H rather than `depth * max_width`. The whole pyramid is a required output
-    (nothing XLA can rematerialize away), so a uniform-width stack would pin
-    `depth * max_width` live at once -- a hard floor under the whole prove.
-
-    Each transition folds at its own shape, so the first layer may enter
-    base-field numerators under an extension-field denominator and transition 0's
-    fold `n0*d1 + n1*d0` promotes them to EF inline (no separate carve-out).
-    """
-    planes: list[tuple[Array, Array, Array, Array]] = []
-    n0, n1, d0, d1 = numerator_0, numerator_1, denominator_0, denominator_1
-    cur = first_row_counts
-    for out_row_counts in schedules:
-        prepad_counts, folded_counts = _prepad_folded(cur)
-        n0, n1, d0, d1 = _pad_neutral(
-            n0, n1, d0, d1, _segment_gather(cur, prepad_counts)
-        )
-        n0, n1, d0, d1 = _fold_pairs(n0, n1, d0, d1)
-        n0, n1, d0, d1 = _pad_neutral(
-            n0, n1, d0, d1, _segment_gather(folded_counts, out_row_counts)
-        )
-        planes.append((n0, n1, d0, d1))
-        cur = out_row_counts
-    return planes
-
-
 def build_jagged_pyramid(
     first: JaggedGkrLayer, schedules: Sequence[tuple[int, ...]]
 ) -> list[JaggedGkrLayer]:
     """Build the jagged pyramid `[first, ..., floor]`, folding one row variable
     per transition. `schedules[k]` is transition `k`'s `out_row_counts` (the
-    caller's halving policy, the same argument the eager `jagged_layer_transition`
-    takes). One fused traced region via `_build_pyramid_planes`, byte-identical to
-    iterating `jagged_layer_transition` down the chain, but each layer keeps its
-    natural width so peak residency stays ~2*H."""
+    caller's halving policy, the same argument `jagged_layer_transition` takes).
+    Each transition is its own dispatch, so the layers land as separate per-layer
+    buffers. Peak residency is ~2*H -- every natural-width layer is a required GKR
+    input, live until its top-down sumcheck -- split across ~depth buffers a
+    pooling allocator can seat individually; a single contiguous 2*H alloc exceeds
+    what BFC can place on wide shards (#468). Costs one compile per distinct
+    transition shape; warm reuse is per-shape."""
     schedules = list(schedules)
     if not schedules:
         return [first]
@@ -442,23 +405,9 @@ def build_jagged_pyramid(
                 )
         cur = out_row_counts
 
-    planes = _build_pyramid_planes(
-        first.numerator_0,
-        first.numerator_1,
-        first.denominator_0,
-        first.denominator_1,
-        first_row_counts=first.row_counts,
-        schedules=tuple(schedules),
-    )
     layers = [first]
-    for out_row_counts, (n0, n1, d0, d1) in zip(schedules, planes):
-        layers.append(
-            JaggedGkrLayer(
-                numerator_0=n0,
-                numerator_1=n1,
-                denominator_0=d0,
-                denominator_1=d1,
-                row_counts=out_row_counts,
-            )
-        )
+    layer = first
+    for out_row_counts in schedules:
+        layer = jagged_layer_transition(layer, out_row_counts)
+        layers.append(layer)
     return layers
