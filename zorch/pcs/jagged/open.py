@@ -24,8 +24,8 @@ convention), and query positions take the canonical low bits of a base squeeze
 The fold geometry is zorch's bit-reversed Reed-Solomon foldable code, which pairs
 conjugates adjacently — the order ``trace_commit`` already writes its codeword in.
 
-References (whir-zorch ``basefold/prover.py::_basefold_fri_commit_phase`` is the
-byte-match reference pipeline):
+References (the consumer's BaseFold FRI commit phase is the byte-match
+reference pipeline):
 - batch RLC weights — ``partial_lagrange`` over ``log2_ceil(total_width)`` EF
   challenges, allocated staggered across rounds.
 - per-round message ``(s(0), s(1))`` — derived from the running MLE under the

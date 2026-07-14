@@ -3,10 +3,10 @@
 
 Builds the column prefix-sum bit tensor (`build_jagged_layout`) and evaluates
 the partial MLE J̃(z_row, z_col, ·) over the dense area (`partial_eval_core`),
-shape-polymorphic in the column count and prefix-bit width. Adapts whir-zorch
-`jagged/poly.py` to AOT-clean form: static l_max column axis, n_d bound to the
-instance's log-area tier. The branching-program indicator eval that closes the
-sumcheck lives in `branching_program.py`.
+shape-polymorphic in the column count and prefix-bit width, in AOT-clean form:
+a static l_max column axis, n_d bound to the instance's log-area tier. The
+branching-program indicator eval that closes the sumcheck lives in
+`branching_program.py`.
 """
 
 from __future__ import annotations
