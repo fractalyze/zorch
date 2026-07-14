@@ -1,6 +1,6 @@
 # Development environment
 
-`zorch` is pure Python on JAX + the Fractal XLA PJRT plugin. This page is the dev-loop
+`zorch` is pure Python on JAX + the Fractalyze XLA PJRT plugin. This page is the dev-loop
 reference; for a first install see the quick start in
 [`../README.md`](../../README.md).
 
@@ -33,11 +33,11 @@ Drop `-n` only when chasing one test's output interactively. `bazel test //...`
 remains the single source of truth for "all tests pass"
 ([`conventions.md`](conventions.md)); it parallelizes per target on its own.
 
-## Developing against a local Fractal XLA build
+## Developing against a local Fractalyze XLA build
 
 The pinned venv installs the four `jax` / `frxlib` / `frx-cuda12-pjrt` /
 `frx-cuda12-plugin` wheels from the Fractalyze package index (rebuilt and
-published per merged Fractal XLA PR):
+published per merged Fractalyze XLA PR):
 
 ```sh
 pip install -r requirements.in \
@@ -46,7 +46,7 @@ pip install -r requirements.in \
 
 Plugin resolution has **no env-var indirection**: `jax_plugins/xla_cuda12`
 loads the `xla_cuda_plugin.so` installed in the venv's site-packages (there is
-no `*_GPU_PLUGIN_PATH` override). So to run against a local Fractal XLA build
+no `*_GPU_PLUGIN_PATH` override). So to run against a local Fractalyze XLA build
 with unmerged changes, build the `frx-cuda12-plugin` + `frx-cuda12-pjrt` wheels
 from the checkout (see the XLA repo's `docs/build_from_source.md`) and
 force-reinstall them over the pinned ones:

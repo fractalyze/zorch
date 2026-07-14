@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 U32 = jnp.uint32
 
 SHA256_MARKER = "zorch.sha256"
-# Marker revision riding as `composite.version`. Fractal XLA recognizes the marker by
+# Marker revision riding as `composite.version`. FXLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).
 SHA256_MARKER_VERSION = 1

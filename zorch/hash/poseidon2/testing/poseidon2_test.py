@@ -50,10 +50,10 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         assert_single_trace(self, _permute_body, calls)
 
     def test_permute_emits_poseidon2_named_composite(self) -> None:
-        # The standard-MDS permute marks its region "zorch.poseidon2" so Fractal XLA
+        # The standard-MDS permute marks its region "zorch.poseidon2" so FXLA
         # routes it to the dedicated Poseidon2Fusion emitter; the permutation
         # shape rides as composite.attributes — all four ints are required by
-        # the Fractal XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
+        # the FXLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
         p = koalabear16_perm()
         txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)

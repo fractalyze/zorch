@@ -12,7 +12,7 @@ maintain, not value.
 
 ## The one rule: don't hand-roll the NTT
 
-In Fractal XLA's patched JAX, `frx.lax.ntt` **is** the native finite-field NTT — field
+In Fractalyze XLA's patched JAX, `frx.lax.ntt` **is** the native finite-field NTT — field
 dtype in and out, a `generator` argument selecting the root, extension fields
 auto-decomposed into prime-field NTTs, and the whole thing lowered to a single
 fused kernel. Reed-Solomon `encode` therefore hands its evaluation to `lax.ntt`

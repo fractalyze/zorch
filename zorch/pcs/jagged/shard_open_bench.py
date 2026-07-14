@@ -133,7 +133,7 @@ def main() -> None:
     encode = frx.jit(code.encode)
 
     # Commit as ONE jit (encode + transpose + leaf hash + tree compress).
-    # NOTE: the Fractal XLA sponge_hash *supports* a column-major leaf
+    # NOTE: the FXLA sponge_hash *supports* a column-major leaf
     # layout (leaf_stride=1) so the ``.T`` could stay a view, but zorch's
     # smcs.commit currently passes row-major strides (leaf_stride=absorb_len),
     # so XLA materializes the ``.T`` (a wrapped_transpose kernel) and the hash

@@ -22,7 +22,7 @@ EF = zk_dtypes.koalabearx4_mont
 
 # Host-FS runs the sponge on the CPU inside the callback; on a CPU-only backend the
 # device and host sponges coincide (nothing to compare) and the run also hits the
-# Fractal XLA CPU scan array-carry bug the duplex tests skip for (fractalyze/zkx#500).
+# FXLA CPU scan array-carry bug the duplex tests skip for (fractalyze/zkx#500).
 _CPU_BACKEND = frx.default_backend() == "cpu"
 
 

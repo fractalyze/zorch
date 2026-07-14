@@ -50,7 +50,7 @@ not `degree+1` wide) is a structural error, not a soundness one — that raises.
 
 `_round_poly` / `_fold` stay to element-wise field ops plus the one inherent `Σ`
 — no gratuitous `reduce` / `gather` — so a round body is foldable without a marker
-or a `@jit` decorator. Measured on Fractal XLA GPU, `_round_poly` lowers to one reduction
+or a `@jit` decorator. Measured on Fractalyze XLA GPU, `_round_poly` lowers to one reduction
 (`kInput`) kernel and `_fold` to one element-wise (`kLoop`) kernel; a full round
 is **two** kernels, since its message and folded state are disjoint outputs.
 Collapsing a round into one replayed unit is the marker + generic XLA emitter

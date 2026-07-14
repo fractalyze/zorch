@@ -38,7 +38,7 @@ _ROUND_CONSTANTS = (
 
 # Marker metadata as StableHLO prints it (dict keys alphabetical). `mds` is the
 # 3x3 MDS flattened row-major, a numpy int64 value so it lowers to a
-# DenseElementsAttr the Fractal XLA recognizer parses (GetCompositeAttrIntArray).
+# DenseElementsAttr the FXLA recognizer parses (GetCompositeAttrIntArray).
 EXPECTED_ATTRS = (
     f"composite_attributes = {{alpha = {_ALPHA} : i64,"
     f" full_rounds = {_FULL} : i64,"
@@ -156,10 +156,10 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
     def test_permute_emits_poseidon_named_composite(self) -> None:
-        # The permute marks its region "zorch.poseidon" so Fractal XLA routes it to the
+        # The permute marks its region "zorch.poseidon" so FXLA routes it to the
         # dedicated Poseidon emitter; the permutation shape rides as
         # composite.attributes — all four ints plus the flat MDS are required by
-        # the Fractal XLA recognizer.
+        # the FXLA recognizer.
         p = Poseidon(_poseidon_params())
         txt = frx.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
@@ -177,7 +177,7 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
 
     def test_mds_serializes_as_dense_i64_tensor(self) -> None:
         # The mds attribute must lower to a DenseElementsAttr
-        # (`dense<[..]> : tensor<Nxi64>`), the form the Fractal XLA recognizer reads via
+        # (`dense<[..]> : tensor<Nxi64>`), the form the FXLA recognizer reads via
         # GetCompositeAttrIntArray — NOT a plain ArrayAttr (`mds = [..]`), which a
         # Python list/tuple would produce.
         p = Poseidon(_poseidon_params())

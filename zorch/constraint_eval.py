@@ -48,7 +48,7 @@ CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 def _scalar_int32_operand(value: Array | int, name: str) -> Array:
     """Normalize a scalar-int32 operand (`live_width`, `start_offset`): a Python
     int is converted and range-checked; anything else must already be a scalar
-    int32 (the wire type Fractal XLA validates). asarray funnels a non-Array (float,
+    int32 (the wire type FXLA validates). asarray funnels a non-Array (float,
     numpy scalar) into the shape/dtype rejection instead of an opaque
     AttributeError."""
     if isinstance(value, int):
@@ -58,7 +58,7 @@ def _scalar_int32_operand(value: Array | int, name: str) -> Array:
     arr = jnp.asarray(value)
     if arr.shape != () or arr.dtype != jnp.int32:
         raise ValueError(
-            f"{name} must be a scalar int32 (the wire type Fractal XLA validates), "
+            f"{name} must be a scalar int32 (the wire type FXLA validates), "
             f"got shape {arr.shape} dtype {arr.dtype}"
         )
     return arr
@@ -90,7 +90,7 @@ def constraint_eval(
     (a Python int is converted) holding a non-negative value — the emitter
     compares indices unsigned, so a negative bound would diverge between the
     marked and inlined paths. It rides as operand 2 with its index declared in
-    `live_width_operand_idx`; Fractal XLA hard-errors on a malformed declaration rather
+    `live_width_operand_idx`; FXLA hard-errors on a malformed declaration rather
     than silently falling back to the unbounded path.
 
     `start_offset`, when given, treats `trace` as a TALL shared buffer

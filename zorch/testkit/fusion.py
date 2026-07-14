@@ -6,11 +6,11 @@ one inherent Sigma -- no gather/scatter/dot/while/... boundary, no extra reduce.
 ``assert_fusion_ready`` lowers ``fn(*args)`` and checks the StableHLO uses only
 fusion-safe ops plus exactly ``reduces`` reduce(s). It's a whitelist (not a
 gather/dot blacklist), so ANY boundary op or extra reduce trips it -- and any
-new op in the fusion-critical body gets a conscious look. Cheap proxy for Fractal XLA's
+new op in the fusion-critical body gets a conscious look. Cheap proxy for FXLA's
 ``ZorchFusedRegionRewriter`` (issue #21), the authoritative compiler gate.
 
 Not for the hash permutation: poseidon2 fuses via the ``zorch.fused_region``
-marker and normal-form linear layers (no dot for Fractal XLA to optimize) -- a different
+marker and normal-form linear layers (no dot for FXLA to optimize) -- a different
 fusion shape.
 """
 from __future__ import annotations

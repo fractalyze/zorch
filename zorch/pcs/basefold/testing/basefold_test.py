@@ -140,7 +140,7 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
 
 
 # TODO(zorch#202): basefold open emits a multi-batch NTT the published nightly's
-# rewriter rejects (`Unsupported opcode: ntt`); the fix is in Fractal XLA,
+# rewriter rejects (`Unsupported opcode: ntt`); the fix is in FXLA,
 # not the published wheel.
 @unittest.skip("basefold open hits an unsupported multi-batch NTT; see zorch#202")
 class BasefoldOpenTest(absltest.TestCase):

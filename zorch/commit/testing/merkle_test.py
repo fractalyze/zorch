@@ -385,7 +385,7 @@ class KaryMerkleTreeTest(absltest.TestCase):
             self.assertTrue(bool(tree.verify(root, i, tree.open(matrix, layers, i))))
 
     @absltest.skip(
-        "Fractal XLA CPU mis-routes the batched k-ary compress permute to the binary "
+        "FXLA CPU mis-routes the batched k-ary compress permute to the binary "
         "poseidon2_merkle_compress kernel (shape mismatch crash); single-index "
         "reconstruct_root passes. Tracked as fractalyze/zkx#606."
     )

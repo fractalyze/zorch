@@ -5,7 +5,7 @@ this file is just the map plus the two rules every change must respect.
 
 - **Project overview & quick start:** [`README.md`](README.md)
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md)
-- **Dev environment — venv pinning, Fractal XLA plugin, compile caches:**
+- **Dev environment — venv pinning, Fractalyze XLA plugin, compile caches:**
   [`docs/reference/development.md`](docs/reference/development.md)
 - **Detailed design & open decisions:** tracked on GitHub — epic issue
   [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).

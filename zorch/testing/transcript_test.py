@@ -33,14 +33,14 @@ from zorch.transcript import (
 
 F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 
-# The duplex sponge's `lax.scan` absorb is correct on GPU but hits a Fractal XLA CPU
+# The duplex sponge's `lax.scan` absorb is correct on GPU but hits a FXLA CPU
 # while-emitter bug that drops the scan's array-carry update (eager runs go
 # non-deterministic). Skip the duplex tests on CPU until it lands. See
 # fractalyze/zkx#500.
 _CPU_BACKEND = frx.default_backend() == "cpu"
 _skip_on_cpu_scan_bug = absltest.skipIf(
     _CPU_BACKEND,
-    "Fractal XLA CPU scan array-carry bug (GPU-correct); remove when "
+    "FXLA CPU scan array-carry bug (GPU-correct); remove when "
     "fractalyze/zkx#500 lands",
 )
 
@@ -661,7 +661,7 @@ def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
     A Python loop with NO `lax.scan` and NO traced-index scatter: `in_buf[in_pos]`
     is set with a `jnp.where` select, and `_absorb_permute`'s `sponge.at[:rate]`
     write is a static-range scatter the sample path already uses CPU-safely. So
-    this is correct on the Fractal XLA CPU backend, unlike the scan-based
+    this is correct on the FXLA CPU backend, unlike the scan-based
     `_ref_observe`,
     and can byte-check the production rate-block observe ON CPU."""
     base = t.state.sponge_state.dtype
@@ -693,7 +693,7 @@ class CpuByteIdentityTest(absltest.TestCase):
     """Rate-block byte-identity on CPU (NOT `@_skip_on_cpu_scan_bug`).
 
     The byte-identity suite above is GPU-pinned (its `lax.scan`/`lax.cond`
-    references hit the Fractal XLA CPU scan bug, fractalyze/zkx#500), so the rate-block
+    references hit the FXLA CPU scan bug, fractalyze/zkx#500), so the rate-block
     ops were never byte-checked on the CPU backend the prover runs on. These
     compare production `observe`/`sample` against scan-free, CPU-safe references
     (`_pure_observe`, the per-limb `_sample_one` loop) so a future rate-block

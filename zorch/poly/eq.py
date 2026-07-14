@@ -77,7 +77,7 @@ def expand_eq_to_hypercube(x: Array, scalar: Array) -> Array:
     w[0] as the MSB.
 
     NOTE: explicit indexing instead of `for coord in x` — iterating a JAX array
-    of an extension-field dtype dispatches `lax.sign`, a Fractal XLA gotcha.
+    of an extension-field dtype dispatches `lax.sign`, a FXLA gotcha.
     """
     state = jnp.atleast_1d(scalar)
     for j in range(x.shape[0]):

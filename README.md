@@ -3,9 +3,9 @@
 > **SNARK = Σ IOP Round**
 
 JAX-native building blocks for Modern SNARKs. `zorch` sits between JAX and the
-proof systems that consume it: JAX provides tracing and codegen (via Fractal
-XLA, Fractalyze's XLA with native finite-field dtypes); `zorch` provides the
-reusable pieces a proof system is assembled from.
+proof systems that consume it: JAX provides tracing and codegen (via Fractalyze
+XLA (FXLA), the XLA backend with native finite-field dtypes); `zorch` provides
+the reusable pieces a proof system is assembled from.
 
 A Modern SNARK is **IOP + PCS**. The way deep learning stacks `Layer`s, `zorch`
 stacks **`Round`s** — the one composable unit the rest is threaded through.
@@ -74,7 +74,7 @@ decisions: epic issue [#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Development
 
-`zorch` is pure Python on JAX, run against the Fractal XLA GPU plugin. A virtualenv with
+`zorch` is pure Python on JAX, run against the Fractalyze XLA GPU plugin. A virtualenv with
 the pinned toolchain:
 
 ```sh
@@ -83,7 +83,7 @@ pip install -r requirements.in \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The dev loop — per-workspace venvs, developing against a local Fractal XLA build, the
+The dev loop — per-workspace venvs, developing against a local Fractalyze XLA build, the
 JAX compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
 
 ## Documentation
