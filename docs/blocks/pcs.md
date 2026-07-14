@@ -73,22 +73,17 @@ this because `commitment` is scheme-defined; the input convention stays uniform
 
 ## Instance anatomy
 
-Every *instance* directory (`kzg`, `fri`, `basefold`) follows one shape, so a
-reader — or a new instance — knows where things live and what they are called.
-(`jagged` is exempt: it is a [consumer on the seam](#jagged-a-consumer-on-the-seam),
-not an instance.)
-
-| File | Contents |
-|------|----------|
-| `config.py` | Wire types shared by both sides: the commitment alias, the proof type, public params, and any Fiat-Shamir helper both sides must derive identically. |
-| `prover.py` | `XProver` and `XProverData` — the retained witness `commit` hands to `open`. Only the prover ever sees it. |
-| `verifier.py` | `XVerifier`. Never imports `prover.py` — the prover/verifier asymmetry is a module boundary too. |
-| `setup.py` | Keys, only for schemes with a trusted setup (`kzg`). |
-
-Naming: `XProver` / `XVerifier` / `XProverData` / `XProof` / `XCommitment`.
+Every *instance* (`kzg`, `fri`, `basefold`) follows one shape — shared wire types,
+a prover, and a verifier in separate modules — so the instances stay
+interchangeable and a new one has a template to fill. (`jagged` is exempt: it is a
+[consumer on the seam](#jagged-a-consumer-on-the-seam), not an instance.) One part
+of the shape is load-bearing rather than cosmetic: **the verifier module never
+imports the prover module.** The prover/verifier asymmetry — a prover holds an
+O(degree) key and the retained witness `commit` hands to `open`, a deployed
+verifier carries neither — is a *module boundary*, not just a type.
 
 **Conformance is mypy-enforced, not conventional** — the repo-wide seam pin
-([conventions.md "Seam conformance pins"](conventions.md#seam-conformance-pins)).
+([conventions.md "Seam conformance pins"](../reference/conventions.md#seam-conformance-pins)).
 The seam is generic — `PcsProver[C, D, P]` / `PcsVerifier[C, P]` — so each
 instance parameterizes its pin with the scheme's wire types:
 
@@ -122,7 +117,7 @@ interchangeable. (`JaggedPcsProver` is deliberately *not* pinned: it is a
 The jagged PCS (`zorch/pcs/jagged/`) is the first `basefold` consumer: it
 densifies variable-height columns into one MLE and commits it, then binds the
 jagged structure (row/column counts, hashed) into the single root. The layering is
-deliberate — `chip → blocks` is the *consumer's* concern (e.g. whir-zorch), while
+deliberate — `chip → blocks` is the *consumer's* concern (its trace layout), while
 `blocks → dense MLE` is zorch's, because the layout must match the `t_c`
 prefix-sum convention the jagged indicator (`zorch/pcs/jagged/poly.py`) reads.
 The structure bind lives in the jagged layer, not the generic seam — it is why
@@ -155,7 +150,7 @@ of three tiers, and which tier an op takes is the only thing that varies:
 
 This is why "one fused kernel" is a property of an *instance's* lowering, not of the
 seam: MSM is a GPU-only kernel, pairing is CPU-only, and the FRI fold/NTT lower on
-both. See the hub [fusion north star](README.md#fusion-north-star).
+both. See the hub [fusion north star](../README.md#fusion-north-star).
 
 ## AOT and the host/device boundary
 

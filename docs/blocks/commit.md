@@ -19,7 +19,7 @@ hash.
 
 **No domain separator, no proof layout.** `commit` returns raw digests only. The
 domain separator, the opening / proof wire layout, and the verify error codes are
-scheme-specific and live in the consumer (whir-zorch's SMCS). Keeping them out is
+scheme-specific and live in the consumer (its commitment scheme). Keeping them out is
 exactly what makes the tree reusable across schemes — the agnostic
 non-negotiable. `open` / `verify` here are the structural path-and-rebuild
 mechanics, not a scheme's soundness story.
@@ -31,4 +31,4 @@ leaf one `hash`, i.e. one permute per node-batch — and the fold unrolls (layer
 count is static), so no host-driven loop appears. The permute is the fusion unit
 ([hash.md](hash.md#fusion-by-construction)): once it is captured to a kernel (the
 poseidon2 path, [#25](https://github.com/fractalyze/zorch/issues/25)), a whole
-layer is one GPU kernel. See the hub [fusion north star](README.md#fusion-north-star).
+layer is one GPU kernel. See the hub [fusion north star](../README.md#fusion-north-star).

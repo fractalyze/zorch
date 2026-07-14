@@ -38,8 +38,9 @@ class CheapPermutation:
         self.has_dedicated_fusion = False
 
     def __eq__(self, other: object) -> bool:
-        # Pytree-aux value equality, mirroring `Poseidon2` (docs/conventions.md
-        # "Pytree registration") — identity-eq would re-trace per fresh instance.
+        # Pytree-aux value equality, mirroring `Poseidon2`
+        # (docs/reference/conventions.md "Pytree registration") — identity-eq
+        # would re-trace per fresh instance.
         if not isinstance(other, CheapPermutation):
             return NotImplemented
         return (self.width, self.dtype) == (other.width, other.dtype)
@@ -69,5 +70,6 @@ def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTran
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[Permutation] = CheapPermutation

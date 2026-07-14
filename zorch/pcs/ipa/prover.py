@@ -314,5 +314,6 @@ def _open_one_zk(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[PcsProver[IpaCommitment, IpaProverData, list[IpaProof]]] = IpaProver

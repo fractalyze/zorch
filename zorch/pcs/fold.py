@@ -14,7 +14,7 @@ sample identical query indices from the transcript.
 
 The round loop stays a Python `for` via `zorch.prove.fold_rounds`: each round
 Merkle-commits a half-size layer whose retained artifacts are ragged across
-rounds, so it is not `lax.scan`-shaped (docs/conventions.md "Loops")."""
+rounds, so it is not `lax.scan`-shaped (docs/reference/conventions.md "Loops")."""
 
 from __future__ import annotations
 
@@ -390,7 +390,8 @@ def verify_fold_chain(
 
     The loop stays unrolled: `fold_values` is one `lax.fft` plus a few field ops
     per level, so it already traces O(1) per round — scanning it would add a
-    control-flow boundary for no trace+lower win (docs/conventions.md "Loops")."""
+    control-flow boundary for no trace+lower win
+    (docs/reference/conventions.md "Loops")."""
     num_rounds = len(query_openings)
     ok = jnp.bool_(True)
     for i in range(num_rounds):
@@ -423,7 +424,7 @@ def verify_group_fold_chain(
     The loop stays unrolled for the same reason as the binary chain:
     `fold_group_values` traces O(1) per round (one `compute_lagrange_basis` plus
     a static-width-k combination), so scanning it would add a control-flow
-    boundary for no trace+lower win (docs/conventions.md "Loops")."""
+    boundary for no trace+lower win (docs/reference/conventions.md "Loops")."""
     num_rounds = len(query_openings)
     ok = jnp.bool_(True)
     for i in range(num_rounds):
@@ -446,6 +447,7 @@ def verify_group_fold_chain(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[ProverRound] = PreFoldPairCommitRound
     _k: type[ProverRound] = PreFoldKGroupCommitRound

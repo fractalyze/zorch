@@ -4,7 +4,7 @@
 groups per layer (Compression, whose `arity` sets the tree's) down to a single
 root, returning `(raw_root, digest_layers)` (leaf digests first, root last).
 It adds NO domain separator — that, the proof layout, and the verify error codes
-are scheme-specific and live in the consumer (e.g. whir-zorch's SMCS).
+are scheme-specific and live in the consumer (its commitment scheme).
 
 A level whose node count is not a multiple of the arity is completed with
 zero digests — the only convention that keeps a k-ary tree well-defined on

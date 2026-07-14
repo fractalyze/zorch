@@ -30,7 +30,7 @@ appended last) matches the dense chain's.
 
 Per-round shapes shrink and the gather layout changes round to round, so the
 driver is a host-orchestrated Python loop over plain numeric bodies, not the
-homogeneous `zorch.sumcheck` scan (see docs/conventions.md).
+homogeneous `zorch.sumcheck` scan (see docs/reference/conventions.md).
 """
 
 from __future__ import annotations
@@ -662,5 +662,6 @@ class JaggedGkrLayerRound(Round):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[ProverRound] = JaggedGkrLayerRound

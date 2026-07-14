@@ -46,7 +46,7 @@ exclude = ["zorch.testing", "zorch.testing.*", "zorch.*.testing", "zorch.*.testi
 testpaths = ["zorch"]
 python_files = ["*_test.py", "test_*.py"]
 
-# Every def carries full type annotations (see docs/conventions.md); mypy's
+# Every def carries full type annotations (see docs/reference/conventions.md); mypy's
 # disallow_untyped_defs is what enforces it. Run: `mypy` (uses the files below).
 [tool.mypy]
 python_version = "3.11"

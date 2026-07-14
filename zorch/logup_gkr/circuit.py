@@ -282,7 +282,7 @@ def _jagged_transition_core(
 
     The transition's one `@jit` boundary: eager dispatch decomposes the
     gather/pad/fold into op-by-op kernels, so the core needs exactly one
-    boundary around it (`docs/conventions.md` per-island), never zero. A
+    boundary around it (`docs/reference/conventions.md` per-island), never zero. A
     consumer that builds the pyramid by iterating the transition per layer --
     rather than the fused `build_jagged_pyramid` -- then pays one fused dispatch
     per transition instead of N eager ops. The schedule is pure static ints, so

@@ -515,6 +515,6 @@ class HostSha256:
 
 
 if TYPE_CHECKING:
-    # Seam-conformance pins (docs/conventions.md).
+    # Seam-conformance pins (docs/reference/conventions.md).
     _bh_marker: type[ByteHash] = Sha256
     _bh_host: type[ByteHash] = HostSha256

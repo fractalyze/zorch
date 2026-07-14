@@ -242,7 +242,8 @@ SUMCHECK_ROUND_MARKER_VERSION = 1
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _summand: type[SumcheckSummand] = ProductSummand
     _prover_round: type[ProverRound] = StandardRound
     _compressed_prover_round: type[ProverRound] = CompressedProductRound

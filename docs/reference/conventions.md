@@ -38,7 +38,7 @@ fused region (`stablehlo.composite`) + XLA emitter will lower to one kernel
 A round body needs **exactly one** `@jit` boundary around it — never zero (eager
 dispatch *decomposes* the fused composite, so the boundary is the perf lever, not
 just a cache) and never two (a nested `@jit` lowers to a *call* the single-kernel
-rewriter rejects, [`fusion.py`](../zorch/fusion.py)). Two shapes satisfy this,
+rewriter rejects, [`fusion.py`](../../zorch/fusion.py)). Two shapes satisfy this,
 and which one a scheme uses is **forced by whether a host-side op interleaves the
 round loop**, not chosen for style:
 
@@ -90,7 +90,7 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   the XLA PTX cliff (#58). `prove` / `verify` are the case — every variable's
   round poly has the same shape. A `scan` carry must keep a **fixed shape**, so a
   halving MLE state rides in a full-width buffer with the live prefix packed at the
-  front and the dead tail masked (see [`prove.py`](../zorch/prove.py)). The round
+  front and the dead tail masked (see [`prove.py`](../../zorch/prove.py)). The round
   is the carry, so it must be a registered pytree. `prove` is **generic over the
   round's summand**: it reads only `degree` + `_combine` (the `SumcheckSummand`
   Protocol in `prove.py`) and owns the buffer / mask / fold / scan, so the product
@@ -216,7 +216,7 @@ tests and goes stale the first time the API moves — so we don't write one.
   alone ("byte-exact with arkworks") is fine — it's the moving symbol that rots.
   Same rule for the spec: cite the formula, not the function that computes it.
 - **A `docs/` page is design notes**, not an API tour — the *why* behind the
-  shape, the principles, the non-obvious gotchas. [`sumcheck.md`](sumcheck.md) is
+  shape, the principles, the non-obvious gotchas. [`sumcheck.md`](../blocks/sumcheck.md) is
   the intended shape.
 
 ### Subsystem doc skeleton
@@ -225,13 +225,13 @@ tests and goes stale the first time the API moves — so we don't write one.
 non-negotiables, so its doc must make both explicit:
 
 - **Why this shape** — the concept the block factors, and how it stays
-  proving-scheme- and zkVM-agnostic.
+  proving-scheme- and implementation-agnostic.
 - **Fusion by construction** — the load-bearing rule that keeps the block one
   fused unit by design, not by a compiler pattern-match.
 
 Everything else is optional, added only when the block has it — design decisions
 and their rationale, gotchas, what's deliberately out of scope. Don't pad a doc to
-fill a template. [`sumcheck.md`](sumcheck.md) and [`coding.md`](coding.md) are the
+fill a template. [`sumcheck.md`](../blocks/sumcheck.md) and [`coding.md`](../blocks/coding.md) are the
 two worked shapes — copy whichever fits.
 
 ## Naming
@@ -289,7 +289,7 @@ so signature drift — a renamed method, wrong arity, an added parameter — fai
 pre-commit mypy at the instance, instead of surfacing at a consumer call site
 (or never, while the instance still has no in-tree consumer). A generic seam
 parameterizes the pin with the instance's concrete types — the PCS pins are the
-worked example ([pcs.md "Instance anatomy"](pcs.md#instance-anatomy)). A module
+worked example ([pcs.md "Instance anatomy"](../blocks/pcs.md#instance-anatomy)). A module
 pinning more than one seam names each pin (`_summand`, `_prover_round`, ...):
 mypy rejects re-annotating `_`.
 
@@ -341,12 +341,12 @@ statement Python drops under `-O`, so under optimization a positive check or an
 
 ### Agnostic tests and goldens
 
-zorch is proving-scheme- and zkVM-agnostic (the repo's defining non-negotiable,
-[`../README.md`](../README.md)), so its tests must read as the library's own —
+zorch is proving-scheme- and implementation-agnostic (the repo's defining non-negotiable,
+[`../README.md`](../../README.md)), so its tests must read as the library's own —
 no consumer identity leaks in.
 
-- **Name no consumer or zkVM.** Test names, helper names, and comments don't
-  mention a downstream (`_matches_whir_zorch`, `_sp1_input_hash`, "SP1's
+- **Name no consumer or application.** Test names, helper names, and comments
+  don't mention a downstream (`_sp1_input_hash`, "SP1's
   reference fixture"). A future reader neither knows nor needs to know what the
   consumer is, and the name rots when that consumer moves.
 - **Self-anchor the golden** to zorch's own deterministic output. Don't drag in

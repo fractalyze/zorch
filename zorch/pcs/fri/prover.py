@@ -13,7 +13,7 @@ entirely field/NTT arithmetic that lowers on both CPU and GPU (no MSM). The quer
 phase is device-batched — positions are a device int32 array and each Merkle
 opening is one `vmap` over them — while the fold phase stays a Python `for` over
 rounds: each round Merkle-commits a half-size layer, so the loop is not
-`scan`-shaped (see docs/conventions.md). Scope: a single base-field polynomial
+`scan`-shaped (see docs/reference/conventions.md). Scope: a single base-field polynomial
 per opening, fixed small parameters — a demonstration of the seam, not a hardened
 prover.
 """
@@ -163,5 +163,6 @@ def _open_one(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
     _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver

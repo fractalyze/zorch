@@ -56,7 +56,7 @@ evaluation-domain form these combinators emit, so its field arithmetic stays in
 flock-zorch (see epic #1).
 
 The seam state between stages rides one accumulating **pipeline carry**
-(`SpartanCarry`, per [`stage-composition.md`](stage-composition.md)): values that
+(`SpartanCarry`, per [`stage-composition.md`](../composition/stage-composition.md)): values that
 skip a stage — `r_x`, read by both the inner sum-check and the PCS glue — live
 there rather than in a pass-through pairwise seam type. Each stage writes its own
 fields and fails loud if a predecessor has not run.
@@ -64,7 +64,7 @@ fields and fails loud if a predecessor has not run.
 ## Fusion is by construction
 
 Each stage is a `Round`, so stage granularity is capture granularity
-([`stage-composition.md`](stage-composition.md), "Fusion by construction"). The
+([`stage-composition.md`](../composition/stage-composition.md), "Fusion by construction"). The
 per-variable sum-check bodies are the shared `zorch.sumcheck` rounds, already
 written fusion-ready: the zerocheck summand `E·(A·B − C)` and the lincheck
 product `M·Z` each lower to element-wise field ops plus the one inherent `Σ` (no

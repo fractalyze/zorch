@@ -4,7 +4,7 @@ Merlin-over-hash duplex (`ByteHashTranscript`) parameterized by a `ByteHash`.
 
 This is the HOST-side, byte-oriented sibling of the device-resident algebraic
 `DuplexTranscript` (`transcript.py`). The two form a taxonomy (see
-`docs/transcript.md`): an algebraic sponge whose `observe`/`sample` are *device*
+`docs/blocks/transcript.md`): an algebraic sponge whose `observe`/`sample` are *device*
 ops fused into the round body, vs a byte hash whose Fiat-Shamir chain is strictly
 sequential and runs on the host.
 
@@ -220,6 +220,6 @@ class ByteHashTranscript:
 
 
 if TYPE_CHECKING:
-    # Seam-conformance pins (docs/conventions.md).
+    # Seam-conformance pins (docs/reference/conventions.md).
     _bt: type[ByteTranscript] = ByteHashTranscript
     _bg: type[ByteGrindingTranscript] = ByteHashTranscript
