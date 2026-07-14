@@ -18,8 +18,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.fusion import fused_region
 from zorch.hash.permutation import Permutation

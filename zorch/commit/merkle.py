@@ -34,23 +34,23 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=["row", "path"], meta_fields=[])
+@partial(frx.tree_util.register_dataclass, data_fields=["row", "path"], meta_fields=[])
 @dataclass(frozen=True)
 class Opening:
     """A single leaf's authentication path: the committed matrix `row` plus the
     sibling digest at each level (leaf-first, excluding the root).
 
     A pytree (leaves: `row` and each path sibling) so `open` / `reconstruct_root`
-    batch under `jax.vmap` and trace under `jit`."""
+    batch under `frx.vmap` and trace under `jit`."""
 
     row: Array
     path: list[Array]  # each (digest_elems,) for arity 2, (arity-1, digest_elems) above
@@ -140,12 +140,12 @@ class MerkleTree:
     # `vmap(single)` IS the batched kernel — a hand-written batched twin would
     # buy nothing.
     def _hash_leaves(self, matrix: Array) -> Array:
-        return jax.vmap(self._leaf_hasher.hash, in_axes=1 if self._column_major else 0)(
+        return frx.vmap(self._leaf_hasher.hash, in_axes=1 if self._column_major else 0)(
             matrix
         )
 
     def _compress_groups(self, groups: Array) -> Array:
-        return jax.vmap(self._compressor.compress)(groups)
+        return frx.vmap(self._compressor.compress)(groups)
 
     def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
         """The commit body: vmap the leaf hash, fold arity-sized groups per level
@@ -185,14 +185,14 @@ class MerkleTree:
         row), even when `column_major` (a commit-side-only flag): a column-major
         consumer passes the leaf-major transpose of its commit input here.
 
-        Single-index by construction; batch by `jax.vmap`-ing over `index` (the
+        Single-index by construction; batch by `frx.vmap`-ing over `index` (the
         sibling gather is orchestration outside the fused permute, like `commit`).
         Index validity is a prover-side precondition — enforced eagerly for any
         concrete index (Python int or 0-d Array), skipped only under tracing,
         where the value is unknown and JAX would silently clamp an out-of-range
         gather; there `verify` owns out-of-range rejection.
         """
-        if not isinstance(index, jax.core.Tracer) and not 0 <= index < matrix.shape[0]:
+        if not isinstance(index, frx.core.Tracer) and not 0 <= index < matrix.shape[0]:
             raise IndexError(f"leaf index {index} out of range [0, {matrix.shape[0]})")
         path = []
         idx = index
@@ -242,7 +242,7 @@ class MerkleTree:
         Returns the root Array, not a verdict — a separator-binding consumer
         (e.g. SP1's SMCS) rebinds the raw root before comparing, which
         `verify`'s plain equality can't express. Single-index; batch by
-        `jax.vmap`-ing over `(index, opening)`."""
+        `frx.vmap`-ing over `(index, opening)`."""
         node = self._leaf_hasher.hash(opening.row)
         # Unroll the leaf->root fold over the static-depth path instead of a
         # `scan`: a scan lowers to a `while` whose custom poseidon2 fusion body
@@ -294,10 +294,10 @@ class MerkleTree:
                 node = jnp.where(active, folded, node)
                 return (node, idx), None
 
-            (node, _), _ = jax.lax.scan(fold, (node, index), (path, mask))
+            (node, _), _ = frx.lax.scan(fold, (node, index), (path, mask))
             return node
 
-        return jax.vmap(one)(rows, indices, paths, valid)
+        return frx.vmap(one)(rows, indices, paths, valid)
 
     def verify(self, root: Array, index: int, opening: Opening) -> bool:
         """Rebuild the root from the row + path; compare to the committed root."""

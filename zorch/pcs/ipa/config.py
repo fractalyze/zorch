@@ -13,14 +13,14 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TypeAlias
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 IpaCommitment: TypeAlias = Array  # G1 affine [K] — one P = ⟨a, G⟩ per poly
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["l", "r", "a"],
     meta_fields=[],
 )
@@ -41,7 +41,7 @@ class IpaProof:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["l", "r", "a", "hiding_comm", "rand"],
     meta_fields=[],
 )

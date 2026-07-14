@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 # Counters a while_loop step tests in parallel: one window covers any practical
 # difficulty (expected work 2^bits), so the loop normally runs once.

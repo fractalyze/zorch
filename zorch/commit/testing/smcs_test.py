@@ -8,9 +8,9 @@ recomputation of SP1's separator formula, plus pinned regression vectors. SP1
 byte-match equivalence against the reference prover is the FFI slice.
 """
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from jax import Array
+from frx import Array
 
 from zorch.pcs.fold import FoldChoreography
 from zorch.transcript import TranscriptT

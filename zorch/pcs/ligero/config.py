@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TypeAlias
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 from zorch.commit.merkle import Opening
 
@@ -26,7 +26,7 @@ LigeroCommitment: TypeAlias = Array
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["w", "component_opening"],
     meta_fields=[],
 )

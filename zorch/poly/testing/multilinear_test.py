@@ -1,11 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Tests for poly.multilinear: eval_mle, mle_fold, mle_coeffs_to_evals,
 mle_evals_to_coeffs (base field)."""
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.poly.multilinear import (
     eval_mle,
@@ -119,7 +119,7 @@ class MleCoeffEvalTransformTest(absltest.TestCase):
         # "no hand-rolled butterfly" note warns about).
         def lowered(k: int) -> str:
             a = jnp.arange(1 << k, dtype=F)
-            return jax.jit(mle_evals_to_coeffs).lower(a).as_text()
+            return frx.jit(mle_evals_to_coeffs).lower(a).as_text()
 
         small, large = lowered(3), lowered(10)
         self.assertIn("while", small)

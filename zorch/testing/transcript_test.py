@@ -4,11 +4,11 @@ from __future__ import annotations
 import functools
 from dataclasses import replace
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array, lax, tree_util
+from frx import Array, lax, tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_perm,
@@ -33,14 +33,15 @@ from zorch.transcript import (
 
 F = zk_dtypes.koalabear_mont  # the koalabear16 permutation's field
 
-# The duplex sponge's `lax.scan` absorb is correct on GPU but hits a ZKX CPU
+# The duplex sponge's `lax.scan` absorb is correct on GPU but hits a Fractal XLA CPU
 # while-emitter bug that drops the scan's array-carry update (eager runs go
 # non-deterministic). Skip the duplex tests on CPU until it lands. See
 # fractalyze/zkx#500.
-_CPU_BACKEND = jax.default_backend() == "cpu"
+_CPU_BACKEND = frx.default_backend() == "cpu"
 _skip_on_cpu_scan_bug = absltest.skipIf(
     _CPU_BACKEND,
-    "ZKX CPU scan array-carry bug (GPU-correct); remove when fractalyze/zkx#500 lands",
+    "Fractal XLA CPU scan array-carry bug (GPU-correct); remove when "
+    "fractalyze/zkx#500 lands",
 )
 
 
@@ -84,7 +85,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         # Acceptance: state threads functionally under @jit (so the transcript
         # can later live in a lax.scan carry, issue #58).
         v = rand_field(4, (5,), F)
-        got = jax.jit(lambda t, x: t.observe(x).sample(2)[1])(self._new(), v)
+        got = frx.jit(lambda t, x: t.observe(x).sample(2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
         self.assertTrue(bool(jnp.all(got == want)))
 
@@ -102,7 +103,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         # Acceptance: absorb+squeeze are one @jit computation (fused by
         # construction), matching the eager observe-then-sample reference.
         v = rand_field(8, (5,), F)
-        got = jax.jit(lambda t, x: t.observe_and_sample(x, 2)[1])(self._new(), v)
+        got = frx.jit(lambda t, x: t.observe_and_sample(x, 2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
         self.assertTrue(bool(jnp.all(got == want)))
 
@@ -131,7 +132,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         # also appears by construction in the lowered HLO for a vendor to fuse.
         self._assert_marked_matches_plain(self._new())
         hlo = (
-            jax.jit(lambda t, x: observe_and_sample_marked(t, x, 4))
+            frx.jit(lambda t, x: observe_and_sample_marked(t, x, 4))
             .lower(self._new(), rand_field(9, (5,), F))
             .as_text()
         )
@@ -167,7 +168,7 @@ class DuplexTranscriptTest(absltest.TestCase):
             return t2, s * s  # give the squeeze an in-graph consumer, then discard
 
         t_ref, _ = _observe_and_sample_body(self._new(), v, 4)
-        t_mk, _ = jax.jit(consume)(self._new(), v)
+        t_mk, _ = frx.jit(consume)(self._new(), v)
         for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_mk)):
             self.assertTrue(bool(jnp.all(a == b)))
 
@@ -231,13 +232,13 @@ class TranscriptJitCacheTest(absltest.TestCase):
         )
 
     def test_jit_zone_does_not_retrace_per_fresh_transcript(self) -> None:
-        @jax.jit
+        @frx.jit
         def zone(t: DuplexTranscript) -> jnp.ndarray:
             return t.state.sponge_state
 
         zone(DuplexTranscript.new(koalabear16_perm(), rate=8))
         zone(DuplexTranscript.new(koalabear16_perm(), rate=8))
-        # _cache_size() is a private JAX API; may change on jax upgrade.
+        # _cache_size() is a private JAX API; may change on frx upgrade.
         self.assertEqual(zone._cache_size(), 1)
 
     def test_sample_reuses_one_cached_zone(self) -> None:
@@ -328,7 +329,7 @@ class GrindTest(absltest.TestCase):
             _, witness = transcript.grind(8)
             return witness
 
-        witness = jax.jit(body)()
+        witness = frx.jit(body)()
         _, ok = self._seeded().check_witness(8, witness)
         self.assertTrue(bool(ok))
 
@@ -660,7 +661,8 @@ def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
     A Python loop with NO `lax.scan` and NO traced-index scatter: `in_buf[in_pos]`
     is set with a `jnp.where` select, and `_absorb_permute`'s `sponge.at[:rate]`
     write is a static-range scatter the sample path already uses CPU-safely. So
-    this is correct on the ZKX CPU backend, unlike the scan-based `_ref_observe`,
+    this is correct on the Fractal XLA CPU backend, unlike the scan-based
+    `_ref_observe`,
     and can byte-check the production rate-block observe ON CPU."""
     base = t.state.sponge_state.dtype
     flat = lax.bitcast_convert_type(values, base).reshape(-1)
@@ -691,7 +693,7 @@ class CpuByteIdentityTest(absltest.TestCase):
     """Rate-block byte-identity on CPU (NOT `@_skip_on_cpu_scan_bug`).
 
     The byte-identity suite above is GPU-pinned (its `lax.scan`/`lax.cond`
-    references hit the ZKX CPU scan bug, fractalyze/zkx#500), so the rate-block
+    references hit the Fractal XLA CPU scan bug, fractalyze/zkx#500), so the rate-block
     ops were never byte-checked on the CPU backend the prover runs on. These
     compare production `observe`/`sample` against scan-free, CPU-safe references
     (`_pure_observe`, the per-limb `_sample_one` loop) so a future rate-block

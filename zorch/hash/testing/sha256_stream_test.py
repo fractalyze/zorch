@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import hashlib
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
 
@@ -90,7 +90,7 @@ class Sha256StreamTest(absltest.TestCase):
         msg = bytes(range(70))
         extra = b"\x01\x02\x03\x04\x05\x06\x07\x08"
 
-        @jax.jit
+        @frx.jit
         def run(data: jnp.ndarray, ex: jnp.ndarray) -> jnp.ndarray:
             state = sha256_stream_absorb(sha256_stream_init(), data)
             return sha256_stream_finalize(state, ex.reshape(1, -1))
@@ -105,14 +105,14 @@ class Sha256StreamTest(absltest.TestCase):
         msg = bytes(range(96))  # 6 chunks of 16 -> one full block + a 32 B remainder
         chunks = jnp.asarray(np.frombuffer(msg, np.uint8)).reshape(6, 16)
 
-        @jax.jit
+        @frx.jit
         def run(xs: jnp.ndarray) -> jnp.ndarray:
             def step(
                 state: Sha256State, chunk: jnp.ndarray
             ) -> tuple[Sha256State, None]:
                 return sha256_stream_absorb(state, chunk), None
 
-            state, _ = jax.lax.scan(step, sha256_stream_init(), xs)
+            state, _ = frx.lax.scan(step, sha256_stream_init(), xs)
             return sha256_stream_finalize(state, jnp.zeros((1, 0), dtype=jnp.uint8))
 
         got = bytes(np.asarray(run(chunks))[0])

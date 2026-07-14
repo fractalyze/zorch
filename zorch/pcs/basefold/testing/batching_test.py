@@ -3,7 +3,7 @@
 single-column case."""
 from __future__ import annotations
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabearx4_mont as EF
 

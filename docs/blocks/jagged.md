@@ -83,12 +83,12 @@ property of this layout-recomputing shape, worth preserving.)
 **Composite fusion is deferred.** The opening is a procedural composition of `@jit`
 device zones; folding the whole protocol into one fused kernel (the
 [fusion north star](../README.md#fusion-north-star)) needs the Fiat-Shamir-internal
-sumcheck marker and is gated on `jax.lax.composite` accepting field dtypes —
+sumcheck marker and is gated on `frx.lax.composite` accepting field dtypes —
 tracked on the epic, not this slice.
 
 ## Fusion by construction
 
-`eval_jagged_mle` is a single `jax.jit` whose output shape is a function of input
+`eval_jagged_mle` is a single `frx.jit` whose output shape is a function of input
 *shapes* only — no value dependence — with a `lax.fori_loop` over the bit layers,
 so it carries no host control flow. It is verifier-once work, not a per-round hot
 path, so it is `@jit`'d directly rather than written for a fused-region marker

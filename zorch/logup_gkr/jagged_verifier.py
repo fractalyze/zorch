@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
 from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine

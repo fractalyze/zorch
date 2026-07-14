@@ -39,9 +39,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
@@ -57,7 +57,7 @@ from zorch.utils.bits import log2_ceil_usize, log2_strict_usize
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["mle", "digest_layers"],
     meta_fields=[],
 )
@@ -123,7 +123,7 @@ def sample_query_positions(
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[
         "component_commitments",
         "fri_raw_roots",
@@ -142,7 +142,7 @@ class StackedOpenProof:
     """The stacked BaseFold open proof, byte-matched field-for-field against the
     SP1 reference dump.
 
-    A registered pytree so the proof crosses the open's `@jax.jit` boundary.
+    A registered pytree so the proof crosses the open's `@frx.jit` boundary.
 
     component_commitments: per round, the shape-bound SMCS root of the
         committed codeword — SP1's ``merkle_tree_commitments``, the roots the
@@ -177,7 +177,7 @@ class StackedOpenProof:
 # One @jit zone: collapses the FRI fold loop's ~1.2k eager per-op module compiles
 # into one.
 @partial(
-    jax.jit,
+    frx.jit,
     static_argnames=(
         "smcs",
         "code",
@@ -209,7 +209,7 @@ def stacked_basefold_open(
     ``(proof, transcript)``.
 
     ``rlc_bits`` switches the open into the **symbolic-K** mode used for a
-    recompile-free ``jax.export``: when set, each round's column count ``K`` may
+    recompile-free ``frx.export``: when set, each round's column count ``K`` may
     be a symbolic dim. The two K-dependent steps are made shape-polymorphic — the
     per-column evals run under ``vmap`` over the column axis (not a static
     ``range(K)``), and the RLC samples exactly ``rlc_bits`` challenges instead of
@@ -241,7 +241,7 @@ def stacked_basefold_open(
     # evaluations, observed into the transcript). vmap over the column axis serves
     # concrete and symbolic K alike, byte-identical to a per-column unroll.
     batch_evals = [
-        jax.vmap(eval_mle, in_axes=(1, None))(rd.mle, stack_point) for rd in rounds
+        frx.vmap(eval_mle, in_axes=(1, None))(rd.mle, stack_point) for rd in rounds
     ]
 
     t: GrindingTranscript = transcript
@@ -306,7 +306,7 @@ def stacked_basefold_open(
         # conjugates adjacently, so reshaping the base-field view into [n//2, *]
         # rows lands each pair in one leaf.
         n = codeword.shape[0]
-        leaves = jax.lax.bitcast_convert_type(codeword, bf_dtype).reshape(n // 2, -1)
+        leaves = frx.lax.bitcast_convert_type(codeword, bf_dtype).reshape(n // 2, -1)
         bound_root, digest_layers = smcs.commit(leaves)
         raw_roots.append(digest_layers[-1][0])
         bound_roots.append(bound_root)

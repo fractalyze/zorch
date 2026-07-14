@@ -14,12 +14,12 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from jax import Array
+from frx import Array
 
 from zorch.pcs.ring_switch import (
     RingSwitch,
@@ -134,10 +134,10 @@ class RingSwitchReductionTest(parameterized.TestCase):
         w = field_bit_width(dtype)
         s_hat = bit_slice_evals(_rand(11, (16,), dtype), _rand(12, (16,), dtype))
         args = s_hat, _rand(12, (16,), dtype), _rand(13, (w,), dtype)
-        eager, jitted = reduce_bit_claim(*args), jax.jit(reduce_bit_claim)(*args)
-        leaves, treedef = jax.tree_util.tree_flatten(eager)
+        eager, jitted = reduce_bit_claim(*args), frx.jit(reduce_bit_claim)(*args)
+        leaves, treedef = frx.tree_util.tree_flatten(eager)
         self.assertLen(leaves, 3)
-        self.assertEqual(treedef, jax.tree_util.tree_flatten(jitted)[1])
+        self.assertEqual(treedef, frx.tree_util.tree_flatten(jitted)[1])
         for field in ("s_hat_v", "rs_eq_ind", "claim"):
             np.testing.assert_array_equal(
                 _np_lanes(getattr(jitted, field)), _np_lanes(getattr(eager, field))

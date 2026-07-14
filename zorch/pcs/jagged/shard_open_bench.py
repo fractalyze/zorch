@@ -26,10 +26,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 from zk_dtypes import pfinfo
@@ -90,7 +90,7 @@ def _pack_dense(chips: list[Array], S: int) -> Array:
 
 
 def _rand_ef(key: Array, n: int) -> Array:
-    return jax.random.randint(key, (n * 4,), 0, MODULUS, dtype=jnp.uint32).view(EF)
+    return frx.random.randint(key, (n * 4,), 0, MODULUS, dtype=jnp.uint32).view(EF)
 
 
 def main() -> None:
@@ -114,7 +114,7 @@ def main() -> None:
 
     smcs = _smcs()
     code = BitReversedReedSolomon(message_len=S, blowup=_BLOWUP, dtype=BF)
-    open_jit = jax.jit(
+    open_jit = frx.jit(
         stacked_basefold_open,
         static_argnums=(0, 1, 5),
         static_argnames=("num_queries", "pow_bits"),
@@ -123,43 +123,43 @@ def main() -> None:
     dense = _pack_dense(chips, S)
     k = dense.shape[0] // S
     dmat = dense.reshape(k, S)  # [K, S] — code rides the leading axis
-    jax.block_until_ready(dmat)
+    frx.block_until_ready(dmat)
     print(
         f"  packed dense {dense.shape} -> stacked [{S}, {k}] "
         f"(codeword [{S * _BLOWUP}, {k}])",
         flush=True,
     )
 
-    encode = jax.jit(code.encode)
+    encode = frx.jit(code.encode)
 
     # Commit as ONE jit (encode + transpose + leaf hash + tree compress).
-    # NOTE: the xla_fork sponge_hash *supports* a column-major leaf
+    # NOTE: the Fractal XLA sponge_hash *supports* a column-major leaf
     # layout (leaf_stride=1) so the ``.T`` could stay a view, but zorch's
     # smcs.commit currently passes row-major strides (leaf_stride=absorb_len),
     # so XLA materializes the ``.T`` (a wrapped_transpose kernel) and the hash
     # reads row-major. Wiring column-major through smcs would drop the transpose
     # + coalesce the 188-wide leaf reads — follow-up, not done here.
-    @jax.jit
+    @frx.jit
     def commit_round(d: Array) -> tuple[Array, list[Array]]:
         codeword = code.encode(d).T  # [S*blowup, K]
         _root, digest_layers = smcs.commit(codeword)
         return codeword, digest_layers
 
-    key = jax.random.PRNGKey(args.seed)
+    key = frx.random.PRNGKey(args.seed)
 
     def _time(label: str, fn: Callable[[], Any], reps: int = 2) -> tuple[Any, float]:
         """Compile-warm then time ``reps`` steady-state calls, freeing each
         output before the next call so peak memory stays one-output (these
         codewords are GBs; holding two OOMs a 32 GB card)."""
         w = fn()
-        jax.block_until_ready(jax.tree_util.tree_leaves(w))
+        frx.block_until_ready(frx.tree_util.tree_leaves(w))
         del w
         out, dts = None, []
         for _ in range(reps):
             out = None  # drop the prior timed output before reallocating
             t0 = time.perf_counter()
             out = fn()
-            jax.block_until_ready(jax.tree_util.tree_leaves(out))
+            frx.block_until_ready(frx.tree_util.tree_leaves(out))
             dts.append(time.perf_counter() - t0)
         dt = min(dts)
         print(f"  {label:14s} {dt*1e3:9.2f} ms  (min of {reps})", flush=True)
@@ -177,10 +177,10 @@ def main() -> None:
     rd = StackedRound(mle=dmat.T, digest_layers=digest_layers)
 
     # OPEN at a random point (jit'd; one batched FRI).
-    key, kr, kd = jax.random.split(key, 3)
+    key, kr, kd = frx.random.split(key, 3)
     z_final = _rand_ef(kr, args.log_stacking_height)
     dense_eval = _rand_ef(kd, 1)[0]
-    jax.block_until_ready((z_final, dense_eval))
+    frx.block_until_ready((z_final, dense_eval))
 
     def _open() -> tuple[StackedOpenProof, GrindingTranscript]:
         return open_jit(

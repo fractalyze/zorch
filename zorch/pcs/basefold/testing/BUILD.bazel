@@ -6,7 +6,7 @@ py_test(
     name = "basefold_test",
     size = "small",
     srcs = ["basefold_test.py"],
-    # composite-vmap; CI's published jaxlib can't run it. .bazelrc.ci excludes the
+    # composite-vmap; CI's published frxlib can't run it. .bazelrc.ci excludes the
     # local_only tag from CI (full rationale there); local bazel runs it.
     tags = ["local_only"],
     deps = [
@@ -21,7 +21,7 @@ py_test(
         "//zorch/testkit:jit_cache",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -46,7 +46,7 @@ py_test(
     size = "medium",
     srcs = ["basefold_cadence_test.py"],
     # Real-poseidon2 transcript + Merkle lower to composites CI's published
-    # jaxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
+    # frxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
     tags = ["local_only"],
     deps = [
         "//zorch:transcript",
@@ -57,7 +57,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -70,7 +70,7 @@ py_test(
         "//zorch/pcs/basefold",
         "//zorch/poly",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -84,7 +84,7 @@ py_test(
         "//zorch/pcs/basefold",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -94,7 +94,7 @@ py_test(
     size = "small",
     srcs = ["batching_test.py"],
     # Real-poseidon2 transcript permute lowers to a composite CI's published
-    # jaxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
+    # frxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
     tags = ["local_only"],
     deps = [
         "//zorch:transcript",
@@ -102,7 +102,7 @@ py_test(
         "//zorch/pcs/basefold",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

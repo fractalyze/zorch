@@ -11,8 +11,8 @@ prover), not here.
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -169,7 +169,7 @@ class DuplexSpongeContractTest(absltest.TestCase):
 
         a = jnp.arange(_RATE, dtype=F)
         b = jnp.arange(_RATE, dtype=F) + F(3)
-        batched = jax.vmap(run)(jnp.stack([a, b]))
+        batched = frx.vmap(run)(jnp.stack([a, b]))
         self.assertTrue(bool(jnp.array_equal(batched[0], run(a))))
         self.assertTrue(bool(jnp.array_equal(batched[1], run(b))))
 

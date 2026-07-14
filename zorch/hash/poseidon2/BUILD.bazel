@@ -14,7 +14,7 @@ py_library(
         "//zorch:fusion",
         "//zorch/hash:permutation",
         "//zorch/hash:sponge",
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ],
 )

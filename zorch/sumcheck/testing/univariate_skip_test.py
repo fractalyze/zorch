@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import re
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 
@@ -212,12 +212,13 @@ class Round0FusionTest(absltest.TestCase):
         # Round 0 cannot be one straight-line kernel (it is inner-sum + iNTT), but it
         # must lower to a BOUNDED fused-kernel set: NTT kernels + element-wise combine +
         # the one inherent Σ over H_n — no gather/scatter/dot/while boundary. Whether
-        # the NTTs fuse into a single ZKX kernel is the open ZKX-side question (wiki
-        # `[[univariate-skip]]`); the authoritative gate is the ZKX rewriter, this is a
+        # the NTTs fuse into a single Fractal XLA kernel is the open Fractal
+        # XLA-side question (wiki `[[univariate-skip]]`); the authoritative gate is
+        # the Fractal XLA rewriter, this is a
         # cheap HLO-shape proxy mirroring `testkit.fusion.assert_fusion_ready`.
         p = rand_field(6, (2, 1 << 5), KB)
         hlo = (
-            jax.jit(lambda x: round0_message(x, 2, ProductSummand(degree=2)))
+            frx.jit(lambda x: round0_message(x, 2, ProductSummand(degree=2)))
             .lower(p)
             .as_text()
         )

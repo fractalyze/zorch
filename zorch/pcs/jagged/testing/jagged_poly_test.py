@@ -5,12 +5,12 @@ import operator
 from functools import reduce
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.pcs.jagged.branching_program import (
     _TRANSITION_ROWS,
@@ -150,7 +150,7 @@ class EvalJaggedMleTest(absltest.TestCase):
         cfg = oracle_cfg(heights_list[0], l_max, n_r, EF)
         z_col = rand_ext_field(2, (cfg.n_c,), KB, EF)
         z_index = rand_ext_field(3, (cfg.n_d,), KB, EF)
-        fn = jax.jit(lambda cps: eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg))
+        fn = frx.jit(lambda cps: eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg))
         for hc in heights_list:
             cps, n_d = build_jagged_layout(hc, l_max, EF)
             self.assertEqual(n_d, cfg.n_d)  # same tier
@@ -281,7 +281,7 @@ class PartialEvalTest(absltest.TestCase):
         off_b = _offset_bit_tensor(heights_b, l_max, cfg.n_d, cfg.dtype)
         z_row = rand_ext_field(20, (cfg.n_r,), KB, EF)
         z_col = rand_ext_field(21, (cfg.n_c,), KB, EF)
-        run = jax.jit(lambda cps, zr, zc: partial_eval_core(cps, zr, zc, 1 << cfg.n_d))
+        run = frx.jit(lambda cps, zr, zc: partial_eval_core(cps, zr, zc, 1 << cfg.n_d))
         out1 = run(off_a, z_row, z_col)
         out1.block_until_ready()
         out2 = run(off_b, z_row, z_col)

@@ -13,11 +13,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.coding.additive_reed_solomon import AdditiveReedSolomon
 from zorch.coding.foldable_code import FoldableCode

@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""SHA-256 over uint32 lanes, authored in jax — byte-identical to the FIPS 180-4
+"""SHA-256 over uint32 lanes, authored in frx — byte-identical to the FIPS 180-4
 standard (and any conforming implementation, e.g. Python's `hashlib.sha256`).
 
 Bulk-parallel by construction: a batch of `B` equal-length messages is hashed in
@@ -21,12 +21,12 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
-from jax.tree_util import register_dataclass
-from jax.typing import ArrayLike
+from frx import Array
+from frx.tree_util import register_dataclass
+from frx.typing import ArrayLike
 
 from zorch.fusion import fused_region
 
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 U32 = jnp.uint32
 
 SHA256_MARKER = "zorch.sha256"
-# Marker revision riding as `composite.version`. zkx recognizes the marker by
+# Marker revision riding as `composite.version`. Fractal XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).
 SHA256_MARKER_VERSION = 1
@@ -188,7 +188,7 @@ def _compress(state: Array, w16: Array, k: Array) -> Array:
         return (t1 + t2, a, b, c, d + t1, e, f, g, w)
 
     init = (*(state[:, i] for i in range(8)), w16)
-    a, b, c, d, e, f, g, h, _ = jax.lax.fori_loop(0, 64, round_t, init)
+    a, b, c, d, e, f, g, h, _ = frx.lax.fori_loop(0, 64, round_t, init)
     return state + jnp.stack([a, b, c, d, e, f, g, h], axis=1)
 
 
@@ -268,7 +268,7 @@ def deserialize_digest(digest: Array) -> Array:
 # body would dominate the first-trace floor (cf. poseidon2._permute_body, #216).
 # `inline=True` splices the cached jaxpr into the enclosing trace, so the emitted
 # module (one composite marker per chain) is unchanged.
-@partial(jax.jit, inline=True)
+@partial(frx.jit, inline=True)
 def sha256_chain(h0: Array, blocks: Array) -> Array:
     """The SHA-256 compression chain from midstate `h0` (uint32 [8], shared by
     the batch) over `blocks` (uint32 [B, nblocks, 16]) -> uint8 [B, 32]
@@ -395,7 +395,7 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
             h_new = jnp.where(active_blocks == max_blocks, h_hi, h_lo)
 
     tail_len = new_len - active_blocks * _BLOCK
-    tail = jax.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
+    tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
     slot = jnp.arange(_BLOCK, dtype=jnp.int32)
     pending = jnp.where(slot < tail_len, tail, jnp.uint8(0))
     return Sha256State(h_new, pending, tail_len, state.total_len + jnp.int32(length))

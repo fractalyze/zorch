@@ -6,7 +6,7 @@ py_test(
     name = "fri_test",
     size = "small",
     srcs = ["fri_test.py"],
-    # composite-vmap; CI's published jaxlib can't run it. .bazelrc.ci excludes the
+    # composite-vmap; CI's published frxlib can't run it. .bazelrc.ci excludes the
     # local_only tag from CI (full rationale there); local bazel runs it.
     tags = ["local_only"],
     deps = [
@@ -17,7 +17,7 @@ py_test(
         "//zorch/testkit:jit_cache",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

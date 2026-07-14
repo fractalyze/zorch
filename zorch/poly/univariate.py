@@ -5,9 +5,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.utils.field import base_field, naturals
 
@@ -50,7 +50,7 @@ def _lagrange_denominators(domain: Array) -> Array:
     return jnp.prod(jnp.where(mask, one, domain[:, None] - domain[None, :]), axis=1)
 
 
-@jax.jit
+@frx.jit
 def compute_lagrange_basis(r: Array, domain: Array) -> Array:
     """All Lagrange basis evaluations ``L_{D,k}(r)`` over ``domain``:
     ``L_{D,k}(r) = prod_{j != k} (r - x_j) / (x_k - x_j)``.
@@ -93,7 +93,7 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
     return jnp.stack(columns, axis=1)
 
 
-@jax.jit
+@frx.jit
 def eval_coeffs(coeffs: Array, point: Array) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
@@ -112,7 +112,7 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
 
     # Forward power accumulation rather than a reverse-scan Horner (which would
     # carry only the accumulator): ``lax.scan(reverse=True)`` is not honored on
-    # this jax fork — it runs forward and yields the wrong value.
+    # this frx build — it runs forward and yields the wrong value.
     def step(
         carry: tuple[Array, Array], c_i: Array
     ) -> tuple[tuple[Array, Array], None]:
@@ -121,5 +121,5 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
 
     # acc seeds in the coeff×point promoted dtype/shape; power seeds at point**0.
     init = (jnp.zeros_like(coeffs[..., 0] * point), jnp.ones_like(point))
-    (acc, _), _ = jax.lax.scan(step, init, leading)
+    (acc, _), _ = frx.lax.scan(step, init, leading)
     return acc

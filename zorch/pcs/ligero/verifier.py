@@ -24,9 +24,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.coding.linear_code import LinearCode
 from zorch.commit.merkle import MerkleTree
@@ -77,7 +77,7 @@ class LigeroVerifier:
 
 
 # Jitted verify body: the verifier is the static key (by value, #214).
-@partial(jax.jit, static_argnames=("verifier",))
+@partial(frx.jit, static_argnames=("verifier",))
 def _verify_body(
     verifier: LigeroVerifier,
     commitment: Array,

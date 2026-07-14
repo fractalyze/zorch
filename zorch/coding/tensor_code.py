@@ -29,7 +29,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from jax import Array
+from frx import Array
 
 from zorch.coding.linear_code import LinearCode
 

@@ -21,9 +21,9 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as F
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon

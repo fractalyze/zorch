@@ -1,10 +1,10 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array, lax, tree_util
+from frx import Array, lax, tree_util
 
 from zorch.sumcheck import prover, verifier
 from zorch.sumcheck.domain import fold, split_halves, split_pairs

@@ -5,7 +5,7 @@
 JAX-native building blocks for Modern SNARKs. `zorch` sits between
 [fractalyze/jax](https://github.com/fractalyze/jax) and the proof systems that
 consume it: JAX provides tracing and codegen (via
-[fractalyze/xla](https://github.com/fractalyze/xla), Fractalyze's XLA fork with
+[fractalyze/xla](https://github.com/fractalyze/xla), Fractalyze's XLA with
 native finite-field dtypes); `zorch` provides the reusable pieces a proof system
 is assembled from.
 

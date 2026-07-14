@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TypeAlias
 
-from jax import Array
+from frx import Array
 
 KzgCommitment: TypeAlias = Array  # bn254 G1 affine [K] — one commitment per poly
 KzgProof: TypeAlias = Array  # bn254 G1 affine [K] — one opening proof π per poly

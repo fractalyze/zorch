@@ -3,14 +3,14 @@
 
 `encode` reads the message as the `message_len` low-order coefficients of a
 polynomial, zero-pads to `block_len`, and evaluates it on the order-`block_len`
-two-adic subgroup (or a coset of it). The evaluation is `jax.lax.fft` — the
-ZKX-native NTT — which lowers to one fused kernel and auto-decomposes extension
+two-adic subgroup (or a coset of it). The evaluation is `frx.lax.ntt` — the
+Fractal XLA-native NTT — which lowers to one fused kernel and auto-decomposes extension
 fields into prime-field NTTs.
 
 There is deliberately no hand-rolled butterfly: a `jnp` butterfly would be
 log(n) unfused kernels the compiler cannot recognize as an NTT. Reed-Solomon
 hands its evaluation to the native op, the way poseidon2 hands its algebra to
-zkx rather than fusing it by pattern-match.
+Fractal XLA rather than fusing it by pattern-match.
 
 `fri_fold` is the codeword fold shared by every FRI-style scheme (FRI,
 Basefold, WHIR, STARK); the fold half of the seam delegates to it. It lives
@@ -24,11 +24,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
-from jax import Array, lax
+from frx import Array, lax
 
 from zorch.poly.univariate import compute_lagrange_basis, powers
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
@@ -61,10 +61,10 @@ def _is_binary_field(dtype: Any) -> bool:
 def eval_domain(
     dtype: Any, n: int, *, shift: Array | None = None, generator: int | None = None
 ) -> Array:
-    """The order-`n` two-adic subgroup points [d₀..d_{n-1}] in `lax.fft` order,
+    """The order-`n` two-adic subgroup points [d₀..d_{n-1}] in `lax.ntt` order,
     or the coset points [shift·d₀..shift·d_{n-1}] when `shift` is given.
 
-    `lax.fft` of the coefficient vector of p(X)=X (i.e. e₁) returns
+    `lax.ntt` of the coefficient vector of p(X)=X (i.e. e₁) returns
     [p(d₀)..p(d_{n-1})] = [d₀..d_{n-1}], so the domain is read off the same NTT
     the encoder uses. `generator` selects the subgroup generator the NTT root is
     `gen^((p-1)/n)` of; None uses the dtype's canonical root. It must match the
@@ -245,7 +245,7 @@ class ReedSolomon:
             if self._binary_eval_table is None:
                 # Concrete even under an outer trace: a traced table stored on
                 # self would leak the tracer into later calls.
-                with jax.ensure_compile_time_eval():
+                with frx.ensure_compile_time_eval():
                     self._binary_eval_table = self._build_binary_eval_table()
             return self._binary_eval_table[positions]  # (*positions.shape, k)
         k = log2_strict_usize(self.message_len)
@@ -417,7 +417,7 @@ class ReedSolomon:
         """vmap the single-group Lagrange fold (`fri_fold_k_values`) over the
         group/query axis — the one place fold_group and fold_group_values share,
         each supplying its own `groups`/`points` (full layer vs opened queries)."""
-        return jax.vmap(lambda g, p: fri_fold_k_values(g, beta, p))(groups, points)
+        return frx.vmap(lambda g, p: fri_fold_k_values(g, beta, p))(groups, points)
 
     def _regroup(self, layer: Array, k: int) -> Array:
         """Reshape a length-`n` layer into its `[n // k, k]` k-th-root cosets:

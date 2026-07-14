@@ -10,14 +10,14 @@ consumer's, keeping this block proving-scheme- and PCS-agnostic.
 The replay is one `lax.scan` over the proof rows (carry `(claim, transcript)`),
 not a Python loop: the whole verification compiles to a single traced region that
 is flat in the round count (issue #58), so it stays one fused unit rather than an
-unrolled body that crosses the ZKX PTX cliff.
+unrolled body that crosses the Fractal XLA PTX cliff.
 """
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.transcript import Transcript
 

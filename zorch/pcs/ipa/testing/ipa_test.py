@@ -1,11 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from jax import Array, lax
+from frx import Array, lax
 
 from zorch.pcs.ipa.challenger import TranscriptChallenger
 from zorch.pcs.ipa.config import IpaProof, IpaZkProof
@@ -71,9 +71,9 @@ class TranscriptChallengerPytreeTest(absltest.TestCase):
 
     def test_flatten_roundtrip(self) -> None:
         ch = TranscriptChallenger(cheap_transcript(SF), SF)
-        leaves, treedef = jax.tree_util.tree_flatten(ch)
+        leaves, treedef = frx.tree_util.tree_flatten(ch)
         self.assertEqual(len(leaves), 5)  # DuplexState's 5 buffers; dtype is not a leaf
-        back = jax.tree_util.tree_unflatten(treedef, leaves)
+        back = frx.tree_util.tree_unflatten(treedef, leaves)
         self.assertIs(back.dtype, ch.dtype)  # the static meta survives unflatten
 
     def test_two_instances_share_one_treedef(self) -> None:
@@ -83,13 +83,13 @@ class TranscriptChallengerPytreeTest(absltest.TestCase):
         a = TranscriptChallenger(cheap_transcript(SF), SF)
         b = TranscriptChallenger(cheap_transcript(SF), SF)
         self.assertEqual(
-            jax.tree_util.tree_structure(a), jax.tree_util.tree_structure(b)
+            frx.tree_util.tree_structure(a), frx.tree_util.tree_structure(b)
         )
 
     def test_threads_through_jit_as_argument(self) -> None:
         ch = TranscriptChallenger(cheap_transcript(SF), SF)
         lhs, rhs = jnp.array(3, SF), jnp.array(5, SF)
-        got = jax.jit(lambda c: c.challenge(lhs, rhs)[1])(ch)
+        got = frx.jit(lambda c: c.challenge(lhs, rhs)[1])(ch)
         self.assertTrue(bool(got == ch.challenge(lhs, rhs)[1]))
 
 
@@ -100,7 +100,7 @@ class TranscriptChallengerPytreeTest(absltest.TestCase):
 # production encoding) over the standard-domain toy basis, the same split KZG's
 # round-trip test uses.
 
-_GPU = jax.default_backend() == "gpu"
+_GPU = frx.default_backend() == "gpu"
 
 # (subtest name, Montgomery scalar field, standard-domain toy curve)
 _CURVES = (

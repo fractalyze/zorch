@@ -15,7 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
 ]
-# The jax fork stack (jax / jaxlib / jax-cuda12-* / zk-dtypes) is deliberately
+# The frx (Field, Ring Accelerated) stack (frx / frxlib / frx-cuda12-* / zk-dtypes) is deliberately
 # NOT pinned here. It is a GPU-correctness-sensitive, continuously-bumped build
 # (see requirements.in + jax-update.yml) that the *consuming* workspace pins
 # exactly; declaring it in the wheel would only force resolver conflicts there.
@@ -56,11 +56,11 @@ disallow_incomplete_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 
-# Untyped (or, for the ZKX jax fork, statically unresolvable) third parties:
-# jax is an editable build whose own .pyi stubs don't parse under mypy, so its
-# types are unusable here — `jax.Array` collapses to Any. zk_dtypes/zkbench ship
+# Untyped (or, for frx, statically unresolvable) third parties:
+# frx is an editable build whose own .pyi stubs don't parse under mypy, so its
+# types are unusable here — `frx.Array` collapses to Any. zk_dtypes/zkbench ship
 # no py.typed; absl only stubs part of its surface. disallow_untyped_defs still
 # enforces our own annotations regardless.
 [[tool.mypy.overrides]]
-module = ["jax.*", "jaxlib.*", "zk_dtypes.*", "zkbench.*", "absl.*"]
+module = ["frx.*", "frxlib.*", "zk_dtypes.*", "zkbench.*", "absl.*"]
 ignore_missing_imports = true

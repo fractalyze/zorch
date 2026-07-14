@@ -11,8 +11,8 @@ from __future__ import annotations
 import functools
 import hashlib
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
@@ -57,7 +57,7 @@ class Sha256Test(parameterized.TestCase):
         # dedicated zorch.sha256 emitter (parallel to zorch.poseidon2).
         blocks = jnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
         fn = functools.partial(sha256.sha256_chain, sha256.INITIAL_STATE)
-        txt = jax.jit(fn).lower(blocks).as_text()
+        txt = frx.jit(fn).lower(blocks).as_text()
         self.assertIn(sha256.SHA256_MARKER, txt)
         self.assertEqual(txt.count("stablehlo.composite"), 1)
 

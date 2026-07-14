@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.utils.bits import log2_strict_usize

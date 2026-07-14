@@ -10,7 +10,7 @@ py_library(
         "//zorch:transcript",
         "//zorch/coding:foldable_code",
         "//zorch/commit:merkle",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -22,7 +22,7 @@ py_library(
         "//zorch/coding:linear_code",
         "//zorch/commit:merkle",
         "//zorch/pcs:fold",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -35,7 +35,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -44,6 +44,6 @@ py_library(
     srcs = ["ring_switch.py"],
     visibility = ["//visibility:public"],
     deps = [
-        requirement("jax"),
+        requirement("frx"),
     ],
 )

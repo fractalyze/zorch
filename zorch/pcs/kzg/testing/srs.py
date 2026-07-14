@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from typing import cast
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
-from jax import lax
+from frx import lax
 
 from zorch.pcs.kzg.setup import KzgProvingKey, KzgVerifierKey, setup
 

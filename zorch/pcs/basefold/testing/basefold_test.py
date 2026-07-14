@@ -10,8 +10,8 @@ import re
 import unittest
 from collections.abc import Callable
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
@@ -73,8 +73,8 @@ class BasefoldTest(absltest.TestCase):
         bf, rs, tree, S = _basefold()
         mle = jnp.arange(S * 3, dtype=F).reshape(S, 3)
         _, pdata = bf.commit(_columns(mle))
-        leaves, treedef = jax.tree_util.tree_flatten(pdata)
-        restored = jax.tree_util.tree_unflatten(treedef, leaves)
+        leaves, treedef = frx.tree_util.tree_flatten(pdata)
+        restored = frx.tree_util.tree_unflatten(treedef, leaves)
         self.assertEqual(restored.widths, pdata.widths)
         for a, b in zip(restored.digest_layers, pdata.digest_layers):
             self.assertTrue(bool(jnp.array_equal(a, b)))
@@ -101,8 +101,8 @@ class BasefoldTest(absltest.TestCase):
             component_openings=[comp],
             query_openings=[pair],
         )
-        leaves, treedef = jax.tree_util.tree_flatten(proof)
-        restored = jax.tree_util.tree_unflatten(treedef, leaves)
+        leaves, treedef = frx.tree_util.tree_flatten(proof)
+        restored = frx.tree_util.tree_unflatten(treedef, leaves)
         self.assertEqual(len(restored.univariate_messages), 1)
         self.assertEqual(restored.final_poly.shape, (2,))
         self.assertEqual(len(restored.component_openings), 1)
@@ -140,8 +140,8 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
 
 
 # TODO(zorch#202): basefold open emits a multi-batch NTT the published nightly's
-# rewriter rejects (`Unsupported opcode: ntt`); the fix is on the parametric
-# xla_fork branch, not the wheel.
+# rewriter rejects (`Unsupported opcode: ntt`); the fix is in Fractal XLA,
+# not the published wheel.
 @unittest.skip("basefold open hits an unsupported multi-batch NTT; see zorch#202")
 class BasefoldOpenTest(absltest.TestCase):
     def _commit(
@@ -371,7 +371,7 @@ class BasefoldOpenTest(absltest.TestCase):
         prover = BasefoldProver(rs, tree, num_queries=4)
         t0 = _transcript()  # built eagerly; closed over as a pytree constant
 
-        @functools.partial(jax.jit, static_argnums=())
+        @functools.partial(frx.jit, static_argnums=())
         def run(mle: jnp.ndarray, z: jnp.ndarray) -> jnp.ndarray:
             cols = [mle[:, k] for k in range(K)]
             _, pdata = prover.commit(cols)

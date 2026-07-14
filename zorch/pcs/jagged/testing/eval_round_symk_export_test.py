@@ -3,7 +3,7 @@
 
 ``eval_round_core`` runs every column-indexed step — the outer indicator's
 searchsorted gather, the outer ``Σ D·J̃`` Hadamard sumcheck, and the inner
-branching-program sumcheck — over the REAL column count, so ONE ``jax.export``
+branching-program sumcheck — over the REAL column count, so ONE ``frx.export``
 binary serves every column count at real-size cost (no padding). This locks the
 full round: a single symbolic binary must produce a byte-identical
 ``JaggedEvalMsg`` to the concrete core for two distinct column counts of one area
@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array, export
+from frx import Array, export
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -39,14 +39,14 @@ _PRIME = 2013265921
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(jax.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> Array:
     ints = np.random.default_rng(seed).integers(
         1, 1 << 30, size=(*shape, 4), dtype=np.int64
     )
-    return jax.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
+    return frx.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
 
 
 class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
@@ -91,14 +91,14 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
 
     def _export(self) -> export.Exported:
         (length,) = export.symbolic_shape("l", constraints=["l >= 5", "l <= 8"])
-        offsets_abs = jax.ShapeDtypeStruct((length + 1, _N_D), EF)
-        merged_abs = jax.ShapeDtypeStruct((length, 2 * _N_D), EF)
-        weights_abs = jax.ShapeDtypeStruct((length,), EF)
-        claims_abs = jax.ShapeDtypeStruct((length,), EF)
-        tr_abs = jax.tree_util.tree_map(
-            lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
+        offsets_abs = frx.ShapeDtypeStruct((length + 1, _N_D), EF)
+        merged_abs = frx.ShapeDtypeStruct((length, 2 * _N_D), EF)
+        weights_abs = frx.ShapeDtypeStruct((length,), EF)
+        claims_abs = frx.ShapeDtypeStruct((length,), EF)
+        tr_abs = frx.tree_util.tree_map(
+            lambda a: frx.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
         )
-        return export.export(jax.jit(self._fn))(
+        return export.export(frx.jit(self._fn))(
             offsets_abs, merged_abs, weights_abs, claims_abs, tr_abs
         )
 
@@ -111,8 +111,8 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
             ref = self._fn(offsets, merged, weights, claims, cheap_transcript(BF))
             got = exported.call(offsets, merged, weights, claims, cheap_transcript(BF))
 
-            ref_leaves = jax.tree_util.tree_leaves(ref)
-            got_leaves = jax.tree_util.tree_leaves(got)
+            ref_leaves = frx.tree_util.tree_leaves(ref)
+            got_leaves = frx.tree_util.tree_leaves(got)
             self.assertEqual(len(ref_leaves), len(got_leaves), f"leaf count L={length}")
             for i, (a, b) in enumerate(zip(ref_leaves, got_leaves, strict=True)):
                 self.assertEqual(_u32(a), _u32(b), f"leaf {i} diverged at L={length}")
@@ -159,11 +159,11 @@ class SymbolicNrEvalRoundExportTest(absltest.TestCase):
 
     def _export(self) -> export.Exported:
         (r,) = export.symbolic_shape("r", constraints=["r >= 3", "r <= 5"])
-        z_row_abs = jax.ShapeDtypeStruct((r,), EF)
-        tr_abs = jax.tree_util.tree_map(
-            lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
+        z_row_abs = frx.ShapeDtypeStruct((r,), EF)
+        tr_abs = frx.tree_util.tree_map(
+            lambda a: frx.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
         )
-        return export.export(jax.jit(self._fn))(z_row_abs, tr_abs)
+        return export.export(frx.jit(self._fn))(z_row_abs, tr_abs)
 
     def test_one_binary_byte_matches_concrete_for_every_nr(self) -> None:
         exported = self._export()
@@ -172,8 +172,8 @@ class SymbolicNrEvalRoundExportTest(absltest.TestCase):
             ref = self._fn(z_row, cheap_transcript(BF))
             got = exported.call(z_row, cheap_transcript(BF))
 
-            ref_leaves = jax.tree_util.tree_leaves(ref)
-            got_leaves = jax.tree_util.tree_leaves(got)
+            ref_leaves = frx.tree_util.tree_leaves(ref)
+            got_leaves = frx.tree_util.tree_leaves(got)
             self.assertEqual(len(ref_leaves), len(got_leaves), f"leaf count n_r={n_r}")
             for i, (a, b) in enumerate(zip(ref_leaves, got_leaves, strict=True)):
                 self.assertEqual(_u32(a), _u32(b), f"leaf {i} diverged at n_r={n_r}")

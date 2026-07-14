@@ -25,9 +25,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.fold import PreFoldPairCommitRound, open_rows, sample_positions
@@ -49,7 +49,7 @@ def _eval_poly(coeffs: Array, z: Array) -> Array:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["coeffs", "codeword", "leaves", "digest_layers"],
     meta_fields=[],
 )
@@ -113,7 +113,7 @@ class FriProver:
 # FriParams: it never reads the open-side knobs (num_rounds / num_queries), so
 # params differing only there must not compile twice (static keys compare by
 # value — #214).
-@partial(jax.jit, static_argnames=("code", "tree"))
+@partial(frx.jit, static_argnames=("code", "tree"))
 def _commit_one(
     code: DeepFoldableCode, tree: MerkleTree, coeffs: Array
 ) -> FriCommittedPoly:
@@ -123,7 +123,7 @@ def _commit_one(
     return FriCommittedPoly(coeffs, codeword, leaves, digest_layers)
 
 
-@partial(jax.jit, static_argnames=("params",))
+@partial(frx.jit, static_argnames=("params",))
 def _open_one(
     params: FriParams,
     committed: FriCommittedPoly,

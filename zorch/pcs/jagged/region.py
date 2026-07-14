@@ -17,9 +17,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Optional, Sequence
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 
 def structure_counts(
@@ -50,7 +50,7 @@ def structure_counts(
     return row_counts, column_counts, total_area, aligned
 
 
-@partial(jax.jit, static_argnames=("num_added_vals", "pad_dtype"))
+@partial(frx.jit, static_argnames=("num_added_vals", "pad_dtype"))
 def _pack_chip_data(
     chips: tuple[Array, ...], *, num_added_vals: int, pad_dtype: Any
 ) -> Array:
@@ -70,7 +70,7 @@ def _pack_chip_data(
 # height, and names are static aux. Lets a region cross the chain's @jit
 # boundary as part of a donatable carry.
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["dense"],
     meta_fields=[
         "chip_starts",

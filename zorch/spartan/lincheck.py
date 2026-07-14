@@ -17,8 +17,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.prove import fold_rounds
 from zorch.round import Round

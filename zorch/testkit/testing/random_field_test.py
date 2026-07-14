@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest

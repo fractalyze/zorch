@@ -1,15 +1,15 @@
 """composite emits one named composite marker carrying its attrs."""
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 
 from zorch._composite import composite
 
 
-def _composite_eqns(fn: object, *args: jax.Array) -> list:
+def _composite_eqns(fn: object, *args: frx.Array) -> list:
     """The composite primitive eqns in `fn`'s jaxpr — read without MLIR lowering."""
-    jaxpr = jax.make_jaxpr(fn)(*args).jaxpr
+    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
     return [e for e in jaxpr.eqns if e.primitive.name == "composite"]
 
 

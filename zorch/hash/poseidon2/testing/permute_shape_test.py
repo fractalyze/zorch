@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import dataclasses
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -65,7 +65,7 @@ class Poseidon2PermuteShapeTest(absltest.TestCase):
         self.assertEqual(out.shape, (16,))
         self.assertEqual(out.dtype, F)
         batch = jnp.stack([x, x + F(1)])
-        bout = jax.vmap(p.permute)(batch)  # thread-per-hash
+        bout = frx.vmap(p.permute)(batch)  # thread-per-hash
         self.assertEqual(bout.shape, (2, 16))
         self.assertEqual(bout.dtype, F)
         self.assertTrue(bool(jnp.array_equal(bout[0], out)))

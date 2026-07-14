@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -19,7 +19,7 @@ from zorch.testkit.transcript import cheap_transcript
 
 
 def _states_equal(a: object, b: object) -> bool:
-    la, lb = jax.tree_util.tree_leaves(a), jax.tree_util.tree_leaves(b)
+    la, lb = frx.tree_util.tree_leaves(a), frx.tree_util.tree_leaves(b)
     return len(la) == len(lb) and all(
         bool(jnp.array_equal(x, y)) for x, y in zip(la, lb, strict=True)
     )

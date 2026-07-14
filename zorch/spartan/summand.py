@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from jax import Array
+from frx import Array
 
 
 @dataclass(frozen=True)

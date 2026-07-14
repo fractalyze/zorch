@@ -40,7 +40,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol, TypeVar
 
-from jax import Array
+from frx import Array
 
 from zorch.transcript import Transcript
 

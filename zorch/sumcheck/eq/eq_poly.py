@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
@@ -75,7 +75,7 @@ def _weighted_summand(
         num_x_r = p0s.shape[1] // num_x_l
         p0s = jnp.reshape(p0s, (m, num_x_l, num_x_r))
         p1s = jnp.reshape(p1s, (m, num_x_l, num_x_r))
-    combined = combine(*jax.vmap(domain.sample)(p0s, p1s))  # (num_points, *x_shape)
+    combined = combine(*frx.vmap(domain.sample)(p0s, p1s))  # (num_points, *x_shape)
     if eq_w_l is not None:
         return jnp.sum(
             eq_w_l[None, :, None] * combined * eq_w_r[None, None, :], axis=(1, 2)

@@ -9,7 +9,7 @@ py_test(
     deps = [
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -21,7 +21,7 @@ py_test(
     deps = [
         "//zorch/testkit:fusion",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -35,7 +35,7 @@ py_test(
         "//zorch/hash:permutation",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

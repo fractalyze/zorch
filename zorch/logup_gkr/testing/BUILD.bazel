@@ -18,7 +18,7 @@ py_library(
         "//zorch/sumcheck/jagged",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -31,7 +31,7 @@ py_test(
         ":testing",
         "//zorch/logup_gkr",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -52,7 +52,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -70,7 +70,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -86,7 +86,7 @@ py_test(
         "//zorch/sumcheck/jagged",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -104,7 +104,7 @@ py_test(
         "//zorch/testkit:transcript",
         "//zorch/utils:bits",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -118,7 +118,7 @@ py_test(
         "//zorch/logup_gkr",
         "//zorch/testkit:jit_cache",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -139,7 +139,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -156,7 +156,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -169,7 +169,7 @@ py_test(
         ":testing",
         "//zorch/logup_gkr",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )

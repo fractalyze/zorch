@@ -15,8 +15,8 @@ from __future__ import annotations
 import functools
 import operator
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 
 def _unrolled_sum(terms: list[Array]) -> Array:

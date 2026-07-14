@@ -23,7 +23,7 @@ py_library(
         "//zorch:transcript",
         "//zorch/poly",
         "//zorch/sumcheck",
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ],
 )

@@ -14,8 +14,8 @@ standard-basis / Montgomery-scalar split KZG's round-trip test uses."""
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.pcs.ipa.setup import IpaKey, setup
 from zorch.pcs.testing.curves import Curve, generator

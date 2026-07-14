@@ -13,10 +13,10 @@ from dataclasses import dataclass, replace
 from functools import cache, partial
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 
-import jax
-import jax.numpy as jnp
-from jax import Array, jit, lax, vmap
-from jax.tree_util import register_dataclass, tree_map
+import frx
+import frx.numpy as jnp
+from frx import Array, jit, lax, vmap
+from frx.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
 
 from zorch.fusion import fused_region
@@ -424,7 +424,7 @@ class DuplexTranscript:
 # `inline=True` keeps call sites already inside a jit zone byte-identical:
 # without it the zone stays a nested pjit call in the outer jaxpr, which stops
 # the permutation's round constants from auto-lifting into the
-# `zorch.sumcheck` composite envelope (the operand layout zkx expands).
+# `zorch.sumcheck` composite envelope (the operand layout Fractal XLA expands).
 
 
 @partial(jit, static_argnames=("n",), inline=True)
@@ -457,7 +457,7 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     # Select the chain entry for `perm_count` with a one-hot select over the
     # STATIC chain, NOT a traced-index gather into a stacked array
     # (`output_buffers[perm_count, ...]` / `leaves[perm_count]`): that gather
-    # miscompiles on the ZKX CPU backend (fractalyze/zkx#500 class), the same
+    # miscompiles on the Fractal XLA CPU backend (fractalyze/zkx#500 class), the same
     # reason `_observe_body` unrolls its block loop. `depth` is static, so the
     # one-hot is a fixed chain of selects; `out_pos` stays a 1-D buffer gather,
     # which `_sample_one` already uses CPU-safely.
@@ -685,7 +685,7 @@ def _check_witness_body(
 # The sponge state lives on the CPU for the whole Fiat-Shamir stream: the host op
 # calls the CPU sponge jit DIRECTLY on host-resident leaves and moves only `values`
 # in / the squeezed challenge back to the compute device. Crossing the host
-# boundary costs per array-leaf (a `jax.pure_callback` round-trip of the 5 state
+# boundary costs per array-leaf (a `frx.pure_callback` round-trip of the 5 state
 # leaves every hop was ~6x that and dominated a warm prove once the sponge math got
 # fast); keeping the state resident drops each hop to one `values` in + one
 # challenge out. This is an eager primitive -- it is the production jit=False
@@ -695,16 +695,16 @@ def _check_witness_body(
 # (fs_on_host defaults False -> no recursion) and runs the SAME `_observe_body`/
 # `_sample_body`. The `permutation` must lower its `permute` to the host (a raw
 # permute, not one pinning an inner accelerator jit). State leaves cross as their
-# own field dtype -- jax_fork#45 (FFI ABI carries ZK field types) retired the
+# own field dtype -- frx#45 (FFI ABI carries ZK field types) retired the
 # uint32 bitcast workaround for the #44 abort.
 # ============================================================================
 
 
 @cache
-def _host_cpu() -> jax.Device:
+def _host_cpu() -> frx.Device:
     """The host device, resolved lazily so a host-FS transcript -- not merely
     importing -- is what requires a CPU backend."""
-    return jax.devices("cpu")[0]
+    return frx.devices("cpu")[0]
 
 
 def _state_leaves(
@@ -764,10 +764,10 @@ def _host_obs_sample_jit(perm: Permutation, rate: int, n: int) -> Any:
 
 
 @cache
-def _host_compute_device() -> jax.Device:
+def _host_compute_device() -> frx.Device:
     """Where a squeezed challenge returns to -- the device the surrounding eager
     prove computes on (its kernels consume the challenge)."""
-    return jax.devices()[0]
+    return frx.devices()[0]
 
 
 def _on_host(x: Array) -> bool:
@@ -781,14 +781,14 @@ def _state_on_host(state: DuplexState) -> DuplexState:
     if _on_host(state.sponge_state):
         return state
     c = _host_cpu()
-    return DuplexState(*(jax.device_put(leaf, c) for leaf in _state_leaves(state)))
+    return DuplexState(*(frx.device_put(leaf, c) for leaf in _state_leaves(state)))
 
 
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
     """`observe` on the host sponge; the state stays host-resident."""
     s = _state_on_host(transcript.state)
     f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)  # type: ignore[arg-type]
-    return transcript._with_state(f(s, jax.device_put(values, _host_cpu())))
+    return transcript._with_state(f(s, frx.device_put(values, _host_cpu())))
 
 
 def _sample_host(
@@ -801,7 +801,7 @@ def _sample_host(
     state, out = f(s)
     return (
         transcript._with_state(state),
-        jax.device_put(out, _host_compute_device()),
+        frx.device_put(out, _host_compute_device()),
     )
 
 
@@ -816,10 +816,10 @@ def _observe_and_sample_host(
     compute_device = next(iter(values.devices()))
     s = _state_on_host(transcript.state)
     f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
-    state, out = f(s, jax.device_put(values, _host_cpu()))
+    state, out = f(s, frx.device_put(values, _host_cpu()))
     return (
         transcript._with_state(state),
-        jax.device_put(out, compute_device),
+        frx.device_put(out, compute_device),
     )
 
 

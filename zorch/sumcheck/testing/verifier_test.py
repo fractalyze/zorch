@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.prove import fold_rounds
 from zorch.sumcheck import prover, verifier
@@ -19,7 +19,7 @@ from zorch.utils.bits import log2_strict_usize
 from zorch.verify import verify
 
 KB = zk_dtypes.koalabear_mont
-_GPU_BACKEND = jax.default_backend() == "gpu"
+_GPU_BACKEND = frx.default_backend() == "gpu"
 
 
 def _standard(degree: int) -> prover.StandardRound:

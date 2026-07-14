@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from jax import Array
+from frx import Array
 
 
 def product(factors: Sequence[Array]) -> Array:

@@ -2,7 +2,7 @@
 
 Wraps `eval_fn(trace)` (a per-row constraint evaluation producing `[..., K]`)
 followed by the random-linear-combination `sum_k alpha_k * C_k` in a
-`jax.lax.composite` named `zorch.constraint_eval`. The marker preserves the
+`frx.lax.composite` named `zorch.constraint_eval`. The marker preserves the
 high-level "evaluate K constraints, fold them under one challenge vector" shape
 so a recognizing compiler can emit a single kernel that accumulates
 `alpha_k * C_k` incrementally and never materializes the `[..., K]` constraint
@@ -37,8 +37,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch._composite import composite
 
@@ -48,7 +48,7 @@ CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 def _scalar_int32_operand(value: Array | int, name: str) -> Array:
     """Normalize a scalar-int32 operand (`live_width`, `start_offset`): a Python
     int is converted and range-checked; anything else must already be a scalar
-    int32 (the wire type zkx validates). asarray funnels a non-Array (float,
+    int32 (the wire type Fractal XLA validates). asarray funnels a non-Array (float,
     numpy scalar) into the shape/dtype rejection instead of an opaque
     AttributeError."""
     if isinstance(value, int):
@@ -58,7 +58,7 @@ def _scalar_int32_operand(value: Array | int, name: str) -> Array:
     arr = jnp.asarray(value)
     if arr.shape != () or arr.dtype != jnp.int32:
         raise ValueError(
-            f"{name} must be a scalar int32 (the wire type zkx validates), "
+            f"{name} must be a scalar int32 (the wire type Fractal XLA validates), "
             f"got shape {arr.shape} dtype {arr.dtype}"
         )
     return arr
@@ -90,7 +90,7 @@ def constraint_eval(
     (a Python int is converted) holding a non-negative value — the emitter
     compares indices unsigned, so a negative bound would diverge between the
     marked and inlined paths. It rides as operand 2 with its index declared in
-    `live_width_operand_idx`; zkx hard-errors on a malformed declaration rather
+    `live_width_operand_idx`; Fractal XLA hard-errors on a malformed declaration rather
     than silently falling back to the unbounded path.
 
     `start_offset`, when given, treats `trace` as a TALL shared buffer
@@ -129,7 +129,7 @@ def constraint_eval(
     1-ary `eval_fn(trace)`. They ride as the trailing operands with their indices
     declared in `aux_operand_idxs`. A constraint that depends on a runtime array
     its trace does not carry passes it here as a DECLARED operand rather than
-    closing over it. That distinction is load-bearing under `jax.jit`: a
+    closing over it. That distinction is load-bearing under `frx.jit`: a
     closed-over array enters the composite decomposition as a Tracer constant,
     which `lax.composite` rejects (`UnexpectedTracerError`), whereas a declared
     operand traces cleanly. `zorch` reads no meaning from them; the recognizing

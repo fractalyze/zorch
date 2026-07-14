@@ -5,8 +5,8 @@ from __future__ import annotations
 import dataclasses
 import functools
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -36,7 +36,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_vmap_batch_matches(self) -> None:
         p = koalabear16_perm()
         x = jnp.arange(16, dtype=F)
-        batch = jax.vmap(p.permute)(jnp.stack([x, x]))
+        batch = frx.vmap(p.permute)(jnp.stack([x, x]))
         self.assertTrue(bool(jnp.array_equal(batch[0], KOALABEAR16_EXPECTED)))
         self.assertTrue(bool(jnp.array_equal(batch[1], KOALABEAR16_EXPECTED)))
 
@@ -50,12 +50,12 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         assert_single_trace(self, _permute_body, calls)
 
     def test_permute_emits_poseidon2_named_composite(self) -> None:
-        # The standard-MDS permute marks its region "zorch.poseidon2" so zkx
+        # The standard-MDS permute marks its region "zorch.poseidon2" so Fractal XLA
         # routes it to the dedicated Poseidon2Fusion emitter; the permutation
         # shape rides as composite.attributes — all four ints are required by
-        # the zkx recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
+        # the Fractal XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
         p = koalabear16_perm()
-        txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
@@ -66,7 +66,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # Exactly the 5 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
         # diag]. The internal J scale rides as the `internal_j_scale` attribute,
         # not a 6th operand (issue #440). A closed-over external matrix would be
-        # lifted to a leading 6th operand (jax.lax.composite prepends consts) and
+        # lifted to a leading 6th operand (frx.lax.composite prepends consts) and
         # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 5, composite_line)
@@ -78,7 +78,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
         # not the storage 1 a raw-bits/canonical mixup would emit (fractalyze/xla#206).
         p = koalabear16_scaled_perm()
-        txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
@@ -87,11 +87,11 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertEqual(operands.count("%"), 5, composite_line)
 
     def test_vmap_permute_keeps_dedicated_marker(self) -> None:
-        # If jax's composite batching rule regresses, vmap silently falls back to
+        # If frx's composite batching rule regresses, vmap silently falls back to
         # generic loop fusion — the dedicated kernel lost with no error.
         p = koalabear16_perm()
         states = jnp.arange(5 * 16, dtype=F).reshape(5, 16)
-        txt = jax.jit(lambda x: jax.vmap(p.permute)(x)).lower(states).as_text()
+        txt = frx.jit(lambda x: frx.vmap(p.permute)(x)).lower(states).as_text()
         comp = [ln for ln in txt.splitlines() if "stablehlo.composite" in ln]
         self.assertEqual(len(comp), 1, txt)  # one composite over the whole batch
         self.assertIn(f'"{POSEIDON2_MARKER}"', comp[0])  # dedicated, not generic
@@ -106,7 +106,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # the HorizenLabs reference — does take the dedicated route.)
         custom = jnp.arange(16 * 16, dtype=F).reshape(16, 16)
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=custom))
-        txt = jax.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
         self.assertNotIn(POSEIDON2_MARKER, txt)
         self.assertIn("zorch.fused_region", txt)
 
@@ -125,7 +125,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             dtype=F,
         )
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
-        txt = jax.jit(p.permute).lower(jnp.arange(w, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(jnp.arange(w, dtype=F)).as_text()
         self.assertIn(POSEIDON2_MARKER, txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"
@@ -148,7 +148,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         )
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
         s = Sponge(p, SpongeParams(rate=8, out=8))
-        txt = jax.jit(lambda x: s.hash(x)).lower(jnp.arange(w, dtype=F)).as_text()
+        txt = frx.jit(lambda x: s.hash(x)).lower(jnp.arange(w, dtype=F)).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"

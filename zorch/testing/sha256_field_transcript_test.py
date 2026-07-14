@@ -10,8 +10,8 @@ scan-threadable — and threads zorch's sumcheck round driver under `@jit`.
 """
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
 
@@ -157,7 +157,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             return r
 
         eager = np.asarray(run(jnp.asarray(vals)))
-        jitted = np.asarray(jax.jit(run)(jnp.asarray(vals)))
+        jitted = np.asarray(frx.jit(run)(jnp.asarray(vals)))
         self.assertEqual(eager.tobytes(), jitted.tobytes())
 
     def test_ghash_threads_under_jit(self) -> None:
@@ -178,7 +178,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             return jnp.concatenate([one.reshape(1), vec])
 
         eager = np.asarray(run(jnp.asarray(v)))
-        jitted = np.asarray(jax.jit(run)(jnp.asarray(v)))
+        jitted = np.asarray(frx.jit(run)(jnp.asarray(v)))
         self.assertEqual(eager.tobytes(), jitted.tobytes())
 
     def test_threads_through_sumcheck_prove(self) -> None:
@@ -200,8 +200,8 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             state, _, msgs = fold_rounds(rnd, jnp.stack([x, y]), tr, 3)
             return state[:, 0], jnp.stack(msgs)
 
-        eager = jax.tree_util.tree_map(np.asarray, run(a, b))
-        jitted = jax.tree_util.tree_map(np.asarray, jax.jit(run)(a, b))
+        eager = frx.tree_util.tree_map(np.asarray, run(a, b))
+        jitted = frx.tree_util.tree_map(np.asarray, frx.jit(run)(a, b))
         self.assertEqual(eager[0].tobytes(), jitted[0].tobytes())
         self.assertEqual(eager[1].tobytes(), jitted[1].tobytes())
 

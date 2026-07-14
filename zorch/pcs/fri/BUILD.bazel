@@ -17,6 +17,6 @@ py_library(
         "//zorch/commit:merkle",
         "//zorch/pcs:fold",
         "//zorch/pcs:protocol",  # type-only (seam conformance pins)
-        requirement("jax"),
+        requirement("frx"),
     ],
 )

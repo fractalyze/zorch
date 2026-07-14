@@ -16,9 +16,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.fusion import fused_region
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -160,7 +160,7 @@ def _bp_eval_decomposition(
         )
         eq16 = expand_eq_to_hypercube(point, jnp.ones([], dtype=dtype))  # [16]
         # t_layer[m, m'] = eq16 @ t_res[m]  — vmap over input memory state m
-        t_layer = jax.vmap(lambda tm: eq16 @ tm)(t_res)  # [4,4]
+        t_layer = frx.vmap(lambda tm: eq16 @ tm)(t_res)  # [4,4]
         return t_layer @ sv
 
     sv0 = (
@@ -171,7 +171,7 @@ def _bp_eval_decomposition(
     # num_vars layers (not num_vars+1): a layer == num_vars would read all-zero
     # bits (every dim <= num_vars) and is an identity on the carry-0 start
     # state, so it's a no-op — omit it.
-    sv = jax.lax.fori_loop(0, num_vars, body, sv0)
+    sv = frx.lax.fori_loop(0, num_vars, body, sv0)
     return sv[_INITIAL_INDEX]
 
 

@@ -12,8 +12,8 @@ slots it contributes to.
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import Array, vmap
+import frx.numpy as jnp
+from frx import Array, vmap
 
 from zorch.sumcheck.domain import extend_to_round_domain
 from zorch.utils.bits import log2_strict_usize
@@ -23,7 +23,7 @@ def _extend_prefix_to_domain(evals: Array, d: int, k: int) -> Array:
     """Extend the first k variables from {0,1} to the full U_d = {∞, 0, 1, …, d−1},
     leaving the rest on the cube: {p(β)} for β ∈ U_dᵏ × {0,1}ˡ⁻ᵏ, flattened. Each
     step lifts one variable, then reassembles lexicographic order by per-node
-    slicing (not jnp.transpose, which the fork ignores on 3D arrays)."""
+    slicing (not jnp.transpose, which frx ignores on 3D arrays)."""
     l = log2_strict_usize(evals.shape[0])
     size = d + 1
     for i in range(k):

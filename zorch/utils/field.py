@@ -6,9 +6,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
-from jax import Array
+from frx import Array
 
 
 def base_field(dtype: Any) -> Any:
@@ -29,5 +29,5 @@ def naturals(n: int, dtype: Any) -> Array:
     and byte-identical to embedding each node into the extension. Built as a
     constant, NOT `jnp.arange`: these nodes feed the fused round-poly kernels, whose
     bodies must stay straight-line element-wise (an `iota` is a forbidden op there,
-    and an iota over an extension dtype is unsupported in the fork besides)."""
+    and an iota over an extension dtype is unsupported in frx besides)."""
     return jnp.array(list(range(n)), base_field(dtype))

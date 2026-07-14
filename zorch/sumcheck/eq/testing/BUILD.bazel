@@ -13,7 +13,7 @@ py_test(
         "//zorch/sumcheck/eq",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -26,7 +26,7 @@ py_test(
         "//zorch/sumcheck/eq",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

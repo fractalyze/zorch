@@ -66,9 +66,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array, jit, lax
+import frx
+import frx.numpy as jnp
+from frx import Array, jit, lax
 
 _LANE = jnp.uint32
 _LANE_BITS = 32
@@ -161,7 +161,7 @@ def inner_product(a: Array, b: Array) -> Array:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["s_hat_v", "rs_eq_ind", "claim"],
     meta_fields=[],
 )

@@ -10,11 +10,11 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest, parameterized
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -550,7 +550,7 @@ class LigeritoWireGoldenTest(parameterized.TestCase):
         _, s_open = t_open.sample()
         _, s_verify = t_verify.sample()
         h = hashlib.sha256()
-        for leaf in [value, *jax.tree_util.tree_leaves(proof), s_open, s_verify]:
+        for leaf in [value, *frx.tree_util.tree_leaves(proof), s_open, s_verify]:
             h.update(
                 np.asarray(jnp.asarray(leaf).reshape(-1).view(jnp.uint32)).tobytes()
             )

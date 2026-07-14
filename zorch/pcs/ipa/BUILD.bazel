@@ -18,7 +18,7 @@ py_library(
         "//zorch/pcs:protocol",  # type-only (seam conformance pins)
         "//zorch/poly",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )

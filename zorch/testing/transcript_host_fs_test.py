@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from jax import tree_util
+from frx import tree_util
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
@@ -22,8 +22,8 @@ EF = zk_dtypes.koalabearx4_mont
 
 # Host-FS runs the sponge on the CPU inside the callback; on a CPU-only backend the
 # device and host sponges coincide (nothing to compare) and the run also hits the
-# ZKX CPU scan array-carry bug the duplex tests skip for (fractalyze/zkx#500).
-_CPU_BACKEND = jax.default_backend() == "cpu"
+# Fractal XLA CPU scan array-carry bug the duplex tests skip for (fractalyze/zkx#500).
+_CPU_BACKEND = frx.default_backend() == "cpu"
 
 
 @absltest.skipIf(

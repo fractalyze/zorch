@@ -10,11 +10,11 @@ invariants.
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array, tree_util
+from frx import Array, tree_util
 
 from zorch.logup_gkr.circuit import build_pyramid, extract_outputs
 from zorch.logup_gkr.prover import (
@@ -162,14 +162,14 @@ class LogupSumcheckRoundPytreeTest(absltest.TestCase):
     def test_threads_through_jit_as_argument(self) -> None:
         rnd = LogupSumcheckRound(jnp.array(7, KB))
         st = _state(20, 8)
-        got = jax.jit(lambda r, s: r._round_poly(s))(rnd, st)
+        got = frx.jit(lambda r, s: r._round_poly(s))(rnd, st)
         self.assertTrue(bool(jnp.all(got == rnd._round_poly(st))))
 
     def test_vmap_over_lam_batches_layers(self) -> None:
         # One vmap over distinct batching challenges, sharing the MLE state.
         st = _state(30, 8)
         lams = rand_field(99, (4,), KB)
-        got = jax.vmap(lambda r, s: r._round_poly(s), in_axes=(0, None))(
+        got = frx.vmap(lambda r, s: r._round_poly(s), in_axes=(0, None))(
             LogupSumcheckRound(lams), st
         )
         self.assertEqual(got.shape, (4, 4))  # (batch, degree+1)

@@ -12,11 +12,11 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from typing import TypeVar
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
@@ -40,7 +40,7 @@ EF = zk_dtypes.koalabearx4_mont
 # see the note in kzg/testing/srs.py.
 SF = zk_dtypes.bn254_sf_mont
 
-_GPU = jax.default_backend() == "gpu"
+_GPU = frx.default_backend() == "gpu"
 
 C = TypeVar("C")
 D = TypeVar("D")

@@ -5,7 +5,7 @@ description: |
   universal checks, then layers zorch's two non-negotiables on top:
   subsystem doc-coverage parity (every zorch/<subsystem>/ has a
   docs/**/<subsystem>.md and a hub row), the two-section subsystem skeleton
-  (why-the-shape/agnostic + fusion-by-construction), ZKX field-dtype gotcha
+  (why-the-shape/agnostic + fusion-by-construction), Fractal XLA field-dtype gotcha
   dedup (stated canonically only in poly.md), the CLAUDE.md = pointer +
   two-non-negotiables + dev-env rule, and agnostic naming (a scheme/zkVM is
   named only as the consumer boundary). The subsystem list is auto-detected
@@ -81,9 +81,9 @@ Heuristic: the doc has a `## …why…` heading and a `## …fusion…` heading
 different titles — so treat a near-miss as a prompt to confirm both ideas are
 present, not an automatic failure.
 
-### Z3. ZKX field-dtype gotcha dedup (Medium)
+### Z3. Fractal XLA field-dtype gotcha dedup (Medium)
 
-The ZKX field-dtype limits are stated canonically in
+The Fractal XLA field-dtype limits are stated canonically in
 `blocks/poly.md#field-dtype-gotchas`. Any other doc that re-explains a limit instead
 of linking that anchor is a duplicate. Detection: grep the other docs for the limit keywords poly.md's gotcha
 bullets use (`iota`, `reduce_sum`, `lax.shift`, `jnp.tile`, `arange`, …) and check

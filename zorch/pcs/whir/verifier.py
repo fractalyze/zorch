@@ -17,9 +17,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
-import jax
-import jax.numpy as jnp
-from jax import Array, lax
+import frx
+import frx.numpy as jnp
+from frx import Array, lax
 from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import ReedSolomon
@@ -117,7 +117,7 @@ class WhirVerifier:
         return _verify_body(self, commitment, z, values, proof, transcript)
 
 
-@partial(jax.jit, static_argnames=("verifier",))
+@partial(frx.jit, static_argnames=("verifier",))
 def _verify_body(
     verifier: WhirVerifier,
     commitment: WhirCommitment,
@@ -189,7 +189,7 @@ def _verify_body(
         opening = (
             proof.initial_openings[0] if r == 0 else proof.codeword_openings[r - 1]
         )
-        rebuilt = jax.vmap(tree.reconstruct_root)(positions, opening)
+        rebuilt = frx.vmap(tree.reconstruct_root)(positions, opening)
         ok = ok & jnp.all(rebuilt == cur_root)
 
         # Fold each opened coset to the round-folded poly's value at the query
@@ -205,7 +205,7 @@ def _verify_body(
             coset_vals = eval_coeffs(opening.row.astype(ef), mu)  # (Q, 2^k)
         else:
             coset_vals = lax.bitcast_convert_type(opening.row, ef)  # (Q, 2^k)
-        ys = jax.vmap(lambda v, p: binary_k_fold(v, alphas, p))(coset_vals, coset_pts)
+        ys = frx.vmap(lambda v, p: binary_k_fold(v, alphas, p))(coset_vals, coset_pts)
         query_roots.append(domain[positions].astype(ef))
 
         t, gamma = sample_challenge(t, ef, limbs)

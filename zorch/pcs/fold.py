@@ -22,10 +22,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
-from jax import Array, lax
+from frx import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
@@ -146,7 +146,7 @@ def open_rows(
     `Opening` whose `row`/`path` carry the query axis. Used for both the
     component matrices (opened at the full query index) and the committed
     fold layers' pair-leaves (opened at the layer's halved index)."""
-    return jax.vmap(lambda i: tree.open(matrix, digest_layers, i))(indices)
+    return frx.vmap(lambda i: tree.open(matrix, digest_layers, i))(indices)
 
 
 def lane_combine(lanes: Array, challenges: Sequence[Array]) -> Array:
@@ -388,7 +388,7 @@ def verify_fold_chain(
     per-layer fold lives here on the shared seam. `leaf_indices[i]` is layer `i`'s
     query leaf index `code.layer_positions(positions)[i]`.
 
-    The loop stays unrolled: `fold_values` is one `lax.fft` plus a few field ops
+    The loop stays unrolled: `fold_values` is one `lax.ntt` plus a few field ops
     per level, so it already traces O(1) per round — scanning it would add a
     control-flow boundary for no trace+lower win
     (docs/reference/conventions.md "Loops")."""

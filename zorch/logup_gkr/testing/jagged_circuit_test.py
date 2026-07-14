@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr.circuit import (
     GkrLayer,
@@ -146,12 +146,12 @@ class JaggedTransitionTest(absltest.TestCase):
 class JaggedTransitionJitTest(absltest.TestCase):
     """The transition's array core rides a `@jit` island so each pyramid layer
     is one fused dispatch; the fused output must byte-match the eager
-    (`jax.disable_jit`) one across the schedule shapes a build hits."""
+    (`frx.disable_jit`) one across the schedule shapes a build hits."""
 
     def _assert_eager_matches_jit(
         self, layer: JaggedGkrLayer, schedule: tuple[int, ...]
     ) -> None:
-        with jax.disable_jit():
+        with frx.disable_jit():
             eager = jagged_layer_transition(layer, schedule)
         fused = jagged_layer_transition(layer, schedule)
         self.assertEqual(fused.row_counts, eager.row_counts)

@@ -9,15 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 # eq (deg 1) * (lam*(n0*d1 + n1*d0) + d0*d1) (deg 2), in coefficient form.
 _DEGREE = 3
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["n0", "n1", "d0", "d1"],
     meta_fields=[],
 )
@@ -34,7 +34,7 @@ class _Planes:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["eq_adj", "pad_adj", "z_cur", "claim", "lam"],
     meta_fields=[],
 )
@@ -53,7 +53,7 @@ class _RoundScalars:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["planes", "eq_row", "eq_int", "eval_point", "lam", "claim"],
     meta_fields=[],
 )

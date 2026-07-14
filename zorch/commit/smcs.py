@@ -20,9 +20,9 @@ from __future__ import annotations
 from enum import IntEnum
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.hash.compression import Compression
@@ -150,9 +150,9 @@ class SingleMatrixCommitmentScheme:
         list of length ``log_height`` whose i-th entry is ``(Q, digest_elems)``,
         the level-``i`` sibling digest of every query. The sibling gather is
         zorch's single-index ``MerkleTree.open`` batched over the queries with
-        ``jax.vmap`` — the consumer keeps no Merkle path logic of its own.
+        ``frx.vmap`` — the consumer keeps no Merkle path logic of its own.
         """
-        opening = jax.vmap(self._tree.open, in_axes=(None, None, 0))(
+        opening = frx.vmap(self._tree.open, in_axes=(None, None, 0))(
             matrix, digest_layers, indices
         )
         return opening.row, opening.path

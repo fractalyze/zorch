@@ -9,9 +9,9 @@ from collections.abc import Sequence
 from functools import partial
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 
 def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
@@ -53,7 +53,7 @@ def _resize_zero(arr: Array, width: int) -> Array:
 _LAYER_BUF_POOL: dict[tuple[str, int, Any], Array] = {}
 
 
-@partial(jax.jit, donate_argnums=(0,))
+@partial(frx.jit, donate_argnums=(0,))
 def _lay_prefix_many(
     dsts: tuple[Array, ...], srcs: tuple[Array, ...]
 ) -> tuple[Array, ...]:
@@ -62,7 +62,10 @@ def _lay_prefix_many(
     executable laying every (dst, src) pair of a layer entry instead of one
     dispatch per role. The shape combo is static per layer layout, so the
     executable census stays per-layout."""
-    return tuple(jax.lax.dynamic_update_slice(d, s, (0,)) for d, s in zip(dsts, srcs))
+    return tuple(
+        frx.lax.dynamic_update_slice(d, s, (0,))
+        for d, s in zip(dsts, srcs, strict=True)
+    )
 
 
 def _pool_lay_batch(entries: Sequence[tuple[str, Array, int]]) -> list[Array]:

@@ -1,11 +1,11 @@
 """Poseidon2 permutation — scheme-agnostic, single-kernel by construction.
 
-The permutation is one function (all rounds) wrapped in a `jax.lax.composite`
-(`fused_region`): zkx's `ZorchFusedRegionRewriter` turns that marker into a
+The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
+(`fused_region`): Fractal XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. With the standard external matrix the region is named
 `zorch.poseidon2`, the permutation shape riding as `composite.attributes`
-(`width`/`external_rounds`/`internal_rounds`/`alpha`), and routes to zkx's
+(`width`/`external_rounds`/`internal_rounds`/`alpha`), and routes to Fractal XLA's
 dedicated, params-driven Poseidon2Fusion emitter; a non-standard external
 matrix falls back to the generic
 `zorch.fused_region` marker (whose generic LoopFusion would compile a full
@@ -21,10 +21,10 @@ from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
+from frx import Array
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
 
 POSEIDON2_MARKER = "zorch.poseidon2"
-# Marker revision riding as `composite.version`. zkx recognizes the marker by
+# Marker revision riding as `composite.version`. Fractal XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker. v2: J scale
 # is the `internal_j_scale` attribute, not an operand (#440).
@@ -144,7 +144,7 @@ def _permutation_body(
     w, e_rounds, i_rounds = perm.width, p.external_rounds, p.internal_rounds
 
     # The external MDS must not be a closed-over array on the named-emitter
-    # path: jax.lax.composite lifts closed-over consts to leading operands, so
+    # path: frx.lax.composite lifts closed-over consts to leading operands, so
     # the matrix would leak in as a 6th operand and break the Poseidon2Fusion
     # 5-operand ABI. An M4-block-structured matrix applies via integer literals
     # (the 4×4 M4, no array capture) and rides as a marker attribute; a free-form
@@ -214,7 +214,7 @@ def _abi_operands(perm: Poseidon2, state: Array) -> tuple[Array, ...]:
 
 def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
     """The base M4 flattened row-major as a numpy int64 `(16,)`. A numpy value
-    (not a Python list) so it lowers to a `dense<[..]> : tensor<16xi64>` the zkx
+    (not a Python list) so it lowers to a `dense<[..]> : tensor<16xi64>` the Fractal XLA
     recognizer can parse (a plain list lowers to an unparsed ArrayAttr). Caller
     guards on `has_dedicated_fusion`."""
     assert perm._external_m4 is not None  # has_dedicated_fusion ⇒ M4-structured
@@ -232,8 +232,9 @@ def _internal_j_scale_attr(perm: Poseidon2) -> int:
 
 def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
     """The dedicated marker's `composite.attributes` + version. The permutation
-    shape rides as attributes — the zkx recognizer's contract: the four shape ints
-    (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4 base M4. The
+    shape rides as attributes — the Fractal XLA recognizer's contract: the four
+    shape ints (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4
+    base M4. The
     recognizer rewrites only the M4 its kernel implements (the canonical
     `circ(2,3,1,1)`) and leaves any other matrix to inline its real body, so the
     attr is what identifies the matrix. The body ignores these attrs (metadata
@@ -259,7 +260,7 @@ def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
 # The permutation is the static key, compared by value (#214); `inline=True`
 # splices the cached jaxpr into the enclosing trace, so the emitted module
 # (one composite marker per permute) is unchanged.
-@partial(jax.jit, static_argnames=("perm",), inline=True)
+@partial(frx.jit, static_argnames=("perm",), inline=True)
 def _permute_body(perm: Poseidon2, state: Array) -> Array:
     def decomposition(
         s: Array,

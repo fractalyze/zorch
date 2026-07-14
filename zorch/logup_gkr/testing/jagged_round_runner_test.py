@@ -6,11 +6,11 @@ under the fixed-width caps. The oracle is kept in-tree precisely for this
 gate."""
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr._jagged_types import _DEGREE, _JaggedState, _Planes
 from zorch.logup_gkr.circuit import JaggedGkrLayer
@@ -104,7 +104,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         # `_run_jagged_rounds` runs under the consumer's whole-layer jit (its FS hop
         # traces into the layer kernel); under jit it must reproduce the unrolled
         # eager reference byte-for-byte.
-        got = jax.jit(lambda tr: _run_jagged_rounds(state, sched, tr))(
+        got = frx.jit(lambda tr: _run_jagged_rounds(state, sched, tr))(
             cheap_transcript(KB)
         )
         self._assert_matches_reference(ref, got, "jit")
@@ -126,7 +126,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
                 caps,
             )
             label = "fixed-slack" if slack else "fixed-tight"
-            got_fixed = jax.jit(lambda tr: _run_jagged_rounds(state, fixed_sched, tr))(
+            got_fixed = frx.jit(lambda tr: _run_jagged_rounds(state, fixed_sched, tr))(
                 cheap_transcript(KB)
             )
             self._assert_matches_reference(ref, got_fixed, label)

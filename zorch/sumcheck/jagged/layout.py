@@ -3,7 +3,7 @@
 
 The numpy gather that remaps a jagged `row_counts` layout across a fold, and the
 even-prepad/folded-count recurrence. Both are host-side (numpy / pure Python) so
-the schedule is precomputed and baked into the jax trace as a constant. Shared
+the schedule is precomputed and baked into the frx trace as a constant. Shared
 by the jagged round schedule and the LogUp-GKR circuit transition.
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ def _segment_gather_np(
     positions past a segment's source rows get the sentinel `sum(src_counts)`
     (a downstream `_gather_pad` resolves it to the padding value). None when the
     layouts already agree. Stays numpy so the schedule is precomputed host-side
-    and baked into the `jax.jit` trace as a constant, where an `np.asarray` of a
+    and baked into the `frx.jit` trace as a constant, where an `np.asarray` of a
     jnp value would trip on a tracer.
     """
     if src_counts == dst_counts:

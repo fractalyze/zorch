@@ -24,11 +24,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -62,11 +62,11 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _from_u32(u32: Any, dtype: Any) -> Array:
-    return jax.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
+    return frx.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
 
 
 def _u32(a: Array) -> np.ndarray:
-    return np.asarray(jax.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
+    return np.asarray(frx.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
 
 
 def _raw_area(round_meta: dict[str, Any]) -> int:
@@ -83,7 +83,7 @@ def _out(name: str) -> Any:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["_samples", "_cursor", "_witness"],
     meta_fields=[],
 )
@@ -94,7 +94,7 @@ class _ScriptedTranscript:
     rather than re-deriving them (the duplex encoding is the pipeline's concern).
     Mirrors ``prover_test._ScriptedTranscript`` for the sumcheck half.
 
-    A registered pytree so it threads through the open's ``@jax.jit`` zone: the
+    A registered pytree so it threads through the open's ``@frx.jit`` zone: the
     flat base-field squeeze stream ``_samples`` is consumed in order via a traced
     ``_cursor`` (a Python ``list.pop`` cursor would not trace). Each extension
     challenge is four base squeezes; ``_witness`` is the dumped proof-of-work
@@ -112,7 +112,7 @@ class _ScriptedTranscript:
         return self
 
     def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
-        out = jax.lax.dynamic_slice_in_dim(self._samples, self._cursor, n, axis=0)
+        out = frx.lax.dynamic_slice_in_dim(self._samples, self._cursor, n, axis=0)
         return dataclasses.replace(self, _cursor=self._cursor + n), out
 
     def grind(self, pow_bits: int) -> tuple[_ScriptedTranscript, Array]:
@@ -121,7 +121,7 @@ class _ScriptedTranscript:
 
 # smcs/code/round_widths/log_stacking_height are static; the proof, eval point
 # and transcript trace. One compile, cached across runs.
-_verify_jit = jax.jit(
+_verify_jit = frx.jit(
     stacked_basefold_verify,
     static_argnums=(0, 1, 2, 5),
     static_argnames=("num_queries", "pow_bits"),
@@ -305,10 +305,10 @@ class StackedOpenByteMatchTest(absltest.TestCase):
 
     def test_verify_rejects_tampered_final_poly(self) -> None:
         # The final poly is the fold chain's residual; a flipped lane breaks it.
-        u = jax.lax.bitcast_convert_type(self.real_proof.final_poly, jnp.uint32)
+        u = frx.lax.bitcast_convert_type(self.real_proof.final_poly, jnp.uint32)
         u = u.at[0].set(u[0] ^ jnp.uint32(1))
         bad = dataclasses.replace(
-            self.real_proof, final_poly=jax.lax.bitcast_convert_type(u, EF)
+            self.real_proof, final_poly=frx.lax.bitcast_convert_type(u, EF)
         )
         self.assertFalse(self._verify(bad))
 

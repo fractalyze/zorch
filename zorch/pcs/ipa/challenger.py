@@ -23,9 +23,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol, Self
 
-import jax.numpy as jnp
-from jax import Array
-from jax.tree_util import register_dataclass
+import frx.numpy as jnp
+from frx import Array
+from frx.tree_util import register_dataclass
 
 from zorch.transcript import Transcript, sample_challenge
 

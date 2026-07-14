@@ -4,7 +4,7 @@ proving the witness-open glue is genuinely PCS-agnostic across the seam."""
 
 from __future__ import annotations
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 

@@ -10,9 +10,9 @@ plane bodies live in `zorch.logup_gkr._jagged_rounds`."""
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_lagrange_basis
@@ -67,7 +67,7 @@ def _round_coeffs(
     b_root = (one - z_cur) / (one - jnp.array(2, dtype) * z_cur)
     xs = jnp.stack([jnp.zeros((), dtype), one, one / jnp.array(2, dtype), b_root])
     ys = jnp.stack([s_zero, s_one, s_half, jnp.zeros((), dtype)])
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
+    lagrange = frx.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
     return jnp.dot(inv_vand, jnp.dot(lagrange, ys))
 
 

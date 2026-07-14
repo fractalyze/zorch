@@ -10,7 +10,7 @@ py_library(
     deps = [
         "//zorch/pcs/jagged:poly",
         "//zorch/poly",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -23,13 +23,13 @@ py_test(
         "//zorch/pcs/jagged:poly",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
 
-# The tests below are composite-vmap: CI's published jaxlib can't run them.
+# The tests below are composite-vmap: CI's published frxlib can't run them.
 # .bazelrc.ci excludes the local_only tag from CI (full rationale there); local
 # bazel runs them.
 py_test(
@@ -48,7 +48,7 @@ py_test(
         "//zorch/pcs/jagged:commit",
         "//zorch/pcs/jagged:region",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -59,7 +59,7 @@ py_test(
     size = "small",
     srcs = ["prover_test.py"],
     data = glob(["testdata/**"]),
-    # SP1 byte-match over a vendored shard dump; CI's published jaxlib can't
+    # SP1 byte-match over a vendored shard dump; CI's published frxlib can't
     # run the poseidon2 / composite path.
     tags = ["local_only"],
     deps = [
@@ -68,7 +68,7 @@ py_test(
         "//zorch/pcs/jagged:prover",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -79,7 +79,7 @@ py_test(
     size = "small",
     srcs = ["open_test.py"],
     data = glob(["testdata/**"]),
-    # SP1 byte-match over a vendored shard dump; CI's published jaxlib can't
+    # SP1 byte-match over a vendored shard dump; CI's published frxlib can't
     # run the poseidon2 path.
     tags = ["local_only"],
     deps = [
@@ -90,8 +90,9 @@ py_test(
         "//zorch/hash:sponge",
         "//zorch/hash/poseidon2",
         "//zorch/pcs/jagged:open",
+        "//zorch/pcs/jagged:verifier",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -101,8 +102,8 @@ py_test(
     name = "commit_symk_export_test",
     size = "small",
     srcs = ["commit_symk_export_test.py"],
-    # Symbolic-K jax.export over the ntt + poseidon2 GPU path; CI's published
-    # jaxlib can't run it, same as open_test.
+    # Symbolic-K frx.export over the ntt + poseidon2 GPU path; CI's published
+    # frxlib can't run it, same as open_test.
     tags = ["local_only"],
     deps = [
         "//zorch/coding:reed_solomon",
@@ -112,7 +113,7 @@ py_test(
         "//zorch/hash:sponge",
         "//zorch/hash/poseidon2",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -122,7 +123,7 @@ py_test(
     name = "open_symk_export_test",
     size = "small",
     srcs = ["open_symk_export_test.py"],
-    # Symbolic-K jax.export over the poseidon2 GPU path; CI's published jaxlib
+    # Symbolic-K frx.export over the poseidon2 GPU path; CI's published frxlib
     # can't run it, same as open_test.
     tags = ["local_only"],
     deps = [
@@ -135,7 +136,7 @@ py_test(
         "//zorch/hash/poseidon2",
         "//zorch/pcs/jagged:open",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -145,8 +146,8 @@ py_test(
     name = "inner_symk_export_test",
     size = "small",
     srcs = ["inner_symk_export_test.py"],
-    # Symbolic column-count jax.export over the EF branching-program GPU path;
-    # CI's published jaxlib can't run it, same as open_test.
+    # Symbolic column-count frx.export over the EF branching-program GPU path;
+    # CI's published frxlib can't run it, same as open_test.
     tags = ["local_only"],
     deps = [
         "//zorch/pcs/jagged:dense",
@@ -155,7 +156,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -165,8 +166,8 @@ py_test(
     name = "eval_round_symk_export_test",
     size = "small",
     srcs = ["eval_round_symk_export_test.py"],
-    # Symbolic column-count jax.export over the whole eval-round GPU path; CI's
-    # published jaxlib can't run it, same as open_test.
+    # Symbolic column-count frx.export over the whole eval-round GPU path; CI's
+    # published frxlib can't run it, same as open_test.
     tags = ["local_only"],
     deps = [
         "//zorch/pcs/jagged:dense",
@@ -175,7 +176,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,

@@ -21,9 +21,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.coding.linear_code import LinearCode
 from zorch.commit.merkle import MerkleTree
@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["root", "matrix", "leaves", "digest_layers"],
     meta_fields=["cols"],
 )
@@ -115,7 +115,7 @@ class LigeroProver:
 # Jitted commit body, keyed on code + tree by value (#214): commit never reads
 # num_queries, so provers differing only there must not compile twice. `rows` and
 # `cols` are static (shape-determining), passed positionally after the arrays.
-@partial(jax.jit, static_argnames=("code", "tree", "rows", "cols"))
+@partial(frx.jit, static_argnames=("code", "tree", "rows", "cols"))
 def _commit_body(
     code: LinearCode, tree: MerkleTree, f: Array, rows: int, cols: int
 ) -> tuple[LigeroCommitment, LigeroProverData]:
@@ -136,7 +136,7 @@ def _commit_body(
 
 
 # Jitted open body: the prover is the static key (by value, #214).
-@partial(jax.jit, static_argnames=("prover",))
+@partial(frx.jit, static_argnames=("prover",))
 def _open_body(
     prover: LigeroProver,
     pd: LigeroProverData,

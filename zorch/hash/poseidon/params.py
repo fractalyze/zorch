@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from jax import Array
+from frx import Array
 
 
 @dataclass(frozen=True)

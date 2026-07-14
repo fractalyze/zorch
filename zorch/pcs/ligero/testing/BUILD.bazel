@@ -8,7 +8,7 @@ py_test(
     size = "medium",
     srcs = ["ligero_test.py"],
     # Real-poseidon2 transcript permute lowers to a composite CI's published
-    # jaxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
+    # frxlib can't run; .bazelrc.ci excludes local_only (local bazel runs it).
     tags = ["local_only"],
     deps = [
         "//zorch:transcript",
@@ -20,7 +20,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

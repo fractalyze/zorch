@@ -8,10 +8,10 @@ from __future__ import annotations
 from functools import cache
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
+from frx import Array
 
 from zorch.sumcheck.jagged.layout import (
     _prepad_folded,
@@ -88,8 +88,8 @@ def _round_metadata_impl(
     # without it the cached value is a trace-scoped `device_put` tracer that escapes
     # when a later call reuses the cache (UnexpectedTracerError). Concrete -> the jit
     # bakes it as a constant.
-    with jax.ensure_compile_time_eval():
-        return jax.device_put(host_meta)
+    with frx.ensure_compile_time_eval():
+        return frx.device_put(host_meta)
 
 
 _round_metadata_cached = cache(_round_metadata_impl)
@@ -135,8 +135,8 @@ def _round_live_meta(row_counts: tuple[int, ...], num_row_vars: int) -> list[Arr
             )
         )
         counts = pairs
-    with jax.ensure_compile_time_eval():
-        return jax.device_put(host)
+    with frx.ensure_compile_time_eval():
+        return frx.device_put(host)
 
 
 def _round_out_pairs(row_counts: tuple[int, ...], num_row_vars: int) -> tuple[int, ...]:
@@ -253,8 +253,8 @@ def _row_counts_operand(row_counts: tuple[int, ...]) -> Array:
     """The layer's `row_counts` as the tiny i32[nseg] device operand every v2
     round marker carries (committed once per distinct layout; memoized like
     the live triples)."""
-    with jax.ensure_compile_time_eval():
-        return jax.device_put(np.asarray(row_counts, np.int32))
+    with frx.ensure_compile_time_eval():
+        return frx.device_put(np.asarray(row_counts, np.int32))
 
 
 @cache
@@ -263,5 +263,5 @@ def _dense_live_operand(pairs: int) -> Array:
     the eager round loop otherwise re-commits this 8-byte array once per round
     per layer -- a real host->device dispatch each time. The value set is tiny
     (one per power-of-two pair count), so the never-evicting cache is safe."""
-    with jax.ensure_compile_time_eval():
-        return jax.device_put(np.asarray([pairs, 0], np.int32))
+    with frx.ensure_compile_time_eval():
+        return frx.device_put(np.asarray([pairs, 0], np.int32))

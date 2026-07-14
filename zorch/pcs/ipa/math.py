@@ -32,8 +32,8 @@ pins that identity so the succinct path and the explicit path cannot drift.
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 
 def challenge_vector(u: Array) -> Array:

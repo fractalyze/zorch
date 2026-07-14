@@ -8,7 +8,7 @@ zone's compile cache gains no entries after the first call.
 
 Snapshot-compare rather than assert an absolute count: a module-level zone is
 shared process-wide, so an earlier test may already have seeded this config's
-entry. ``_cache_size()`` is a private JAX API that may change on a jax
+entry. ``_cache_size()`` is a private JAX API that may change on a frx
 upgrade; this helper is its single home for the no-retrace assertions.
 """
 

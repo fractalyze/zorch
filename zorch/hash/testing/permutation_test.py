@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.hash.permutation import Permutation
 

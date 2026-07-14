@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
-from jax import Array
+from frx import Array
 
 
 @runtime_checkable

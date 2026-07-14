@@ -1,11 +1,11 @@
 """Classic Poseidon permutation — scheme-agnostic, single-kernel by construction.
 
-The permutation is one function (all rounds) wrapped in a `jax.lax.composite`
-(`fused_region`): zkx's `ZorchFusedRegionRewriter` turns that marker into a
+The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
+(`fused_region`): Fractal XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. The region is named `zorch.poseidon` (distinct from
 `zorch.poseidon2`), the permutation shape riding as `composite.attributes`
-(`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to zkx's
+(`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to Fractal XLA's
 dedicated, params-driven Poseidon emitter. The body is kept straight-line:
 rounds are unrolled (fixed, small counts) and the dense MDS uses the normal-form
 helper (`apply_dense_mds`) so nothing lowers to a reduce/dot/gather that would
@@ -23,10 +23,10 @@ from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
+from frx import Array
 
 from zorch.fusion import fused_region
 from zorch.hash.poseidon.linear import apply_dense_mds
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
 
 POSEIDON_MARKER = "zorch.poseidon"
-# Marker revision riding as `composite.version`. zkx recognizes the marker by
+# Marker revision riding as `composite.version`. Fractal XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON_MARKER_VERSION = 1
@@ -142,7 +142,7 @@ def _permute_from_rc(perm: "Poseidon", s: Array, rc_flat: Array) -> Array:
 # The permutation is the static key, compared by value (#214); `inline=True`
 # splices the cached jaxpr into the enclosing trace, so the emitted module
 # (one composite marker per permute) is unchanged.
-@partial(jax.jit, static_argnames=("perm",), inline=True)
+@partial(frx.jit, static_argnames=("perm",), inline=True)
 def _permute_body(perm: Poseidon, state: Array) -> Array:
     p = perm._p
     w = perm.width

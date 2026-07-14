@@ -31,8 +31,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.eq import eq_factor, eq_root
 from zorch.poly.univariate import eval_coeffs
@@ -80,7 +80,7 @@ def interp_matrix(extra_ts: Sequence[Array], z: Array) -> Array:
 
     The Gruen node set is one EvalDomain instance. Depends only on ``z`` and the
     static ``extra_ts``, so a fixed-shape scan driver precomputes it per round
-    OUTSIDE the scan (``jax.vmap`` over the stacked round coordinates) and feeds it
+    OUTSIDE the scan (``frx.vmap`` over the stacked round coordinates) and feeds it
     through the scan's xs; a host-relaunch driver just calls `round_coeffs`, which
     composes this with the value assembly."""
     dtype = z.dtype

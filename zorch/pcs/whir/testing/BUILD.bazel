@@ -13,7 +13,7 @@ py_test(
     srcs = ["whir_test.py"],
     shard_count = 4,
     # Real-poseidon2 transcript/commit permute lowers to a composite CI's
-    # published jaxlib can't run; .bazelrc.ci excludes local_only (local bazel
+    # published frxlib can't run; .bazelrc.ci excludes local_only (local bazel
     # runs it).
     tags = ["local_only"],
     deps = [
@@ -26,7 +26,7 @@ py_test(
         "//zorch/pcs/whir",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

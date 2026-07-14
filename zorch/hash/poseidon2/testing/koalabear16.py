@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
 

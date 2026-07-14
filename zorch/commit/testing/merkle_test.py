@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import dataclasses
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import goldilocks_mont
 from zk_dtypes import koalabear_mont as F
 
@@ -106,17 +106,17 @@ class MerkleTreeTest(absltest.TestCase):
         # flattens to a single opaque leaf.
         tree, matrix, _, layers = _committed_4x8()
         op = tree.open(matrix, layers, 1)  # height 4 -> 2-sibling path
-        leaves, treedef = jax.tree_util.tree_flatten(op)
+        leaves, treedef = frx.tree_util.tree_flatten(op)
         self.assertEqual(len(leaves), 1 + len(op.path))
-        rebuilt = jax.tree_util.tree_unflatten(treedef, leaves)
+        rebuilt = frx.tree_util.tree_unflatten(treedef, leaves)
         self.assertTrue(bool(jnp.array_equal(rebuilt.row, op.row)))
 
     def test_vmap_open_matches_per_index_open(self) -> None:
-        # open is a single-index primitive; batching is jax.vmap over the index
+        # open is a single-index primitive; batching is frx.vmap over the index
         # (matrix/layers shared), exactly as commit vmaps the per-row leaf hash.
         tree, matrix, _, layers = _committed_4x8()
         indices = jnp.arange(matrix.shape[0])
-        batched = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        batched = frx.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
         self.assertEqual(batched.row.shape, (4, 8))
         self.assertEqual([p.shape for p in batched.path], [(4, 8), (4, 8)])
         for q in range(matrix.shape[0]):
@@ -128,11 +128,11 @@ class MerkleTreeTest(absltest.TestCase):
     def test_vmap_reconstruct_root_recovers_committed_root(self) -> None:
         tree, matrix, root, layers = _committed_4x8()
         indices = jnp.arange(matrix.shape[0])
-        openings = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
-        roots = jax.vmap(tree.reconstruct_root)(indices, openings)
+        openings = frx.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        roots = frx.vmap(tree.reconstruct_root)(indices, openings)
         self.assertEqual(roots.shape, (4, 8))
         self.assertTrue(
-            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+            bool(jnp.all(frx.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
     def test_jit_batched_open_reconstruct_roundtrip(self) -> None:
@@ -141,14 +141,14 @@ class MerkleTreeTest(absltest.TestCase):
         tree, matrix, root, layers = _committed_4x8()
         indices = jnp.arange(matrix.shape[0])
 
-        @jax.jit
+        @frx.jit
         def run(matrix: Array, layers: list[Array], indices: Array) -> Array:
-            ops = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
-            return jax.vmap(tree.reconstruct_root)(indices, ops)
+            ops = frx.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+            return frx.vmap(tree.reconstruct_root)(indices, ops)
 
         roots = run(matrix, layers, indices)
         self.assertTrue(
-            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+            bool(jnp.all(frx.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
     def test_reconstruct_root_recovers_root_on_deeper_tree(self) -> None:
@@ -158,10 +158,10 @@ class MerkleTreeTest(absltest.TestCase):
         matrix = jnp.arange(128, dtype=F).reshape(16, 8)  # height 16 -> depth 4
         root, layers = tree.commit(matrix)
         indices = jnp.arange(matrix.shape[0])
-        openings = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
-        roots = jax.vmap(tree.reconstruct_root)(indices, openings)
+        openings = frx.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        roots = frx.vmap(tree.reconstruct_root)(indices, openings)
         self.assertTrue(
-            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+            bool(jnp.all(frx.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
     def test_reconstruct_roots_batches_mixed_depths(self) -> None:
@@ -320,7 +320,7 @@ class MerkleTreeTest(absltest.TestCase):
     def test_commit_lowers_to_nested_poseidon2_markers(self) -> None:
         _, _, tree = koalabear16_merkle()
         matrix = jnp.arange(32, dtype=F).reshape(4, 8)
-        text = jax.jit(tree.commit).lower(matrix).as_text()
+        text = frx.jit(tree.commit).lower(matrix).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
         # vmap auto-lifts the round constants to operands; check the attributes
@@ -385,7 +385,7 @@ class KaryMerkleTreeTest(absltest.TestCase):
             self.assertTrue(bool(tree.verify(root, i, tree.open(matrix, layers, i))))
 
     @absltest.skip(
-        "zkx CPU mis-routes the batched k-ary compress permute to the binary "
+        "Fractal XLA CPU mis-routes the batched k-ary compress permute to the binary "
         "poseidon2_merkle_compress kernel (shape mismatch crash); single-index "
         "reconstruct_root passes. Tracked as fractalyze/zkx#606."
     )
@@ -396,10 +396,10 @@ class KaryMerkleTreeTest(absltest.TestCase):
         matrix = jnp.arange(128, dtype=F).reshape(16, 8)
         root, layers = tree.commit(matrix)
         indices = jnp.arange(16)
-        openings = jax.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
-        roots = jax.vmap(tree.reconstruct_root)(indices, openings)
+        openings = frx.vmap(tree.open, in_axes=(None, None, 0))(matrix, layers, indices)
+        roots = frx.vmap(tree.reconstruct_root)(indices, openings)
         self.assertTrue(
-            bool(jnp.all(jax.vmap(lambda r: jnp.array_equal(r, root))(roots)))
+            bool(jnp.all(frx.vmap(lambda r: jnp.array_equal(r, root))(roots)))
         )
 
     def test_reconstruct_roots_rejects_kary(self) -> None:

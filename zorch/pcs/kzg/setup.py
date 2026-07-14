@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jax import Array
+from frx import Array
 
 
 @dataclass(frozen=True)

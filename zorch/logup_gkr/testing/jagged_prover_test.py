@@ -14,10 +14,10 @@ import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,

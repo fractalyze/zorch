@@ -20,9 +20,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
-import jax
-import jax.numpy as jnp
-from jax import Array, lax
+import frx
+import frx.numpy as jnp
+from frx import Array, lax
 from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import ReedSolomon
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["mle", "codeword", "digest_layers"],
     meta_fields=[],
 )
@@ -146,7 +146,7 @@ class WhirProver:
 # the `(block_len, num_polys)` codeword matrix commits under one strided root whose
 # `2^k_whir` strided rows one query opens. `mle` (the message-domain columns) and
 # the codeword matrix are retained for `open`.
-@partial(jax.jit, static_argnames=("code", "tree"))
+@partial(frx.jit, static_argnames=("code", "tree"))
 def _commit_body(
     code: ReedSolomon, tree: StridedMerkleTree, polys: list[Array]
 ) -> tuple[WhirCommitment, WhirProverData]:
@@ -168,13 +168,13 @@ def _commit_body(
 # real grinds.
 
 
-@partial(jax.jit, static_argnames=("prover",))
+@partial(frx.jit, static_argnames=("prover",))
 def _island_initial(prover: WhirProver, mle: Array, z: Array) -> Array:
     """The per-column claimed evaluations the proof opens to."""
     return prover.scheme.claimed_values(mle, z)
 
 
-@partial(jax.jit, static_argnames=("prover",))
+@partial(frx.jit, static_argnames=("prover",))
 def _island_tables(
     prover: WhirProver, mle: Array, z: Array, mu: Array
 ) -> tuple[Array, Array]:
@@ -182,7 +182,7 @@ def _island_tables(
     return prover.scheme.combined_f_evals(mle, mu), prover.scheme.initial_weight(z)
 
 
-@jax.jit
+@frx.jit
 def _island_round_poly(f_evals: Array, w_evals: Array) -> Array:
     """The degree-2 sumcheck message `[s(1), s(2)]` of `Σ f̂·ŵ`."""
     f0, f1 = f_evals[0::2], f_evals[1::2]
@@ -192,7 +192,7 @@ def _island_round_poly(f_evals: Array, w_evals: Array) -> Array:
     return jnp.stack([s1, s2])
 
 
-@jax.jit
+@frx.jit
 def _island_fold(f_evals: Array, w_evals: Array, alpha: Array) -> tuple[Array, Array]:
     """Fold both tables at `alpha` (LSB-first, halving the length)."""
     return (
@@ -201,13 +201,13 @@ def _island_fold(f_evals: Array, w_evals: Array, alpha: Array) -> tuple[Array, A
     )
 
 
-@jax.jit
+@frx.jit
 def _island_coeffs(f_evals: Array) -> Array:
     """The folded MLE's coefficients `ĝ` (re-encoded, or sent in the clear)."""
     return mle_evals_to_coeffs(f_evals)
 
 
-@partial(jax.jit, static_argnames=("prover", "r"))
+@partial(frx.jit, static_argnames=("prover", "r"))
 def _island_reencode(
     prover: WhirProver, g_coeffs: Array, r: int
 ) -> tuple[Array, Array, list[Array]]:
@@ -221,21 +221,21 @@ def _island_reencode(
     return root, codeword, layers
 
 
-@jax.jit
+@frx.jit
 def _island_ood(g_coeffs: Array, z0: Array) -> Array:
     """`ĝ` at the out-of-domain point (the coefficients as a univariate at `z0`)."""
     return eval_coeffs(g_coeffs, z0)
 
 
-@partial(jax.jit, static_argnames=("prover",))
+@partial(frx.jit, static_argnames=("prover",))
 def _island_query_open(
     prover: WhirProver, codeword: Array, layers: list[Array], positions: Array
 ) -> Opening:
     """Open the queried codeword at every strided query coset."""
-    return jax.vmap(lambda i: prover.tree.open(codeword, layers, i))(positions)
+    return frx.vmap(lambda i: prover.tree.open(codeword, layers, i))(positions)
 
 
-@partial(jax.jit, static_argnames=("prover", "r"))
+@partial(frx.jit, static_argnames=("prover", "r"))
 def _island_weight_update(
     prover: WhirProver,
     w_evals: Array,
@@ -262,7 +262,7 @@ def _island_weight_update(
 
     # Queries are independent, so one vmap + a γ-power-weighted reduction.
     gpows = query_gamma_powers(gamma, params.num_queries[r])
-    query_tables = jax.vmap(_query_weight)(x_roots)  # (Q, 2^dim)
+    query_tables = frx.vmap(_query_weight)(x_roots)  # (Q, 2^dim)
     return (
         w_evals
         + gamma * eq_table(pow2_powers(z0, dim))

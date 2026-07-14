@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.utils.bits import log2_strict_usize

@@ -3,8 +3,8 @@
 # `bazel test //...` still runs every target.
 #
 # Skip `local_only`-tagged tests in CI. They vmap the zorch.fused_region
-# composite, which needs the CompositeOp op + jax#164 batching rule that only
-# the composite-capable dev jaxlib carries — CI runs the published wheel, which
-# lacks both. Run these locally against that dev jaxlib. Drop this filter (and
-# the tags) once the published jax pin carries the composite backport.
+# composite, which needs the CompositeOp op + frx#164 batching rule that only
+# the composite-capable dev frxlib carries — CI runs the published wheel, which
+# lacks both. Run these locally against that dev frxlib. Drop this filter (and
+# the tags) once the published frx pin carries the composite backport.
 test --test_tag_filters=-local_only

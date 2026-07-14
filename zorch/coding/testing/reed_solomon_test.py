@@ -2,7 +2,7 @@
 """Reed-Solomon encode and the FRI fold: checked against independent oracles.
 
 The oracle never reuses the encoder. The NTT evaluation domain is recovered
-straight from `lax.fft` of an impulse (NTT(e_1)_j = w^j), then the codeword is
+straight from `lax.ntt` of an impulse (NTT(e_1)_j = w^j), then the codeword is
 compared to a Horner evaluation of the message polynomial on that domain — a
 path that shares no code with pad + NTT. The fold is checked the same way: a
 hand-computed linear-polynomial fold plus the fold/encode commute invariant.
@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array, lax
+from frx import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.coding.linear_code import LinearCode

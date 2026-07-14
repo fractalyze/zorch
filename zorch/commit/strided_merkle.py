@@ -30,9 +30,9 @@ folding PCS (e.g. WHIR) needs.
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.hash.compression import Compression
@@ -119,7 +119,7 @@ class StridedMerkleTree:
         """The commit body: vmap the leaf hash, fold ``log2(rows_per_query)``
         query-strided levels, then plain adjacent pairs to the root."""
         d = self.digest_elems
-        layer = jax.vmap(self._leaf_hasher.hash)(matrix)
+        layer = frx.vmap(self._leaf_hasher.hash)(matrix)
         query_stride = layer.shape[0] // rows_per_query
 
         # Query-strided levels (not stored): reshape (m, …) as (m/(2s), 2, s, d)
@@ -128,7 +128,7 @@ class StridedMerkleTree:
         # preserves next[x·s + y] order.
         for _ in range(log2_strict_usize(rows_per_query)):
             pairs = layer.reshape(-1, 2, query_stride, d).transpose(0, 2, 1, 3)
-            layer = jax.vmap(self._compressor.compress)(pairs.reshape(-1, 2, d))
+            layer = frx.vmap(self._compressor.compress)(pairs.reshape(-1, 2, d))
 
         # Plain binary fold from the query layer to the root (stored); a single
         # query-layer node is already the root.
@@ -173,7 +173,7 @@ class StridedMerkleTree:
         concrete index, skipped under tracing where `verify` owns out-of-range
         rejection (mirrors `MerkleTree.open`)."""
         stride = self.query_stride(matrix.shape[0])
-        if not isinstance(index, jax.core.Tracer) and not 0 <= index < stride:
+        if not isinstance(index, frx.core.Tracer) and not 0 <= index < stride:
             raise IndexError(f"query index {index} out of range [0, {stride})")
         rows = matrix[index + stride * jnp.arange(self._rows_per_query)]
         path = []
@@ -196,7 +196,7 @@ class StridedMerkleTree:
         # Collapse the coset to its query-layer node with the same `_fold_to_root`
         # `_build` uses; `rows_per_query == 1` adds no strided level (the lone
         # hashed row is already the node).
-        leaves = jax.vmap(self._leaf_hasher.hash)(opening.row)  # (rows_per_query, d)
+        leaves = frx.vmap(self._leaf_hasher.hash)(opening.row)  # (rows_per_query, d)
         if self._rows_per_query == 1:
             query_node = leaves[0]
         else:
@@ -209,7 +209,7 @@ class StridedMerkleTree:
         ) -> tuple[tuple[Array, Array], None]:
             return self._top._fold_with_sibling(*carry, sibling), None
 
-        (root, _), _ = jax.lax.scan(
+        (root, _), _ = frx.lax.scan(
             fold, (query_node, jnp.asarray(index)), jnp.stack(opening.path)
         )
         return root

@@ -33,8 +33,8 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 import numpy as np
-from jax import Array
-from jax.typing import ArrayLike
+from frx import Array
+from frx.typing import ArrayLike
 
 
 @runtime_checkable
