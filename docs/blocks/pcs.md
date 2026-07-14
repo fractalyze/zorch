@@ -144,7 +144,7 @@ of three tiers, and which tier an op takes is the only thing that varies:
 - **CPU-legalized primitive** — `lax.pairing_check` for KZG `verify`, which has no
   GPU kernel; the verifier is O(1), so the host round-trip (MSM on GPU →
   materialize → pairing on CPU) is irrelevant. It currently mis-decodes
-  Montgomery-form inputs ([zkx#518](https://github.com/fractalyze/zkx/issues/518)),
+  Montgomery-form inputs (zkx#518),
   which is why KZG's round-trip tests run the bn254 *standard* domain while every
   other instance tests `*_mont` — the msm/scalar-mul path is already mont-correct.
 
