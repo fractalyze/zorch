@@ -2,12 +2,10 @@
 
 > **SNARK = Σ IOP Round**
 
-JAX-native building blocks for Modern SNARKs. `zorch` sits between
-[fractalyze/jax](https://github.com/fractalyze/jax) and the proof systems that
-consume it: JAX provides tracing and codegen (via
-[fractalyze/xla](https://github.com/fractalyze/xla), Fractalyze's XLA with
-native finite-field dtypes); `zorch` provides the reusable pieces a proof system
-is assembled from.
+JAX-native building blocks for Modern SNARKs. `zorch` sits between JAX and the
+proof systems that consume it: JAX provides tracing and codegen (via Fractal
+XLA, Fractalyze's XLA with native finite-field dtypes); `zorch` provides the
+reusable pieces a proof system is assembled from.
 
 A Modern SNARK is **IOP + PCS**. The way deep learning stacks `Layer`s, `zorch`
 stacks **`Round`s** — the one composable unit the rest is threaded through.
