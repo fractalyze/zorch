@@ -2,7 +2,7 @@
 
 `zorch` is pure Python on JAX + the Fractal XLA PJRT plugin. This page is the dev-loop
 reference; for a first install see the quick start in
-[`../README.md`](../README.md).
+[`../README.md`](../../README.md).
 
 ## Per-workspace venvs
 

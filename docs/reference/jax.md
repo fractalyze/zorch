@@ -89,7 +89,7 @@ of them:
 1. **Earns its class-hood.** It carries config (`degree`) or state, or it's a
    polymorphic seam consumers dispatch on. If it's a bare stateless function
    dressed as a class, make it a function. (`coding.md`'s "[a code is an object,
-   not a call](coding.md)" is the same call made for `ReedSolomon`.)
+   not a call](../blocks/coding.md)" is the same call made for `ReedSolomon`.)
 2. **Frozen + registered if it crosses a transform.** Anything passed to / returned
    from / carried through `jit`/`vmap`/`scan` is
    `@partial(jax.tree_util.register_dataclass, data_fields=[...], meta_fields=[...])`
@@ -159,7 +159,7 @@ gotcha — live in [`conventions.md` → Pytree registration](conventions.md#pyt
   per-call inner `def`.
 - **Field dtypes have extra sharp edges.** `jnp.arange`/`jnp.power`/`np.iinfo`
   over a zk field dtype fail; build ramps with `cumprod`, gather with explicit
-  bounds modes. See [`poly.md` → field-dtype gotchas](poly.md#field-dtype-gotchas).
+  bounds modes. See [`poly.md` → field-dtype gotchas](../blocks/poly.md#field-dtype-gotchas).
 
 ## When `jit` is slow: diagnose, don't guess
 
@@ -234,7 +234,7 @@ Read in this order to actually *understand* `jit` rather than cargo-cult it.
 | [Stateful computations](https://docs.jax.dev/en/latest/stateful-computations.html) | How to carry "state" under `jit` without side effects — idea #3 applied. |
 | [Debugging slow tracing & compilation](https://docs.jax.dev/en/latest/debugging/slow_tracing_compilation.html) | The diagnostic playbook above, in full: the flags, the log signatures, the `lambda`-vs-`partial` / unrolling / varying-shape gotchas. |
 | [Config options](https://docs.jax.dev/en/latest/config_options.html) | Every diagnostic flag (`jax_log_compiles`, `jax_explain_cache_misses`, IR dumps). |
-| [Persistent compilation cache](https://docs.jax.dev/en/latest/persistent_compilation_cache.html) | Caching compiles across processes — and why a poisoned cache dir surfaces as a deserialization crash (see [`dev-env.md`](dev-env.md)). |
+| [Persistent compilation cache](https://docs.jax.dev/en/latest/persistent_compilation_cache.html) | Caching compiles across processes — and why a poisoned cache dir surfaces as a deserialization crash (see [`dev-env.md`](development.md)). |
 | [Compiling ML programs via high-level tracing](https://cs.stanford.edu/~rfrostig/pubs/jax-mlsys2018.pdf) (Frostig, Johnson, Leary — MLSys 2018) | The founding paper. `jit` *is* this paper; read it once for the model the whole system is built on. |
 
 ### Debugging (at runtime)

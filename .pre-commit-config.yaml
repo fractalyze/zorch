@@ -43,7 +43,7 @@ repos:
     hooks:
       - id: mont-test-dtypes
         # Tests draw field and curve-point elements as the Montgomery-form
-        # dtypes — the production encoding (docs/conventions.md "Testing").
+        # dtypes — the production encoding (docs/reference/conventions.md "Testing").
         # Covers every zk_dtypes family that ships a `_mont` sibling: the
         # fields (babybear/goldilocks/koalabear + extensions, bn254_sf) and
         # the bn254 G1/G2 point types. A test that is genuinely ABOUT the

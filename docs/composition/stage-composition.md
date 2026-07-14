@@ -125,21 +125,49 @@ Messages nest correspondingly: the pipeline's proof is one entry per stage,
 and a nested chain's entry is its own per-round list.
 
 The verifier is a `VerifyChain` mirroring the prover chain *round for round*,
-glue included. `VerifyChain`'s one-message-per-round check then guarantees
-alignment: a stage (or glue step) present on one side and absent on the other
+bridges included. `VerifyChain`'s one-message-per-round check then guarantees
+alignment: a stage (or bridge) present on one side and absent on the other
 fails loud instead of silently desynchronizing the Fiat-Shamir stream. A
 round with nothing to send still emits a `None` message to hold its position —
 the placeholder is what keeps the two chains structurally equal.
 
-## Consumer-owned scheme glue
+## The consumer boundary
+
+zorch ships the agnostic blocks; a *consumer* is the code that turns them into
+one concrete prover byte-matching a specific reference. The split follows the
+implementation-agnostic non-negotiable ([`../CLAUDE.md`](../../CLAUDE.md)): the test
+for "does this belong in zorch" is *would a second, unrelated prover reuse it
+unchanged?* It is about the generality of the *decision*, not the math — a niche
+kernel that defines one scheme's encoding is the consumer's; a
+mundane-but-universal structure like a Merkle tree, or a whole reusable PCS
+scheme, is zorch's.
+
+| Concern | zorch (generic) | Consumer (one scheme / application) |
+| --- | --- | --- |
+| Fiat-Shamir | the transcript + `grind` / `check_witness` | the rate/field parameterization and the observe/sample *order* |
+| Hashing | the `Permutation` seam, sponge, compression | the concrete permutation params (constants, width, field) |
+| Commitment | the Merkle tree(s) + reusable query/opening layout | which columns are committed, and the layout *schedule* |
+| Codes / PCS | the `LinearCode` / `PcsProver` / `PcsVerifier` seams + reusable instances and fold machinery | the per-prover stacking/region/batching schedule, any scheme-specific fold |
+| Sumcheck | the scan driver + per-variable rounds | the `combine` summand and the round wiring |
+| Composition | the `Round` abstraction + chains | the actual stage sequence and the carry between stages |
+| Constraints / field | works over any field dtype | the constraint system, the quotient/zero-check shape, the base/extension dtypes |
+
+A consumer never forks a block; it supplies only the differing *values* and
+*order* through four injection points: (1) a params object behind the
+`Permutation` seam, (2) the field dtype threaded as data, (3) the
+`PcsProver` / `PcsVerifier` protocols over the shared fold machinery, and (4) a
+consumer-owned driver threading `Round`s. A scheme-agnostic gap goes *upstream*
+into zorch first, then the consumer depends on it — never a fork.
+
+## Bridges — consumer-owned scheme glue
 
 zorch ships the agnostic stage rounds and the chain machinery; the consumer
-owns everything that encodes its reference's exact transcript (the one rule,
-[`building-a-zkvm-prover.md`](building-a-zkvm-prover.md)). The glue between
-stages — a PoW grind, a reference's sampled-and-discarded challenge,
-length-prefixed observes — composes into the consumer's chain as small
-consumer-local `Round`s rather than as free-floating statements in a driver
-function:
+owns everything that encodes its reference's exact transcript (the
+implementation-agnostic non-negotiable above). A **bridge** is a small,
+transcript-only `Round` between stages — a PoW grind, a reference's
+sampled-and-discarded challenge, length-prefixed observes. Bridges compose into
+the consumer's chain as consumer-local `Round`s rather than as free-floating
+statements in a driver function:
 
 - a grind round emits the witness as its message; its verifier dual re-checks
   the proof-of-work bits;
@@ -147,9 +175,9 @@ function:
 - an observe round absorbs with the reference's exact framing; its dual
   absorbs the same values from the proof.
 
-Glue-as-rounds is what gives the verifier its mirror for free: the consumer
+Modeling bridges as rounds is what gives the verifier its mirror for free: the consumer
 writes the schedule once as a list of rounds, and the dual chain has exactly
-one slot per step. The alternative — glue inline in `prove`, re-derived by
+one slot per step. The alternative — bridges inlined in `prove`, re-derived by
 hand in `verify` and again in every diagnostic harness — duplicates the
 schedule at every copy, and a drift between copies is invisible until a
 byte-match fails end to end.
@@ -165,10 +193,10 @@ soundness gain.
 
 Stage granularity is capture granularity. Each stage round's body remains one
 traced region over the device-side transcript, so it lowers to one replayable
-unit (the [fusion north star](README.md#fusion-north-star)); the chain stays
-a host-side Python loop, exactly as the per-layer chain is. Glue rounds move
+unit (the [fusion north star](../README.md#fusion-north-star)); the chain stays
+a host-side Python loop, exactly as the per-layer chain is. Bridges move
 no kernel boundary — their absorbs and squeezes already execute between stage
-captures; the rounds change bookkeeping, not lowering. A glue round is
+captures; the rounds change bookkeeping, not lowering. A bridge is
 transcript-only and does not warrant its own capture.
 
 ## Out of scope

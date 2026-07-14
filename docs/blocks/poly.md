@@ -39,9 +39,9 @@ polynomials are routinely evaluated at the small integer nodes themselves.
 
 These are leaf numeric helpers — element-wise field ops plus the one inherent `Σ`
 in `eval_mle` — so they fold into a caller's kernel without a marker or a `@jit`
-of their own (the `@jit` guidance in [`conventions.md`](conventions.md#jit)
+of their own (the `@jit` guidance in [`conventions.md`](../reference/conventions.md#jit)
 applies). They carry no host control flow, so they drop unchanged into the
-[fusion north star](README.md#fusion-north-star) path.
+[fusion north star](../README.md#fusion-north-star) path.
 
 ## Field-dtype gotchas
 

@@ -30,7 +30,7 @@ so it hashes as a `jit` static arg) fixes `l_max` (compiled-max column count),
 `n_c` / `n_r` / `n_d` (column / row / layer bit-widths), and the field `dtype`.
 The real-chip layout that *produces* the column heights (per-interaction row
 counts, gather-pad) is the consumer's trace concern; here it is just the agnostic
-eval. Adapted from whir-zorch's `jagged/poly.py` to AOT-clean form — a static
+eval, recast to AOT-clean form — a static
 `l_max` column axis and a `lax.fori_loop` layer loop in place of host-driven
 shapes.
 
@@ -82,7 +82,7 @@ property of this layout-recomputing shape, worth preserving.)
 
 **Composite fusion is deferred.** The opening is a procedural composition of `@jit`
 device zones; folding the whole protocol into one fused kernel (the
-[fusion north star](README.md#fusion-north-star)) needs the Fiat-Shamir-internal
+[fusion north star](../README.md#fusion-north-star)) needs the Fiat-Shamir-internal
 sumcheck marker and is gated on `jax.lax.composite` accepting field dtypes —
 tracked on the epic, not this slice.
 
@@ -92,7 +92,7 @@ tracked on the epic, not this slice.
 *shapes* only — no value dependence — with a `lax.fori_loop` over the bit layers,
 so it carries no host control flow. It is verifier-once work, not a per-round hot
 path, so it is `@jit`'d directly rather than written for a fused-region marker
-(see the hub [fusion north star](README.md#fusion-north-star)).
+(see the hub [fusion north star](../README.md#fusion-north-star)).
 
 The per-column indicator fold `bp_eval_core` is the opposite case: the inner
 sumcheck `vmap`s it over every column each round, so its DP fold is the prover's

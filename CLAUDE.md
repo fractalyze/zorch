@@ -6,16 +6,16 @@ this file is just the map plus the two rules every change must respect.
 - **Project overview & quick start:** [`README.md`](README.md)
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md)
 - **Dev environment — venv pinning, Fractal XLA plugin, compile caches:**
-  [`docs/dev-env.md`](docs/dev-env.md)
-- **Detailed design & open decisions:** tracked on GitHub — milestone
-  `spine: core + poseidon2 v1`, epic issue
+  [`docs/reference/development.md`](docs/reference/development.md)
+- **Detailed design & open decisions:** tracked on GitHub — epic issue
   [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Two non-negotiables
 
-- **Proving-scheme- and zkVM-agnostic.** No block may assume a particular
-  proving scheme or any zkVM. If scheme/zkVM-specific knowledge is creeping in,
-  it belongs in the consumer (e.g. `whir-zorch`), not in `zorch`.
+- **Proving-scheme- and implementation-agnostic.** No block may assume a
+  particular proving scheme or any one downstream implementation (a zkVM, zkML,
+  or zkTLS prover). If scheme- or implementation-specific knowledge is creeping
+  in, it belongs in the consumer, not in `zorch`.
 - **Fusion is a correctness-of-design property.** A `Round`, an
   `absorb`/`squeeze`, a `commit`/`open`, a fold step, and a hash permutation
   must each lower to one fused kernel — by construction, never by a

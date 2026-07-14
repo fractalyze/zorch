@@ -14,7 +14,7 @@ call `permute`; none names a concrete hash. `Poseidon2` is one implementation
 and classic `Poseidon` (`zorch/hash/poseidon`, the `zorch.poseidon` marker — a
 full dense MDS every round, full/partial round split) is a second; any other
 fixed-width permutation drops into the same seam unchanged. This is how the
-symmetric layer stays proving-scheme- and zkVM-agnostic — the non-negotiable.
+symmetric layer stays proving-scheme- and implementation-agnostic — the non-negotiable.
 
 **A second seam for byte hashes: `ByteHash`.** SHA-256 (and BLAKE3, Keccak) is a
 *byte* hash, not an algebraic `Permutation`: it maps a batch of equal-length byte
@@ -67,7 +67,7 @@ the `poseidon2` and `fusion.py` docstrings; the rule here is that the permutatio
 is written *for* that one marker.
 
 This is the per-block face of the hub's
-[fusion north star](README.md#fusion-north-star): a `vmap` over a Merkle layer or
+[fusion north star](../README.md#fusion-north-star): a `vmap` over a Merkle layer or
 a sponge's block loop batches into one `permute`, which collapses to one GPU
 kernel once the permutation is captured (the poseidon2 fusion path,
 [#25](https://github.com/fractalyze/zorch/issues/25)).
