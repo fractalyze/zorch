@@ -3,9 +3,11 @@
 > **SNARK = Σ IOP Round**
 
 JAX-native building blocks for Modern SNARKs. `zorch` sits between JAX and the
-proof systems that consume it: JAX provides tracing and codegen (via Fractalyze
-XLA (FXLA), the XLA backend with native finite-field dtypes); `zorch` provides
-the reusable pieces a proof system is assembled from.
+proof systems that consume it: JAX provides tracing and codegen, lowered through
+**Fractalyze XLA** — Fractalyze's fork of stock
+[XLA](https://github.com/openxla/xla) with native field and elliptic-curve
+types. Every later "XLA" here means this fork, not the upstream compiler. `zorch`
+provides the reusable pieces a proof system is assembled from.
 
 A Modern SNARK is **IOP + PCS**. The way deep learning stacks `Layer`s, `zorch`
 stacks **`Round`s** — the one composable unit the rest is threaded through.
@@ -28,53 +30,59 @@ stacks **`Round`s** — the one composable unit the rest is threaded through.
 
 ## Building blocks
 
-**There is one composable unit: the `Round`** (implement `__call__`; it threads
-the Fiat-Shamir transcript and calls `observe` / `sample` directly). Everything
-else — Fiat-Shamir, `Polynomial`, `PCS`, fold, zero-check — is something a round
-is *built from* or *reduces to* (the split is below), not a sibling unit.
+**There is one composable unit: the `Round`** — implement `__call__`; it threads
+the Fiat-Shamir transcript and calls `observe` / `sample` directly. A prover
+stacks `Round`s into a chain, and **`Round`s nest**: a chain is itself a `Round`,
+so one `Round` can expand into a whole sub-chain. At the leaf a `Round` is a
+single `observe`→`sample`; higher up it is a phase built from many.
 
-`Round`s compose at three granularities. All three **are** `Round`s — chains
-nest — so they differ only in altitude:
+A prover's top-level chain reads as two recurring roles — **`Stage`** and
+**`Bridge`**, both of them `Round`s:
 
-| Granularity | What it is                                        | Example                                                      |
-| ----------- | ------------------------------------------------- | ------------------------------------------------------------ |
-| **Stage**   | one phase of the argument, usually itself a chain | trace-commit · logup-gkr · zero-check · jagged-evals         |
-| **Bridge**  | connects stages; transcript-only                  | a grind, a sampled-and-discarded challenge, a framed observe |
-| **`Round`** | one step on the Fiat-Shamir schedule              | a per-variable sumcheck round                                |
+```text
+prove()  —  a chain of Stages joined by Bridges
+──────────────────────────────────────────────────────────────
 
-**The split criterion is the Fiat-Shamir schedule, nothing else.** The atomic
-`Round` is one `observe`→`sample`, and it lowers to one capturable unit. Coarser
-rounds exist only because chains nest: you *split* a new round where the
-transcript takes another `observe`/`sample`, and you *group* rounds into a stage
-where the argument moves to its next phase. The full seam contract — the carry
-between stages and the bridges between them — is
-[`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
+  Stage   trace-commit      commit the witness columns
+  Bridge  grind             a PoW that only feeds the transcript
+  Stage   logup-gkr         the interaction argument — a sub-chain of
+                              per-layer Rounds, each layer its own sumcheck
+  Bridge  observe(framing)  absorb in the reference's exact order
+  Stage   zero-check        the constraint sumcheck
+  Stage   jagged-evals      the PCS opening
+```
 
-Two kinds of thing feed those rounds; neither is a sibling unit:
+|             | **`Stage`**                                       | **`Bridge`**                                      | **leaf `Round`**              |
+| ----------- | ------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
+| **Role**    | one phase of the argument                         | join two stages on the transcript                 | one step inside a stage       |
+| **Body**    | witness + real compute; usually a sub-chain       | transcript-facing only — a grind still hashes, but no witness crosses | one `observe`→`sample`        |
+| **Example** | trace-commit, logup-gkr, zero-check, jagged-evals | a PoW grind, a framed observe, a discarded sample | a per-variable sumcheck round |
 
-- **Materials a round body computes with** — the **Fiat-Shamir transcript**
-  (`observe` / `sample`, a duplex sponge underneath), **`Polynomial`** primitives
-  (univariate + multilinear eval), and the **fold** step (2-to-1 reduction, one
-  challenge per round).
-- **Reductions that *are* a Stage** — **`PCS`** (`commit` / `open` / `verify`;
-  the other half of `IOP + PCS`, and its `open` is itself a stage) and
-  **zero-check** (reduces a constraint system — injected by the consumer — to a
-  sumcheck). These live at the Stage altitude, not inside a leaf round.
+`Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
+how the verifier mirrors the prover *round-for-round* — but the roles are what a
+reader navigates by.
 
-## Status
+**Where the boundaries fall.** A new `Round` splits where the transcript takes
+another `observe`/`sample`; `Round`s group into a `Stage` where the argument
+moves to its next phase; a `Bridge` sits where the reference demands a transcript
+step between two stages. The Fiat-Shamir schedule is the primary boundary, with
+the protocol-phase and carry seams alongside it — the full carry-and-seam
+contract is [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
 
-The core spine is up — `Round`, Fiat-Shamir, `Polynomial`, and the fusion
-contract — and the blocks a prover is assembled from have landed on top of it:
-Poseidon2 and device SHA-256 transcripts, the sumcheck engine, LogUp-GKR, the
-`PCS` seam with KZG / FRI / BaseFold instances, the jagged PCS, and the Spartan
-R1CS combinators. The current frontier is end-to-end IOP+PCS composition —
-gluing the stages into a full prover (milestone `compose: e2e IOP+PCS gluing`,
-[#462](https://github.com/fractalyze/zorch/issues/462)). Detailed design and open
-decisions: epic issue [#1](https://github.com/fractalyze/zorch/issues/1).
+**Where the classic pieces fit.** A ZK reader expects Fiat-Shamir, `Polynomial`,
+`PCS`, and sumcheck as top-level "blocks." In this picture they are not peers of
+the `Round`:
+
+- **Fiat-Shamir, `Polynomial`, and fold** are the *materials* a `Round` body
+  computes with — the transcript it threads, the polynomials it evaluates, the
+  fold (2-to-1 reduction, one challenge per round) it applies each step.
+- **A `PCS` opening and a zero-check are `Stage`s** — each a distinct phase: a
+  zero-check reduces to a sumcheck, while a `PCS` opening runs its
+  commitment-opening and evaluation checks (the *jagged-evals* stage above).
 
 ## Development
 
-`zorch` is pure Python on JAX, run against the Fractalyze XLA GPU plugin. A virtualenv with
+`zorch` is pure Python on JAX, run against the XLA GPU plugin. A virtualenv with
 the pinned toolchain:
 
 ```sh
@@ -83,7 +91,7 @@ pip install -r requirements.in \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The dev loop — per-workspace venvs, developing against a local Fractalyze XLA build, the
+The dev loop — per-workspace venvs, developing against a local XLA build, the
 JAX compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
 
 ## Documentation
