@@ -64,62 +64,28 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import Any
 
 import frx
 import frx.numpy as jnp
-from frx import Array, jit, lax
+from frx import Array, jit
 
-_LANE = jnp.uint32
-_LANE_BITS = 32
-
-
-def field_bit_width(dtype: Any) -> int:
-    """`W`: the field's size in storage bits (= its GF(2)-dimension)."""
-    width = jnp.dtype(dtype).itemsize * 8
-    if width % _LANE_BITS != 0:
-        raise ValueError(
-            f"{jnp.dtype(dtype).name} is {width} bits; the bit kernels lane over "
-            f"uint{_LANE_BITS} and need a multiple of {_LANE_BITS}"
-        )
-    return width
-
-
-def _lanes(x: Array) -> Array:
-    """(...,) field -> (..., L) little-endian uint32 storage lanes."""
-    return lax.bitcast_convert_type(x, _LANE)
-
-
-def _from_lanes(lanes: Array, dtype: Any) -> Array:
-    """(..., L) uint32 lanes -> (...,) field. Inverse of [`_lanes`]."""
-    return lax.bitcast_convert_type(lanes, dtype)
-
-
-def _bits(x: Array) -> Array:
-    """(...,) field -> (..., W) 0/1 uint32: bit `r` is lane `r//32`'s bit `r%32`."""
-    lanes = _lanes(x)
-    shifts = jnp.arange(_LANE_BITS, dtype=_LANE)
-    bits = (lanes[..., :, None] >> shifts) & _LANE(1)
-    return bits.reshape(*x.shape, -1)
-
-
-def _xor_reduce(lanes: Array, axis: int) -> Array:
-    """XOR-reduce uint32 lanes — field addition of any binary field, done on the
-    representation so it needs no dtype arithmetic support."""
-    return lax.reduce(lanes, _LANE(0), lax.bitwise_xor, (axis,))
+from zorch.utils import binary_field as bf
 
 
 @jit
 def bit_slice_evals(packed_witness: Array, tensor: Array) -> Array:
     """`s_hat_v[r] = Σ_i bit_r(packed_witness[i]) · tensor[i]` for `r ∈ [0, W)`.
 
-    `(n,) × (n,) -> (W,)`. A bit-select + XOR-reduce — no field multiplies; the
-    `(n, W, L)` intermediate stays inside the jit fusion.
+    `(n,) × (n,) -> (W,)`. A bit-select then a field-additive reduce — no field
+    multiplies (the select is a `{0,1} × uint32-limb` product on the
+    representation); the `(n, W, L)` intermediate stays inside the jit fusion.
     """
-    w_bits = _bits(packed_witness)  # (n, W)
-    t_lanes = _lanes(tensor)  # (n, L)
-    acc = _xor_reduce(w_bits[:, :, None] * t_lanes[:, None, :], axis=0)  # (W, L)
-    return _from_lanes(acc, tensor.dtype)
+    w_bits = bf._bits(packed_witness)  # (n, W)
+    t_limbs = bf._to_limbs(tensor)  # (n, L)
+    # Each bit selects tensor[i]'s limbs (or 0); reinterpret to the field and sum
+    # under field addition (native `jnp.sum` — binary-field add is the limb XOR).
+    selected = bf._from_limbs(w_bits[:, :, None] * t_limbs[:, None, :], tensor.dtype)
+    return jnp.sum(selected, axis=0)  # (W,)
 
 
 @jit
@@ -130,17 +96,19 @@ def rs_eq_ind(tensor: Array, eq_r_dprime: Array) -> Array:
 
     `(n,) × (W,) -> (n,)`.
     """
-    t_bits = _bits(tensor)  # (n, W)
-    eq_lanes = _lanes(eq_r_dprime)  # (W, L)
-    acc = _xor_reduce(t_bits[:, :, None] * eq_lanes[None, :, :], axis=1)  # (n, L)
-    return _from_lanes(acc, eq_r_dprime.dtype)
+    t_bits = bf._bits(tensor)  # (n, W)
+    eq_limbs = bf._to_limbs(eq_r_dprime)  # (W, L)
+    selected = bf._from_limbs(
+        t_bits[:, :, None] * eq_limbs[None, :, :], eq_r_dprime.dtype
+    )
+    return jnp.sum(selected, axis=1)  # (n,)
 
 
 @jit
 def tensor_algebra_transpose(v: Array) -> Array:
     """The `W×W` bit transpose between the two readings of a tensor-algebra
     element: `bit_b(out[h]) = bit_h(v[b])`. `(W,) -> (W,)`; an involution."""
-    w = field_bit_width(v.dtype)
+    w = bf.field_bit_width(v.dtype)
     if v.shape != (w,):
         # Any other length reshapes into a rectangular bit matrix and returns
         # garbage instead of erroring.
@@ -148,16 +116,15 @@ def tensor_algebra_transpose(v: Array) -> Array:
             f"a tensor-algebra element over {jnp.dtype(v.dtype).name} is "
             f"shape ({w},), got {v.shape}"
         )
-    bits_t = _bits(v).T  # (W, W): row h = bit h of every v[b]
-    shifts = (_LANE(1) << jnp.arange(_LANE_BITS, dtype=_LANE))[None, None, :]
-    lanes = jnp.sum(bits_t.reshape(w, -1, _LANE_BITS) * shifts, axis=-1, dtype=_LANE)
-    return _from_lanes(lanes, v.dtype)
+    bits_t = bf._bits(v).T  # (W, W): row h = bit h of every v[b]
+    return bf._from_limbs(bf._limbs_from_bits(bits_t), v.dtype)
 
 
 @jit
 def inner_product(a: Array, b: Array) -> Array:
-    """`Σ_i a[i]·b[i]` — field multiplies + a lane-XOR reduce. `(n,) × (n,) -> ()`."""
-    return _from_lanes(_xor_reduce(_lanes(a * b), axis=0), a.dtype)
+    """`Σ_i a[i]·b[i]` — field multiplies then a native field-additive reduce.
+    `(n,) × (n,) -> ()`."""
+    return jnp.sum(a * b, axis=0)
 
 
 @partial(

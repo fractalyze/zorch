@@ -70,6 +70,7 @@ py_test(
     deps = [
         "//zorch/pcs:ring_switch",
         "//zorch/poly",
+        "//zorch/utils:binary_field",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

@@ -32,6 +32,7 @@ from frx import Array, lax
 
 from zorch.poly.univariate import compute_lagrange_basis, powers
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
+from zorch.utils.field import is_binary_field
 
 if TYPE_CHECKING:
     from zorch.coding.foldable_code import FoldableCode, KFoldableCode
@@ -43,19 +44,6 @@ def _base_dtype(dtype: Any) -> Any:
         return zk_dtypes.efinfo(dtype).base_field_dtype
     except ValueError:
         return dtype
-
-
-def _is_binary_field(dtype: Any) -> bool:
-    """True for the binary-field family (`binary_field_ghash`, `binary_field_t*`).
-
-    These have characteristic 2, so their multiplicative group has odd order and
-    no 2^m-th roots of unity — `lax.ntt` runs the LCH *additive* NTT (novel
-    polynomial basis over an F2-affine subspace) instead of the multiplicative
-    one. That is the same code (Reed-Solomon = low-degree extension) but shifts
-    the `TensorCode` generator tensor from the geometric `(dₛ^{2^i})` (monomial
-    basis) to the subspace-polynomial `(Ŵ_i(dₛ))` (novel basis). Prime and
-    extension fields keep the multiplicative NTT and are False."""
-    return jnp.dtype(dtype).name.startswith("binary_field")
 
 
 def eval_domain(
@@ -132,11 +120,14 @@ class ReedSolomon:
         if coset_shift is not None:
             self._coset_powers = powers(jnp.asarray(coset_shift, dtype), self.block_len)
         self._key: tuple | None = None
-        # A binary field encodes via the additive NTT (see `_is_binary_field`).
-        # `encode` is unchanged — `lax.ntt` dispatches the transform by dtype —
-        # but `eval_point` needs the additive (subspace-polynomial) tensor, and
-        # the multiplicative fold/coset do not apply.
-        self._binary = _is_binary_field(dtype)
+        # A binary field has characteristic 2 — its multiplicative group has odd
+        # order and no 2^m-th roots of unity, so `lax.ntt` runs the LCH *additive*
+        # NTT (novel basis over an F2-affine subspace) instead of the
+        # multiplicative one. `encode` is unchanged (`lax.ntt` dispatches by
+        # dtype), but `eval_point` needs the additive tensor — its factors shift
+        # from the geometric `(dₛ^{2^i})` to the subspace polynomials `(Ŵ_i(dₛ))`
+        # — and the multiplicative fold/coset do not apply.
+        self._binary = is_binary_field(dtype)
         if self._binary and coset_shift is not None:
             raise NotImplementedError(
                 "coset Reed-Solomon over a binary field (an additive coset) is "
