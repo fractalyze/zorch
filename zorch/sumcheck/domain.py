@@ -196,7 +196,7 @@ def summand_evals(
     A leading (∞) node encodes s(∞) = combine(*slopes), the true leading coefficient
     only for a HOMOGENEOUS combine — every monomial a product of exactly `degree`
     factors (a plain product, or the LogUp combine); a mixed-degree combine like
-    E·(A·B − C) is not. A finite domain carries no such restriction — any summand
+    eq·(â◦b̂ − ĉ) is not. A finite domain carries no such restriction — any summand
     samples cleanly on it."""
     p0, p1 = split_halves(stacked) if msb else split_pairs(stacked)
     combined = combine(*frx.vmap(domain.sample)(p0, p1))

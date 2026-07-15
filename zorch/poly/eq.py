@@ -72,16 +72,17 @@ def contract_hypercube_step(state: Array) -> Array:
     return state[..., 0::2] + state[..., 1::2]
 
 
-def expand_eq_to_hypercube(x: Array, scalar: Array) -> Array:
-    """scalar·eq(w, x) for all w in {0,1}^n. Returns (2^n,); result[nat(w)] with
-    w[0] as the MSB.
+def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Array:
+    """scalar·eq(w, x) for all w in {0,1}^n. `msb=False` interleaves each new share
+    (default, `w[0]` the MSB); `msb=True` concatenates `[low, high]`, placing
+    `x[j]` at bit `j`.
 
     NOTE: explicit indexing instead of `for coord in x` — iterating a JAX array
     of an extension-field dtype dispatches `lax.sign`, a XLA gotcha.
     """
     state = jnp.atleast_1d(scalar)
     for j in range(x.shape[0]):
-        state = expand_hypercube_step(state, x[j])
+        state = expand_hypercube_step(state, x[j], msb=msb)
     return state
 
 
