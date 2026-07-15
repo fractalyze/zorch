@@ -9,6 +9,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.utils.bits import is_power_of_two, log2_strict_usize
 from zorch.utils.field import base_field, naturals
 
 
@@ -119,3 +120,76 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
     )
     powers = frx.lax.associative_scan(lambda a, b: a * b, seq, axis=-1)
     return fnp.sum(coeffs * powers, axis=-1)
+
+
+def coset_intt(
+    groups: Array, omega_inv: Array, coset_inv: Array | None = None
+) -> Array:
+    """Recover the degree-``<k`` coefficients from evaluations on the order-``k``
+    subgroup ``⟨ω⟩`` (``coset_inv=None``) or a coset ``s·⟨ω⟩`` (``coset_inv =
+    s⁻¹``), for the whole batch at once. ``groups`` is ``(..., k)`` — ``groups[...,
+    j]`` is the value at ``ωʲ`` (or ``s·ωʲ``), ``k`` a power of two on the last
+    axis; returns ``(..., k)`` coefficients, ``x^m`` at index ``m``.
+
+    Shared-twiddle inverse NTT: bit-reverse, then ``log k`` decimation-in-time
+    butterfly stages whose twiddles ``ω⁻⁰..ω⁻^(k/2-1)`` are computed once and
+    shared across the whole batch, ``k⁻¹`` normalise, then (coset only) undo the
+    shift ``coeffₘ ·= coset_inv^m`` (``Q(y)=P(s·y)``). The coefficient-form
+    counterpart of ``compute_lagrange_basis``'s evaluation form; byte-identical
+    to ``compute_inv_vandermonde`` or any correct INTT, since field arithmetic is
+    exact and the summation order a butterfly vs a matmul takes is irrelevant.
+
+    Carries no root convention (like ``compute_lagrange_basis``): the caller
+    supplies ``ω⁻¹`` and per-group ``coset_inv`` in its own domain order. The
+    butterfly is hand-unrolled over the static ``k`` over a large *batch* axis, so
+    it lowers to a handful of fused elementwise kernels coalesced over the groups
+    — the native ``lax.ntt``'s single-long-axis form is the wrong tool here, and
+    its canonical root would need a per-group reindex against the caller's."""
+    k = groups.shape[-1]
+    if not is_power_of_two(k):
+        raise ValueError(f"coset_intt needs a power-of-two factor k, got {k}")
+    log_k = log2_strict_usize(k)
+    if fnp.ndim(omega_inv) != 0:
+        raise ValueError(
+            f"omega_inv must be a scalar, got shape {fnp.shape(omega_inv)}"
+        )
+    if coset_inv is not None:
+        try:
+            fnp.broadcast_shapes(fnp.shape(coset_inv), groups.shape[:-1])
+        except ValueError as e:
+            raise ValueError(
+                f"coset_inv shape {fnp.shape(coset_inv)} must broadcast with the "
+                f"batch dims {groups.shape[:-1]}"
+            ) from e
+
+    # Shared INTT twiddles ω⁻⁰..ω⁻^(k/2-1), one set for every group. The static k
+    # axis becomes a Python list so the butterfly unrolls to elementwise ops over
+    # the (batched) leading dims.
+    twiddles = powers(omega_inv, max(k >> 1, 1))
+    col = [groups[..., i] for i in range(k)]
+
+    # Decimation-in-time INTT: bit-reverse, then log_k butterfly stages.
+    col = [col[int(f"{i:0{log_k}b}"[::-1], 2)] for i in range(k)] if k > 1 else col
+    half = k >> 1
+    for i in range(log_k):
+        half_group = 1 << i
+        for j in range(half):
+            group = j >> i
+            offset = j & (half_group - 1)
+            i1 = (group << (i + 1)) + offset
+            i2 = i1 + half_group
+            odd = col[i2] * twiddles[offset * (k >> (i + 1))]
+            col[i1], col[i2] = col[i1] + odd, col[i1] - odd
+
+    # Scale by k⁻¹ (INTT normalisation), then (coset only) undo the shift.
+    base = base_field(groups.dtype)
+    inv_k = fnp.ones((), base) / fnp.asarray(k, base)
+    col = [c * inv_k for c in col]
+    if coset_inv is not None:
+        shift_pow = coset_inv
+        for m in range(1, k):
+            col[m] = col[m] * shift_pow
+            if m < k - 1:  # the final power is never read — skip its elementwise mul
+                shift_pow = shift_pow * coset_inv
+
+    return fnp.stack(col, axis=-1)

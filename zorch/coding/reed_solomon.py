@@ -16,7 +16,7 @@ XLA rather than fusing it by pattern-match.
 Basefold, WHIR, STARK); the fold half of the seam delegates to it. It lives
 in this module so the fold's x-coordinates stay the *same* evaluation domain
 the encoder used. The arbitrary-fold-factor (k-ary) generalization is
-`fri_fold_k_values` plus the `KFoldableCode` group seam — additive to the binary
+`fri_fold_k` plus the `KFoldableCode` group seam — additive to the binary
 conjugate-pair fold, which stays the closed-form butterfly (see coding.md).
 """
 
@@ -30,7 +30,7 @@ import numpy as np
 import zk_dtypes
 from frx import Array, lax
 
-from zorch.poly.univariate import compute_lagrange_basis, powers
+from zorch.poly.univariate import compute_lagrange_basis, coset_intt, powers
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 from zorch.utils.field import is_binary_field
 
@@ -342,7 +342,8 @@ class ReedSolomon:
     # above. A k-ary fold groups the k entries of one folded point's k-th-root
     # coset {p, p + n/k, ..., p + (k-1)n/k} (the natural-order generalization of
     # the (x, -x) conjugate pair) and Lagrange-interpolates them at beta via
-    # `fri_fold_k_values`. The binary methods are left untouched (zorch#252).
+    # `fri_fold_k`'s `points=` form; the binary pair keeps its cheaper closed-form
+    # butterfly (zorch#252).
 
     def fold_group(self, codeword: Array, beta: Array) -> Array:
         """KFoldableCode fold: regroup the layer into k-th-root cosets and
@@ -405,10 +406,11 @@ class ReedSolomon:
         return indices
 
     def _fold_groups(self, groups: Array, points: Array, beta: Array) -> Array:
-        """vmap the single-group Lagrange fold (`fri_fold_k_values`) over the
-        group/query axis — the one place fold_group and fold_group_values share,
-        each supplying its own `groups`/`points` (full layer vs opened queries)."""
-        return frx.vmap(lambda g, p: fri_fold_k_values(g, beta, p))(groups, points)
+        """vmap the single-group Lagrange fold (`fri_fold_k` with `points`) over
+        the group/query axis — the one place fold_group and fold_group_values
+        share, each supplying its own `groups`/`points` (full layer vs opened
+        queries)."""
+        return frx.vmap(lambda g, p: fri_fold_k(g, beta, points=p))(groups, points)
 
     def _regroup(self, layer: Array, k: int) -> Array:
         """Reshape a length-`n` layer into its `[n // k, k]` k-th-root cosets:
@@ -546,25 +548,47 @@ def fri_fold_values(fx: Array, fnx: Array, beta: Array, x: Array) -> Array:
     return (fx + fnx) / two + beta * (fx - fnx) / (two * x)
 
 
-def fri_fold_k_values(group: Array, beta: Array, points: Array) -> Array:
-    """k-ary fold of one query group: the degree-`(k-1)` interpolant through the
-    `k` `points` carrying values `group` (both length-`k`, last axis), evaluated
-    at `beta`.
+def fri_fold_k(
+    group: Array,
+    beta: Array,
+    *,
+    points: Array | None = None,
+    coset: tuple[Array, Array] | None = None,
+) -> Array:
+    """k-ary FRI fold: the degree-`(k-1)` interpolant through a group's `k`
+    points, evaluated at `beta`. The arbitrary-fold-factor generalization of the
+    `k=2` `fri_fold_values` butterfly (kept separate because its closed form is
+    cheaper than interpolating). Pass exactly one of:
 
-    The arbitrary-fold-factor generalization of `fri_fold_values` (the `k=2`
-    conjugate-pair butterfly is the special case — for points `(x, −x)` this
-    returns exactly `fri_fold_values(group[0], group[1], beta, x)`). A folding
-    factor `> 2` has no closed-form butterfly, so it interpolates; the `k=2`
-    butterfly is kept separately because it is cheaper than its Lagrange form.
+    - `points` (..., k): the group's evaluation coordinates in the caller's own
+      domain order (native `eval_domain`, or another root entirely) — a Lagrange
+      interpolation, O(k²) per group, carrying no domain convention. The
+      per-query verifier path; `vmap` over the group axis.
+    - `coset = (coset_inv, omega_inv)`: when the points form a coset `s·⟨ω⟩` of
+      the order-`k` subgroup — a shared-twiddle INTT (`coset_intt`) then an
+      unrolled Horner, O(k log k) with one twiddle set across the whole batch and
+      only the per-group shift varying. The batched prover path. `coset_inv` is
+      per-group `s⁻¹` (broadcasts over the leading dims), `omega_inv` the shared
+      `ω⁻¹`.
 
-    `points` are the group's evaluation coordinates — the caller supplies them
-    from its own domain order (native `eval_domain`, or another root entirely),
-    so this carries no single domain convention. Folds one group; `vmap` over the
-    query/group axis. `group`/`points` may be extension-field; the dtypes follow
-    `compute_lagrange_basis`."""
-    # Unroll the linear combination over the static factor k rather than
-    # `fnp.dot`: a reduction op is a kInput/gather fusion boundary on GPU, so
-    # the fold would not lower to one fused kernel (CLAUDE.md "Fusion by
+    The interpolant is unique, so the two paths are byte-identical wherever both
+    apply. `group` and the coordinates may be extension-field; dtypes follow
+    `compute_lagrange_basis` / `coset_intt`."""
+    if (points is None) == (coset is None):
+        raise ValueError("fri_fold_k needs exactly one of `points` or `coset`")
+    if coset is not None:
+        coset_inv, omega_inv = coset
+        coeffs = coset_intt(group, omega_inv, coset_inv)
+        # Horner at beta, unrolled over the static k — not `eval_coeffs`, whose
+        # `lax.scan` is a fusion barrier that materialises the coeffs (measured
+        # +40% at 2^23); the unroll fuses through `coset_intt`'s stack.
+        folded = coeffs[..., -1]
+        for m in range(coeffs.shape[-1] - 2, -1, -1):
+            folded = folded * beta + coeffs[..., m]
+        return folded
+    # Lagrange path: unroll the linear combination over the static factor k
+    # rather than `fnp.dot` — a reduction is a kInput/gather fusion boundary on
+    # GPU, so the fold would not lower to one fused kernel (CLAUDE.md "Fusion by
     # construction"). k is a small compile-time constant, so the unroll is cheap.
     basis = compute_lagrange_basis(beta, points)
     folded = group[..., 0] * basis[..., 0]

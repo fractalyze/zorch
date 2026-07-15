@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import frx
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
@@ -24,9 +25,10 @@ from zorch.coding.reed_solomon import (
     ReedSolomon,
     eval_domain,
     fri_fold,
-    fri_fold_k_values,
+    fri_fold_k,
     fri_fold_values,
 )
+from zorch.poly.univariate import coset_intt
 from zorch.testkit.random_field import rand_ext_field, rand_field
 
 F = zk_dtypes.koalabear_mont
@@ -97,7 +99,7 @@ class ReedSolomonTest(absltest.TestCase):
         )
         self.assertTrue(bool(fnp.all(got == folded[positions])))
 
-    def test_fri_fold_k_values_k2_equals_butterfly(self) -> None:
+    def test_fri_fold_k_points_k2_equals_butterfly(self) -> None:
         # The k-ary fold's k=2 case must equal the conjugate-pair butterfly: for
         # points (x, -x), interpolation and fri_fold_values are the same map
         # (independent formulas — Lagrange vs the closed-form butterfly).
@@ -106,10 +108,10 @@ class ReedSolomonTest(absltest.TestCase):
         group = fnp.stack([fx, fnx])
         points = fnp.stack([x, -x])
         self.assertEqual(
-            fri_fold_k_values(group, beta, points), fri_fold_values(fx, fnx, beta, x)
+            fri_fold_k(group, beta, points=points), fri_fold_values(fx, fnx, beta, x)
         )
 
-    def test_fri_fold_k_values_matches_lagrange_oracle(self) -> None:
+    def test_fri_fold_k_points_matches_lagrange_oracle(self) -> None:
         # A folding factor > 2 interpolates; check against an independent
         # product-form Lagrange evaluation (k=4, extension-field values).
         k = 4
@@ -130,8 +132,71 @@ class ReedSolomonTest(absltest.TestCase):
             return acc
 
         self.assertEqual(
-            fri_fold_k_values(group, beta, points), oracle(group, points, beta)
+            fri_fold_k(group, beta, points=points), oracle(group, points, beta)
         )
+
+    def test_fri_fold_k_coset_path_matches_points_path(self) -> None:
+        # fri_fold_k's shared-twiddle INTT path (coset=) must be byte-identical
+        # to its general Lagrange path (points=) when the points are a subgroup
+        # coset s*<w> — the interpolant is unique. Batched over groups (fri.fold's
+        # prover path), each with its own coset shift; the shared root is order-k.
+        for k in (2, 4, 8):
+            subgroup = _domain(k, F)  # [w^0..w^{k-1}], canonical order-k root
+            omega_inv = fnp.ones((), F) / subgroup[1]
+            shifts = rand_field(10 + k, (3,), F) + fnp.ones((), F)  # 3 nonzero shifts
+            coset_inv = fnp.ones((3,), F) / shifts
+            points = shifts[:, None] * subgroup[None, :]  # (3, k) coset points
+            groups = rand_ext_field(20 + k, (3, k), F, EF)
+            beta = rand_ext_field(30 + k, (), F, EF)
+            want = frx.vmap(lambda g, p: fri_fold_k(g, beta, points=p))(groups, points)
+            got = fri_fold_k(groups, beta, coset=(coset_inv, omega_inv))
+            self.assertTrue(bool(fnp.all(got == want)), msg=f"k={k}")
+
+    def test_fri_fold_k_requires_exactly_one_form(self) -> None:
+        # points/coset are mutually exclusive; neither or both is a caller error.
+        group = rand_ext_field(70, (4,), F, EF)
+        beta = rand_field(71, (), F)
+        pts = rand_field(72, (4,), F)
+        with self.assertRaises(ValueError):
+            fri_fold_k(group, beta)
+        with self.assertRaises(ValueError):
+            fri_fold_k(group, beta, points=pts, coset=(pts, pts[0]))
+
+    def test_coset_intt_recovers_coefficients(self) -> None:
+        # coset_intt inverts evaluation on the subgroup <w> (coset_inv=None) and
+        # on a coset s*<w> (coset_inv = s^-1): interpolate coefficients from the
+        # values and recover the original polynomial byte-for-byte. Oracle is a
+        # plain Horner evaluation on the coset (shares no code with the INTT
+        # butterfly), batched over columns as fri.fold's final-poly INTT is.
+        for k in (2, 4, 8):
+            subgroup = _domain(k, F)  # [w^0..w^{k-1}], canonical order-k root
+            omega_inv = fnp.ones((), F) / subgroup[1]
+            coeffs = rand_ext_field(40 + k, (3, k), F, EF)  # 3 polys, degree <k
+
+            evals = frx.vmap(lambda c: _horner(c, subgroup))(coeffs)  # (3, k)
+            self.assertTrue(
+                bool(fnp.all(coset_intt(evals, omega_inv) == coeffs)),
+                msg=f"subgroup k={k}",
+            )
+
+            shifts = rand_field(50 + k, (3,), F) + fnp.ones((), F)  # 3 nonzero shifts
+            coset_inv = fnp.ones((3,), F) / shifts
+            points = shifts[:, None] * subgroup[None, :]  # (3, k) coset points
+            cevals = frx.vmap(_horner)(coeffs, points)  # (3, k)
+            self.assertTrue(
+                bool(fnp.all(coset_intt(cevals, omega_inv, coset_inv) == coeffs)),
+                msg=f"coset k={k}",
+            )
+
+    def test_coset_intt_rejects_bad_shapes(self) -> None:
+        # Fail loud at the public seam: a non-scalar root, or a coset_inv that
+        # cannot broadcast against the batch dims, is a caller error.
+        groups = rand_ext_field(60, (3, 4), F, EF)
+        omega_inv = fnp.ones((), F)
+        with self.assertRaises(ValueError):
+            coset_intt(groups, fnp.ones((2,), F))  # non-scalar omega_inv
+        with self.assertRaises(ValueError):
+            coset_intt(groups, omega_inv, fnp.ones((5,), F))  # (5,) vs batch (3,)
 
     def test_check_final_accepts_only_the_constant_claim(self) -> None:
         rs = ReedSolomon(message_len=1, blowup=4, dtype=F)
