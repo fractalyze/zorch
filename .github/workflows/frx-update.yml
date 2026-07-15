@@ -1,17 +1,21 @@
 # Copyright 2026 Fractalyze Inc. All rights reserved.
 #
-# Receives a `jax-update` repository_dispatch from the jax repo's
+# Receives an `frx-update` repository_dispatch from the jax repo's
 # notify-downstream workflow and opens a pin-bump PR. zorch must be added to
 # that dispatcher's consumer list for events to arrive.
+#
+# `upstream_repo: jax` below is not a leftover: pip-bump interpolates it into a
+# github.com/fractalyze/<repo>/commit link, and the repo publishing these wheels
+# is still named jax -- only the wheels are frx.
 
-name: JAX Update
+name: FRX Update
 
 on:
   repository_dispatch:
-    types: [jax-update]
+    types: [frx-update]
 
 concurrency:
-  group: jax-update
+  group: frx-update
   cancel-in-progress: true
 
 jobs:
@@ -26,7 +30,7 @@ jobs:
         uses: fractalyze/github-actions/pip-bump@main
         with:
           upstream_repo: jax
-          version: ${{ github.event.client_payload.jax_version }}
+          version: ${{ github.event.client_payload.frx_version }}
           upstream_commit: ${{ github.event.client_payload.commit }}
           packages: frx frxlib frx-cuda12-pjrt frx-cuda12-plugin
           github_token: ${{ secrets.BUMPER_GH_PAT }}
