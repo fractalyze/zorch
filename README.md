@@ -42,49 +42,51 @@ Grouping `Round`s gives either a bigger `Round` (a sumcheck, from its
 per-variable rounds) or — when the group is a top-level phase — a `Stage`. Two
 roles organize the composition; both are `Round`s, since a chain is itself one:
 
-- A **`Stage`** is a `Round` that is one phase of the scheme's top-level chain
-  (trace-commit, logup-gkr, zero-check, a PCS opening). Chaining Stages
-  instantiates the scheme.
-- A **`Bridge`** is a transcript-only `Round` that connects siblings — Stages in
-  the scheme, or Rounds within a stage — for a soundness or security reason: a
-  PoW grind (buys security bits), a framed observe or domain separator (closes a
-  Fiat-Shamir soundness gap), a sampled-and-discarded challenge (matches the
-  reference's schedule).
+- A **`Stage`** is a `Round` that is one phase of the scheme's `prove_chain` —
+  the sequence of Stages the scheme *is* (trace-commit, logup-gkr, zero-check, a
+  PCS opening).
+- A **`Bridge`** is a transcript-only `Round` *inside* a Stage — a grind, a
+  framed observe, a sampled-and-discarded challenge — soundness or security work
+  the phase needs, not a phase of its own: a grind buys security bits, framing /
+  domain separation closes a Fiat-Shamir soundness gap, a discarded sample
+  matches the reference's schedule.
 
-So the shape is recursive — a scheme chains `Stage`s (joined by `Bridge`s); a
-`Stage` chains `Round`s; a `Round` may itself chain `Round`s, down to the leaf
-interaction:
+So the shape is recursive — the `prove_chain` is a sequence of `Stage`s; a
+`Stage` chains `Round`s and `Bridge`s; a `Round` may itself chain `Round`s, down
+to the leaf interaction:
 
 ```text
-prove()  —  a scheme: Stages chained, Bridges between them
-────────────────────────────────────────────────────────────────
+prove()  —  the prove_chain is Stages; a Stage holds Rounds and Bridges
+──────────────────────────────────────────────────────────────────────
 
-  Stage   trace-commit        commit the witness columns
-  Bridge  grind               a PoW between stages (buys security bits)
-  Stage   logup-gkr           the interaction argument, a chain of Rounds:
-    Round   layer L              one layer — itself a Round of Rounds:
-      Round   bind x₀              a leaf: one observe → sample
+  Stage   trace-commit          commit the witness columns
+    Bridge  grind                 a PoW inside the stage (buys security bits)
+  Stage   logup-gkr             the interaction argument:
+    Round   layer L                one layer — itself a Round of Rounds:
+      Round   bind x₀                a leaf: one observe → sample
       Round   bind x₁
     Round   layer L-1
-  Bridge  observe(framing)    bind the transcript in order (soundness)
-  Stage   zero-check          the constraint sumcheck
-  Stage   jagged-evals        the PCS opening
+  Stage   zero-check            the constraint sumcheck:
+    Bridge  observe(framing)      bind the transcript first (soundness)
+    Round   bind x₀                a leaf: one observe → sample
+    Round   bind x₁
+  Stage   jagged-evals          the PCS opening
 ```
 
 |             | **`Round`**                          | **`Stage`**                                       | **`Bridge`**                                      |
 | ----------- | ------------------------------------ | ------------------------------------------------- | ------------------------------------------------- |
-| **Is**      | a prover↔verifier interaction; nests | a `Round` that is a top-level phase               | a `Round` that connects siblings                  |
-| **Does**    | `observe`→`sample` at the leaf       | witness + real compute (an inner sumcheck, an open) | a transcript op a scheme's soundness needs      |
-| **Example** | a sumcheck round, or a whole sumcheck | trace-commit, logup-gkr, zero-check, jagged-evals | a PoW grind, a framed observe, a discarded sample |
+| **Is**      | a prover↔verifier interaction; nests | a `Round` that is one `prove_chain` phase           | a transcript-only `Round` inside a Stage        |
+| **Does**    | `observe`→`sample` at the leaf       | witness + real compute (an inner sumcheck, an open) | a transcript op the phase's soundness needs     |
+| **Example** | a sumcheck round, or a whole sumcheck | trace-commit, logup-gkr, zero-check, jagged-evals | a grind, a framed observe, a discarded sample   |
 
 `Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
 how the verifier mirrors the prover *round-for-round* — but the roles are what a
 reader navigates by.
 
 **Where the boundaries fall.** A leaf `Round` is each prover↔verifier interaction
-(`observe`→`sample`); Rounds bundle into a bigger `Round` or, at a top-level
-phase, a `Stage`; a `Bridge` sits wherever the reference's soundness argument
-demands a transcript step between siblings. The full carry-and-seam contract is
+(`observe`→`sample`); Rounds bundle into a bigger `Round` or, at a `prove_chain`
+phase, a `Stage`; a `Bridge` sits inside a Stage wherever the reference's
+soundness argument needs a transcript op. The full carry-and-seam contract is
 [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
 
 **Where the classic pieces fit.** A ZK reader expects Fiat-Shamir, `Polynomial`,
