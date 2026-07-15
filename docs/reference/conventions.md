@@ -15,6 +15,7 @@ the why.
 inside are fine — `jit` unrolls them.
 
 **Do not `@jit`** when the function:
+
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
 - composes sub-rounds in a static Python loop over heterogeneous shapes — e.g.
@@ -198,12 +199,10 @@ has two drift-proof homes: the code itself (names, types) and the tests, which a
 the executable usage and run on every commit. A prose "usage guide" duplicates the
 tests and goes stale the first time the API moves — so we don't write one.
 
-- **WHY, not WHAT.** `# loop over factors` above a `for` is noise; `# direct
-  Lagrange, not barycentric, so a challenge on a node doesn't divide by zero`
+- **WHY, not WHAT.** `# loop over factors` above a `for` is noise; `# direct Lagrange, not barycentric, so a challenge on a node doesn't divide by zero`
   earns its line. If a name already says it, the comment is redundant.
 - **Temporally neutral.** State the current permanent rule, not the journey. No
-  "used to", "before this commit", "lands in a follow-up" — `git log` / `git
-  blame` carry the chronology; in-tree narration rots within a commit or two.
+  "used to", "before this commit", "lands in a follow-up" — `git log` / `git blame` carry the chronology; in-tree narration rots within a commit or two.
 - **Self-contained.** A reader has only the source tree and history. No
   session/spec labels (`Q1:A`, `Approach D`), no references to uncommitted files,
   no home/scratch paths. Link rationale in a tracked file by its repo-relative
@@ -259,8 +258,7 @@ Vocabulary:
   it is only read, `list[Array]` where it is owned or returned.
 - `Transcript` (the Protocol in `transcript.py`) for the threaded transcript,
   never a concrete implementation. A test that reaches an implementation-only
-  field narrows first with `if not isinstance(t, DuplexTranscript): raise
-  AssertionError(...)`, not a bare `assert` ([Testing](#testing)).
+  field narrows first with `if not isinstance(t, DuplexTranscript): raise AssertionError(...)`, not a bare `assert` ([Testing](#testing)).
 - `Any` for a field dtype — the core names no field and treats `dtype` as
   opaque, so `dtype: Any` is the honest type, not a placeholder.
 

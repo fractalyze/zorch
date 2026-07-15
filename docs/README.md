@@ -12,37 +12,37 @@ ______________________________________________________________________
 
 ## `blocks/` — reusable building blocks
 
-| Question                                                                                  | Where                                          |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Polynomial primitives — `eq`, multilinear eval/fold, and the field-dtype gotchas          | [`poly.md`](blocks/poly.md)                     |
-| Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2             | [`hash.md`](blocks/hash.md)                     |
-| Fiat-Shamir transcripts — the device-algebraic vs host-byte (SHA-256) taxonomy            | [`transcript.md`](blocks/transcript.md)         |
-| Merkle commitment — binary tree on Sponge + Compression                                   | [`commit.md`](blocks/commit.md)                 |
-| Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT        | [`coding.md`](blocks/coding.md)                 |
-| Polynomial commitment seam — `PcsProver`/`PcsVerifier`, with KZG / FRI / BaseFold instances | [`pcs.md`](blocks/pcs.md)                     |
-| Jagged Little Polynomial — verifier point-eval (branching program)                        | [`jagged.md`](blocks/jagged.md)                 |
-| The sumcheck block — design rationale & gotchas                                            | [`sumcheck.md`](blocks/sumcheck.md)             |
-| LogUp-GKR — fractional-sum circuit, prover/verifier round duals                           | [`logup-gkr.md`](blocks/logup-gkr.md)           |
+| Question                                                                                    | Where                                   |
+| ------------------------------------------------------------------------------------------- | --------------------------------------- |
+| Polynomial primitives — `eq`, multilinear eval/fold, and the field-dtype gotchas            | [`poly.md`](blocks/poly.md)             |
+| Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2               | [`hash.md`](blocks/hash.md)             |
+| Fiat-Shamir transcripts — the device-algebraic vs host-byte (SHA-256) taxonomy              | [`transcript.md`](blocks/transcript.md) |
+| Merkle commitment — binary tree on Sponge + Compression                                     | [`commit.md`](blocks/commit.md)         |
+| Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT          | [`coding.md`](blocks/coding.md)         |
+| Polynomial commitment seam — `PcsProver`/`PcsVerifier`, with KZG / FRI / BaseFold instances | [`pcs.md`](blocks/pcs.md)               |
+| Jagged Little Polynomial — verifier point-eval (branching program)                          | [`jagged.md`](blocks/jagged.md)         |
+| The sumcheck block — design rationale & gotchas                                             | [`sumcheck.md`](blocks/sumcheck.md)     |
+| LogUp-GKR — fractional-sum circuit, prover/verifier round duals                             | [`logup-gkr.md`](blocks/logup-gkr.md)   |
 
 ## `schemes/` — full SNARKs assembled from blocks
 
-| Question                                                                                  | Where                                          |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Spartan R1CS combinators — zerocheck / RLC / lincheck / PCS-open glue, into the Spartan PIOP | [`spartan.md`](schemes/spartan.md)           |
+| Question                                                                                     | Where                              |
+| -------------------------------------------------------------------------------------------- | ---------------------------------- |
+| Spartan R1CS combinators — zerocheck / RLC / lincheck / PCS-open glue, into the Spartan PIOP | [`spartan.md`](schemes/spartan.md) |
 
 ## `composition/` — assembling blocks into a prover
 
-| Question                                                                                  | Where                                          |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| Question                                                                                                                                     | Where                                                      |
+| -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | Stage composition & the consumer boundary — the seam contract between stages, what zorch owns vs the consumer, the injection points, bridges | [`stage-composition.md`](composition/stage-composition.md) |
 
 ## `reference/` — conventions, environment, learning
 
-| Question                                                                                  | Where                                          |
-| ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| Coding conventions — `@jit`, the WHY-not-WHAT rule, `_`-private naming, the subsystem doc skeleton | [`conventions.md`](reference/conventions.md) |
-| Dev environment — per-workspace venv pinning, the Fractalyze XLA plugin, the FRX compile-cache rule | [`development.md`](reference/development.md)  |
-| New to JAX — the mental models behind the conventions, and the canonical references to learn from | [`jax.md`](reference/jax.md)                 |
+| Question                                                                                            | Where                                        |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Coding conventions — `@jit`, the WHY-not-WHAT rule, `_`-private naming, the subsystem doc skeleton  | [`conventions.md`](reference/conventions.md) |
+| Dev environment — per-workspace venv pinning, the Fractalyze XLA plugin, the FRX compile-cache rule | [`development.md`](reference/development.md) |
+| New to JAX — the mental models behind the conventions, and the canonical references to learn from   | [`jax.md`](reference/jax.md)                 |
 
 Detailed design, the fusion contract, findings, and open decisions live on the
 epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
