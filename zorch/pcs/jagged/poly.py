@@ -35,7 +35,7 @@ JAGGED_INDICATOR_MARKER_VERSION = 1
 
 def msb_first_bits(values: Any, num_bits: int) -> np.ndarray:
     """(N,) ints → (N, num_bits) numpy int64, MSB first. Host-side; never feeds a
-    field element into >> (FXLA field dtypes have no lax.shift)."""
+    field element into >> (XLA field dtypes have no lax.shift)."""
     arr = np.asarray(values, dtype=np.int64)
     shifts = np.arange(num_bits - 1, -1, -1, dtype=np.int64)
     return (arr[:, None] >> shifts[None, :]) & 1

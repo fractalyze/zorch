@@ -55,10 +55,10 @@ class ConstraintEvalTest(absltest.TestCase):
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         self.assertIn(CONSTRAINT_EVAL_MARKER, txt)
-        # K is carried as a composite attribute for the FXLA-side recognizer.
+        # K is carried as a composite attribute for the XLA-side recognizer.
         self.assertIn("num_constraints", txt)
         # Without a live-width bound the marker must NOT declare one — the
-        # declaration routes FXLA to the bounded emitter.
+        # declaration routes XLA to the bounded emitter.
         self.assertNotIn("live_width_operand_idx", txt)
 
     def test_live_width_masks_rows_past_the_bound(self) -> None:
@@ -104,7 +104,7 @@ class ConstraintEvalTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             constraint_eval(_eval_fn, rows, alpha, live_width=jnp.array([5], jnp.int32))
         with self.assertRaises(ValueError):
-            # A field scalar is not the s32 wire type FXLA validates.
+            # A field scalar is not the s32 wire type XLA validates.
             constraint_eval(_eval_fn, rows, alpha, live_width=rand_field(3, (), F))
         with self.assertRaises(ValueError):
             # live_width validation rejects a non-int32 (float) before the frx
@@ -129,7 +129,7 @@ class ConstraintEvalTest(absltest.TestCase):
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         self.assertIn(CONSTRAINT_EVAL_MARKER, txt)
-        # The bound rides as operand 2; FXLA routes on this declaration and
+        # The bound rides as operand 2; XLA routes on this declaration and
         # hard-errors unless that operand is a scalar s32.
         self.assertIn("live_width_operand_idx = 2", txt)
 
@@ -153,7 +153,7 @@ class ConstraintEvalTest(absltest.TestCase):
     @absltest.skip(
         "jit elides the field transpose in the column-weight dot, so jit output "
         "byte-differs from eager on the published frx nightly. The XLA-pass "
-        "fix is in FXLA, not the released wheel."
+        "fix is in XLA, not the released wheel."
     )
     def test_column_weights_under_jit_matches_eager(self) -> None:
         # The column term is a dot inside the marked body; confirm the jitted /
@@ -248,7 +248,7 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertIn("aux_operand_idxs = [2]", txt)
 
     def test_aux_absent_declares_no_operand_idxs(self) -> None:
-        # No aux operands ⇒ no declaration; that attr routes FXLA to the
+        # No aux operands ⇒ no declaration; that attr routes XLA to the
         # aux-threading emitter path.
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
@@ -463,7 +463,7 @@ class ConstraintEvalTest(absltest.TestCase):
                 window_rows=8,
             )
         with self.assertRaises(ValueError):
-            # A field scalar is not the s32 wire type FXLA validates.
+            # A field scalar is not the s32 wire type XLA validates.
             constraint_eval(
                 _eval_fn,
                 rows,

@@ -4,13 +4,13 @@
 `encode` reads the message as the `message_len` low-order coefficients of a
 polynomial, zero-pads to `block_len`, and evaluates it on the order-`block_len`
 two-adic subgroup (or a coset of it). The evaluation is `frx.lax.ntt` — the
-FXLA-native NTT — which lowers to one fused kernel and auto-decomposes extension
+XLA-native NTT — which lowers to one fused kernel and auto-decomposes extension
 fields into prime-field NTTs.
 
 There is deliberately no hand-rolled butterfly: a `jnp` butterfly would be
 log(n) unfused kernels the compiler cannot recognize as an NTT. Reed-Solomon
 hands its evaluation to the native op, the way poseidon2 hands its algebra to
-FXLA rather than fusing it by pattern-match.
+XLA rather than fusing it by pattern-match.
 
 `fri_fold` is the codeword fold shared by every FRI-style scheme (FRI,
 Basefold, WHIR, STARK); the fold half of the seam delegates to it. It lives

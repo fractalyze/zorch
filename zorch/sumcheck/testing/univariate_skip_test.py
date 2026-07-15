@@ -212,9 +212,9 @@ class Round0FusionTest(absltest.TestCase):
         # Round 0 cannot be one straight-line kernel (it is inner-sum + iNTT), but it
         # must lower to a BOUNDED fused-kernel set: NTT kernels + element-wise combine +
         # the one inherent Σ over H_n — no gather/scatter/dot/while boundary. Whether
-        # the NTTs fuse into a single FXLA kernel is the open
-        # FXLA-side question (wiki `[[univariate-skip]]`); the
-        # authoritative gate is the FXLA rewriter, this is a
+        # the NTTs fuse into a single XLA kernel is the open
+        # XLA-side question (wiki `[[univariate-skip]]`); the
+        # authoritative gate is the XLA rewriter, this is a
         # cheap HLO-shape proxy mirroring `testkit.fusion.assert_fusion_ready`.
         p = rand_field(6, (2, 1 << 5), KB)
         hlo = (

@@ -643,7 +643,7 @@ def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
     A Python loop with NO `lax.scan` and NO traced-index scatter: `in_buf[in_pos]`
     is set with a `jnp.where` select, and `_absorb_permute`'s `sponge.at[:rate]`
     write is a static-range scatter the sample path already uses CPU-safely. So
-    this is correct on the FXLA CPU backend, unlike the scan-based
+    this is correct on the XLA CPU backend, unlike the scan-based
     `_ref_observe`,
     and can byte-check the production rate-block observe ON CPU."""
     base = t.state.sponge_state.dtype
