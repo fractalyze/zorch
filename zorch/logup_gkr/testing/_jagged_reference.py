@@ -9,8 +9,8 @@ path calls it, so it lives here rather than in `jagged_prover`.
 """
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.logup_gkr._jagged_rounds import _paired_sums
 from zorch.logup_gkr._jagged_types import _JaggedState

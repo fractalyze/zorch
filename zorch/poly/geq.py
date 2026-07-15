@@ -6,13 +6,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["threshold", "geq_coefficient", "eq_coefficient"],
     meta_fields=[],
 )

@@ -29,9 +29,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, cast
 
-import jax
-import jax.numpy as jnp
-from jax import Array, lax
+import frx
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
@@ -234,7 +234,7 @@ def _require_no_grind(chor: BasefoldChoreography, config: BasefoldConfig) -> Non
         )
 
 
-@partial(jax.jit, static_argnames=("code", "base_level"))
+@partial(frx.jit, static_argnames=("code", "base_level"))
 def _fold_coset(
     code: FoldableCode,
     coset: Array,
@@ -414,7 +414,7 @@ def _verify_with_basis_cadence(
 # Jitted verify body: an eager replay interprets each composite op-by-op in
 # Python (issue #140). The verifier is the static key (by value, #214), so its
 # config and choreography (both frozen, value-compared) fix the compiled zone.
-@partial(jax.jit, static_argnames=("verifier",))
+@partial(frx.jit, static_argnames=("verifier",))
 def _verify_batch_body(
     verifier: BasefoldVerifier,
     commitments: list[Array],

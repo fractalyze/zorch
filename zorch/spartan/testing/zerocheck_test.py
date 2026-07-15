@@ -3,10 +3,10 @@ from __future__ import annotations
 
 from typing import cast
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.spartan.carry import SpartanCarry
 from zorch.spartan.r1cs import R1CS

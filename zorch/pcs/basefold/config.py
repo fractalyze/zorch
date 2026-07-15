@@ -11,8 +11,8 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import Any, TypeAlias
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 from zorch.commit.merkle import Opening
 
@@ -21,7 +21,7 @@ BasefoldCommitment: TypeAlias = Array
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[
         "univariate_messages",
         "fri_roots",

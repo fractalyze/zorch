@@ -8,7 +8,7 @@ py_library(
         "permutation.py",
     ],
     visibility = ["//visibility:public"],
-    deps = [requirement("jax")],
+    deps = [requirement("frx")],
 )
 
 py_library(
@@ -17,7 +17,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":permutation",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -27,7 +27,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":permutation",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -37,7 +37,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":permutation",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -49,7 +49,7 @@ py_library(
     srcs = ["byte_hash.py"],
     visibility = ["//visibility:public"],
     deps = [
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ],
 )
@@ -65,7 +65,7 @@ py_library(
     deps = [
         ":byte_hash",
         "//zorch:fusion",
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ],
 )

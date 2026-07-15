@@ -1,7 +1,7 @@
 """fused_region runs its decomposition and emits one zorch.fused_region composite."""
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -19,13 +19,13 @@ class FusedRegionTest(absltest.TestCase):
         # composite *lowering* under @jit must produce the decomposition's result.
         s0 = rand_field(2, (8,), F)
         decomp = lambda s: s + s + s
-        out = jax.jit(lambda v: fused_region(decomp, v))(s0)
+        out = frx.jit(lambda v: fused_region(decomp, v))(s0)
         self.assertTrue(bool(jnp.array_equal(out, decomp(s0))))
 
     def test_emits_one_zorch_fused_region_composite(self) -> None:
         s0 = rand_field(1, (8,), F)
         decomp = lambda s: s + s
-        txt = jax.jit(lambda v: fused_region(decomp, v)).lower(s0).as_text()
+        txt = frx.jit(lambda v: fused_region(decomp, v)).lower(s0).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         self.assertIn("zorch.fused_region", txt)
 

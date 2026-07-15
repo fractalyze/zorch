@@ -4,7 +4,7 @@
 The commit side of the jagged PCS is RS-``encode`` (one ``lax.ntt`` over the
 column batch) followed by ``smcs.commit`` (poseidon2 Merkle). Both ``ntt`` and
 the poseidon2 ops carry VHLO twins, so the whole commit serializes to portable
-bytecode and ONE ``jax.export`` binary serves every column count ``K`` — the
+bytecode and ONE ``frx.export`` binary serves every column count ``K`` — the
 commit is recompile-free under symbolic ``K`` with no code change. This locks
 that: a single symbolic binary must produce a byte-identical root + codeword to
 the concrete commit for two distinct ``K``. Pairs with
@@ -13,11 +13,11 @@ the concrete commit for two distinct ``K``. Pairs with
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array, export
+from frx import Array, export
 from zk_dtypes import koalabear_mont as BF
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
@@ -42,7 +42,7 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(jax.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
 
 
 class CommitSymkExportTest(absltest.TestCase):
@@ -61,8 +61,8 @@ class CommitSymkExportTest(absltest.TestCase):
 
     def test_one_binary_byte_matches_concrete_for_every_k(self) -> None:
         (k,) = export.symbolic_shape("k", constraints=["k <= 16", "k >= 9"])
-        msg_abs = jax.ShapeDtypeStruct((k, _S), BF)
-        exported = export.export(jax.jit(self._commit))(msg_abs)
+        msg_abs = frx.ShapeDtypeStruct((k, _S), BF)
+        exported = export.export(frx.jit(self._commit))(msg_abs)
 
         for k_val in (12, 16):
             rng = np.random.default_rng(k_val)

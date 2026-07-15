@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import _pad_neutral

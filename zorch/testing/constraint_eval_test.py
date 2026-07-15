@@ -1,7 +1,7 @@
 """constraint_eval runs eval + α-RLC and emits one zorch.constraint_eval composite."""
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -9,7 +9,7 @@ from zorch.constraint_eval import CONSTRAINT_EVAL_MARKER, constraint_eval
 from zorch.testkit.random_field import rand_field
 
 
-def _eval_fn(rows: jax.Array) -> jax.Array:
+def _eval_fn(rows: frx.Array) -> frx.Array:
     """A straight-line stand-in for a per-row constraint evaluation:
     rows [N, num_cols] -> constraints [N, K]. Self-contained (no scheme/zkVM
     knowledge) so the test anchors only on its own golden."""
@@ -19,7 +19,7 @@ def _eval_fn(rows: jax.Array) -> jax.Array:
     return jnp.stack([c0, c1, c2], axis=-1)
 
 
-def _eval_fn_aux(rows: jax.Array, aux: jax.Array) -> jax.Array:
+def _eval_fn_aux(rows: frx.Array, aux: frx.Array) -> frx.Array:
     """A 2-ary constraint stand-in that reads an auxiliary operand beyond the
     trace: the aux-threading counterpart to `_eval_fn`. Each leg mixes an aux
     element so a wrong value (or a dropped operand) breaks the golden."""
@@ -49,16 +49,16 @@ class ConstraintEvalTest(absltest.TestCase):
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         txt = (
-            jax.jit(lambda t, a: constraint_eval(_eval_fn, t, a))
+            frx.jit(lambda t, a: constraint_eval(_eval_fn, t, a))
             .lower(rows, alpha)
             .as_text()
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         self.assertIn(CONSTRAINT_EVAL_MARKER, txt)
-        # K is carried as a composite attribute for the zkx-side recognizer.
+        # K is carried as a composite attribute for the FXLA-side recognizer.
         self.assertIn("num_constraints", txt)
         # Without a live-width bound the marker must NOT declare one — the
-        # declaration routes zkx to the bounded emitter.
+        # declaration routes FXLA to the bounded emitter.
         self.assertNotIn("live_width_operand_idx", txt)
 
     def test_live_width_masks_rows_past_the_bound(self) -> None:
@@ -91,7 +91,7 @@ class ConstraintEvalTest(absltest.TestCase):
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         golden = constraint_eval(_eval_fn, rows, alpha, live_width=5)
-        got = jax.jit(lambda t, a, lw: constraint_eval(_eval_fn, t, a, live_width=lw))(
+        got = frx.jit(lambda t, a, lw: constraint_eval(_eval_fn, t, a, live_width=lw))(
             rows, alpha, jnp.int32(5)
         )
         self.assertTrue(bool(jnp.array_equal(got, golden)))
@@ -104,10 +104,10 @@ class ConstraintEvalTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             constraint_eval(_eval_fn, rows, alpha, live_width=jnp.array([5], jnp.int32))
         with self.assertRaises(ValueError):
-            # A field scalar is not the s32 wire type zkx validates.
+            # A field scalar is not the s32 wire type FXLA validates.
             constraint_eval(_eval_fn, rows, alpha, live_width=rand_field(3, (), F))
         with self.assertRaises(ValueError):
-            # live_width validation rejects a non-int32 (float) before the jax
+            # live_width validation rejects a non-int32 (float) before the frx
             # asarray funnel: "live_width must be a scalar int32".
             constraint_eval(_eval_fn, rows, alpha, live_width=1.5)
         with self.assertRaises(ValueError):
@@ -123,13 +123,13 @@ class ConstraintEvalTest(absltest.TestCase):
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         txt = (
-            jax.jit(lambda t, a, lw: constraint_eval(_eval_fn, t, a, live_width=lw))
+            frx.jit(lambda t, a, lw: constraint_eval(_eval_fn, t, a, live_width=lw))
             .lower(rows, alpha, jnp.int32(5))
             .as_text()
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         self.assertIn(CONSTRAINT_EVAL_MARKER, txt)
-        # The bound rides as operand 2; zkx routes on this declaration and
+        # The bound rides as operand 2; FXLA routes on this declaration and
         # hard-errors unless that operand is a scalar s32.
         self.assertIn("live_width_operand_idx = 2", txt)
 
@@ -152,8 +152,8 @@ class ConstraintEvalTest(absltest.TestCase):
 
     @absltest.skip(
         "jit elides the field transpose in the column-weight dot, so jit output "
-        "byte-differs from eager on the published jax_fork nightly. The XLA-pass "
-        "fix rides the parametric xla_fork branch, not the released wheel."
+        "byte-differs from eager on the published frx nightly. The XLA-pass "
+        "fix is in FXLA, not the released wheel."
     )
     def test_column_weights_under_jit_matches_eager(self) -> None:
         # The column term is a dot inside the marked body; confirm the jitted /
@@ -165,7 +165,7 @@ class ConstraintEvalTest(absltest.TestCase):
         golden = constraint_eval(
             _eval_fn, rows, alpha, live_width=5, column_weights=weights
         )
-        got = jax.jit(
+        got = frx.jit(
             lambda t, a, w: constraint_eval(
                 _eval_fn, t, a, live_width=5, column_weights=w
             )
@@ -215,18 +215,18 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
 
     def test_aux_declared_operand_survives_jit_where_a_closure_breaks(self) -> None:
-        # Why aux is an operand and not a closure: under jax.jit an array closed
+        # Why aux is an operand and not a closure: under frx.jit an array closed
         # into eval_fn reaches the decomposition as a Tracer constant, which
         # lax.composite rejects. Declared, the same computation traces cleanly.
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         aux = rand_field(7, (2,), F)
-        with self.assertRaises(jax.errors.UnexpectedTracerError):
-            jax.jit(
+        with self.assertRaises(frx.errors.UnexpectedTracerError):
+            frx.jit(
                 lambda t, a, x: constraint_eval(lambda tr: _eval_fn_aux(tr, x), t, a)
             )(rows, alpha, aux)
         golden = _eval_fn_aux(rows, aux) @ alpha
-        got = jax.jit(
+        got = frx.jit(
             lambda t, a, x: constraint_eval(_eval_fn_aux, t, a, aux_operands=(x,))
         )(rows, alpha, aux)
         self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
@@ -236,7 +236,7 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         aux = rand_field(7, (2,), F)
         txt = (
-            jax.jit(
+            frx.jit(
                 lambda t, a, x: constraint_eval(_eval_fn_aux, t, a, aux_operands=(x,))
             )
             .lower(rows, alpha, aux)
@@ -248,12 +248,12 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertIn("aux_operand_idxs = [2]", txt)
 
     def test_aux_absent_declares_no_operand_idxs(self) -> None:
-        # No aux operands ⇒ no declaration; that attr routes zkx to the
+        # No aux operands ⇒ no declaration; that attr routes FXLA to the
         # aux-threading emitter path.
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         txt = (
-            jax.jit(lambda t, a: constraint_eval(_eval_fn, t, a))
+            frx.jit(lambda t, a: constraint_eval(_eval_fn, t, a))
             .lower(rows, alpha)
             .as_text()
         )
@@ -294,14 +294,14 @@ class ConstraintEvalTest(absltest.TestCase):
         a0 = rand_field(7, (2,), F)
         a1 = rand_field(8, (2,), F)
 
-        def eval2(r: jax.Array, x0: jax.Array, x1: jax.Array) -> jax.Array:
+        def eval2(r: frx.Array, x0: frx.Array, x1: frx.Array) -> frx.Array:
             return _eval_fn_aux(r, x0) + _eval_fn_aux(r, x1)
 
         golden = eval2(rows, a0, a1) @ alpha
         got = constraint_eval(eval2, rows, alpha, aux_operands=(a0, a1))
         self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
         txt = (
-            jax.jit(
+            frx.jit(
                 lambda t, a, x0, x1: constraint_eval(eval2, t, a, aux_operands=(x0, x1))
             )
             .lower(rows, alpha, a0, a1)
@@ -322,7 +322,7 @@ class ConstraintEvalTest(absltest.TestCase):
         )
         self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
         txt = (
-            jax.jit(
+            frx.jit(
                 lambda t, a, lw, x: constraint_eval(
                     _eval_fn_aux, t, a, live_width=lw, aux_operands=(x,)
                 )
@@ -354,7 +354,7 @@ class ConstraintEvalTest(absltest.TestCase):
         )
         self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
         txt = (
-            jax.jit(
+            frx.jit(
                 lambda t, a, lw, w, x: constraint_eval(
                     _eval_fn_aux,
                     t,
@@ -411,7 +411,7 @@ class ConstraintEvalTest(absltest.TestCase):
         tall = rand_field(9, (off + W + 2, nc), F)
         alpha = rand_field(2, (3,), F)
         txt = (
-            jax.jit(
+            frx.jit(
                 lambda t, a, lw, so: constraint_eval(
                     _eval_fn,
                     t,
@@ -463,7 +463,7 @@ class ConstraintEvalTest(absltest.TestCase):
                 window_rows=8,
             )
         with self.assertRaises(ValueError):
-            # A field scalar is not the s32 wire type zkx validates.
+            # A field scalar is not the s32 wire type FXLA validates.
             constraint_eval(
                 _eval_fn,
                 rows,
@@ -473,7 +473,7 @@ class ConstraintEvalTest(absltest.TestCase):
                 window_rows=8,
             )
         with self.assertRaises(ValueError):
-            # A float is not int32; rejected before the jax asarray funnel.
+            # A float is not int32; rejected before the frx asarray funnel.
             constraint_eval(
                 _eval_fn, rows, alpha, live_width=8, start_offset=1.5, window_rows=8
             )
@@ -521,7 +521,7 @@ class ConstraintEvalTest(absltest.TestCase):
         weights = rand_field(5, (nc,), F)
         aux = rand_field(7, (2,), F)
         txt = (
-            jax.jit(
+            frx.jit(
                 lambda t, a, lw, so, w, x: constraint_eval(
                     _eval_fn_aux,
                     t,

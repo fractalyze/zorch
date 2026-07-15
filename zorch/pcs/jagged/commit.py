@@ -14,9 +14,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import partial
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
 from zorch.commit.smcs import SingleMatrixCommitmentScheme
@@ -24,7 +24,7 @@ from zorch.pcs.jagged.region import JaggedRegion
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[
         "dense",
         "mle",
@@ -78,7 +78,7 @@ def _commit(
 # ``smcs`` is a static arg keyed by object identity (the scheme defines no
 # __eq__/__hash__): every call site must reuse one instance per process, or
 # each fresh instance silently recompiles the full poseidon2/Merkle pipeline.
-_commit_jit = jax.jit(_commit, static_argnames=("smcs", "log_blowup"))
+_commit_jit = frx.jit(_commit, static_argnames=("smcs", "log_blowup"))
 
 
 def commit_region(

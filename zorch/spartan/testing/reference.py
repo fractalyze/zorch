@@ -15,8 +15,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.transcript import Transcript
 

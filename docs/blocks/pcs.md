@@ -93,7 +93,7 @@ if TYPE_CHECKING:
 ```
 
 Because those wire types are zorch-owned nominal types, the PCS pins have full
-teeth despite the `jax.Array ≡ Any` caveat: `commit`'s prover data disagreeing
+teeth despite the `frx.Array ≡ Any` caveat: `commit`'s prover data disagreeing
 with `open`'s fails the pin. That is why prover data is always a named
 dataclass, never a bare list or tuple.
 
@@ -128,7 +128,7 @@ Opening reduces a jagged evaluation to a BaseFold opening of that dense MLE via
 two sumchecks (an outer Hadamard `Σ D·J̃` and an inner jagged-assist that collapses
 the `O(L)`-column indicator sum to one branching-program leaf) plus the stacked
 `z_final` split — see [jagged](jagged.md#opening). Whole-protocol composite fusion
-is deferred (gated on `jax.lax.composite` accepting field dtypes).
+is deferred (gated on `frx.lax.composite` accepting field dtypes).
 
 ## Fusion by construction
 
@@ -143,10 +143,7 @@ of three tiers, and which tier an op takes is the only thing that varies:
   NTT (the RS LDE in both FRI and BaseFold commit).
 - **CPU-legalized primitive** — `lax.pairing_check` for KZG `verify`, which has no
   GPU kernel; the verifier is O(1), so the host round-trip (MSM on GPU →
-  materialize → pairing on CPU) is irrelevant. It currently mis-decodes
-  Montgomery-form inputs ([zkx#518](https://github.com/fractalyze/zkx/issues/518)),
-  which is why KZG's round-trip tests run the bn254 *standard* domain while every
-  other instance tests `*_mont` — the msm/scalar-mul path is already mont-correct.
+  materialize → pairing on CPU) is irrelevant.
 
 This is why "one fused kernel" is a property of an *instance's* lowering, not of the
 seam: MSM is a GPU-only kernel, pairing is CPU-only, and the FRI fold/NTT lower on

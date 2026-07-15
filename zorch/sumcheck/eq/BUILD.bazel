@@ -21,6 +21,6 @@ py_library(
         "//zorch/sumcheck",
         "//zorch/utils:bits",
         "//zorch/utils:field",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )

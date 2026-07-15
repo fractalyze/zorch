@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree
@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["digest_layers", "mle", "codeword", "leaves"],
     meta_fields=["widths"],
 )
@@ -406,7 +406,7 @@ def _open_with_basis_cadence(
 # one fused kernel (`tree.commit` → one fused_region), so it rides its own jit
 # island — mirroring the native `_commit_body` and ligerito's `_commit`. `tree`
 # is the static key (frozen, value-compared, #214).
-@partial(jax.jit, static_argnames=("tree",))
+@partial(frx.jit, static_argnames=("tree",))
 def _commit_leaves(tree: MerkleTree, leaves: Array) -> tuple[Array, list[Array]]:
     return tree.commit(leaves)
 
@@ -417,7 +417,7 @@ def _commit_leaves(tree: MerkleTree, leaves: Array) -> tuple[Array, list[Array]]
 # Keyed on code + tree, not the prover: commit never reads num_queries, so
 # provers differing only there must not compile twice (static keys compare by
 # value — #214).
-@partial(jax.jit, static_argnames=("code", "tree"))
+@partial(frx.jit, static_argnames=("code", "tree"))
 def _commit_body(
     code: FoldableCode, tree: MerkleTree, polys: list[Array]
 ) -> tuple[BasefoldCommitment, BasefoldProverData]:
@@ -521,7 +521,7 @@ def _fold_and_query(
 # seam also reaches inside its enclosing jit — `open` is reached eagerly via
 # `stacked_open`. The prover is the static key (by value, #214), so its config
 # and choreography (both frozen, value-compared) fix the compiled zone.
-@partial(jax.jit, static_argnames=("prover",))
+@partial(frx.jit, static_argnames=("prover",))
 def _open_batch_body(
     prover: BasefoldProver,
     rounds: Sequence[BasefoldProverData],
@@ -570,7 +570,7 @@ def _open_batch_body(
 # native choreography refuses `point=None` (this entry is for a basis consumer);
 # the basis-path sumcheck message is a deferred consumer delta (see
 # `_SumcheckPairFoldRound`).
-@partial(jax.jit, static_argnames=("prover",))
+@partial(frx.jit, static_argnames=("prover",))
 def _open_with_basis_body(
     prover: BasefoldProver,
     pd: BasefoldProverData,

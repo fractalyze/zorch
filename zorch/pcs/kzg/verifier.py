@@ -8,13 +8,12 @@ fixed verifier-key points — no G2 scalar-mul:
     e(C − f(z)·G1 + z·π, [1]₂) · e(−π, [τ]₂) == 1
 
 This forces a **device split**: `lax.msm` is a GPU-only kernel while
-`lax.pairing_check` legalizes to CPU only. The fork exposes no `device_put`, so the
+`lax.pairing_check` legalizes to CPU only. frx exposes no `device_put`, so the
 G1 combinations are computed on the GPU, their coordinates pulled to the host, and
 the points rebuilt on the CPU for the pairing — the split any pairing-based
 verifier on this stack must make. The verifier is O(1), so the round-trip is
-irrelevant. The rebuild is domain-faithful (`raw` → `from_raw` of the same
-dtype), so it is not the obstacle to Montgomery-form keys — `lax.pairing_check`'s
-mont mis-decode is (fractalyze/zkx#518).
+irrelevant. The rebuild is domain-faithful (`raw` → `from_raw` of the same dtype), so
+Montgomery-form keys verify correctly.
 """
 
 from __future__ import annotations
@@ -23,10 +22,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array, lax
+from frx import Array, lax
 
 from zorch.pcs.kzg.config import KzgCommitment, KzgProof
 from zorch.pcs.kzg.setup import KzgVerifierKey
@@ -36,12 +35,12 @@ if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
 
 
-def _point_to_host(point: Array, cpu: jax.Device) -> Array:
+def _point_to_host(point: Array, cpu: frx.Device) -> Array:
     """Rebuild a device EC point on the CPU, preserving its dtype (and thus its
     domain): `raw` carries the dtype-domain limbs verbatim and `from_raw`
     reinterprets them under the same dtype."""
     pt = np.array(point).item()
-    with jax.default_device(cpu):
+    with frx.default_device(cpu):
         return jnp.asarray(type(pt).from_raw(pt.raw))
 
 
@@ -65,7 +64,7 @@ class KzgVerifier:
                 f"values={values.shape[0]}, proof={proof.shape[0]}"
             )
         one = jnp.array(1, dtype=values.dtype)
-        cpu = jax.devices("cpu")[0]
+        cpu = frx.devices("cpu")[0]
         gen_g2 = _point_to_host(self.vk.gen_g2, cpu)
         tau_g2 = _point_to_host(self.vk.tau_g2, cpu)
         oks = []
@@ -75,7 +74,7 @@ class KzgVerifier:
                 jnp.stack([one, -fz, z]), jnp.stack([c, self.vk.gen_g1, pi])
             )  # C − f(z)·G1 + z·π
             neg_pi = lax.msm(jnp.stack([-one]), jnp.stack([pi]))  # −π
-            with jax.default_device(cpu):
+            with frx.default_device(cpu):
                 g1 = jnp.stack(
                     [_point_to_host(g1_combo, cpu), _point_to_host(neg_pi, cpu)]
                 )

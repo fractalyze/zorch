@@ -12,7 +12,7 @@ from __future__ import annotations
 import weakref
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 

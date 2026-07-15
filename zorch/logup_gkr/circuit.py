@@ -37,9 +37,9 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.sumcheck.jagged.layout import _prepad_folded, _segment_gather_np
 from zorch.utils.bits import log2_strict_usize
@@ -235,7 +235,7 @@ def _segment_gather(
     Positions past a segment's source rows get the sentinel `sum(src_counts)`,
     which `_gather_pad` resolves to the padding value. None when the layouts
     already agree (no gather needed). jnp so the unrolled `_round_metadata`
-    schedule rides the jax round body byte-for-byte.
+    schedule rides the frx round body byte-for-byte.
     """
     seg = _segment_gather_np(src_counts, dst_counts)
     return None if seg is None else jnp.asarray(seg)
@@ -268,7 +268,7 @@ def _pad_neutral(
     )
 
 
-@partial(jax.jit, static_argnames=("row_counts", "out_row_counts"))
+@partial(frx.jit, static_argnames=("row_counts", "out_row_counts"))
 def _jagged_transition_core(
     numerator_0: Array,
     numerator_1: Array,

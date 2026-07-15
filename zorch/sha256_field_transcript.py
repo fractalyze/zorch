@@ -37,10 +37,10 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import numpy as np
-from jax import Array, lax
-from jax.tree_util import register_dataclass
+from frx import Array, lax
+from frx.tree_util import register_dataclass
 
 from zorch.byte_transcript import (
     KIND_SCALAR,

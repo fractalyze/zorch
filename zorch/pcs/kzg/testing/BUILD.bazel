@@ -11,7 +11,7 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [
         "//zorch/pcs/kzg",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -33,7 +33,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

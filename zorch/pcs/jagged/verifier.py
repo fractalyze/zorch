@@ -37,9 +37,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
@@ -137,7 +137,7 @@ def verify_jagged_eval_msg(
     t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
     merged = merged_prefix_bits(heights, num_bits, dtype=dtype)
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))
-    eqs = jax.vmap(lambda row: eval_eq(row, inner_point))(merged)
+    eqs = frx.vmap(lambda row: eval_eq(row, inner_point))(merged)
     h_bp = bp_eval_core(
         z_row,
         z_final,
@@ -158,7 +158,7 @@ def _ef_pairs(rows: Array, dtype: Any) -> Array:
     """The ``(Q, 2·limbs)`` base-field pair-leaf rows as ``(Q, 2)`` extension
     values — the inverse of the open's leaf bitcast."""
     limbs = efinfo(dtype).degree
-    return jax.lax.bitcast_convert_type(rows.reshape(rows.shape[0], 2, limbs), dtype)
+    return frx.lax.bitcast_convert_type(rows.reshape(rows.shape[0], 2, limbs), dtype)
 
 
 def stacked_basefold_verify(
@@ -309,7 +309,7 @@ def stacked_basefold_verify(
         rows: Array,
         paths: list[Array],
     ) -> Array:
-        codes = jax.vmap(
+        codes = frx.vmap(
             lambda i, row, path: smcs.verify_batch(root, dims, i, row, path)
         )(idx, rows, paths)
         return jnp.all(codes == int(VerifyCode.OK))

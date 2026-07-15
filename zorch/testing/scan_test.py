@@ -10,14 +10,13 @@ not flaky. Byte-identity (the sumcheck / logup-gkr roundtrip tests) separately
 proves the body genuinely runs R times: a hoisted or CSE'd carry would yield a
 wrong proof.
 
-Tracing only -- no execution -- so these run on every backend (the zkx#500 CPU
-while-emitter bug only bites at run time; see transcript_test).
+Tracing only -- no execution -- so these run on every backend.
 """
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -28,13 +27,13 @@ from zorch.verify import verify
 KB = zk_dtypes.koalabear_mont
 
 
-def _top_primitives(jaxpr: jax.core.ClosedJaxpr) -> list[str]:
+def _top_primitives(jaxpr: frx.core.ClosedJaxpr) -> list[str]:
     return [eqn.primitive.name for eqn in jaxpr.jaxpr.eqns]
 
 
 def _verify_eqn_count(rounds: int) -> int:
     proof = jnp.ones((rounds, 2), KB)  # degree+1 = 2
-    jaxpr = jax.make_jaxpr(lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t))(
+    jaxpr = frx.make_jaxpr(lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t))(
         jnp.array(0, KB), proof, cheap_transcript(KB)
     )
     return len(jaxpr.jaxpr.eqns)
@@ -47,7 +46,7 @@ class VerifyScanShapeTest(absltest.TestCase):
 
     def test_verify_lowers_to_a_scan(self) -> None:
         proof = jnp.ones((4, 2), KB)
-        jaxpr = jax.make_jaxpr(
+        jaxpr = frx.make_jaxpr(
             lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t)
         )(jnp.array(0, KB), proof, cheap_transcript(KB))
         self.assertIn("scan", _top_primitives(jaxpr))

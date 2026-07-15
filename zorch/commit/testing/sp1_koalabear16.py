@@ -20,7 +20,7 @@ https://github.com/fractalyze/sp1/blob/cc4eb1f38/slop/crates/koala-bear/src/koal
 
 from __future__ import annotations
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
 

@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import dataclasses
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
@@ -119,9 +119,9 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
 
     def test_fold_group_jits(self) -> None:
         # The prover-side k-ary fold is a jitted kernel (Option B): it must lower
-        # under @jax.jit and match the eager result.
+        # under @frx.jit and match the eager result.
         beta = rand_field(60, (), KB)
-        jitted = jax.jit(self.code.fold_group)
+        jitted = frx.jit(self.code.fold_group)
         self.assertTrue(
             bool(jnp.all(jitted(self.f, beta) == self.code.fold_group(self.f, beta)))
         )
@@ -129,7 +129,7 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
     def test_verify_group_fold_chain_jits(self) -> None:
         # The verifier fold-chain check is a jitted kernel: the openings are
         # pytrees and the round count is static, so the whole check rides one jit
-        # (the k-ary counterpart of the binary verifier's @jax.jit body).
+        # (the k-ary counterpart of the binary verifier's @frx.jit body).
         final, roots, query_openings = self._prove()
         t = _transcript()
         betas = []
@@ -140,7 +140,7 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
         t = t.observe(final)
         t, positions = sample_positions(t, self.code.block_len, self.num_queries)
         a = self.code.group_layer_positions(positions, self.num_rounds)
-        jitted = jax.jit(
+        jitted = frx.jit(
             lambda qo, b, idx, fp: verify_group_fold_chain(self.code, qo, b, idx, fp)
         )
         self.assertTrue(bool(jitted(query_openings, betas, a, final)))

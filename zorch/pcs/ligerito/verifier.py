@@ -18,8 +18,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree

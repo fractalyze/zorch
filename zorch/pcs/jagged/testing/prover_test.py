@@ -19,11 +19,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont, koalabearx4_mont
 
 from zorch.pcs.jagged.prover import (
@@ -46,11 +46,11 @@ _ZC_INPUTS = Path(__file__).parent / "testdata" / "zerocheck_dense"
 
 
 def _from_u32(u32: Any, dtype: Any) -> Array:
-    return jax.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
+    return frx.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
 
 
 def _u32(a: Array) -> np.ndarray:
-    return np.asarray(jax.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
+    return np.asarray(frx.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
 
 
 def _raw_area(round_meta: dict[str, Any]) -> int:
@@ -64,7 +64,7 @@ def _raw_area(round_meta: dict[str, Any]) -> int:
 
 
 @partial(
-    jax.tree_util.register_dataclass, data_fields=["stream", "pos"], meta_fields=[]
+    frx.tree_util.register_dataclass, data_fields=["stream", "pos"], meta_fields=[]
 )
 @dataclass(frozen=True)
 class _ScriptedTranscript:
@@ -84,7 +84,7 @@ class _ScriptedTranscript:
 
     @classmethod
     def create(cls, challenges: Array) -> _ScriptedTranscript:
-        stream = jax.lax.bitcast_convert_type(jnp.asarray(challenges), BF).reshape(-1)
+        stream = frx.lax.bitcast_convert_type(jnp.asarray(challenges), BF).reshape(-1)
         return cls(stream=stream, pos=jnp.array(0, jnp.int32))
 
     # No dedicated-fusion permutation: observe_and_sample falls back to the plain
@@ -95,7 +95,7 @@ class _ScriptedTranscript:
         return self
 
     def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
-        out = jax.lax.dynamic_slice(self.stream, (self.pos,), (n,))
+        out = frx.lax.dynamic_slice(self.stream, (self.pos,), (n,))
         return replace(self, pos=self.pos + n), out
 
     def observe_and_sample(
@@ -199,7 +199,7 @@ class ChallengeRuleTest(absltest.TestCase):
             ints = np.random.default_rng(seed).integers(
                 1, 1 << 30, size=(*shape, 4), dtype=np.int64
             )
-            return jax.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
+            return frx.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
 
         col_heights = (2, 2)
         inputs = JaggedEvalInputs(

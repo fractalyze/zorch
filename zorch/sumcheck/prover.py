@@ -34,9 +34,9 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Any, Protocol
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 from zk_dtypes import efinfo
 
 from zorch.round import Round
@@ -170,7 +170,7 @@ class CompressedProductRound(Round):
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["round_poly", "challenge"],
     meta_fields=[],
 )
@@ -234,10 +234,10 @@ class SumcheckSummand(Protocol):
 # challenge, which arrives as one operand whose dtype already carries base vs
 # extension.
 SUMCHECK_ROUND_MARKER = "zorch.sumcheck.round"
-# Version 1: this marker never shipped, and its producer (here), the zkx
+# Version 1: this marker never shipped, and its producer (here), the FXLA
 # `SumcheckRecognizer` (`kSumcheckRoundCompositeVersion`), and the emitters are
 # pinned together, so the version is the initial one and moves only on a future
-# cross-release ABI break. Keep in lockstep with the zkx recognizer's constant.
+# cross-release ABI break. Keep in lockstep with the FXLA recognizer's constant.
 SUMCHECK_ROUND_MARKER_VERSION = 1
 
 

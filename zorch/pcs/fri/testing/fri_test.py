@@ -4,10 +4,10 @@ from __future__ import annotations
 import dataclasses
 import functools
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle

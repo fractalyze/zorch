@@ -10,9 +10,9 @@ unique to WHIR's coset fold and per-round geometry live here.)
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import Array, lax
-from jax.typing import DTypeLike
+import frx.numpy as jnp
+from frx import Array, lax
+from frx.typing import DTypeLike
 
 from zorch.coding.reed_solomon import ReedSolomon, fri_fold_values
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -73,7 +73,7 @@ def interp_quadratic_012(e0: Array, e1: Array, e2: Array, x: Array) -> Array:
 
     Pure field arithmetic rather than `poly.univariate.eval_univariate`: that
     helper's nested `compute_lagrange_basis` `@jit` + `jnp.dot` mis-lowers when
-    inlined under the verifier's own `@jit` zone on this jax fork (eager-only).
+    inlined under the verifier's own `@jit` zone on frx (eager-only).
     `eval_coeffs` (a single jitted power-chain) composes fine and is reused for the
     coefficient-form evaluations."""
     one = jnp.ones((), x.dtype)

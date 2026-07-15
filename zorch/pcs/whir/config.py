@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TypeAlias
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 from zorch.commit.merkle import Opening
 
@@ -59,7 +59,7 @@ class WhirParams:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[
         "mu_pow_witness",
         "sumcheck_polys",

@@ -14,7 +14,7 @@ py_library(
     deps = [
         "//zorch/utils:bits",
         "//zorch/utils:field",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )

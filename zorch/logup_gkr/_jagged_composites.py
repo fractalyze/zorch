@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from functools import partial
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch._composite import composite
 from zorch.logup_gkr._jagged_rounds import (

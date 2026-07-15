@@ -11,10 +11,10 @@ tests live here too, since the construction is the Sponge's, not a permutation's
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
-from jax import export
+from frx import export
 from zk_dtypes import koalabear_mont as F
 
 from zorch.hash.permutation import Permutation
@@ -153,7 +153,7 @@ class SpongeTest(absltest.TestCase):
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         a = jnp.arange(16, dtype=F)
         b = jnp.arange(16, dtype=F) + F(3)
-        batched = jax.vmap(s.hash)(jnp.stack([a, b]))
+        batched = frx.vmap(s.hash)(jnp.stack([a, b]))
         self.assertTrue(bool(jnp.array_equal(batched[0], s.hash(a))))
         self.assertTrue(bool(jnp.array_equal(batched[1], s.hash(b))))
 
@@ -213,8 +213,8 @@ class MerkleDamgardTest(absltest.TestCase):
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         (n,) = export.symbolic_shape("n")
         txt = (
-            jax.jit(lambda x: s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD))
-            .lower(jax.ShapeDtypeStruct((n,), F))
+            frx.jit(lambda x: s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD))
+            .lower(frx.ShapeDtypeStruct((n,), F))
             .as_text()
         )
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)

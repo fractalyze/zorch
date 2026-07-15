@@ -2,7 +2,7 @@
 """Symbolic column-count export of the inner BP sumcheck byte-matches concrete.
 
 ``inner_sumcheck_core`` does its per-column work as a ``vmap`` + ``jnp.sum`` over
-``merged``'s REAL columns, so ONE ``jax.export`` binary serves every column count
+``merged``'s REAL columns, so ONE ``frx.export`` binary serves every column count
 ``L`` at real-size cost (no padding) — the proper polymorphic form of the column
 axis, mirroring ``stacked_basefold_open``'s symbolic ``K``. This locks it: a
 single symbolic binary must produce byte-identical sumcheck output to the
@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array, export
+from frx import Array, export
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -42,14 +42,14 @@ _N_D = log_area_tier(_AREA)
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(jax.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> Array:
     ints = np.random.default_rng(seed).integers(
         1, 1 << 30, size=(*shape, 4), dtype=np.int64
     )
-    return jax.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
+    return frx.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
 
 
 def _build(heights: list[int], z_col: Array) -> tuple[Array, Array]:
@@ -81,12 +81,12 @@ class SymbolicColumnInnerExportTest(absltest.TestCase):
 
     def _export(self) -> export.Exported:
         (length,) = export.symbolic_shape("l", constraints=["l >= 5", "l <= 8"])
-        merged_abs = jax.ShapeDtypeStruct((length, 2 * _N_D), EF)
-        weights_abs = jax.ShapeDtypeStruct((length,), EF)
-        tr_abs = jax.tree_util.tree_map(
-            lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
+        merged_abs = frx.ShapeDtypeStruct((length, 2 * _N_D), EF)
+        weights_abs = frx.ShapeDtypeStruct((length,), EF)
+        tr_abs = frx.tree_util.tree_map(
+            lambda a: frx.ShapeDtypeStruct(a.shape, a.dtype), cheap_transcript(BF)
         )
-        return export.export(jax.jit(self._fn))(merged_abs, weights_abs, tr_abs)
+        return export.export(frx.jit(self._fn))(merged_abs, weights_abs, tr_abs)
 
     def test_one_binary_byte_matches_concrete_for_every_l(self) -> None:
         exported = self._export()
@@ -97,8 +97,8 @@ class SymbolicColumnInnerExportTest(absltest.TestCase):
             ref = self._fn(merged, weights, cheap_transcript(BF))
             got = exported.call(merged, weights, cheap_transcript(BF))
 
-            ref_leaves = jax.tree_util.tree_leaves(ref)
-            got_leaves = jax.tree_util.tree_leaves(got)
+            ref_leaves = frx.tree_util.tree_leaves(ref)
+            got_leaves = frx.tree_util.tree_leaves(got)
             self.assertEqual(len(ref_leaves), len(got_leaves), f"leaf count L={length}")
             for i, (a, b) in enumerate(zip(ref_leaves, got_leaves, strict=True)):
                 self.assertEqual(_u32(a), _u32(b), f"leaf {i} diverged at L={length}")

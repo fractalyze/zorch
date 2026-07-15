@@ -12,7 +12,7 @@ py_library(
     deps = [
         "//zorch/pcs/ipa",
         "//zorch/pcs/testing:curves",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -29,7 +29,7 @@ py_test(
         "//zorch/poly",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

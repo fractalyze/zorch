@@ -1,6 +1,6 @@
 """fused_region — mark a straight-line region as one fused kernel.
 
-Wraps a decomposition in a `jax.lax.composite` named `zorch.fused_region`; zkx's
+Wraps a decomposition in a `frx.lax.composite` named `zorch.fused_region`; FXLA's
 `ZorchFusedRegionRewriter` turns that marker into a single custom-fusion kernel —
 one kernel by construction, not by a per-hash compiler pattern match. The name is
 deliberately generic: one marker fuses any straight-line region (a Round, a fold,
@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from jax import Array
+from frx import Array
 
 from zorch._composite import _Region, composite
 
@@ -45,7 +45,7 @@ def fused_region(
     loops, reductions, or gathers — so it lowers to a single kernel. It is called
     with `operands`, which become the composite's operands in order.
 
-    A non-default `name` routes the region to a dedicated zkx emitter instead of
+    A non-default `name` routes the region to a dedicated FXLA emitter instead of
     the generic one — e.g. a `zorch.poseidon2` region goes to `Poseidon2Fusion`
     rather than the generic `LoopFusion` (unusable for a full hash permutation).
     The `operands` must then follow that emitter's ABI. Such a region need not be

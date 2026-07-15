@@ -1,11 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.poly.eq import eq_root
 from zorch.poly.univariate import eval_coeffs
@@ -73,7 +73,7 @@ class RoundCoeffsTest(absltest.TestCase):
             return gruen.round_coeffs(s0, c, [half], [y], zz)
 
         eager = assemble(s_zero, claim, s_half, z)
-        jitted = jax.jit(assemble)(s_zero, claim, s_half, z)
+        jitted = frx.jit(assemble)(s_zero, claim, s_half, z)
         self.assertTrue(bool(jnp.all(eager == jitted)))
 
     def test_mismatched_extra_lengths_raise(self) -> None:
@@ -92,7 +92,7 @@ class RoundCoeffsTest(absltest.TestCase):
         two = jnp.array(2, KB)
         four = jnp.array(4, KB)
         zs = jnp.array([9, 13, 21], KB)
-        matrices = jax.vmap(lambda z: gruen.interp_matrix([two, four], z))(zs)
+        matrices = frx.vmap(lambda z: gruen.interp_matrix([two, four], z))(zs)
         p = _poly_with_root_at_b(jnp.array([3, 1, 4, 1], KB), eq_root(zs[1]))
         s_zero = eval_coeffs(p, jnp.zeros((), KB))
         claim = s_zero + eval_coeffs(p, jnp.ones((), KB))

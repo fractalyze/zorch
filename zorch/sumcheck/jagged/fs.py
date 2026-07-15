@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from jax import Array
+from frx import Array
 
 from zorch.sumcheck import gruen
 from zorch.transcript import (

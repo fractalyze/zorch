@@ -41,7 +41,7 @@ ______________________________________________________________________
 | Question                                                                                  | Where                                          |
 | ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | Coding conventions — `@jit`, the WHY-not-WHAT rule, `_`-private naming, the subsystem doc skeleton | [`conventions.md`](reference/conventions.md) |
-| Dev environment — per-workspace venv pinning, the Fractal XLA plugin, the JAX compile-cache rule | [`development.md`](reference/development.md)  |
+| Dev environment — per-workspace venv pinning, the Fractalyze XLA plugin, the JAX compile-cache rule | [`development.md`](reference/development.md)  |
 | New to JAX — the mental models behind the conventions, and the canonical references to learn from | [`jax.md`](reference/jax.md)                 |
 
 Detailed design, the fusion contract, findings, and open decisions live on the
@@ -68,7 +68,7 @@ Phase 3 — round bodies are written **fusion-ready**: element-wise field ops
 plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they drop into
 that path unchanged. See [`sumcheck.md`](blocks/sumcheck.md).
 
-**Measured (Fractal XLA GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
+**Measured (Fractalyze XLA GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
 compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
 `Σ`, no marker needed — and `_fold` to a single element-wise (`kLoop`) kernel. A full round
 (`_round_poly` + `_fold`) is **two** kernels (its message and folded state are disjoint

@@ -1,15 +1,15 @@
 # Development environment
 
-`zorch` is pure Python on JAX + the Fractal XLA PJRT plugin. This page is the dev-loop
+`zorch` is pure Python on JAX + the Fractalyze XLA PJRT plugin. This page is the dev-loop
 reference; for a first install see the quick start in
 [`../README.md`](../../README.md).
 
 ## Per-workspace venvs
 
-Each workspace pins its own jax checkout + venv under
+Each workspace pins its own frx checkout + venv under
 `$DEVENV_ENVS_DIR/<workspace>/` (default `~/Workspace/envs/<workspace>/`);
-never point a workspace at another checkout's editable jax. The venv must
-carry the **opt** selfbuilt jaxlib — an assertion-enabled build makes XLA
+never point a workspace at another checkout's editable frx. The venv must
+carry the **opt** selfbuilt frxlib — an assertion-enabled build makes XLA
 compilation an order of magnitude slower, which shows up as multi-minute test
 "hangs":
 
@@ -33,11 +33,11 @@ Drop `-n` only when chasing one test's output interactively. `bazel test //...`
 remains the single source of truth for "all tests pass"
 ([`conventions.md`](conventions.md)); it parallelizes per target on its own.
 
-## Developing against a local Fractal XLA build
+## Developing against a local Fractalyze XLA build
 
-The pinned venv installs the four `jax` / `jaxlib` / `jax-cuda12-pjrt` /
-`jax-cuda12-plugin` wheels from the Fractalyze package index (rebuilt and
-published per merged Fractal XLA PR):
+The pinned venv installs the four `jax` / `frxlib` / `frx-cuda12-pjrt` /
+`frx-cuda12-plugin` wheels from the Fractalyze package index (rebuilt and
+published per merged Fractalyze XLA PR):
 
 ```sh
 pip install -r requirements.in \
@@ -46,8 +46,8 @@ pip install -r requirements.in \
 
 Plugin resolution has **no env-var indirection**: `jax_plugins/xla_cuda12`
 loads the `xla_cuda_plugin.so` installed in the venv's site-packages (there is
-no `*_GPU_PLUGIN_PATH` override). So to run against a local Fractal XLA build
-with unmerged changes, build the `jax-cuda12-plugin` + `jax-cuda12-pjrt` wheels
+no `*_GPU_PLUGIN_PATH` override). So to run against a local Fractalyze XLA build
+with unmerged changes, build the `frx-cuda12-plugin` + `frx-cuda12-pjrt` wheels
 from the checkout (see the XLA repo's `docs/build_from_source.md`) and
 force-reinstall them over the pinned ones:
 
@@ -66,7 +66,7 @@ fresh compile.
 
 A persistent `JAX_COMPILATION_CACHE_DIR` skips recompiles of the heavy
 `local_only` tests across venv runs — worthwhile whenever you iterate against
-one jaxlib for a while. Keep **one cache directory per jaxlib build** and
+one frxlib for a while. Keep **one cache directory per frxlib build** and
 treat a rebuilt wheel as a new toolchain: self-built wheels share a version
 string, so a shared directory replays the *other* build's executables
 ([#120](https://github.com/fractalyze/zorch/issues/120)).

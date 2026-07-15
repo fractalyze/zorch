@@ -31,9 +31,9 @@ from __future__ import annotations
 from functools import partial
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.univariate import eval_coeffs
 from zorch.prove import fold_rounds
@@ -56,7 +56,7 @@ def _next_power_of_two(x: int) -> int:
     return n
 
 
-@partial(jax.jit, static_argnums=(1, 2))
+@partial(frx.jit, static_argnums=(1, 2))
 def round0_message(
     p_initial: Array, skip_rounds: int, summand: SumcheckSummand
 ) -> tuple[Array, Array]:

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from jax import Array
+from frx import Array
 
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.round import ProveChain, VerifyChain

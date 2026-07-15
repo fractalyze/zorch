@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, Protocol, runtime_checkable
 
-from jax import Array
+from frx import Array
 
 
 @runtime_checkable
@@ -35,7 +35,7 @@ class Permutation(Protocol):
         """Apply the permutation: (width,) over `dtype` -> (width,).
 
         One call is one function — the unit that lowers to one fused kernel.
-        Batch with `jax.vmap(permute)`: the dedicated-fusion marker lowers
+        Batch with `frx.vmap(permute)`: the dedicated-fusion marker lowers
         identically batched (one shared decomposition), so no batched twin is
         needed.
         """

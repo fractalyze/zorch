@@ -11,8 +11,8 @@ vector is added in the golden-vector slice.
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -96,7 +96,7 @@ class CompressionTest(absltest.TestCase):
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
         a = jnp.arange(16, dtype=F).reshape(2, 8)
         b = (jnp.arange(16, dtype=F) + F(7)).reshape(2, 8)
-        batched = jax.vmap(c.compress)(jnp.stack([a, b]))
+        batched = frx.vmap(c.compress)(jnp.stack([a, b]))
         self.assertTrue(bool(jnp.array_equal(batched[0], c.compress(a))))
         self.assertTrue(bool(jnp.array_equal(batched[1], c.compress(b))))
 

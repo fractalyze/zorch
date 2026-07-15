@@ -6,10 +6,10 @@ from __future__ import annotations
 import functools
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr.circuit import (
     GkrLayer,
@@ -141,7 +141,7 @@ def prove_gkr(
     return prove_gkr_with_transcript(first, cheap_transcript(_KB))
 
 
-@functools.partial(jax.jit, static_argnums=(4,))
+@functools.partial(frx.jit, static_argnums=(4,))
 def prove_gkr_jitted(
     numerator_0: Array,
     numerator_1: Array,

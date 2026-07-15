@@ -16,11 +16,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as BF
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
@@ -45,11 +45,11 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _u32(a: Array) -> np.ndarray:
-    return np.asarray(jax.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
+    return np.asarray(frx.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
 
 
 def _from_u32(u32: Any, dtype: Any) -> Array:
-    return jax.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
+    return frx.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
 
 
 def _raw_area(round_meta: dict[str, Any]) -> int:
@@ -86,7 +86,7 @@ class CommitRegionTest(absltest.TestCase):
         smcs = _smcs()
         eager = commit_region(_region(), smcs, log_blowup=2)
         jitted = commit_region(_region(), smcs, log_blowup=2, jit=True)
-        for le, lj in zip(jax.tree.leaves(eager), jax.tree.leaves(jitted), strict=True):
+        for le, lj in zip(frx.tree.leaves(eager), frx.tree.leaves(jitted), strict=True):
             np.testing.assert_array_equal(np.asarray(le), np.asarray(lj))
 
     def test_structure_binding_separates_same_dense(self) -> None:

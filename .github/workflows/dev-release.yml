@@ -17,7 +17,7 @@
 # Python, so there is no Bazel / native build step: stamp the version, build the
 # wheel, attach it to a GitHub prerelease, then poke fractalyze/pypi to remirror
 # and regenerate its PEP 503 index. The wheel is built from main HEAD, so the
-# jax fork stack it runs against is whatever the consuming workspace pins.
+# frx stack it runs against is whatever the consuming workspace pins.
 
 name: Dev Release
 

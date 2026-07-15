@@ -9,7 +9,7 @@ py_library(
     ],
     visibility = ["//zorch:__subpackages__"],
     deps = [
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ],
 )
@@ -18,7 +18,7 @@ py_library(
     name = "fusion",
     srcs = ["fusion.py"],
     visibility = ["//zorch:__subpackages__"],
-    deps = [requirement("jax")],
+    deps = [requirement("frx")],
 )
 
 py_library(
@@ -35,6 +35,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )

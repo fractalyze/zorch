@@ -21,9 +21,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from zorch.round import InnerVerifierRound
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
+@partial(frx.tree_util.register_dataclass, data_fields=[], meta_fields=["degree"])
 @dataclass(frozen=True)
 class SumcheckRound(Round):
     """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`."""
@@ -67,7 +67,7 @@ class SumcheckRound(Round):
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[],
     meta_fields=["degree", "challenge_limbs"],
 )
@@ -100,7 +100,7 @@ class CoeffsSumcheckRound(Round):
         return eval_coeffs(msg, r), transcript, r, ok
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=[], meta_fields=[])
+@partial(frx.tree_util.register_dataclass, data_fields=[], meta_fields=[])
 @dataclass(frozen=True)
 class CompressedCoeffsSumcheckRound(Round):
     """Verifier for the compressed coefficient wire
@@ -135,7 +135,7 @@ class CompressedCoeffsSumcheckRound(Round):
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[],
     meta_fields=["skip_rounds", "degree", "ext_dtype", "challenge_limbs"],
 )

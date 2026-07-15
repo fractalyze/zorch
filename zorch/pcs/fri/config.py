@@ -14,8 +14,8 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Protocol, TypeAlias, runtime_checkable
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 from zorch.coding.foldable_code import FoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
@@ -47,7 +47,7 @@ class FriParams:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["value", "fri_roots", "final_layer", "f_opening", "query_openings"],
     meta_fields=[],
 )

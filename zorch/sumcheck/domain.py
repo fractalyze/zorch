@@ -19,9 +19,9 @@ from dataclasses import dataclass
 from functools import cache, reduce
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array, lax
+import frx
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
 from zorch.utils.field import base_field, naturals
@@ -35,7 +35,7 @@ def _interp_constants(degree: int, dtype: Any) -> tuple[Array, Array]:
     # Force concrete eval: @cache would otherwise cache a tracer built inside a
     # jit trace, which then escapes it (UnexpectedTracerError). The constants are
     # trace-independent anyway.
-    with jax.ensure_compile_time_eval():
+    with frx.ensure_compile_time_eval():
         nat = naturals(degree + 1, dtype)
         inv_vand = compute_inv_vandermonde(degree, dtype)
     return nat, inv_vand
@@ -45,7 +45,7 @@ def _finite_coeff_matrix(nodes: Array) -> Array:
     """Value → ascending-coefficient matrix (n, n) for a degree-(n−1) polynomial at
     the n finite nodes, bridged through the naturals then the inverse Vandermonde."""
     nat, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
-    lagrange = jax.vmap(compute_lagrange_basis, in_axes=(0, None))(nat, nodes)
+    lagrange = frx.vmap(compute_lagrange_basis, in_axes=(0, None))(nat, nodes)
     return jnp.dot(inv_vand, lagrange)
 
 
@@ -118,7 +118,7 @@ def extend_to_round_domain(
     base = jnp.stack([diff, p0]) if skip_one else jnp.stack([diff, p0, p1])
     if d == 2:
         return base
-    # Python-int multiplier avoids a field-dtype iota (unsupported in the fork).
+    # Python-int multiplier avoids a field-dtype iota (unsupported in frx).
     rest = jnp.stack([p0 + diff * u for u in range(2, d)], axis=0)
     return jnp.concatenate([base, rest], axis=0)
 
@@ -199,7 +199,7 @@ def summand_evals(
     E·(A·B − C) is not. A finite domain carries no such restriction — any summand
     samples cleanly on it."""
     p0, p1 = split_halves(stacked) if msb else split_pairs(stacked)
-    combined = combine(*jax.vmap(domain.sample)(p0, p1))
+    combined = combine(*frx.vmap(domain.sample)(p0, p1))
     if weight is not None:
         combined = combined * weight
     return jnp.sum(combined, axis=1)

@@ -34,10 +34,10 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
+from frx import Array
 from zk_dtypes import efinfo
 
 from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
@@ -75,7 +75,7 @@ class JaggedEvalInputs:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[
         "outer_sumcheck_claim",
         "outer_sumcheck_polys",
@@ -95,8 +95,8 @@ class JaggedEvalMsg:
     transcript (coefficient-form round polys, the folded point, the reproved
     claim).
 
-    A registered pytree so it crosses the ``eval_round_core`` ``@jax.jit`` /
-    ``jax.export`` boundary (mirrors ``open.py``'s ``StackedOpenProof``)."""
+    A registered pytree so it crosses the ``eval_round_core`` ``@frx.jit`` /
+    ``frx.export`` boundary (mirrors ``open.py``'s ``StackedOpenProof``)."""
 
     outer_sumcheck_claim: Array
     outer_sumcheck_polys: Array
@@ -240,7 +240,7 @@ def _bp_all(
     dims: the half-split ``buf[:, :num_bits]`` / ``buf[:, num_bits:]`` slices at a
     symbolic midpoint and ``bp_eval_core``'s layer ``fori_loop`` (deriving its trip
     count from the ``num_bits``-wide prefix operands) takes a symbolic count."""
-    return jax.vmap(
+    return frx.vmap(
         lambda left, right: bp_eval_core(z_row, z_trace, left, right, t_matrix)
     )(buf[:, :num_bits], buf[:, num_bits:])
 
@@ -327,7 +327,7 @@ def eval_round_core(
     ``(L+1, n_d)``, ``merged`` ``(L, 2·n_d)``, ``weights`` and ``all_claims``
     ``(L,)``. Every column-dependent step (the outer indicator's searchsorted
     gather, the outer ``Σ D·J̃`` Hadamard sumcheck, the inner branching-program
-    sumcheck) runs over the REAL column count, so one ``jax.export`` binary serves
+    sumcheck) runs over the REAL column count, so one ``frx.export`` binary serves
     every column count at real-size cost — no padding. The host builds ``offsets``
     / ``merged`` / ``weights`` from ``col_heights``; taking them as arrays here is
     what lets the column dim be symbolic. ``n_d = merged.shape[1] // 2``."""

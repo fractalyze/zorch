@@ -13,10 +13,10 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,

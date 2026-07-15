@@ -1,6 +1,6 @@
 """Normal-form linear layers equal the matrix form and stay fusion-ready."""
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 

@@ -15,8 +15,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 from zorch.coding.linear_code import LinearCode
 from zorch.commit.merkle import MerkleTree
@@ -28,7 +28,7 @@ def _identity(matrix: Array) -> Array:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=["root", "leaves", "digest_layers"],
     meta_fields=[],
 )

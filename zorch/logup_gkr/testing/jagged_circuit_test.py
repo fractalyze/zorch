@@ -3,11 +3,11 @@ from __future__ import annotations
 
 from dataclasses import fields
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr.circuit import (
     GkrLayer,
@@ -146,12 +146,12 @@ class JaggedTransitionTest(absltest.TestCase):
 class JaggedTransitionJitTest(absltest.TestCase):
     """The transition's array core rides a `@jit` island so each pyramid layer
     is one fused dispatch; the fused output must byte-match the eager
-    (`jax.disable_jit`) one across the schedule shapes a build hits."""
+    (`frx.disable_jit`) one across the schedule shapes a build hits."""
 
     def _assert_eager_matches_jit(
         self, layer: JaggedGkrLayer, schedule: tuple[int, ...]
     ) -> None:
-        with jax.disable_jit():
+        with frx.disable_jit():
             eager = jagged_layer_transition(layer, schedule)
         fused = jagged_layer_transition(layer, schedule)
         self.assertEqual(fused.row_counts, eager.row_counts)
@@ -214,7 +214,7 @@ class JaggedTransitionJitTest(absltest.TestCase):
 class MixedFieldFirstLayerTest(absltest.TestCase):
     """A first layer may hold base-field numerators under extension-field
     denominators; the transition's `n0*d1 + n1*d0` fold promotes to the common
-    field, byte-identically to folding an all-extension copy (zkx#681)."""
+    field, byte-identically to folding an all-extension copy."""
 
     def test_type_accepts_base_numerator_ef_denominator(self) -> None:
         # The shape-only `__post_init__` admits a layer whose numerator and
@@ -315,7 +315,7 @@ class BuildJaggedPyramidTest(absltest.TestCase):
         self._assert_matches_eager((7, 3, 5, 2, 6, 1, 4, 8))
 
     def test_matches_eager_base_field_first_layer(self) -> None:
-        # zkx#681: a base-field first-layer numerator under EF denominators.
+        # A base-field first-layer numerator under EF denominators.
         # Transition 0's fold promotes it to EF; the unrolled build handles the
         # dtype change inline (a `lax.scan` could not -- carry-out dtype would
         # differ from carry-in) and stays byte-identical to the eager build.

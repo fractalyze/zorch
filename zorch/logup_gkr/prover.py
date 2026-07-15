@@ -36,9 +36,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -188,7 +188,7 @@ def fold_carry(
     return num_eval, den_eval, jnp.concatenate([point, jnp.atleast_1d(r)])
 
 
-@partial(jax.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
+@partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
 @dataclass(frozen=True)
 class LogupSumcheckRound(Round):
     """Per-variable sumcheck round for the LogUp combine (sibling of the product

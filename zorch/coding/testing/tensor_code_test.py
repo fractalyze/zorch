@@ -17,11 +17,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax
+import frx
 
-jax.config.update("jax_enable_x64", True)  # binary_field_ghash is uint64-backed
+frx.config.update("jax_enable_x64", True)  # binary_field_ghash is uint64-backed
 
-import jax.numpy as jnp  # noqa: E402
+import frx.numpy as jnp  # noqa: E402
 import zk_dtypes  # noqa: E402
 from absl.testing import absltest, parameterized  # noqa: E402
 
@@ -76,7 +76,7 @@ class TensorCodeTest(parameterized.TestCase):
 
         # Independent oracle: message-coeff -> hypercube-eval basis, then eval.
         evals = mle_coeffs_to_evals(w)
-        oracle = jax.vmap(lambda p: eval_mle(evals, p))(points)  # (block_len,)
+        oracle = frx.vmap(lambda p: eval_mle(evals, p))(points)  # (block_len,)
         self.assertTrue(bool(jnp.all(oracle == codeword)))
 
     @parameterized.named_parameters(
@@ -110,7 +110,7 @@ class TensorCodeTest(parameterized.TestCase):
         self.assertIsNone(code._binary_eval_table)
 
         positions = jnp.array([0, 1, 5])
-        under_jit = jax.jit(code.eval_point)(positions)
+        under_jit = frx.jit(code.eval_point)(positions)
         reused = code.eval_point(positions)  # eager, reuses the cached table
         self.assertTrue(bool(jnp.all(under_jit == reused)))
 

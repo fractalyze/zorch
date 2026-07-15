@@ -11,7 +11,7 @@ py_test(
         "//zorch/hash:permutation",
         "//zorch/hash/poseidon",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,

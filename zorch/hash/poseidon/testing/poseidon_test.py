@@ -8,8 +8,8 @@ the dedicated emitter consumes off the lowered StableHLO.
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
@@ -38,7 +38,7 @@ _ROUND_CONSTANTS = (
 
 # Marker metadata as StableHLO prints it (dict keys alphabetical). `mds` is the
 # 3x3 MDS flattened row-major, a numpy int64 value so it lowers to a
-# DenseElementsAttr the zkx recognizer parses (GetCompositeAttrIntArray).
+# DenseElementsAttr the FXLA recognizer parses (GetCompositeAttrIntArray).
 EXPECTED_ATTRS = (
     f"composite_attributes = {{alpha = {_ALPHA} : i64,"
     f" full_rounds = {_FULL} : i64,"
@@ -141,7 +141,7 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
         self.assertEqual(out.shape, (_WIDTH,))
         self.assertEqual(out.dtype, F)
         batch = jnp.stack([x, x + F(1)])
-        bout = jax.vmap(p.permute)(batch)  # thread-per-hash
+        bout = frx.vmap(p.permute)(batch)  # thread-per-hash
         self.assertEqual(bout.shape, (2, _WIDTH))
         self.assertEqual(bout.dtype, F)
         self.assertTrue(bool(jnp.array_equal(bout[0], out)))
@@ -156,12 +156,12 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
     def test_permute_emits_poseidon_named_composite(self) -> None:
-        # The permute marks its region "zorch.poseidon" so zkx routes it to the
+        # The permute marks its region "zorch.poseidon" so FXLA routes it to the
         # dedicated Poseidon emitter; the permutation shape rides as
         # composite.attributes — all four ints plus the flat MDS are required by
-        # the zkx recognizer.
+        # the FXLA recognizer.
         p = Poseidon(_poseidon_params())
-        txt = jax.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
@@ -170,18 +170,18 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertIn(EXPECTED_ATTRS, composite_line)
         self.assertIn(f"version = {POSEIDON_MARKER_VERSION}", composite_line)
         # Exactly the 2 ABI operands [state, round_constants flattened]. A
-        # closed-over MDS would be lifted to a leading operand (jax.lax.composite
+        # closed-over MDS would be lifted to a leading operand (frx.lax.composite
         # prepends consts) and break the 2-operand Poseidon emitter ABI.
         operands = composite_line.split(f'"{POSEIDON_MARKER}"')[1].split("{")[0]
         self.assertEqual(operands.count("%"), 2, composite_line)
 
     def test_mds_serializes_as_dense_i64_tensor(self) -> None:
         # The mds attribute must lower to a DenseElementsAttr
-        # (`dense<[..]> : tensor<Nxi64>`), the form the zkx recognizer reads via
+        # (`dense<[..]> : tensor<Nxi64>`), the form the FXLA recognizer reads via
         # GetCompositeAttrIntArray — NOT a plain ArrayAttr (`mds = [..]`), which a
         # Python list/tuple would produce.
         p = Poseidon(_poseidon_params())
-        txt = jax.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertIn("mds = dense<[2, 3, 1, 1, 2, 3, 3, 1, 2]> : tensor<9xi64>", txt)
 
 

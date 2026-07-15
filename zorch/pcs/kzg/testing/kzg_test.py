@@ -1,11 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.pcs.kzg.prover import KzgProver, KzgProverData, _quotient_and_eval
 from zorch.pcs.kzg.testing.srs import toy_srs
@@ -54,12 +54,10 @@ class QuotientAndEvalTest(absltest.TestCase):
 
 # --- full commit -> open -> verify over bn254 (GPU: lax.msm is GPU-only) ---------
 
-# Standard domain until lax.pairing_check decodes Montgomery inputs (zkx#518);
-# see the note in testing/srs.py.
 SF = zk_dtypes.bn254_sf_mont
 G1 = zk_dtypes.bn254_g1_affine_mont
 
-_GPU = jax.default_backend() == "gpu"
+_GPU = frx.default_backend() == "gpu"
 
 
 def _transcript() -> DuplexTranscript:

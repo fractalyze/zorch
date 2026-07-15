@@ -3,7 +3,7 @@
 
 ``stacked_basefold_open(rlc_bits=...)`` makes the open shape-polymorphic in each
 round's column count ``K`` (the per-column evals run under ``vmap`` and the RLC
-samples a static ``rlc_bits`` challenges), so ONE ``jax.export`` binary serves
+samples a static ``rlc_bits`` challenges), so ONE ``frx.export`` binary serves
 every ``K`` in a power-of-2 column bracket — killing the per-shard open
 recompile. This locks that path: a single symbolic binary (bracket ``B=4``,
 ``K in [9, 16]``) must produce byte-identical proofs to the concrete open for
@@ -16,11 +16,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 from absl.testing import absltest
-from jax import Array, export
+from frx import Array, export
 from zk_dtypes import koalabear_mont as BF
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -54,7 +54,7 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(jax.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
 
 
 class SymbolicKOpenExportTest(absltest.TestCase):
@@ -82,16 +82,16 @@ class SymbolicKOpenExportTest(absltest.TestCase):
             "k", constraints=[f"k <= {1 << _RLC_BITS}", "k >= 9"]
         )
         rd_abs = StackedRound(
-            mle=jax.ShapeDtypeStruct((_S, k), BF),
+            mle=frx.ShapeDtypeStruct((_S, k), BF),
             digest_layers=[
-                jax.ShapeDtypeStruct(layer.shape, layer.dtype)
+                frx.ShapeDtypeStruct(layer.shape, layer.dtype)
                 for layer in template.digest_layers
             ],
         )
-        z_abs = jax.ShapeDtypeStruct((_LOG_S,), EF)
-        de_abs = jax.ShapeDtypeStruct((), EF)
-        tr_abs = jax.tree_util.tree_map(
-            lambda a: jax.ShapeDtypeStruct(a.shape, a.dtype),
+        z_abs = frx.ShapeDtypeStruct((_LOG_S,), EF)
+        de_abs = frx.ShapeDtypeStruct((), EF)
+        tr_abs = frx.tree_util.tree_map(
+            lambda a: frx.ShapeDtypeStruct(a.shape, a.dtype),
             DuplexTranscript.new(self.perm, rate=8),
         )
 
@@ -114,7 +114,7 @@ class SymbolicKOpenExportTest(absltest.TestCase):
                 transcript=transcript,
             )
 
-        return export.export(jax.jit(fn))([rd_abs], z_abs, de_abs, tr_abs)
+        return export.export(frx.jit(fn))([rd_abs], z_abs, de_abs, tr_abs)
 
     def test_one_binary_byte_matches_concrete_for_every_k(self) -> None:
         exported = self._export_symbolic()
@@ -142,8 +142,8 @@ class SymbolicKOpenExportTest(absltest.TestCase):
                 [rd], z, dense_eval, DuplexTranscript.new(self.perm, rate=8)
             )
 
-            ref_leaves = jax.tree_util.tree_leaves(ref)
-            got_leaves = jax.tree_util.tree_leaves(got)
+            ref_leaves = frx.tree_util.tree_leaves(ref)
+            got_leaves = frx.tree_util.tree_leaves(got)
             self.assertEqual(len(ref_leaves), len(got_leaves), f"leaf count K={k}")
             for i, (a, b) in enumerate(zip(ref_leaves, got_leaves)):
                 self.assertEqual(_u32(a), _u32(b), f"leaf {i} diverged at K={k}")

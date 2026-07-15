@@ -30,7 +30,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import Any, Protocol
 
-from jax import Array
+from frx import Array
 
 from zorch.transcript import Transcript
 

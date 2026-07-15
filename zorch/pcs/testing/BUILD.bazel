@@ -10,7 +10,7 @@ py_library(
     ],
     visibility = ["//zorch:__subpackages__"],
     deps = [
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -19,7 +19,7 @@ py_test(
     name = "protocol_test",
     size = "small",
     srcs = ["protocol_test.py"],
-    # composite-vmap; CI's published jaxlib can't run it. .bazelrc.ci excludes the
+    # composite-vmap; CI's published frxlib can't run it. .bazelrc.ci excludes the
     # local_only tag from CI (full rationale there); local bazel runs it.
     tags = ["local_only"],
     deps = [
@@ -35,7 +35,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -44,7 +44,7 @@ py_test(
     name = "fold_test",
     size = "small",
     srcs = ["fold_test.py"],
-    # composite-vmap (Merkle commit marker); CI's published jaxlib can't run it.
+    # composite-vmap (Merkle commit marker); CI's published frxlib can't run it.
     # .bazelrc.ci excludes the local_only tag from CI; local bazel runs it.
     tags = ["local_only"],
     deps = [
@@ -55,7 +55,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -65,13 +65,13 @@ py_test(
     size = "small",
     srcs = ["ring_switch_test.py"],
     # binary-field dtype arithmetic (ghash/tower multiplies); CI's published
-    # jaxlib can't run it. .bazelrc.ci excludes the local_only tag from CI.
+    # frxlib can't run it. .bazelrc.ci excludes the local_only tag from CI.
     tags = ["local_only"],
     deps = [
         "//zorch/pcs:ring_switch",
         "//zorch/poly",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,

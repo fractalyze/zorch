@@ -12,10 +12,10 @@ maintain, not value.
 
 ## The one rule: don't hand-roll the NTT
 
-In Fractal XLA's patched JAX, `jax.lax.fft` **is** the native finite-field NTT — field
+In Fractalyze XLA's patched JAX, `frx.lax.ntt` **is** the native finite-field NTT — field
 dtype in and out, a `generator` argument selecting the root, extension fields
 auto-decomposed into prime-field NTTs, and the whole thing lowered to a single
-fused kernel. Reed-Solomon `encode` therefore hands its evaluation to `lax.fft`
+fused kernel. Reed-Solomon `encode` therefore hands its evaluation to `lax.ntt`
 and adds only a pad and an optional scale around it.
 
 A hand-rolled radix-2 butterfly would be the opposite: `log(n)` separate,
@@ -29,7 +29,7 @@ needs a transform follows this rule.
 
 `fri_fold` is the FRI-family codeword fold every FRI-style scheme (FRI, Basefold,
 WHIR, STARK) shares. It lives here, not in [`poly`](poly.md#why-the-shape),
-because its x-coordinates must be the *same* `lax.fft` evaluation domain the
+because its x-coordinates must be the *same* `lax.ntt` evaluation domain the
 encoder used: `eval_domain` reads them off the NTT itself, so there is still no
 field-generator table — the same stance as `encode`. It is distinct from
 `poly.mle_fold` (the additive multilinear combine over the hypercube), folding a
@@ -130,6 +130,6 @@ than Reed-Solomon. Each lands with its first real consumer.
 
 `PYTHONPATH=. python zorch/coding/testing/reed_solomon_test.py`. The oracle is
 kept independent of the encoder on purpose: it recovers the NTT domain from
-`lax.fft` of an impulse (`NTT(e₁)_j = ωʲ`) and evaluates the message by Horner on
+`lax.ntt` of an impulse (`NTT(e₁)_j = ωʲ`) and evaluates the message by Horner on
 that domain, so a bug in pad-then-NTT cannot hide behind a round-trip that would
 share the same code path.

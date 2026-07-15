@@ -14,10 +14,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
-from jax import Array
+from frx import Array
 
 from zorch.fusion import fused_region
 from zorch.pcs.jagged.dense import log_area_tier
@@ -35,7 +35,7 @@ JAGGED_INDICATOR_MARKER_VERSION = 1
 
 def msb_first_bits(values: Any, num_bits: int) -> np.ndarray:
     """(N,) ints → (N, num_bits) numpy int64, MSB first. Host-side; never feeds a
-    field element into >> (ZKX field dtypes have no lax.shift)."""
+    field element into >> (FXLA field dtypes have no lax.shift)."""
     arr = np.asarray(values, dtype=np.int64)
     shifts = np.arange(num_bits - 1, -1, -1, dtype=np.int64)
     return (arr[:, None] >> shifts[None, :]) & 1
@@ -84,11 +84,11 @@ def _offset_bit_tensor(
     padded = prefix + [prefix[-1]] * (l_max - len(col_heights))  # empty-range pad
     bits = msb_first_bits(padded, n_d)  # (l_max+1, n_d) int
     # int32 limbs per field element (4 for a 128-bit EF, 1 for a 32-bit base).
-    probe = jax.lax.bitcast_convert_type(jnp.zeros((1,), dtype), jnp.int32)
+    probe = frx.lax.bitcast_convert_type(jnp.zeros((1,), dtype), jnp.int32)
     n_limbs = probe.shape[-1] if probe.ndim > 1 else 1
     limbs = np.zeros((bits.shape[0], n_d, n_limbs), dtype=np.int32)
     limbs[..., 0] = bits
-    return jax.lax.bitcast_convert_type(jnp.asarray(limbs), dtype)
+    return frx.lax.bitcast_convert_type(jnp.asarray(limbs), dtype)
 
 
 def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
@@ -99,7 +99,7 @@ def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
     ndim test, not a reshape (symbolic ``n_d`` can't infer the -1 limb dim). Weights
     ``2^(n_d-1-k)`` use a vectorized ``arange(n_d)`` (``range`` can't iterate a
     symbolic dim)."""
-    limbs = jax.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
+    limbs = frx.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
     bit_vals = limbs[..., 0] if limbs.ndim > col_prefix_sums.ndim else limbs
     powers = jnp.left_shift(jnp.int32(1), n_d - 1 - jnp.arange(n_d, dtype=jnp.int32))
     return jnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
@@ -168,7 +168,7 @@ def _partial_eval_decomposition(
         z_k = z_row[k]
         return acc * (bit * z_k + (one - bit) * (one - z_k)), None
 
-    row_vals, _ = jax.lax.scan(
+    row_vals, _ = frx.lax.scan(
         _eq_bit, jnp.ones(i_idx.shape, dtype), jnp.arange(n_r, dtype=jnp.int32)
     )
     val = col_eq[c_idx] * row_vals

@@ -11,7 +11,7 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [
         "//zorch/hash/poseidon2",
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ],
@@ -26,7 +26,7 @@ py_test(
         "//zorch:_composite",
         "//zorch/testkit:jit_cache",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -38,7 +38,7 @@ py_test(
     deps = [
         "//zorch/hash/poseidon2",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
@@ -51,7 +51,7 @@ py_test(
     deps = [
         "//zorch/hash/poseidon2",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -65,7 +65,7 @@ py_test(
         "//zorch/testkit:fusion",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

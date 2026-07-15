@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from jax import Array
-from jax.tree_util import register_dataclass
+from frx import Array
+from frx.tree_util import register_dataclass
 
 
 @register_dataclass

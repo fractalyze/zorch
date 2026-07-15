@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.spartan.r1cs import R1CS, assignment
 from zorch.testkit.random_field import rand_field

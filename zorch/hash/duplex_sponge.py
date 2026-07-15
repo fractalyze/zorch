@@ -33,8 +33,8 @@ through `jit`, where the threading pattern can be validated rather than guessed.
 
 from __future__ import annotations
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.hash.permutation import Permutation
 

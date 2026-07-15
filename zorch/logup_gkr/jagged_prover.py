@@ -39,9 +39,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
@@ -85,7 +85,7 @@ if TYPE_CHECKING:
 
 
 @partial(
-    jax.tree_util.register_dataclass,
+    frx.tree_util.register_dataclass,
     data_fields=[
         "lam",
         "claim",
@@ -106,7 +106,7 @@ class JaggedLayerProof:
     round polynomials, the bound point, and the final pair openings.
 
     A pytree (every field is an `Array`, like the dense `sumcheck.RoundMsg`) so
-    it can be returned across a `jax.jit` boundary -- the per-layer jit the
+    it can be returned across a `frx.jit` boundary -- the per-layer jit the
     chained prover wraps each round in.
 
     `point` is retained for wire serialization despite being replay-derivable
@@ -253,7 +253,7 @@ def _run_jagged_rounds(
     per round. One `sum_as_poly` (round 0, no fold), one `fix_and_sum` per subsequent
     round (row / boundary / batch variant by round index), one `fix_last`.
 
-    Runs under the consumer's whole-layer `jax.jit` (`JaggedGkrLayerRound`): every
+    Runs under the consumer's whole-layer `frx.jit` (`JaggedGkrLayerRound`): every
     round's compute + FS hop traces into one fused layer kernel, so the per-round
     host dispatches collapse to one per layer. Each round emits the
     `zorch.sumcheck.round` marker (a recognizing emitter fuses it; an unclaimed
@@ -532,7 +532,7 @@ def _prove_jagged_layer_round(
 # so a consumer rebuilding the chain each warm iteration (the generator
 # keeping lazy one-live-layer release) re-traces at most per distinct shape
 # sequence, not per iter.
-@partial(jax.jit, static_argnums=(6, 7, 8, 9))
+@partial(frx.jit, static_argnums=(6, 7, 8, 9))
 def _jagged_round_zone(
     numerator_0: Array,
     numerator_1: Array,
@@ -598,7 +598,7 @@ def _jagged_round_via_zone(
             )
         # Concrete path only: a tracer means an outer trace owns the layout
         # (and pooling would donate a traced value).
-        if not isinstance(planes[0], jax.core.Tracer):
+        if not isinstance(planes[0], frx.core.Tracer):
             planes = tuple(
                 _pool_lay_batch(
                     [

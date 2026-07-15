@@ -1,17 +1,17 @@
-"""composite — emit a `jax.lax.composite` marker for a fusible region.
+"""composite — emit a `frx.lax.composite` marker for a fusible region.
 
-`lax.composite` lowers to `stablehlo.CompositeOp`; zkx's rewriter then fuses the
+`lax.composite` lowers to `stablehlo.CompositeOp`; FXLA's rewriter then fuses the
 marked region into a single custom-fusion kernel (or a vendor-expanded chain,
 for a name-routed marker). Marker-specific semantics live in the callers
 (`fused_region`, `constraint_eval`, the name-routed poseidon2/merkle/sumcheck
 markers); this is the one place the `lax.composite` call is spelled.
 
 `lax.composite` re-traces its decomposition on EVERY emission (no trace cache
-in jax), so a hot identical-aval emission site pays the full Python body per
+in frx), so a hot identical-aval emission site pays the full Python body per
 call. The cache deliberately does NOT live here: most call sites pass fresh
 closures (identity keys would grow a cache unboundedly), and a shared cache
-would need private jax internals. Instead, hoist the hot site into a
-module-level value-keyed `jax.jit(..., inline=True)` zone — see
+would need private frx internals. Instead, hoist the hot site into a
+module-level value-keyed `frx.jit(..., inline=True)` zone — see
 `zorch.hash.poseidon2.poseidon2._permute_body`.
 """
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TypeVar
 
-from jax import Array, lax
+from frx import Array, lax
 
 # The region's output: a single Array for a one-kernel marker, or a pytree of
 # Arrays for a name-routed region a vendor expands into a kernel chain. Both
@@ -46,6 +46,6 @@ def composite(
     passed to `decomposition`, since `lax.composite` calls the decomposition with
     them when tracing; so a decomposition whose attrs are required keyword
     arguments works. `version` rides as `composite.version` for a recognizer that
-    gates on a marker revision (default 0, jax's default).
+    gates on a marker revision (default 0, frx's default).
     """
     return lax.composite(decomposition, name=name, version=version)(*operands, **attrs)

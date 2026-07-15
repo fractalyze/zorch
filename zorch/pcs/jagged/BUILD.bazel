@@ -14,7 +14,7 @@ py_library(
         "//zorch:fusion",
         "//zorch/poly",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ],
 )
@@ -33,7 +33,7 @@ py_library(
     srcs = ["region.py"],
     visibility = ["//visibility:public"],
     deps = [
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -45,7 +45,7 @@ py_library(
         ":region",
         "//zorch/coding:reed_solomon",
         "//zorch/commit:smcs",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -59,7 +59,7 @@ py_library(
         "//zorch/pcs/jagged:poly",
         "//zorch/poly",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ],
@@ -76,7 +76,7 @@ py_library(
         "//zorch/pcs/basefold",
         "//zorch/poly",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -99,7 +99,7 @@ py_library(
         "//zorch/poly",
         "//zorch/sumcheck",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )

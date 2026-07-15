@@ -47,9 +47,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree, Opening
@@ -87,7 +87,7 @@ _COMPRESSED_ROUND = CompressedProductRound()
 # never reads the query count, so provers differing only in `queries` reuse this
 # compiled function rather than re-tracing. `basis` is static too — its `.pre` is
 # the encode pre-transform (the singletons are identity-stable keys).
-@partial(jax.jit, static_argnames=("log_interleave", "code", "tree", "basis"))
+@partial(frx.jit, static_argnames=("log_interleave", "code", "tree", "basis"))
 def _commit(
     witness: Array,
     log_interleave: int,

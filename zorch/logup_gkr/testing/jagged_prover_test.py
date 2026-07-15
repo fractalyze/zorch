@@ -14,10 +14,10 @@ import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
@@ -203,7 +203,7 @@ class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
     """The first GKR layer may carry base-field numerators under extension-field
     denominators. `prove_jagged_layer`'s round 0 then reads the numerators in the
     base field; the fold lifts them to the extension field from round 1, so the
-    whole sumcheck is byte-identical to proving an all-extension copy (zkx#681).
+    whole sumcheck is byte-identical to proving an all-extension copy.
     That round-0 base-field read is the first-layer-numerator bandwidth an
     extension-everywhere layer leaves on the table."""
 

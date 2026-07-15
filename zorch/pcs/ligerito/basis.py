@@ -16,7 +16,7 @@ the same `expand`.
 
 Two conventions exist today; use the module singletons (`EVAL_BASIS` /
 `MONOMIAL_BASIS`) rather than fresh instances — they are identity-stable, so they
-are clean `jax.jit` static keys and commit-cache keys (a fresh instance per call
+are clean `frx.jit` static keys and commit-cache keys (a fresh instance per call
 would defeat the trace cache, #214).
 
 The concept is matrix-commit-level, not Ligerito-specific; it lives here because
@@ -30,8 +30,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-import jax
-from jax import Array
+import frx
+from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube, expand_monomial_to_hypercube
 from zorch.poly.multilinear import mle_evals_to_coeffs
@@ -56,13 +56,13 @@ class CommitBasis:
         the prover's induce, the verifier's induce, and the verifier's terminal
         residual check — they would desynchronize the glued sumcheck if they
         drifted."""
-        return jax.vmap(lambda p: self.expand(p, one))(points_s)
+        return frx.vmap(lambda p: self.expand(p, one))(points_s)
 
 
 def _bit_reverse_matrix(matrix: Array) -> Array:
     # Two single-dimension passes: the CPU lowering rejects a multi-dim reverse.
-    reversed_rows = jax.lax.bit_reverse(matrix, dimensions=(0,))
-    return jax.lax.bit_reverse(reversed_rows, dimensions=(1,))
+    reversed_rows = frx.lax.bit_reverse(matrix, dimensions=(0,))
+    return frx.lax.bit_reverse(reversed_rows, dimensions=(1,))
 
 
 def _eval_expand(point: Array, one: Array) -> Array:

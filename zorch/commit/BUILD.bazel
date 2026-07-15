@@ -13,7 +13,7 @@ py_library(
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -27,7 +27,7 @@ py_library(
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -40,7 +40,7 @@ py_library(
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/utils:bits",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )

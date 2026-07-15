@@ -9,7 +9,7 @@ py_test(
     deps = [
         "//zorch/hash:permutation",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
     ] + GPU_PLUGIN_DEPS,
 )
 
@@ -21,7 +21,7 @@ py_test(
         "//zorch/hash:compression",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -36,7 +36,7 @@ py_test(
         "//zorch/hash:sponge",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -49,7 +49,7 @@ py_test(
         "//zorch/hash:duplex_sponge",
         "//zorch/hash/poseidon2/testing:koalabear16",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -61,7 +61,7 @@ py_test(
     deps = [
         "//zorch/hash:sha256",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -86,7 +86,7 @@ py_test(
     deps = [
         "//zorch/hash:sha256",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )

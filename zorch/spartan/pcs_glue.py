@@ -17,8 +17,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.poly.multilinear import eval_mle

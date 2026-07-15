@@ -9,8 +9,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
@@ -49,7 +49,7 @@ _PRIME = 2013265921  # koalabear
 
 def _inputs(
     m: int = 8,
-) -> tuple[_Planes, jax.Array, jax.Array, _RoundScalars, _InterpConsts, jax.Array]:
+) -> tuple[_Planes, frx.Array, frx.Array, _RoundScalars, _InterpConsts, frx.Array]:
     """A random even-width dense-interaction round: four MLE planes, the eq table,
     the previous challenge, the round scalars, the interp constants, and the
     fully-live `live` prefix marker (`m // 4` reduce pairs)."""
@@ -69,7 +69,7 @@ def _inputs(
 
 
 def _assert_prefix(
-    test: absltest.TestCase, got: jax.Array, want: jax.Array, what: str
+    test: absltest.TestCase, got: frx.Array, want: frx.Array, what: str
 ) -> None:
     """`got`'s live prefix matches `want` exactly and its tail is zeros -- the
     width-preserving round buffer convention (the tail is dead, masked by the
@@ -134,7 +134,7 @@ class RoundCompositeTest(absltest.TestCase):
         planes, eq_int, alpha, scalars, consts, live = _inputs()
         # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
         # it and trace only the array operands.
-        jaxpr = jax.make_jaxpr(
+        jaxpr = frx.make_jaxpr(
             lambda p, e, a, s, lv: _composite_fix_and_sum_dense(p, e, a, s, consts, lv)
         )(planes, eq_int, alpha, scalars, live)
         text = jaxpr.pretty_print()
@@ -153,14 +153,14 @@ def _round0_inputs(
     nrv: int = _NRV,
 ) -> tuple[
     _Planes,
-    jax.Array | None,
-    jax.Array,
-    jax.Array,
-    jax.Array,
-    jax.Array,
+    frx.Array | None,
+    frx.Array,
+    frx.Array,
+    frx.Array,
+    frx.Array,
     _RoundScalars,
     _InterpConsts,
-    jax.Array,
+    frx.Array,
 ]:
     """A valid round-0 jagged row round in the `_round_poly_row` operand order:
     planes, gather, col_index, pair_index, eq_row, eq_int, scalars; `consts`
@@ -195,15 +195,15 @@ def _row_inputs(
     seed: int = 0,
 ) -> tuple[
     _Planes,
-    jax.Array,
-    jax.Array,
-    jax.Array,
-    jax.Array,
-    jax.Array,
-    jax.Array,
+    frx.Array,
+    frx.Array,
+    frx.Array,
+    frx.Array,
+    frx.Array,
+    frx.Array,
     _RoundScalars,
     _InterpConsts,
-    jax.Array,
+    frx.Array,
 ]:
     """A valid round-1 jagged row round (the post-round-0 re-padded state), in the
     `_fix_and_sum_row` operand order: planes, eq_row, alpha, gather, col_index,
@@ -265,7 +265,7 @@ class RowRoundCompositeTest(absltest.TestCase):
         pl, er, al, _ga, _ci, _pi, ei, sc, consts, (rc, live, op) = _row_inputs()
         # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
         # it and trace only the array operands.
-        jaxpr = jax.make_jaxpr(
+        jaxpr = frx.make_jaxpr(
             lambda pl, er, al, rc, ei, sc, lv: _composite_fix_and_sum_row(
                 pl, er, al, rc, ei, sc, consts, lv, op
             )
@@ -282,7 +282,7 @@ class RoundClaimStatusTest(absltest.TestCase):
     `sumcheck_round` custom fusions -- not silently decompose them. Every
     byte-gate in this file passes either way (the decomposition is
     byte-identical by the marker contract), so a marker/recognizer drift
-    between this checkout and the installed jaxlib would otherwise surface
+    between this checkout and the installed frxlib would otherwise surface
     only as a many-launch perf cliff at shard scale. GPU-only: the claim is
     the register-resident GPU path's contract (fractalyze/xla#179 merge
     gate); the fusion-config name `sumcheck_round` appears in the optimized
@@ -290,9 +290,9 @@ class RoundClaimStatusTest(absltest.TestCase):
     inlines the composite away, marker attrs included)."""
 
     def _assert_claimed(self, fn: Callable[..., Any], *args: Any) -> None:
-        if jax.default_backend() != "gpu":
+        if frx.default_backend() != "gpu":
             self.skipTest("claim status is the GPU pairing's contract")
-        text = jax.jit(fn).lower(*args).compile().as_text()
+        text = frx.jit(fn).lower(*args).compile().as_text()
         self.assertIn(
             "sumcheck_round", text, "round marker decomposed instead of claiming"
         )
@@ -326,7 +326,7 @@ class RoundClaimStatusTest(absltest.TestCase):
 
 def _boundary_inputs(
     m: int = 8,
-) -> tuple[_Planes, jax.Array, jax.Array, _RoundScalars, _InterpConsts, jax.Array]:
+) -> tuple[_Planes, frx.Array, frx.Array, _RoundScalars, _InterpConsts, frx.Array]:
     """A random row->interaction handoff round: the planes enter at width `m`
     (the last row round's padded state) while `eq_int` enters at the post-bind
     width `m // 2` and is NOT folded this round. `live` is the fully-live
@@ -353,8 +353,8 @@ class BoundaryRoundCompositeTest(absltest.TestCase):
         got = _composite_fix_and_sum_boundary(
             planes, eq_int, alpha, scalars, consts, live
         )
-        got_leaves = jax.tree_util.tree_leaves(got)
-        want_leaves = jax.tree_util.tree_leaves(want)
+        got_leaves = frx.tree_util.tree_leaves(got)
+        want_leaves = frx.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
         for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
@@ -365,7 +365,7 @@ class BoundaryRoundCompositeTest(absltest.TestCase):
         planes, eq_int, alpha, scalars, consts, live = _boundary_inputs()
         # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
         # it and trace only the array operands.
-        jaxpr = jax.make_jaxpr(
+        jaxpr = frx.make_jaxpr(
             lambda p, e, a, s, lv: _composite_fix_and_sum_boundary(
                 p, e, a, s, consts, lv
             )
@@ -383,8 +383,8 @@ class FirstRoundCompositeTest(absltest.TestCase):
         self.assertIsNotNone(ga)  # odd segments -> a real re-pad this round
         want = _round_poly_row(pl, ga, ci, pi, er, ei, sc, consts)
         got = _composite_sum_as_poly_row(pl, rc, er, ei, sc, consts, live, op)
-        got_leaves = jax.tree_util.tree_leaves(got)
-        want_leaves = jax.tree_util.tree_leaves(want)
+        got_leaves = frx.tree_util.tree_leaves(got)
+        want_leaves = frx.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
         for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
@@ -401,8 +401,8 @@ class FirstRoundCompositeTest(absltest.TestCase):
         self.assertIsNone(ga)
         want = _round_poly_row(pl, None, ci, pi, er, ei, sc, consts)
         got = _composite_sum_as_poly_row(pl, rc, er, ei, sc, consts, live, op)
-        got_leaves = jax.tree_util.tree_leaves(got)
-        want_leaves = jax.tree_util.tree_leaves(want)
+        got_leaves = frx.tree_util.tree_leaves(got)
+        want_leaves = frx.tree_util.tree_leaves(want)
         self.assertEqual(len(got_leaves), len(want_leaves))
         for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
@@ -413,7 +413,7 @@ class FirstRoundCompositeTest(absltest.TestCase):
         pl, _ga, _ci, _pi, er, ei, sc, consts, (rc, live, op) = _round0_inputs()
         # `_InterpConsts` is not a pytree (dtype-derived constants), so close over
         # it and trace only the array operands.
-        jaxpr = jax.make_jaxpr(
+        jaxpr = frx.make_jaxpr(
             lambda pl, rc, er, ei, sc, lv: _composite_sum_as_poly_row(
                 pl, rc, er, ei, sc, consts, lv, op
             )
@@ -440,7 +440,7 @@ class FinalRoundCompositeTest(absltest.TestCase):
     def test_emits_marker_with_abi(self) -> None:
         planes = _Planes(*(rand_field(s, (2,), KB) for s in range(4)))
         alpha = rand_field(11, (), KB)
-        jaxpr = jax.make_jaxpr(_composite_fix_last)(planes, alpha)
+        jaxpr = frx.make_jaxpr(_composite_fix_last)(planes, alpha)
         text = jaxpr.pretty_print()
         self.assertIn(SUMCHECK_ROUND_MARKER, text)
         # The phase/variant attributes are the recognizer's routing key.

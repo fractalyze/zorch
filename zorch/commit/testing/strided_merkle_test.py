@@ -9,10 +9,10 @@ plain `MerkleTree` exactly.
 
 from __future__ import annotations
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 from absl.testing import absltest
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree, Opening
@@ -83,7 +83,7 @@ class StridedMerkleTest(absltest.TestCase):
         # The query-strided `_build` is a separate path from MerkleTree's — cover
         # the same marker shape here too.
         _, _, strided = _stack(rows_per_query=4)
-        text = jax.jit(strided.commit).lower(_matrix(16)).as_text()
+        text = frx.jit(strided.commit).lower(_matrix(16)).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
 
@@ -151,10 +151,10 @@ class StridedMerkleTest(absltest.TestCase):
         root, layers = strided.commit(matrix)
         indices = jnp.arange(strided.query_stride(16), dtype=jnp.int32)
 
-        @jax.jit
+        @frx.jit
         def open_and_rebuild(idx: Array) -> Array:
-            opening = jax.vmap(lambda i: strided.open(matrix, layers, i))(idx)
-            return jax.vmap(strided.reconstruct_root)(idx, opening)
+            opening = frx.vmap(lambda i: strided.open(matrix, layers, i))(idx)
+            return frx.vmap(strided.reconstruct_root)(idx, opening)
 
         roots = open_and_rebuild(indices)
         self.assertEqual(roots.shape, (4, 8))

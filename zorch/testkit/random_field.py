@@ -9,10 +9,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 import numpy as np
 import zk_dtypes
-from jax import Array
+from frx import Array
 
 
 def _is_extension_dtype(dtype: Any) -> bool:

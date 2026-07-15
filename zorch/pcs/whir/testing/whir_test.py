@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import dataclasses
 
-import jax.numpy as jnp
+import frx.numpy as jnp
 from absl.testing import absltest, parameterized
-from jax import Array
+from frx import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 

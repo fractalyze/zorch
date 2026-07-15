@@ -14,9 +14,9 @@ from functools import partial
 from functools import reduce as _reduce
 from typing import Any
 
-import jax
-import jax.numpy as jnp
-from jax import Array
+import frx
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
 from zorch.pcs.jagged.poly import (
@@ -50,7 +50,7 @@ def oracle_cfg(
     )
 
 
-@partial(jax.jit, static_argnames=("cfg",))
+@partial(frx.jit, static_argnames=("cfg",))
 def eval_jagged_mle(
     col_prefix_sums: Array,
     z_row: Array,
@@ -71,7 +71,7 @@ def eval_jagged_mle(
     col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # 2^{n_c}
     all_left = col_prefix_sums[: cfg.l_max]
     all_right = col_prefix_sums[1:]
-    bp_evals = jax.vmap(
+    bp_evals = frx.vmap(
         lambda pl, pr: bp_eval_core(z_row, z_index, pl, pr, t_matrix),
         in_axes=(0, 0),
     )(all_left, all_right)
@@ -80,7 +80,7 @@ def eval_jagged_mle(
     )
 
 
-@partial(jax.jit, static_argnames=("cfg",))
+@partial(frx.jit, static_argnames=("cfg",))
 def scatter_partial_eval(
     col_prefix_sums: Array,
     z_row: Array,
@@ -115,7 +115,7 @@ def scatter_partial_eval(
         contrib = col_eq[c] * jnp.where(mask, row_eq, jnp.zeros([], dtype=dtype))
 
         # Read-modify-write: add contrib into out[t_c : t_c + row_len].
-        old = jax.lax.dynamic_slice(out, (t_c,), (row_len,))
-        return jax.lax.dynamic_update_slice(out, old + contrib, (t_c,))
+        old = frx.lax.dynamic_slice(out, (t_c,), (row_len,))
+        return frx.lax.dynamic_update_slice(out, old + contrib, (t_c,))
 
-    return jax.lax.fori_loop(0, cfg.l_max, body, out)
+    return frx.lax.fori_loop(0, cfg.l_max, body, out)

@@ -16,9 +16,9 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
-import jax
-import jax.numpy as jnp
-from jax import Array, lax
+import frx
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.pcs.fold import sample_positions, verify_fold_chain, verify_openings
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
@@ -66,7 +66,7 @@ class FriVerifier:
 
 # Jitted per-poly verify body (issue #140); one compile serves the batch. The
 # params are the static key (by value, #214).
-@partial(jax.jit, static_argnames=("params",))
+@partial(frx.jit, static_argnames=("params",))
 def _verify_one(
     params: FriParams, f_root: Array, z: Array, v: Array, pf: FriProof, t: Transcript
 ) -> tuple[Transcript, Array]:

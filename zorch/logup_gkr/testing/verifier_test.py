@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import jax
-import jax.numpy as jnp
+import frx
+import frx.numpy as jnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -30,11 +30,12 @@ from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
 
-# A poseidon2 permute is impractically slow to compile on the ZKX CPU backend, so
+# A poseidon2 permute is impractically slow to compile on the FXLA CPU
+# backend, so
 # the real-transcript e2e is GPU-only. transcript_test gates its DuplexTranscript
 # cases on the same CPU-backend check (for its own reason), so neither runs in the
 # CPU CI lane.
-_CPU_BACKEND = jax.default_backend() == "cpu"
+_CPU_BACKEND = frx.default_backend() == "cpu"
 
 
 class GkrRoundtripTest(absltest.TestCase):
@@ -74,7 +75,7 @@ class GkrRoundtripTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
 
-@absltest.skipIf(_CPU_BACKEND, "poseidon2 compile is impractically slow on ZKX CPU")
+@absltest.skipIf(_CPU_BACKEND, "poseidon2 compile is impractically slow on FXLA CPU")
 class GkrDuplexRoundtripTest(absltest.TestCase):
     """Self-verification through the real on-device poseidon2 DuplexTranscript:
     challenges are squeezed from the sponge (no preset stream), and the verifier

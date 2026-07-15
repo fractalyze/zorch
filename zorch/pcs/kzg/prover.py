@@ -17,8 +17,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
-from jax import Array, lax
+import frx.numpy as jnp
+from frx import Array, lax
 
 from zorch.pcs.kzg.config import KzgCommitment, KzgProof
 from zorch.pcs.kzg.setup import KzgProvingKey

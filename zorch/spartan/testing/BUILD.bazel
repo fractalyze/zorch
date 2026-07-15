@@ -16,7 +16,7 @@ py_library(
         "//zorch:transcript",
         "//zorch/spartan",
         "//zorch/testkit:random_field",
-        requirement("jax"),
+        requirement("frx"),
     ],
 )
 
@@ -31,7 +31,7 @@ py_library(
         "//zorch/coding:reed_solomon",
         "//zorch/commit/testing:koalabear16",
         "//zorch/pcs/ligerito",
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ],
 )
@@ -46,7 +46,7 @@ py_test(
         "//zorch/spartan/testing",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -61,7 +61,7 @@ py_test(
         "//zorch/sumcheck",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -79,7 +79,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -94,7 +94,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -110,7 +110,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -124,7 +124,7 @@ py_test(
         "//zorch/spartan/testing",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -141,7 +141,7 @@ py_test(
         "//zorch/spartan/testing",
         "//zorch/spartan/testing:ligerito_pcs",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -159,7 +159,7 @@ py_test(
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
-        requirement("jax"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

@@ -21,8 +21,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import jax.numpy as jnp
-from jax import Array
+import frx.numpy as jnp
+from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.transcript import Transcript
