@@ -18,7 +18,7 @@ from frx import Array
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import Stage
 from zorch.spartan.carry import SpartanCarry
 from zorch.spartan.engine import StageSumcheck, zerocheck_engine
 from zorch.transcript import Transcript
@@ -26,7 +26,7 @@ from zorch.utils.bits import log2_strict_usize
 from zorch.verify import verify
 
 
-class OuterProver(Round):
+class OuterProver(Stage):
     """Prover for the zerocheck stage; holds the matvecs `Az, Bz, Cz` as
     stage-local witness. Inject `sumcheck` to swap the per-variable engine."""
 
@@ -70,7 +70,7 @@ class OuterProver(Round):
         return carry, transcript, (round_polys, claims)
 
 
-class OuterVerifier(Round):
+class OuterVerifier(Stage):
     """Verifier for the zerocheck stage: replay the sumcheck, then check the
     terminal identity `eq(τ,r_x)·(vA·vB − vC) == reduced_claim`."""
 
