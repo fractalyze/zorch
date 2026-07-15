@@ -186,26 +186,34 @@ def sample_distinct_positions(
     transcript: TranscriptT, block_len: int, count: int
 ) -> tuple[TranscriptT, Array]:
     """Rejection-sample `count` DISTINCT positions in `[0, block_len)`, sorted
-    ascending — the strategy of wire formats that spend one squeeze per
-    candidate and re-squeeze on a repeat (a distinct-query byte-wire strategy;
-    each squeeze reduces like `sample_positions`, low limb mod `block_len`).
-    Transcript consumption is data-dependent, so the loop is host-driven (one
-    device->host sync per candidate) and cannot run under `jit`; both sides
-    replay the identical rejections, so their streams stay in lockstep."""
+    ascending: one squeeze per candidate, low limb mod `block_len`, re-squeeze on
+    a repeat. A device `while_loop` (one squeeze/iter matches a scanned chain),
+    so it's `jit`-safe and never leaves the device."""
     if count > block_len:
         raise ValueError(
             f"cannot sample {count} distinct positions from a block of {block_len}"
         )
-    seen: set[int] = set()
-    out: list[int] = []
-    t = transcript
-    while len(out) < count:
+    bl = jnp.uint32(block_len)
+    idx = jnp.arange(count, dtype=jnp.int32)
+
+    def body(
+        carry: tuple[TranscriptT, Array, Array]
+    ) -> tuple[TranscriptT, Array, Array]:
+        t, out, n = carry
         t, raw = t.sample(1)
-        pos = int(lax.bitcast_convert_type(raw, jnp.uint32).reshape(-1)[0]) % block_len
-        if pos not in seen:
-            seen.add(pos)
-            out.append(pos)
-    return t, jnp.sort(jnp.asarray(out, dtype=jnp.int32))
+        pos = (lax.bitcast_convert_type(raw, jnp.uint32).reshape(-1)[0] % bl).astype(
+            jnp.int32
+        )
+        hit = jnp.any((idx < n) & (out == pos))  # already drawn?
+        out = jnp.where(hit, out, out.at[n].set(pos))
+        return t, out, jnp.where(hit, n, n + jnp.int32(1))
+
+    t, out, _ = lax.while_loop(
+        lambda c: c[2] < count,
+        body,
+        (transcript, jnp.zeros(count, jnp.int32), jnp.int32(0)),
+    )
+    return t, jnp.sort(out)
 
 
 @dataclass(frozen=True)

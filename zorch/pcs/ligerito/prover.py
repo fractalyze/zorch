@@ -209,6 +209,21 @@ def _open(
     value: Array,
     transcript: Transcript,
 ) -> tuple[LigeritoProof, Transcript]:
+    # Static-config recursion → the whole open compiles to ONE device program;
+    # eager, the tiny per-round ops dispatch from Python and starve the GPU.
+    return _open_jit(prover, pd.f, pd.initial, z, B, value, transcript)
+
+
+@partial(frx.jit, static_argnums=(0,))
+def _open_jit(
+    prover: LigeritoProver,
+    W0: Array,
+    initial: CommittedMatrix,
+    z: Array | None,
+    B: Array,
+    value: Array,
+    transcript: Transcript,
+) -> tuple[LigeritoProof, Transcript]:
     cfg = prover.config
     chor = prover.choreography
     dtype = B.dtype
@@ -221,10 +236,10 @@ def _open(
     # vector under `open_with_basis`. The prover only emits round messages and
     # folds — it never tracks the running claim (the verifier reduces and
     # checks it).
-    W = pd.f
+    W = W0
 
     # Bind the statement before any challenge (z is None under the basis entry).
-    t = chor.bind_statement(transcript, pd.initial.root, z, value)
+    t = chor.bind_statement(transcript, initial.root, z, value)
 
     sumcheck_messages: list[Array] = []
     recursive_roots: list[Array] = []
@@ -255,7 +270,7 @@ def _open(
     if eager:
         t = emit(t, W, B)
 
-    current = pd.initial  # M_j
+    current = initial  # M_j
     num_vars = cfg.num_vars
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
