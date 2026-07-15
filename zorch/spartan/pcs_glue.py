@@ -22,13 +22,13 @@ from frx import Array
 
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.poly.multilinear import eval_mle
-from zorch.round import Round
+from zorch.round import Stage
 from zorch.spartan.carry import SpartanCarry, _require
 from zorch.spartan.r1cs import R1CS, eval_public_half, recombine_z_eval
 from zorch.transcript import Transcript
 
 
-class WitnessOpenProver(Round):
+class WitnessOpenProver(Stage):
     """Open the committed witness at `r_y[1:]` via the injected `PcsProver`."""
 
     def __init__(self, pcs: PcsProver[Any, Any, Any], prover_data: Any) -> None:
@@ -45,7 +45,7 @@ class WitnessOpenProver(Round):
         return carry, transcript, (values, proof)
 
 
-class WitnessOpenVerifier(Round):
+class WitnessOpenVerifier(Stage):
     """Verify the witness opening and close the lincheck identity."""
 
     def __init__(

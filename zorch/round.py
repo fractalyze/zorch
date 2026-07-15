@@ -9,17 +9,32 @@ its `observe` / `sample` directly. A prover round maps
 state, a GKR layer's running claim, ...) and the transcript thread functionally
 — never hidden mutable state.
 
-Rounds live at two levels. A *stage* round is one step of the heterogeneous
-protocol sequence (a GKR layer), run by the chains here; an *inner* round binds
-one variable of a stage's sumcheck — the homogeneous case, scanned by
-`zorch.prove` / `zorch.verify`, typically from inside a stage round. On the
-prover side both levels share one shape, so `ProverRound` is the single prover
-contract (`ProveChain` / `fold_rounds`). On the verifier side the inner round
-must also surface its sampled challenge for `zorch.verify` to collect into the
-evaluation point, so the contracts split: `VerifierRound` (stage, `VerifyChain`)
-vs `InnerVerifierRound` (per-variable). The Protocols are structural, so a
-wrong-shaped — or wrong-level — round is a type error. `Round` stays the
-nominal base subclasses inherit.
+`Round` is the one recursive unit — a prover<->verifier IOP interaction that
+nests: a single per-variable step is a `Round`, and a whole sumcheck (its
+per-variable `Round`s bundled) is also a `Round`, since a chain is itself a
+`Round`. Two *roles* a `Round` plays in a scheme's `prove_chain` get their own
+nominal marker subclass, so a reader (and a chain) can tell them apart — the
+markers add no behavior:
+
+- A `Stage` is one phase of the top-level `prove_chain` — a zerocheck, a
+  lincheck, a witness opening: the phases a consumer sequences into its
+  `ProveChain`. It usually runs a sub-protocol — an inner sumcheck scanned by
+  `zorch.prove` / `zorch.verify`, or a PCS open — and carries stage-local
+  witness.
+- A `Bridge` is a transcript-only `Round` for soundness or security — a grind, a
+  sampled-and-discarded challenge, a framed observe, an RLC of claims under a
+  fresh challenge. It touches only the transcript and the carry, and its verifier
+  dual replays the same ops. It usually sits inside a stage; a scheme may also
+  place one in the `prove_chain` between two stages (Spartan's RLC).
+
+Every other `Round` is unmarked — a per-variable inner round, or a composite
+that is neither a top-level phase nor a connective. On the prover side every
+round shares one shape, so `ProverRound` is the single prover contract
+(`ProveChain` / `fold_rounds`). On the verifier side the inner round must also
+surface its sampled challenge for `zorch.verify` to collect into the evaluation
+point, so the contracts split: `VerifierRound` (stage, `VerifyChain`) vs
+`InnerVerifierRound` (per-variable). The Protocols are structural, so a
+wrong-shaped — or wrong-level — round is a type error.
 
 A composite protocol is itself a `Round`: `ProveChain` / `VerifyChain` sequence
 sub-Rounds, threading the carry + transcript, so chains nest.
@@ -40,6 +55,27 @@ class Round:
         """Run one round, threading the transcript — see the module docstring for
         the prover and verifier signatures. Implemented by subclasses."""
         raise NotImplementedError
+
+
+class Stage(Round):
+    """A `Round` that is one phase of a top-level prover chain — a zerocheck, a
+    lincheck, a witness opening: the phases a consumer sequences into its
+    `ProveChain`. A stage usually runs a sub-protocol (an inner sumcheck via
+    `zorch.prove` / `fold_rounds`, or a PCS open) and carries stage-local
+    witness on the instance. A semantic marker over `Round`: it adds no
+    behavior, so a reader can tell a top-level phase from the inner rounds it
+    drives. A round that is only a link in a stage's own sub-chain (a GKR layer
+    round) is not a `Stage` — it stays a plain `Round`."""
+
+
+class Bridge(Round):
+    """A transcript-only `Round` for soundness or security — a grind, a
+    sampled-and-discarded challenge, a framed observe, an RLC of claims under a
+    fresh challenge. It touches only the transcript and the carry (no witness,
+    no PCS work), and its verifier dual replays the same ops; a bridge that
+    sends nothing emits `None` as its message. Usually inside a stage; a scheme
+    may also place one in the `prove_chain` between two stages (Spartan's RLC).
+    A semantic marker over `Round`, like `Stage`."""
 
 
 class ProverRound(Protocol):

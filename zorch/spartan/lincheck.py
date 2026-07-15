@@ -21,7 +21,7 @@ import frx.numpy as jnp
 from frx import Array
 
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import Bridge, Stage
 from zorch.spartan.carry import SpartanCarry, _require
 from zorch.spartan.engine import StageSumcheck, lincheck_engine
 from zorch.spartan.r1cs import R1CS
@@ -35,7 +35,7 @@ def _joint_claim(claims_outer: Array, r: Array) -> Array:
     return va + r * vb + r * r * vc
 
 
-class RlcProver(Round):
+class RlcProver(Bridge):
     """Sample the batching challenge; fold the outer claims into `joint_claim`."""
 
     def __call__(
@@ -48,7 +48,7 @@ class RlcProver(Round):
         return carry, transcript, None
 
 
-class RlcVerifier(Round):
+class RlcVerifier(Bridge):
     """Verifier dual of `RlcProver`: replay the same sample and fold."""
 
     def __call__(
@@ -62,7 +62,7 @@ class RlcVerifier(Round):
         return carry, transcript, jnp.bool_(True)
 
 
-class InnerProver(Round):
+class InnerProver(Stage):
     """Prover for the lincheck stage; holds the instance and assignment `z` as
     stage-local witness. Inject `sumcheck` to swap the per-variable engine."""
 
@@ -93,7 +93,7 @@ class InnerProver(Round):
         return carry, transcript, round_polys
 
 
-class InnerVerifier(Round):
+class InnerVerifier(Stage):
     """Verifier for the lincheck sumcheck: reduce `joint_claim` to `(r_y,
     inner_final)`. The terminal identity closes in the PCS glue."""
 
