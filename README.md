@@ -73,11 +73,11 @@ prove()  —  the prove_chain is Stages; a Stage holds Rounds and Bridges
   Stage   jagged-evals          the PCS opening
 ```
 
-|             | **`Round`**                           | **`Stage`**                                         | **`Bridge`**                                  |
-| ----------- | ------------------------------------- | --------------------------------------------------- | --------------------------------------------- |
-| **Is**      | a prover↔verifier interaction; nests  | a `Round` that is one `prove_chain` phase           | a transcript-only `Round` inside a Stage      |
-| **Does**    | `observe`→`sample` at the leaf        | witness + real compute (an inner sumcheck, an open) | a transcript op the phase's soundness needs   |
-| **Example** | a sumcheck round, or a whole sumcheck | trace-commit, logup-gkr, zero-check, jagged-evals   | a grind, a framed observe, a discarded sample |
+|             | **`Round`**                           | **`Stage`**                                           | **`Bridge`**                                  |
+| ----------- | ------------------------------------- | ----------------------------------------------------- | --------------------------------------------- |
+| **Is**      | a prover↔verifier interaction; nests  | a sequence of `Round` that is one `prove_chain` phase | a transcript-only `Round` inside a Stage      |
+| **Does**    | `observe`→`sample` at the leaf        | witness + real compute (an inner sumcheck, an open)   | a transcript op the phase's soundness needs   |
+| **Example** | a sumcheck round, or a whole sumcheck | trace-commit, logup-gkr, zero-check, jagged-evals     | a grind, a framed observe, a discarded sample |
 
 `Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
 how the verifier mirrors the prover *round-for-round* — but the roles are what a
