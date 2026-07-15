@@ -44,6 +44,7 @@ py_library(
     srcs = ["ring_switch.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch/utils:binary_field",
         requirement("frx"),
     ],
 )

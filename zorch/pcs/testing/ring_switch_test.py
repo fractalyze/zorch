@@ -25,7 +25,6 @@ from zorch.pcs.ring_switch import (
     RingSwitch,
     bit_slice_evals,
     eval_rs_eq,
-    field_bit_width,
     inner_product,
     reduce_bit_claim,
     rs_eq_ind,
@@ -33,6 +32,7 @@ from zorch.pcs.ring_switch import (
 )
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
+from zorch.utils.binary_field import field_bit_width
 
 FIELDS = {
     "ghash": zk_dtypes.binary_field_ghash,
