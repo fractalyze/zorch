@@ -1,6 +1,6 @@
 # Development environment
 
-`zorch` is pure Python on JAX + the Fractalyze XLA PJRT plugin. This page is the dev-loop
+`zorch` is pure Python on frx + the Fractalyze XLA PJRT plugin. This page is the dev-loop
 reference; for a first install see the quick start in
 [`../README.md`](../../README.md).
 
@@ -62,7 +62,7 @@ pins in `requirements.in` to that version instead.
 A stale plugin surfaces as `custom op 'stablehlo.composite' is unknown` on any
 fresh compile.
 
-## JAX compile-cache rule
+## frx compile-cache rule
 
 A persistent `JAX_COMPILATION_CACHE_DIR` skips recompiles of the heavy
 `local_only` tests across venv runs — worthwhile whenever you iterate against

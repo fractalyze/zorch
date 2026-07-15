@@ -138,7 +138,7 @@ predictable and the step count drives cost — the jagged GKR roll above).
 
 A `Round` — or any object — that crosses a `frx` transform boundary (passed to or
 returned from `jit` / `vmap` / `scan`, or threaded as a `scan` carry) must be a
-registered JAX **pytree**. Register the concrete class as a frozen dataclass:
+registered frx **pytree**. Register the concrete class as a frozen dataclass:
 
 ```python
 @partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])

@@ -41,7 +41,7 @@ ______________________________________________________________________
 | Question                                                                                  | Where                                          |
 | ----------------------------------------------------------------------------------------- | ---------------------------------------------- |
 | Coding conventions — `@jit`, the WHY-not-WHAT rule, `_`-private naming, the subsystem doc skeleton | [`conventions.md`](reference/conventions.md) |
-| Dev environment — per-workspace venv pinning, the Fractalyze XLA plugin, the JAX compile-cache rule | [`development.md`](reference/development.md)  |
+| Dev environment — per-workspace venv pinning, the Fractalyze XLA plugin, the frx compile-cache rule | [`development.md`](reference/development.md)  |
 | New to JAX — the mental models behind the conventions, and the canonical references to learn from | [`jax.md`](reference/jax.md)                 |
 
 Detailed design, the fusion contract, findings, and open decisions live on the

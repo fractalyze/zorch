@@ -2,12 +2,11 @@
 
 > **SNARK = Σ IOP Round**
 
-JAX-native building blocks for Modern SNARKs. `zorch` sits between JAX and the
-proof systems that consume it: JAX provides tracing and codegen, lowered through
-**Fractalyze XLA** — Fractalyze's fork of stock
-[XLA](https://github.com/openxla/xla) with native field and elliptic-curve
-types. Every later "XLA" here means this fork, not the upstream compiler. `zorch`
-provides the reusable pieces a proof system is assembled from.
+frx-native building blocks for Modern SNARKs. `zorch` sits between **frx**
+(Fractalyze's JAX fork) and the proof systems that consume it: frx provides
+tracing and codegen, lowered through **Fractalyze XLA** — its fork of stock
+[XLA](https://github.com/openxla/xla) that adds native field and elliptic-curve
+types. `zorch` provides the reusable pieces a proof system is assembled from.
 
 A Modern SNARK is **IOP + PCS**. The way deep learning stacks `Layer`s, `zorch`
 stacks **`Round`s** — the one composable unit the rest is threaded through.
@@ -30,14 +29,24 @@ stacks **`Round`s** — the one composable unit the rest is threaded through.
 
 ## Building blocks
 
-**There is one composable unit: the `Round`** — implement `__call__`; it threads
-the Fiat-Shamir transcript and calls `observe` / `sample` directly. A prover
-stacks `Round`s into a chain, and **`Round`s nest**: a chain is itself a `Round`,
-so one `Round` can expand into a whole sub-chain. At the leaf a `Round` is a
-single `observe`→`sample`; higher up it is a phase built from many.
+**The one unit is the `Round` — one prover↔verifier interaction of an IOP.**
+Implement `__call__`: observe a message into the Fiat-Shamir transcript, sample a
+challenge back (`observe`→`sample`). A per-variable sumcheck step is one Round.
+This is what **`SNARK = Σ IOP Round`** says literally — a Fiat-Shamir-compiled IOP
+*is* a sequence of these rounds.
 
-A prover's top-level chain reads as two recurring roles — **`Stage`** and
-**`Bridge`**, both of them `Round`s:
+Rounds compose into a scheme through two roles — both are `Round`s, since a chain
+is itself a `Round`:
+
+- A **`Stage`** groups Rounds into one phase of the argument (trace-commit,
+  logup-gkr, zero-check, a PCS opening). Chaining Stages instantiates the scheme.
+- A **`Bridge`** is a single connective Round between two stages, there for a
+  soundness or security reason the reference demands: a PoW grind (buys security
+  bits), a framed observe or domain separator (closes a Fiat-Shamir soundness
+  gap), a sampled-and-discarded challenge (matches the reference's schedule).
+
+So the shape is **scheme → Stages → Rounds**, with Bridges the connective Rounds
+between stages:
 
 ```text
 prove()  —  a chain of Stages joined by Bridges
@@ -53,22 +62,21 @@ prove()  —  a chain of Stages joined by Bridges
   Stage   jagged-evals      the PCS opening
 ```
 
-|             | **`Stage`**                                       | **`Bridge`**                                                          | **leaf `Round`**              |
-| ----------- | ------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------- |
-| **Role**    | one phase of the argument                         | join two stages on the transcript                                     | one step inside a stage       |
-| **Body**    | witness + real compute; usually a sub-chain       | transcript-facing only — a grind still hashes, but no witness crosses | one `observe`→`sample`        |
-| **Example** | trace-commit, logup-gkr, zero-check, jagged-evals | a PoW grind, a framed observe, a discarded sample                     | a per-variable sumcheck round |
+|             | **`Round`**                     | **`Stage`**                                       | **`Bridge`**                                      |
+| ----------- | ------------------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| **Is**      | one prover↔verifier interaction | a phase — a chain of Rounds                        | one connective Round between two stages           |
+| **Does**    | `observe`→`sample`              | witness + real compute (an inner sumcheck, an open) | a transcript op a scheme's soundness needs      |
+| **Example** | a per-variable sumcheck round   | trace-commit, logup-gkr, zero-check, jagged-evals | a PoW grind, a framed observe, a discarded sample |
 
 `Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
 how the verifier mirrors the prover *round-for-round* — but the roles are what a
 reader navigates by.
 
-**Where the boundaries fall.** A new `Round` splits where the transcript takes
-another `observe`/`sample`; `Round`s group into a `Stage` where the argument
-moves to its next phase; a `Bridge` sits where the reference demands a transcript
-step between two stages. The Fiat-Shamir schedule is the primary boundary, with
-the protocol-phase and carry seams alongside it — the full carry-and-seam
-contract is [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
+**Where the boundaries fall.** A new `Round` starts at each prover↔verifier
+interaction (`observe`→`sample`); Rounds group into a `Stage` where the argument
+moves to its next phase; a `Bridge` sits where the reference's soundness argument
+demands a transcript step between two stages. The full carry-and-seam contract is
+[`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
 
 **Where the classic pieces fit.** A ZK reader expects Fiat-Shamir, `Polynomial`,
 `PCS`, and sumcheck as top-level "blocks." In this picture they are not peers of
@@ -83,7 +91,7 @@ the `Round`:
 
 ## Development
 
-`zorch` is pure Python on JAX, run against the XLA GPU plugin. A virtualenv with
+`zorch` is pure Python on frx, run against its GPU plugin. A virtualenv with
 the pinned toolchain:
 
 ```sh
@@ -92,8 +100,8 @@ pip install -r requirements.in \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The dev loop — per-workspace venvs, developing against a local XLA build, the
-JAX compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
+The dev loop — per-workspace venvs, developing against a local Fractalyze XLA
+build, the frx compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
 
 ## Documentation
 
