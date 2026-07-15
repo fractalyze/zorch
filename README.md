@@ -45,15 +45,16 @@ roles organize the composition; both are `Round`s, since a chain is itself one:
 - A **`Stage`** is a `Round` that is one phase of the scheme's `prove_chain` —
   the sequence of Stages the scheme *is* (trace-commit, logup-gkr, zero-check, a
   PCS opening).
-- A **`Bridge`** is a transcript-only `Round` *inside* a Stage — a grind, a
-  framed observe, a sampled-and-discarded challenge — soundness or security work
-  the phase needs, not a phase of its own: a grind buys security bits, framing /
-  domain separation closes a Fiat-Shamir soundness gap, a discarded sample
-  matches the reference's schedule.
+- A **`Bridge`** is a transcript-only `Round` for soundness or security work — a
+  grind (buys security bits), a framed observe or domain separator (closes a
+  Fiat-Shamir soundness gap), a sampled-and-discarded challenge (matches the
+  reference's schedule). It usually sits *inside* a Stage; a scheme may also
+  place one directly in the `prove_chain` between two stages (an RLC batching
+  their claims).
 
-So the shape is recursive — the `prove_chain` is a sequence of `Stage`s; a
-`Stage` chains `Round`s and `Bridge`s; a `Round` may itself chain `Round`s, down
-to the leaf interaction:
+So the shape is recursive — the `prove_chain` is `Stage`s (with the occasional
+`Bridge` between them); a `Stage` chains `Round`s and `Bridge`s; a `Round` may
+itself chain `Round`s, down to the leaf interaction:
 
 ```text
 prove()  —  the prove_chain is Stages; a Stage holds Rounds and Bridges
@@ -75,8 +76,8 @@ prove()  —  the prove_chain is Stages; a Stage holds Rounds and Bridges
 
 |             | **`Round`**                           | **`Stage`**                                           | **`Bridge`**                                  |
 | ----------- | ------------------------------------- | ----------------------------------------------------- | --------------------------------------------- |
-| **Is**      | a prover↔verifier interaction; nests  | a sequence of `Round` that is one `prove_chain` phase | a transcript-only `Round` inside a Stage      |
-| **Does**    | `observe`→`sample` at the leaf        | witness + real compute (an inner sumcheck, an open)   | a transcript op the phase's soundness needs   |
+| **Is**      | a prover↔verifier interaction; nests  | a sequence of `Round` that is one `prove_chain` phase | a transcript-only connective `Round`          |
+| **Does**    | `observe`→`sample` at the leaf        | witness + real compute (an inner sumcheck, an open)   | a transcript op soundness/security needs      |
 | **Example** | a sumcheck round, or a whole sumcheck | trace-commit, logup-gkr, zero-check, jagged-evals     | a grind, a framed observe, a discarded sample |
 
 `Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
@@ -85,8 +86,9 @@ reader navigates by.
 
 **Where the boundaries fall.** A leaf `Round` is each prover↔verifier interaction
 (`observe`→`sample`); Rounds bundle into a bigger `Round` or, at a `prove_chain`
-phase, a `Stage`; a `Bridge` sits inside a Stage wherever the reference's
-soundness argument needs a transcript op. The full carry-and-seam contract is
+phase, a `Stage`; a `Bridge` sits wherever the reference's soundness argument
+needs a transcript op — inside a stage, or between two in the `prove_chain`. The
+full carry-and-seam contract is
 [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
 
 **Where the classic pieces fit.** A ZK reader expects Fiat-Shamir, `Polynomial`,
