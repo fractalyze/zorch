@@ -35,6 +35,18 @@ class ExpandEqTest(absltest.TestCase):
         )
         self.assertEqual(int(out[2]), int(expected))
 
+    def test_msb_true_threads_to_step(self) -> None:
+        # msb=True concatenates [low, high] each layer (x[j] at bit j) — it must
+        # match the by-hand `expand_hypercube_step(msb=True)` doubling.
+        x = jnp.array([2, 5, 7], dtype=KB)
+        one = jnp.ones([], dtype=KB)
+        out = expand_eq_to_hypercube(x, one, msb=True)
+        ref = jnp.atleast_1d(one)
+        for j in range(x.shape[0]):
+            ref = expand_hypercube_step(ref, x[j], msb=True)
+        self.assertTrue(bool(jnp.all(out == ref)))
+        self.assertEqual(int(out.sum()), 1)  # still a partition of unity
+
 
 class EqFactorTest(absltest.TestCase):
     def test_matches_eval_eq_on_length_one_points(self) -> None:
