@@ -9,10 +9,13 @@ isomorphism the ring-switch / tensor-algebra kernels ride on.
 It is a shift/mask, NOT a bitcast. A hardware bitcast is byte-granular (the finest
 binary-field bitcast is GF(2^128) ↔ GF(2^8); GF(2^128) → F_2 fails the
 compatible-width check), so reaching the individual F_2 coefficients needs the
-explicit unpack. The `uint32` storage limbs the shift/mask rides on stay private:
-`uint32` is the widest integer the field↔integer bitcast is correct at on every
-backend — the field→`uint64` narrowing miscompiles on the CPU PJRT path until the
-pinned wheel carries fractalyze/xla#241.
+explicit unpack. The `uint32` storage limbs the shift/mask rides on stay private.
+`uint32` is the finest limb, so it keeps the bit kernels valid for the widest set
+of tower dtypes — [`field_bit_width`] needs the width to be a whole number of
+limbs, so a `uint64` limb would reject the 32-bit tower level (`binary_field_t5`)
+— and keeps the ring-switch `{0, 1} × limb` products narrow. A `uint64` limb was
+also once outright broken (the field→`uint64` narrowing miscompiled on the CPU
+PJRT path), but that is fixed as of fractalyze/xla#241, carried by the current pin.
 """
 from __future__ import annotations
 
