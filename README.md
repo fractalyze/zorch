@@ -45,10 +45,11 @@ prove()  —  a chain of Stages joined by Bridges
 
   Stage   trace-commit      commit the witness columns
   Bridge  grind             a PoW that only feeds the transcript
-  Stage   logup-gkr         the interaction argument — a sub-chain of
-                              per-layer Rounds, each layer its own sumcheck
+  Stage   logup-gkr         the interaction argument (its own sub-chain)
   Bridge  observe(framing)  absorb in the reference's exact order
-  Stage   zero-check        the constraint sumcheck
+  Stage   zero-check        the constraint sumcheck — a chain of Rounds:
+              Round  bind x₀     one sumcheck step (observe → sample)
+              Round  bind x₁     … one Round per variable
   Stage   jagged-evals      the PCS opening
 ```
 
