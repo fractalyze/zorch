@@ -457,8 +457,8 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     # Select the chain entry for `perm_count` with a one-hot select over the
     # STATIC chain, NOT a traced-index gather into a stacked array
     # (`output_buffers[perm_count, ...]` / `leaves[perm_count]`): that gather
-    # miscompiles on the XLA CPU backend (fractalyze/zkx#500 class), the same
-    # reason `_observe_body` unrolls its block loop. `depth` is static, so the
+    # miscompiles on the XLA CPU backend, the same reason `_observe_body`
+    # unrolls its block loop. `depth` is static, so the
     # one-hot is a fixed chain of selects; `out_pos` stays a 1-D buffer gather,
     # which `_sample_one` already uses CPU-safely.
     def _pick(stacked: list, idx: Array) -> Array:

@@ -353,7 +353,7 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     newly-complete 64-byte block into the midstate, keep the `<64 B` remainder as
     the new pending block. The block loop is a Python-unrolled, active-count-masked
     schedule over STATIC slices (never a traced-index gather / scan-carry scatter)
-    — the fractalyze/zkx#500 CPU-safe pattern `transcript.DuplexTranscript` uses."""
+    — the CPU-safe pattern `transcript.DuplexTranscript` uses."""
     length = data.shape[0]
     pl = state.pending_len
     combined_src = jnp.concatenate([state.pending, data.astype(jnp.uint8)])  # [64+L]
