@@ -60,8 +60,8 @@ prove()  —  the prove_chain is Stages; a Stage holds Rounds and Bridges
 ──────────────────────────────────────────────────────────────────────
 
   Stage   trace-commit          commit the witness columns
-    Bridge  grind                 a PoW inside the stage (buys security bits)
   Stage   logup-gkr             the interaction argument:
+    Bridge  grind                 a PoW inside the stage (buys security bits)
     Round   layer L                one layer — itself a Round of Rounds:
       Round   bind x₀                a leaf: one observe → sample
       Round   bind x₁
