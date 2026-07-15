@@ -1,6 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Field-dtype helpers: the base prime field of a (possibly extension) dtype, and
-the naturals {0..n−1} built in it."""
+"""Field-dtype helpers: the base prime field of a (possibly extension) dtype, the
+naturals {0..n−1} built in it, and the binary-field predicate."""
 
 from __future__ import annotations
 
@@ -29,5 +29,12 @@ def naturals(n: int, dtype: Any) -> Array:
     and byte-identical to embedding each node into the extension. Built as a
     constant, NOT `jnp.arange`: these nodes feed the fused round-poly kernels, whose
     bodies must stay straight-line element-wise (an `iota` is a forbidden op there,
-    and an iota over an extension dtype is unsupported in frx besides)."""
+    and an iota over an extension dtype is unsupported in the fork besides)."""
     return jnp.array(list(range(n)), base_field(dtype))
+
+
+def is_binary_field(dtype: Any) -> bool:
+    """True for the binary-field family (`binary_field_ghash`, `binary_field_t*`):
+    GF(2^m), characteristic 2 — field addition is a bitwise XOR of the packed
+    representation, and `lax.ntt` runs the LCH additive NTT for them."""
+    return jnp.dtype(dtype).name.startswith("binary_field")

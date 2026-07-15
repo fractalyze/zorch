@@ -22,3 +22,16 @@ py_library(
         requirement("zk_dtypes"),
     ],
 )
+
+py_library(
+    name = "binary_field",
+    srcs = [
+        "__init__.py",
+        "binary_field.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ],
+)
