@@ -16,7 +16,7 @@ recovers its bound point by *replaying the verifier round* over the proof
 there is no separate assumption about the message form baked into the stage.
 
 The default engines reproduce the shipped behavior: value-form `StandardRound`
-over the degree-3 zerocheck summand `E·(A·B−C)` (natural domain) for the outer
+over the degree-3 zerocheck summand `eq·(â◦b̂−ĉ)` (natural domain) for the outer
 stage, and the degree-2 product for the inner. The outer summand is mixed-degree,
 so its domain must stay finite (a leading-∞ domain needs a homogeneous summand);
 a swapped outer engine must respect that.
@@ -46,7 +46,7 @@ class StageSumcheck:
 
 def zerocheck_engine() -> StageSumcheck:
     """Default outer engine: value-form product `StandardRound` over the degree-3
-    zerocheck summand `E·(A·B−C)` on the natural domain."""
+    zerocheck summand `eq·(â◦b̂−ĉ)` on the natural domain."""
     return StageSumcheck(
         StandardRound(ZerocheckSummand()), SumcheckRound(ZEROCHECK_DEGREE)
     )
