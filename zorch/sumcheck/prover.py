@@ -234,10 +234,10 @@ class SumcheckSummand(Protocol):
 # challenge, which arrives as one operand whose dtype already carries base vs
 # extension.
 SUMCHECK_ROUND_MARKER = "zorch.sumcheck.round"
-# Version 1: this marker never shipped, and its producer (here), the FXLA
+# Version 1: this marker never shipped, and its producer (here), the XLA
 # `SumcheckRecognizer` (`kSumcheckRoundCompositeVersion`), and the emitters are
 # pinned together, so the version is the initial one and moves only on a future
-# cross-release ABI break. Keep in lockstep with the FXLA recognizer's constant.
+# cross-release ABI break. Keep in lockstep with the XLA recognizer's constant.
 SUMCHECK_ROUND_MARKER_VERSION = 1
 
 

@@ -30,7 +30,7 @@ from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
 
-# A poseidon2 permute is impractically slow to compile on the FXLA CPU
+# A poseidon2 permute is impractically slow to compile on the XLA CPU
 # backend, so
 # the real-transcript e2e is GPU-only. transcript_test gates its DuplexTranscript
 # cases on the same CPU-backend check (for its own reason), so neither runs in the
@@ -75,7 +75,7 @@ class GkrRoundtripTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
 
-@absltest.skipIf(_CPU_BACKEND, "poseidon2 compile is impractically slow on FXLA CPU")
+@absltest.skipIf(_CPU_BACKEND, "poseidon2 compile is impractically slow on XLA CPU")
 class GkrDuplexRoundtripTest(absltest.TestCase):
     """Self-verification through the real on-device poseidon2 DuplexTranscript:
     challenges are squeezed from the sponge (no preset stream), and the verifier

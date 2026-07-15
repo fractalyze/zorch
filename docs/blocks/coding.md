@@ -12,7 +12,7 @@ maintain, not value.
 
 ## The one rule: don't hand-roll the NTT
 
-In Fractalyze XLA's patched JAX, `frx.lax.ntt` **is** the native finite-field NTT — field
+In FRX, `frx.lax.ntt` **is** the native finite-field NTT — field
 dtype in and out, a `generator` argument selecting the root, extension fields
 auto-decomposed into prime-field NTTs, and the whole thing lowered to a single
 fused kernel. Reed-Solomon `encode` therefore hands its evaluation to `lax.ntt`
@@ -91,7 +91,7 @@ binary round the same additive way.
   code's parameters are fixed once and the coset ramp is precomputed. This
   mirrors `Poseidon2` (a configured operator), not a free function.
 
-- **Not a pytree.** `ReedSolomon` holds a JAX array (`_coset_powers`) but is a
+- **Not a pytree.** `ReedSolomon` holds an FRX array (`_coset_powers`) but is a
   configured *operator*, not threaded carry state — so, like `Poseidon2`, it is
   not registered as a pytree. The "register state containers as pytrees" rule is
   about immutably-threaded state (the `Transcript`), not operators constructed

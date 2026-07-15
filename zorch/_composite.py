@@ -1,6 +1,6 @@
 """composite — emit a `frx.lax.composite` marker for a fusible region.
 
-`lax.composite` lowers to `stablehlo.CompositeOp`; FXLA's rewriter then fuses the
+`lax.composite` lowers to `stablehlo.CompositeOp`; XLA's rewriter then fuses the
 marked region into a single custom-fusion kernel (or a vendor-expanded chain,
 for a name-routed marker). Marker-specific semantics live in the callers
 (`fused_region`, `constraint_eval`, the name-routed poseidon2/merkle/sumcheck

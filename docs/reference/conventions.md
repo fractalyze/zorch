@@ -15,6 +15,7 @@ the why.
 inside are fine — `jit` unrolls them.
 
 **Do not `@jit`** when the function:
+
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
 - composes sub-rounds in a static Python loop over heterogeneous shapes — e.g.
@@ -138,7 +139,7 @@ predictable and the step count drives cost — the jagged GKR roll above).
 
 A `Round` — or any object — that crosses a `frx` transform boundary (passed to or
 returned from `jit` / `vmap` / `scan`, or threaded as a `scan` carry) must be a
-registered JAX **pytree**. Register the concrete class as a frozen dataclass:
+registered FRX **pytree**. Register the concrete class as a frozen dataclass:
 
 ```python
 @partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
@@ -198,12 +199,10 @@ has two drift-proof homes: the code itself (names, types) and the tests, which a
 the executable usage and run on every commit. A prose "usage guide" duplicates the
 tests and goes stale the first time the API moves — so we don't write one.
 
-- **WHY, not WHAT.** `# loop over factors` above a `for` is noise; `# direct
-  Lagrange, not barycentric, so a challenge on a node doesn't divide by zero`
+- **WHY, not WHAT.** `# loop over factors` above a `for` is noise; `# direct Lagrange, not barycentric, so a challenge on a node doesn't divide by zero`
   earns its line. If a name already says it, the comment is redundant.
 - **Temporally neutral.** State the current permanent rule, not the journey. No
-  "used to", "before this commit", "lands in a follow-up" — `git log` / `git
-  blame` carry the chronology; in-tree narration rots within a commit or two.
+  "used to", "before this commit", "lands in a follow-up" — `git log` / `git blame` carry the chronology; in-tree narration rots within a commit or two.
 - **Self-contained.** A reader has only the source tree and history. No
   session/spec labels (`Q1:A`, `Approach D`), no references to uncommitted files,
   no home/scratch paths. Link rationale in a tracked file by its repo-relative
@@ -259,8 +258,7 @@ Vocabulary:
   it is only read, `list[Array]` where it is owned or returned.
 - `Transcript` (the Protocol in `transcript.py`) for the threaded transcript,
   never a concrete implementation. A test that reaches an implementation-only
-  field narrows first with `if not isinstance(t, DuplexTranscript): raise
-  AssertionError(...)`, not a bare `assert` ([Testing](#testing)).
+  field narrows first with `if not isinstance(t, DuplexTranscript): raise AssertionError(...)`, not a bare `assert` ([Testing](#testing)).
 - `Any` for a field dtype — the core names no field and treats `dtype` as
   opaque, so `dtype: Any` is the honest type, not a placeholder.
 
@@ -269,7 +267,7 @@ signature. A prover round is `(state, transcript) -> (state, transcript, msg)`
 and its verifier dual `(claim, msg, transcript) -> (claim, transcript, r, ok)`,
 so the base can't name a single shape — the subclasses give the precise ones.
 
-mypy can't see through frx (its shipped stubs don't parse) or
+mypy can't see through FRX (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value
 is catching a missing or malformed annotation, not deep array-shape checking —
 write the precise type regardless; it is documentation that outlives the stubs.
@@ -311,7 +309,7 @@ for the `<module>.py` they exercise — `zorch/sumcheck/prover.py` →
 findable by name; the `testing/` split keeps the source dir to shippable
 surface. Each `testing/` dir carries a `BUILD.bazel` registering every test as a
 `py_test`, so `bazel test //...` — not the `pytest` job alone — is the single
-source of truth for "all tests pass" (`pytest` adds only the frx coverage
+source of truth for "all tests pass" (`pytest` adds only the FRX coverage
 for the `manual`-tagged tests).
 
 `__init__.py` is header-only — the copyright line, nothing more. A consumer

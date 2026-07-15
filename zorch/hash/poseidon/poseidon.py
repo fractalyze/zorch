@@ -1,11 +1,11 @@
 """Classic Poseidon permutation — scheme-agnostic, single-kernel by construction.
 
 The permutation is one function (all rounds) wrapped in a `frx.lax.composite`
-(`fused_region`): FXLA's `ZorchFusedRegionRewriter` turns that marker into a
+(`fused_region`): XLA's `ZorchFusedRegionRewriter` turns that marker into a
 single custom-fusion kernel — one kernel by construction, not via a per-hash
 compiler pattern match. The region is named `zorch.poseidon` (distinct from
 `zorch.poseidon2`), the permutation shape riding as `composite.attributes`
-(`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to FXLA's
+(`width`/`full_rounds`/`partial_rounds`/`alpha`/`mds`), and routes to XLA's
 dedicated, params-driven Poseidon emitter. The body is kept straight-line:
 rounds are unrolled (fixed, small counts) and the dense MDS uses the normal-form
 helper (`apply_dense_mds`) so nothing lowers to a reduce/dot/gather that would
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
 
 POSEIDON_MARKER = "zorch.poseidon"
-# Marker revision riding as `composite.version`. FXLA recognizes the marker by
+# Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON_MARKER_VERSION = 1

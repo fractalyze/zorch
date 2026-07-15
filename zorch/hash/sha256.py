@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 U32 = jnp.uint32
 
 SHA256_MARKER = "zorch.sha256"
-# Marker revision riding as `composite.version`. FXLA recognizes the marker by
+# Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it lets a
 # future contract change be staged without renaming the marker (cf. POSEIDON2).
 SHA256_MARKER_VERSION = 1
@@ -353,7 +353,7 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     newly-complete 64-byte block into the midstate, keep the `<64 B` remainder as
     the new pending block. The block loop is a Python-unrolled, active-count-masked
     schedule over STATIC slices (never a traced-index gather / scan-carry scatter)
-    — the fractalyze/zkx#500 CPU-safe pattern `transcript.DuplexTranscript` uses."""
+    — the CPU-safe pattern `transcript.DuplexTranscript` uses."""
     length = data.shape[0]
     pl = state.pending_len
     combined_src = jnp.concatenate([state.pending, data.astype(jnp.uint8)])  # [64+L]

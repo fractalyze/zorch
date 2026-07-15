@@ -424,7 +424,7 @@ class DuplexTranscript:
 # `inline=True` keeps call sites already inside a jit zone byte-identical:
 # without it the zone stays a nested pjit call in the outer jaxpr, which stops
 # the permutation's round constants from auto-lifting into the
-# `zorch.sumcheck` composite envelope (the operand layout FXLA expands).
+# `zorch.sumcheck` composite envelope (the operand layout XLA expands).
 
 
 @partial(jit, static_argnames=("n",), inline=True)
@@ -457,8 +457,8 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     # Select the chain entry for `perm_count` with a one-hot select over the
     # STATIC chain, NOT a traced-index gather into a stacked array
     # (`output_buffers[perm_count, ...]` / `leaves[perm_count]`): that gather
-    # miscompiles on the FXLA CPU backend (fractalyze/zkx#500 class), the same
-    # reason `_observe_body` unrolls its block loop. `depth` is static, so the
+    # miscompiles on the XLA CPU backend, the same reason `_observe_body`
+    # unrolls its block loop. `depth` is static, so the
     # one-hot is a fixed chain of selects; `out_pos` stays a 1-D buffer gather,
     # which `_sample_one` already uses CPU-safely.
     def _pick(stacked: list, idx: Array) -> Array:
