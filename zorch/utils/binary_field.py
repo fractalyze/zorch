@@ -13,9 +13,7 @@ explicit unpack. The `uint32` storage limbs the shift/mask rides on stay private
 `uint32` is the finest limb, so it keeps the bit kernels valid for the widest set
 of tower dtypes — [`field_bit_width`] needs the width to be a whole number of
 limbs, so a `uint64` limb would reject the 32-bit tower level (`binary_field_t5`)
-— and keeps the ring-switch `{0, 1} × limb` products narrow. A `uint64` limb was
-also once outright broken (the field→`uint64` narrowing miscompiled on the CPU
-PJRT path), but that is fixed as of fractalyze/xla#241, carried by the current pin.
+— and keeps the ring-switch `{0, 1} × limb` products narrow.
 """
 from __future__ import annotations
 
