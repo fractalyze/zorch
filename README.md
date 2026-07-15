@@ -53,11 +53,11 @@ prove()  —  a chain of Stages joined by Bridges
   Stage   jagged-evals      the PCS opening
 ```
 
-|             | **`Stage`**                                       | **`Bridge`**                                      | **leaf `Round`**              |
-| ----------- | ------------------------------------------------- | ------------------------------------------------- | ----------------------------- |
-| **Role**    | one phase of the argument                         | join two stages on the transcript                 | one step inside a stage       |
+|             | **`Stage`**                                       | **`Bridge`**                                                          | **leaf `Round`**              |
+| ----------- | ------------------------------------------------- | --------------------------------------------------------------------- | ----------------------------- |
+| **Role**    | one phase of the argument                         | join two stages on the transcript                                     | one step inside a stage       |
 | **Body**    | witness + real compute; usually a sub-chain       | transcript-facing only — a grind still hashes, but no witness crosses | one `observe`→`sample`        |
-| **Example** | trace-commit, logup-gkr, zero-check, jagged-evals | a PoW grind, a framed observe, a discarded sample | a per-variable sumcheck round |
+| **Example** | trace-commit, logup-gkr, zero-check, jagged-evals | a PoW grind, a framed observe, a discarded sample                     | a per-variable sumcheck round |
 
 `Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
 how the verifier mirrors the prover *round-for-round* — but the roles are what a
