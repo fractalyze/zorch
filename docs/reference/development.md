@@ -1,14 +1,14 @@
 # Development environment
 
-`zorch` is pure Python on frx + the Fractalyze XLA PJRT plugin. This page is the dev-loop
+`zorch` is pure Python on FRX + the Fractalyze XLA PJRT plugin. This page is the dev-loop
 reference; for a first install see the quick start in
 [`../README.md`](../../README.md).
 
 ## Per-workspace venvs
 
-Each workspace pins its own frx checkout + venv under
+Each workspace pins its own FRX checkout + venv under
 `$DEVENV_ENVS_DIR/<workspace>/` (default `~/Workspace/envs/<workspace>/`);
-never point a workspace at another checkout's editable frx. The venv must
+never point a workspace at another checkout's editable FRX. The venv must
 carry the **opt** selfbuilt frxlib — an assertion-enabled build makes XLA
 compilation an order of magnitude slower, which shows up as multi-minute test
 "hangs":
@@ -62,7 +62,7 @@ pins in `requirements.in` to that version instead.
 A stale plugin surfaces as `custom op 'stablehlo.composite' is unknown` on any
 fresh compile.
 
-## frx compile-cache rule
+## FRX compile-cache rule
 
 A persistent `JAX_COMPILATION_CACHE_DIR` skips recompiles of the heavy
 `local_only` tests across venv runs — worthwhile whenever you iterate against

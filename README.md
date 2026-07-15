@@ -2,9 +2,9 @@
 
 > **SNARK = Σ IOP Round**
 
-frx-native building blocks for Modern SNARKs. `zorch` sits between **frx** —
+FRX-native building blocks for Modern SNARKs. `zorch` sits between **FRX** —
 Fractalyze's fork of [JAX](https://github.com/jax-ml/jax) — and the proof systems
-that consume it: frx provides tracing and codegen, lowered through **Fractalyze
+that consume it: FRX provides tracing and codegen, lowered through **Fractalyze
 XLA**, its fork of stock [XLA](https://github.com/openxla/xla) that adds native
 field and elliptic-curve types. `zorch` provides the reusable pieces a proof
 system is assembled from.
@@ -102,7 +102,7 @@ the `Round`:
 
 ## Development
 
-`zorch` is pure Python on frx, run against its GPU plugin. A virtualenv with
+`zorch` is pure Python on FRX, run against its GPU plugin. A virtualenv with
 the pinned toolchain:
 
 ```sh
@@ -112,7 +112,7 @@ pip install -r requirements.in \
 ```
 
 The dev loop — per-workspace venvs, developing against a local Fractalyze XLA
-build, the frx compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
+build, the FRX compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
 
 ## Documentation
 

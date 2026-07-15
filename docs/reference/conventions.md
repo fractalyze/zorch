@@ -138,7 +138,7 @@ predictable and the step count drives cost — the jagged GKR roll above).
 
 A `Round` — or any object — that crosses a `frx` transform boundary (passed to or
 returned from `jit` / `vmap` / `scan`, or threaded as a `scan` carry) must be a
-registered frx **pytree**. Register the concrete class as a frozen dataclass:
+registered FRX **pytree**. Register the concrete class as a frozen dataclass:
 
 ```python
 @partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
@@ -269,7 +269,7 @@ signature. A prover round is `(state, transcript) -> (state, transcript, msg)`
 and its verifier dual `(claim, msg, transcript) -> (claim, transcript, r, ok)`,
 so the base can't name a single shape — the subclasses give the precise ones.
 
-mypy can't see through frx (its shipped stubs don't parse) or
+mypy can't see through FRX (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value
 is catching a missing or malformed annotation, not deep array-shape checking —
 write the precise type regardless; it is documentation that outlives the stubs.
@@ -311,7 +311,7 @@ for the `<module>.py` they exercise — `zorch/sumcheck/prover.py` →
 findable by name; the `testing/` split keeps the source dir to shippable
 surface. Each `testing/` dir carries a `BUILD.bazel` registering every test as a
 `py_test`, so `bazel test //...` — not the `pytest` job alone — is the single
-source of truth for "all tests pass" (`pytest` adds only the frx coverage
+source of truth for "all tests pass" (`pytest` adds only the FRX coverage
 for the `manual`-tagged tests).
 
 `__init__.py` is header-only — the copyright line, nothing more. A consumer
