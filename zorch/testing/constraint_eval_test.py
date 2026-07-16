@@ -135,16 +135,17 @@ class ConstraintEvalTest(absltest.TestCase):
 
     def test_column_weights_adds_the_weighted_column_sum(self) -> None:
         # column_weights folds `sum_c trace[:, c] * w[c]` into each row's value,
-        # added AFTER the live mask (unmasked). The inlined decomposition must
-        # equal `masked_fold + trace @ w` exactly (field add is associative, so
-        # the contraction order is irrelevant). Random rows (dead rows are NOT
-        # zero here) pin that the column term is added unmasked.
+        # under the live mask: dead rows zero out of the column term too. A
+        # window into a compact-packed shared buffer straddles the NEXT chip's
+        # live rows, so dead rows are NOT zero and an unmasked dot would leak
+        # them — the live-bounded emitter kernel zeroes whole dead rows, and
+        # the inlined decomposition must match it byte-for-byte. Random rows
+        # (dead rows are NOT zero here) pin that the mask covers the dot.
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         weights = rand_field(5, (3,), F)  # one weight per trace column
-        fold = _eval_fn(rows) @ alpha
-        masked = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
-        golden = masked + rows @ weights
+        fold = _eval_fn(rows) @ alpha + rows @ weights
+        golden = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
         got = constraint_eval(
             _eval_fn, rows, alpha, live_width=5, column_weights=weights
         )
@@ -335,15 +336,15 @@ class ConstraintEvalTest(absltest.TestCase):
 
     def test_aux_composes_with_live_width_and_column_weights(self) -> None:
         # All optionals present: order is (trace, alpha, live, weights, aux), so
-        # aux's index shifts to 4. The eager result equals the masked fold plus
-        # the unmasked column term (column_weights is added after the mask).
+        # aux's index shifts to 4. The eager result equals the live mask over
+        # the fold PLUS the column term (mask-last: dead rows zero out of the
+        # dot too, matching the live-bounded emitter kernel).
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         weights = rand_field(5, (3,), F)
         aux = rand_field(7, (2,), F)
-        fold = _eval_fn_aux(rows, aux) @ alpha
-        masked = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
-        golden = masked + rows @ weights
+        fold = _eval_fn_aux(rows, aux) @ alpha + rows @ weights
+        golden = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
         got = constraint_eval(
             _eval_fn_aux,
             rows,
@@ -406,6 +407,80 @@ class ConstraintEvalTest(absltest.TestCase):
                 )
                 self.assertTrue(bool(jnp.array_equal(got, want)), (off, got, want))
 
+    def test_col_stride_windows_a_jagged_flat_buffer(self) -> None:
+        # A [h, nc] chip trace packed COLUMN-MAJOR into a flat 1-D buffer:
+        # column c's rows at flat[off + c*H + r], every other element garbage
+        # (the in-column dead tail r in [h, H) and everything outside). The
+        # jagged window (start_offset=off, col_stride=H, num_cols=nc,
+        # window_rows=W) with live_width=h + column_weights must byte-equal the
+        # zero-padded rank-2 window — pins the flat gather, the mask-last dead
+        # rows, and the column dot on the jagged path.
+        h, W, H, off, nc = 5, 6, 9, 7, 3
+        small = rand_field(9, (h, nc), F)
+        alpha = rand_field(2, (3,), F)
+        weights = rand_field(5, (nc,), F)
+        parts = [rand_field(40, (off,), F)]
+        for c in range(nc):
+            parts += [small[:, c], rand_field(50 + c, (H - h,), F)]
+        parts.append(rand_field(60, (4,), F))
+        flat = jnp.concatenate(parts)
+        window = jnp.concatenate([small, jnp.zeros((W - h, nc), F)], axis=0)
+        want = constraint_eval(
+            _eval_fn,
+            window,
+            alpha,
+            live_width=jnp.asarray(h, jnp.int32),
+            column_weights=weights,
+        )
+        got = constraint_eval(
+            _eval_fn,
+            flat,
+            alpha,
+            live_width=jnp.asarray(h, jnp.int32),
+            start_offset=jnp.asarray(off, jnp.int32),
+            window_rows=W,
+            col_stride=jnp.asarray(H, jnp.int32),
+            num_cols=nc,
+            column_weights=weights,
+        )
+        self.assertTrue(bool(jnp.array_equal(got, want)), (got, want))
+
+    def test_col_stride_composes_with_the_fold(self) -> None:
+        # Jagged base + delta flat buffers, fold coefficient k: the marker's
+        # in-window fold `base + k*delta` must byte-equal evaluating the
+        # pre-folded zero-padded rank-2 window directly.
+        h, W, H, off, nc = 4, 4, 6, 3, 3
+        base2 = rand_field(11, (h, nc), F)
+        delta2 = rand_field(12, (h, nc), F)
+        alpha = rand_field(2, (3,), F)
+        k = rand_field(13, (), F)
+
+        def pack(mat: frx.Array, seed: int) -> frx.Array:
+            parts = [rand_field(seed, (off,), F)]
+            for c in range(nc):
+                parts += [mat[:, c], rand_field(seed + 1 + c, (H - h,), F)]
+            return jnp.concatenate(parts)
+
+        flat_b, flat_d = pack(base2, 70), pack(delta2, 80)
+        eff = base2 + k * delta2
+        window = jnp.concatenate([eff, jnp.zeros((W - h, nc), F)], axis=0)
+        want = constraint_eval(
+            _eval_fn, window, alpha, live_width=jnp.asarray(h, jnp.int32)
+        )
+        got = constraint_eval(
+            _eval_fn,
+            flat_b,
+            alpha,
+            live_width=jnp.asarray(h, jnp.int32),
+            start_offset=jnp.asarray(off, jnp.int32),
+            window_rows=W,
+            col_stride=jnp.asarray(H, jnp.int32),
+            num_cols=nc,
+            delta=flat_d,
+            fold_coeff=k,
+        )
+        self.assertTrue(bool(jnp.array_equal(got, want)), (got, want))
+
     def test_start_offset_attrs_ride_the_composite(self) -> None:
         h, off, W, nc = 5, 3, 8, 3
         tall = rand_field(9, (off + W + 2, nc), F)
@@ -430,6 +505,28 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertIn("live_width_operand_idx = 2", txt)
         self.assertIn("start_offset_operand_idx = 3", txt)
         self.assertIn(f"window_rows = {W}", txt)
+
+    def test_start_offset_drives_the_dynamic_slice_start_directly(self) -> None:
+        # The recognizing emitter binds the window base structurally: the
+        # parameter feeding a dynamic-slice's axis-0 start (its
+        # ConstraintEvalStartOffsetIdx). JAX's default negative-index wrap would
+        # interpose a compare/add/select on that start, hiding the parameter and
+        # dropping the marker to the unbounded path. Pin that the decomposition's
+        # windowing slice reads the start_offset OPERAND directly — start token is
+        # a function %arg, not an SSA temp.
+        h, off, W, nc = 5, 3, 8, 3
+        tall = rand_field(9, (off + W + 2, nc), F)
+        alpha = rand_field(2, (3,), F)
+        txt = (
+            frx.jit(
+                lambda t, a, lw, so: constraint_eval(
+                    _eval_fn, t, a, live_width=lw, start_offset=so, window_rows=W
+                )
+            )
+            .lower(tall, alpha, jnp.int32(h), jnp.int32(off))
+            .as_text()
+        )
+        self.assertRegex(txt, r"stablehlo\.dynamic_slice %arg\d+, %arg\d+,", txt)
 
     def test_start_offset_requires_live_width(self) -> None:
         rows = rand_field(1, (8, 3), F)
