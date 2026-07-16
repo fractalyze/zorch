@@ -64,6 +64,16 @@ def _scalar_int32_operand(value: Array | int, name: str) -> Array:
     return arr
 
 
+def _fold_coeff_operand(value: Array | int, dtype: object) -> Array:
+    """Normalize the runtime fold coefficient k to a rank-0 scalar in the trace's
+    field. A Python int (the sumcheck t-point) is cast to that field; an Array
+    must already be a scalar of it."""
+    arr = jnp.asarray(value, dtype) if isinstance(value, int) else value
+    if arr.ndim != 0:
+        raise ValueError(f"fold_coeff must be a scalar, got shape {arr.shape}")
+    return arr
+
+
 def constraint_eval(
     eval_fn: Callable[..., Array],
     trace: Array,
@@ -72,6 +82,10 @@ def constraint_eval(
     live_width: Array | int | None = None,
     start_offset: Array | int | None = None,
     window_rows: int | None = None,
+    col_stride: Array | int | None = None,
+    num_cols: int | None = None,
+    delta: Array | None = None,
+    fold_coeff: Array | int | None = None,
     column_weights: Array | None = None,
     aux_operands: tuple[Array, ...] = (),
     name: str = CONSTRAINT_EVAL_MARKER,
@@ -171,17 +185,50 @@ def constraint_eval(
         raise ValueError(
             "window_rows requires start_offset (it sizes the offset window)"
         )
+    if (col_stride is None) != (num_cols is None):
+        raise ValueError("col_stride and num_cols must be given together")
+    if col_stride is not None:
+        # Jagged flat-trace window: `trace` is a 1-D buffer of column-major
+        # per-chip segments; column c's rows live at
+        # trace[start_offset + c*col_stride + row]. col_stride (the runtime
+        # per-column segment length) and num_cols (the static column count)
+        # size the [window_rows, num_cols] window the constraint sees.
+        if start_offset is None:
+            raise ValueError("col_stride requires start_offset (the window base)")
+        if trace.ndim != 1:
+            raise ValueError(
+                f"col_stride windows a flat 1-D trace, got shape {trace.shape}"
+            )
+        if not isinstance(num_cols, int) or isinstance(num_cols, bool):
+            raise ValueError(
+                f"num_cols must be a Python int, got {type(num_cols).__name__}"
+            )
+        if num_cols < 1:
+            raise ValueError(f"num_cols must be at least 1, got {num_cols}")
+    if delta is not None or fold_coeff is not None:
+        # Fold-inside: the per-row trace is `trace[row] + fold_coeff*delta[row]`,
+        # so one compiled kernel evaluates every sumcheck t-point (fold_coeff is a
+        # runtime scalar). Both window the SAME shared buffer, so start_offset is
+        # required and delta must match trace's shape.
+        if delta is None or fold_coeff is None:
+            raise ValueError("delta and fold_coeff must be given together")
+        if start_offset is None:
+            raise ValueError("delta requires start_offset (both window the buffer)")
+        if delta.shape != trace.shape:
+            raise ValueError(
+                f"delta shape {delta.shape} must match trace shape {trace.shape}"
+            )
     if column_weights is not None:
         # Rides after live_width (so it requires one), keeping the optional
         # order fixed. Validate here so a mismatch fails loud, not as a cryptic
         # matmul trace error.
         if live_width is None:
             raise ValueError("column_weights requires live_width")
-        num_cols = trace.shape[-1]
-        if column_weights.ndim != 1 or column_weights.shape[0] != num_cols:
+        want_cols = num_cols if col_stride is not None else trace.shape[-1]
+        if column_weights.ndim != 1 or column_weights.shape[0] != want_cols:
             raise ValueError(
                 "column_weights must be rank-1 with one weight per trace column "
-                f"({num_cols}), got shape {column_weights.shape}"
+                f"({want_cols}), got shape {column_weights.shape}"
             )
     if aux_operands is None or hasattr(aux_operands, "ndim"):
         # None (a `pv=None`-style migration slip) or a bare array (which would
@@ -194,6 +241,8 @@ def constraint_eval(
     # than by defaulted params, which would mis-bind aux to the weights slot.
     has_live = live_width is not None
     has_offset = start_offset is not None
+    has_jagged = col_stride is not None and num_cols is not None and num_cols > 1
+    has_delta = delta is not None
     has_weights = column_weights is not None
     n_aux = len(aux_operands)
 
@@ -206,7 +255,9 @@ def constraint_eval(
         # *optional silently drops a surplus operand from the inlined path while
         # the marked kernel still carries it (a marked-vs-inlined divergence);
         # guard loud instead.
-        n_expected = has_live + has_offset + has_weights + n_aux
+        n_expected = (
+            has_live + has_offset + has_jagged + 2 * has_delta + has_weights + n_aux
+        )
         if len(optional) != n_expected:
             raise TypeError(
                 f"constraint_eval decomposition expected {n_expected} optional "
@@ -216,36 +267,105 @@ def constraint_eval(
         tail = iter(optional)
         live_width = next(tail) if has_live else None
         start_offset = next(tail) if has_offset else None
+        col_stride = next(tail) if has_jagged else None
+        delta = next(tail) if has_delta else None
+        fold_coeff = next(tail) if has_delta else None
         column_weights = next(tail) if has_weights else None
         aux = tuple(tail)  # the remaining n_aux operands feed the constraint body
         if start_offset is not None:
-            # trace is the tall shared buffer [TOTAL_ROWS, num_cols(, ...)];
-            # evaluate the constraint on the window_rows-row window (axis 0) at
-            # start_offset. window_rows is static (closed over), not an operand.
-            # Slicing here, before eval_fn runs, keeps everything below (the
-            # constraint, the RLC, the live_width mask, the column dot) identical
-            # whether trace arrived pre-windowed or tall.
+            # trace is the tall shared buffer — rank-2 [TOTAL_ROWS, num_cols]
+            # for the row-window path, or the flat 1-D jagged buffer for the
+            # col_stride path; evaluate the constraint on its
+            # [window_rows, num_cols] window at start_offset. window_rows and
+            # num_cols are static (closed over), not operands. Slicing here,
+            # before eval_fn runs, keeps everything below (the constraint, the
+            # RLC, the live_width mask, the column dot) identical whether trace
+            # arrived pre-windowed, tall, or flat.
             assert window_rows is not None  # validated above: start_offset requires it
-            trace = lax.dynamic_slice_in_dim(trace, start_offset, window_rows, axis=0)
+            # allow_negative_indices=False so the offset drives the dynamic-slice
+            # start directly. The default wraps it (compare<0 / add-size / select),
+            # so the axis-0 start becomes that select — but the emitter binds the
+            # window base as "the parameter driving a dynamic-slice start"
+            # (ConstraintEvalStartOffsetIdx); a wrapped start hides the base and
+            # drops the marker to the unbounded path. start_offset is non-negative
+            # by construction, so the wrap is dead semantics — byte-neutral to drop.
+            if col_stride is not None:
+                assert num_cols is not None  # validated together at entry
+
+                # Jagged: column c is a rank-1 slice at the affine start
+                # `start_offset + c*col_stride`. Constant folding leaves
+                # column 0 as the bare base and column 1 as add(o, H) by the
+                # time the recognizer sees the body — it resolves the base
+                # from column 0 and the stride from the add starts.
+                def _win(t: Array) -> Array:
+                    return jnp.stack(
+                        [
+                            lax.dynamic_slice_in_dim(
+                                t,
+                                start_offset + c * col_stride,
+                                window_rows,
+                                axis=0,
+                                allow_negative_indices=False,
+                            )
+                            for c in range(num_cols)
+                        ],
+                        axis=1,
+                    )
+
+            elif num_cols is not None:
+                # Single-column jagged chip: only column 0 exists, so there is
+                # no stride evidence for a recognizer to resolve — the marker
+                # omits the col_stride operand and the window degenerates to
+                # the plain rank-1 base slice, reshaped to the [window_rows, 1]
+                # the constraint sees.
+                def _win(t: Array) -> Array:
+                    return lax.dynamic_slice_in_dim(
+                        t,
+                        start_offset,
+                        window_rows,
+                        axis=0,
+                        allow_negative_indices=False,
+                    ).reshape(window_rows, 1)
+
+            else:
+
+                def _win(t: Array) -> Array:
+                    return lax.dynamic_slice_in_dim(
+                        t,
+                        start_offset,
+                        window_rows,
+                        axis=0,
+                        allow_negative_indices=False,
+                    )
+
+            trace = _win(trace)
+            if delta is not None:
+                # Fold-inside: eff = base_window + fold_coeff * delta_window. One
+                # kernel serves every t-point (fold_coeff runtime). Byte-identical
+                # to windowing a pre-folded `base + fold_coeff*delta` trace.
+                trace = trace + fold_coeff * _win(delta)
         constraints = eval_fn(trace, *aux)
         acc = constraints[..., 0] * alpha[..., 0]
         for k in range(1, num_constraints):
             acc = acc + constraints[..., k] * alpha[..., k]
+        if column_weights is not None:
+            # A dot is allowed in the bounded body; a recognizing emitter folds
+            # it into the per-row accumulator (hand-emitted in-kernel; the
+            # inlined path runs the dot directly).
+            acc = acc + trace @ column_weights
         if live_width is not None:
             if acc.ndim == 0:
                 raise ValueError("live_width needs a result with a leading row axis")
             # lax.select, not jnp.where — the single-kernel body rule; see
             # zorch/fusion.py's module docstring.
+            # The mask comes LAST — select(rows < live_width, rlc + dot, 0) —
+            # so the column term's dead rows zero out too. A window into a
+            # compact-packed shared buffer straddles the NEXT chip's live rows,
+            # so the dead rows are NOT zero and an unmasked dot would leak them;
+            # the live-bounded emitter kernel zeroes whole dead rows, and this
+            # order is what matches it byte-for-byte.
             rows = lax.broadcasted_iota(jnp.int32, acc.shape, 0)
             acc = lax.select(rows < live_width, acc, jnp.zeros_like(acc))
-        if column_weights is not None:
-            # Added AFTER the live mask, so the body root is
-            # add(masked_fold, dot(trace, column_weights)) — the shape a
-            # recognizing emitter folds into the per-row accumulator (hand-emitted
-            # in-kernel; the inlined path runs the dot directly). A dot is allowed
-            # in the bounded body, and dead rows are zero so the column term is
-            # byte-neutral under the live mask.
-            acc = acc + trace @ column_weights
         return acc
 
     operands: tuple[Array, ...] = (trace, alpha)
@@ -264,6 +384,25 @@ def constraint_eval(
         attrs["start_offset_operand_idx"] = len(operands) - 1
         assert window_rows is not None  # validated above: start_offset requires it
         attrs["window_rows"] = window_rows
+    if col_stride is not None and num_cols is not None and num_cols > 1:
+        # Jagged flat-trace window: the runtime per-column segment length,
+        # riding right after start_offset; num_cols is static like
+        # window_rows. Advisory — the emitter resolves the stride structurally
+        # (the base from the bare column-0 start, the stride from the add
+        # starts). A single-column chip omits the operand entirely: no add
+        # start exists to resolve a stride from, and the plain rank-1 window
+        # needs none.
+        operands += (_scalar_int32_operand(col_stride, "col_stride"),)
+        attrs["col_stride_operand_idx"] = len(operands) - 1
+        attrs["num_cols"] = num_cols
+    if delta is not None:
+        # Fold-inside: delta rides right after start_offset, then the runtime
+        # coefficient. The emitter resolves both structurally (delta is the second
+        # tall trace, fold_coeff the rank-0 field scalar feeding a multiply — see
+        # ResolveFoldTrace), so their indices ride only as advisory attributes.
+        operands += (delta, _fold_coeff_operand(fold_coeff, trace.dtype))
+        attrs["delta_operand_idx"] = len(operands) - 2
+        attrs["fold_coeff_operand_idx"] = len(operands) - 1
     if column_weights is not None:
         # The emitter recognizes it structurally (the rank-1 operand of the
         # body-root dot), so no operand-index attribute is needed.
