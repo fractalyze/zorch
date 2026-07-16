@@ -65,13 +65,24 @@ def _scalar_int32_operand(value: Array | int, name: str) -> Array:
 
 
 def _fold_coeff_operand(value: Array | int, dtype: object) -> Array:
-    """Normalize the runtime fold coefficient k to a rank-0 scalar in the trace's
-    field. A Python int (the sumcheck t-point) is cast to that field; an Array
-    must already be a scalar of it."""
-    arr = jnp.asarray(value, dtype) if isinstance(value, int) else value
-    if arr.ndim != 0:
-        raise ValueError(f"fold_coeff must be a scalar, got shape {arr.shape}")
-    return arr
+    """Normalize the runtime fold coefficient k to a rank-0 scalar of the
+    trace's field. A Python int is cast to that field; an Array must already
+    be a rank-0 scalar of it. Anything else fails loud — the decomposition
+    and the backend emitter both evaluate `base + k*delta` in the trace's
+    field, so a differently-typed k would corrupt silently downstream."""
+    if isinstance(value, int):
+        return jnp.asarray(value, dtype)
+    if not hasattr(value, "ndim"):
+        raise TypeError(
+            f"fold_coeff must be a field scalar or int, got {type(value).__name__}"
+        )
+    if value.ndim != 0:
+        raise ValueError(f"fold_coeff must be a scalar, got shape {value.shape}")
+    if value.dtype != dtype:
+        raise ValueError(
+            f"fold_coeff must be the trace's field {dtype}, got {value.dtype}"
+        )
+    return value
 
 
 def constraint_eval(
@@ -123,6 +134,23 @@ def constraint_eval(
     decomposition's `lax.dynamic_slice` keeps the inlined path
     byte-identical.
 
+    `col_stride` + `num_cols`, when given, treat the shared buffer as FLAT
+    and column-major jagged: column `c` of the window is the rank-1 slice of
+    `window_rows` elements starting at `start_offset + c*col_stride`, so
+    evaluations of different heights pack into one buffer with no rectangle
+    padding. `col_stride` is a runtime scalar `int32` like `start_offset`
+    (its operand index rides in `col_stride_operand_idx`); `num_cols` is a
+    Python `int` (a static attribute — it shapes the window). Requires
+    `start_offset`.
+
+    `delta` + `fold_coeff`, when given, evaluate the window of
+    `trace + fold_coeff*delta` instead of `trace`'s: `delta` windows the SAME
+    shared buffer at the same offsets (same shape and field as `trace`), and
+    `fold_coeff` is a runtime rank-0 scalar of the trace's field, so one
+    compiled kernel serves every coefficient value instead of a caller
+    materializing the combined buffer per value. Requires `start_offset`;
+    both must be given together.
+
     `column_weights`, when given, adds a per-row weighted column sum
     `sum_c trace[row, c] * column_weights[c]` to each row's accumulated value —
     a rank-1 vector with one weight per trace column. It rides as an operand
@@ -132,9 +160,11 @@ def constraint_eval(
     the per-row accumulator (computed thread-locally while the row is already
     loaded), so no separate matmul kernel is launched. The marker keeps the dot
     in its body so the inlined / monolithic paths stay byte-identical. It
-    requires `live_width` (the bounded path the emitter folds into) and is added
-    AFTER the live mask: dead rows are zero, so a zero row's column term
-    vanishes and the masked and unmasked forms agree. The term carries no
+    requires `live_width` (the bounded path the emitter folds into), and the
+    live mask wraps the WHOLE per-row value including this term (mask-last):
+    a window into a compact-packed shared buffer straddles the next
+    evaluation's live rows, so the dot's dead-row contributions must zero out
+    with everything else. The term carries no
     proving-scheme meaning here (a consumer may use it for a column opening
     batch) — `zorch` stays scheme-agnostic.
 
@@ -206,10 +236,11 @@ def constraint_eval(
         if num_cols < 1:
             raise ValueError(f"num_cols must be at least 1, got {num_cols}")
     if delta is not None or fold_coeff is not None:
-        # Fold-inside: the per-row trace is `trace[row] + fold_coeff*delta[row]`,
-        # so one compiled kernel evaluates every sumcheck t-point (fold_coeff is a
-        # runtime scalar). Both window the SAME shared buffer, so start_offset is
-        # required and delta must match trace's shape.
+        # Fold-inside: the per-row trace is `trace[row] + fold_coeff*delta[row]`
+        # at a RUNTIME coefficient, so one compiled kernel serves every
+        # coefficient value. Both window the SAME shared buffer, so
+        # start_offset is required and delta must match trace's shape and
+        # field.
         if delta is None or fold_coeff is None:
             raise ValueError("delta and fold_coeff must be given together")
         if start_offset is None:
@@ -217,6 +248,10 @@ def constraint_eval(
         if delta.shape != trace.shape:
             raise ValueError(
                 f"delta shape {delta.shape} must match trace shape {trace.shape}"
+            )
+        if delta.dtype != trace.dtype:
+            raise ValueError(
+                f"delta must be the trace's field {trace.dtype}, got {delta.dtype}"
             )
     if column_weights is not None:
         # Rides after live_width (so it requires one), keeping the optional
@@ -341,7 +376,7 @@ def constraint_eval(
             trace = _win(trace)
             if delta is not None:
                 # Fold-inside: eff = base_window + fold_coeff * delta_window. One
-                # kernel serves every t-point (fold_coeff runtime). Byte-identical
+                # kernel serves every fold coefficient (runtime). Byte-identical
                 # to windowing a pre-folded `base + fold_coeff*delta` trace.
                 trace = trace + fold_coeff * _win(delta)
         constraints = eval_fn(trace, *aux)

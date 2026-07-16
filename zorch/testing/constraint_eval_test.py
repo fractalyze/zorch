@@ -445,6 +445,34 @@ class ConstraintEvalTest(absltest.TestCase):
         )
         self.assertTrue(bool(jnp.array_equal(got, want)), (got, want))
 
+    def test_fold_operands_fail_loud_on_wrong_type_or_field(self) -> None:
+        # The decomposition and the emitter both evaluate base + k*delta in
+        # the trace's field; a float k, a k of another field, or a delta of
+        # another field must fail at the contract boundary, not corrupt
+        # downstream.
+        h, W = 5, 8
+        tall = rand_field(3, (W + 2, 2), F)
+        delta = rand_field(4, (W + 2, 2), F)
+        alpha = rand_field(5, (3,), F)
+
+        def call(**kw: object) -> frx.Array:
+            merged = dict(
+                live_width=h,
+                start_offset=0,
+                window_rows=W,
+                delta=delta,
+                fold_coeff=jnp.zeros((), F),
+            )
+            merged.update(kw)
+            return constraint_eval(_eval_fn, tall, alpha, **merged)
+
+        with self.assertRaises(TypeError):
+            call(fold_coeff=1.5)
+        with self.assertRaises(ValueError):
+            call(fold_coeff=jnp.zeros((), jnp.int32))
+        with self.assertRaises(ValueError):
+            call(delta=delta.view(jnp.uint32))
+
     def test_col_stride_composes_with_the_fold(self) -> None:
         # Jagged base + delta flat buffers, fold coefficient k: the marker's
         # in-window fold `base + k*delta` must byte-equal evaluating the
