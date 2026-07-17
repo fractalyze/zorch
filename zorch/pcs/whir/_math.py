@@ -23,26 +23,28 @@ from zorch.transcript import Transcript
 def sample_query_positions(
     transcript: Transcript, stride: int, count: int, dtype: DTypeLike
 ) -> tuple[Transcript, Array]:
-    """Sample `count` WHIR query coset indices in `[0, stride)`, one transcript
-    squeeze each — NOT the single batched squeeze of `pcs.fold.sample_positions`.
+    """Sample `count` WHIR query coset indices in `[0, stride)` — `count`
+    consecutive squeezes, each reduced on its CANONICAL low limb.
 
-    WHIR's query phase draws its indices one squeeze at a time and reduces each on
-    its CANONICAL low limb. A batched squeeze reorders the draws relative to that
-    sequence, and a Montgomery-bit reduction picks different residues — either one
-    desynchronizes the post-query challenge and breaks a byte-match against that
-    convention, so WHIR cannot reuse the batched fri/basefold sampler. `stride` is
-    a power of two, so the canonical reduction equals the low-bit mask. `dtype` is
+    Still NOT `pcs.fold.sample_positions`: that batched sampler reorders the draws
+    and reduces on Montgomery bits, either of which picks different residues and
+    desynchronizes the post-query challenge. What WHIR's convention pins is the
+    draw ORDER and the canonical reduction, not the number of squeeze calls — and
+    `Transcript.sample(count)` is byte-identical to `count` single squeezes (it
+    selects the same `_duplexing` results, just reading a rate-block per
+    permutation), so the whole draw is one op instead of `count` sequential ones.
+    That matters: the per-draw form dispatched `count` transcript squeezes
+    host-side, ~68 ms of pure launch latency at WHIR's query counts. `stride` is a
+    power of two, so the canonical reduction equals the low-bit mask. `dtype` is
     the base field the transcript squeezes (positions index a base-field
     codeword)."""
     if count == 0:
         return transcript, jnp.empty((0,), jnp.int32)
-    positions = []
-    t = transcript
-    for _ in range(count):
-        t, raw = t.sample(1)
-        canonical = lax.bitcast_convert_type(raw, dtype).astype(jnp.uint32).reshape(-1)
-        positions.append((canonical[0] % stride).astype(jnp.int32))
-    return t, jnp.stack(positions)
+    transcript, raw = transcript.sample(count)
+    # Per draw, take the low limb exactly as the per-draw form's `[0]` did.
+    canonical = lax.bitcast_convert_type(raw, dtype).astype(jnp.uint32)
+    canonical = canonical.reshape(count, -1)[:, 0]
+    return transcript, (canonical % stride).astype(jnp.int32)
 
 
 def round_code(
