@@ -285,7 +285,7 @@ class StackedOpenByteMatchTest(absltest.TestCase):
                 )
 
     def _verify(self, proof: StackedOpenProof) -> bool:
-        round_widths = tuple(r.mle.shape[1] for r in self.rounds)
+        round_widths = tuple(r.block.shape[0] for r in self.rounds)
         _, ok = _verify_jit(
             self.smcs,
             self.code,
