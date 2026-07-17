@@ -54,7 +54,7 @@ class FoldZoneKIndependenceTest(absltest.TestCase):
             block = jnp.asarray(rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
             codeword = code.encode(block).T
             _root, digest_layers = smcs.commit(codeword)
-            rd = StackedRound(mle=block.T, digest_layers=digest_layers)
+            rd = StackedRound(block=block, digest_layers=digest_layers)
             z_final = jnp.asarray(
                 rng.integers(0, _PRIME, (_LOG_S * 4,), np.uint32)
             ).view(EF)

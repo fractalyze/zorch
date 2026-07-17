@@ -153,10 +153,10 @@ class StackedOpenByteMatchTest(absltest.TestCase):
             # Column-major stacking: dense block k is column k. Encode all columns
             # in one batched FFT (the code rides the leading axis), bit-reversed
             # exactly as trace_commit writes the committed codeword.
-            mle = dense.reshape(k, S).T  # [S, K]
-            codeword = code.encode(dense.reshape(k, S)).T  # [S*blowup, K]
+            block = dense.reshape(k, S)  # [K, S]
+            codeword = code.encode(block).T  # [S*blowup, K]
             _root, digest_layers = smcs.commit(codeword)
-            return StackedRound(mle=mle, digest_layers=digest_layers)
+            return StackedRound(block=block, digest_layers=digest_layers)
 
         rounds = [build_round(prep), build_round(main)]
 

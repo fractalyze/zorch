@@ -58,22 +58,24 @@ from zorch.utils.bits import log2_ceil_usize, log2_strict_usize
 
 @partial(
     frx.tree_util.register_dataclass,
-    data_fields=["mle", "digest_layers"],
+    data_fields=["block", "digest_layers"],
     meta_fields=[],
 )
 @dataclass(frozen=True)
 class StackedRound:
     """One committed region's retained witness for the stacked open.
 
-    ``mle`` is the stacked ``[S, K]`` message-domain matrix (column ``k`` is the
-    dense block stacked to height ``S = 2^log_stacking_height``); the open
-    evaluates each column at ``stack_point`` and folds their RLC, and re-encodes
-    it to the committed ``[S * blowup, K]`` codeword (bit-reversed rows = the
-    leaves) for the FRI fold and query openings. ``digest_layers`` is that SMCS
-    commit's layered digest tree.
+    ``block`` is the ``[K, S]`` message-domain matrix in the commit's own
+    layout (row ``k`` is dense block ``k`` at ``S = 2^log_stacking_height``) —
+    for a packed region it is a free reshape view of the dense buffer, no
+    transpose. The open evaluates each block at ``stack_point``, folds their
+    RLC, and re-encodes to the committed ``[S * blowup, K]`` codeword
+    (bit-reversed rows = the leaves); any transposes happen inside the jitted
+    zones, where XLA fuses them. ``digest_layers`` is that SMCS commit's
+    layered digest tree.
     """
 
-    mle: Array
+    block: Array
     digest_layers: list[Array]
 
 
@@ -181,7 +183,7 @@ class StackedOpenProof:
 @partial(frx.jit, static_argnames=("code", "rlc_bits", "total_width"))
 def _open_prologue(
     code: BitReversedReedSolomon,
-    mles: list[Array],
+    blocks: list[Array],
     stack_point: Array,
     dense_eval: Array,
     transcript: GrindingTranscript,
@@ -190,6 +192,9 @@ def _open_prologue(
     total_width: int | None,
 ) -> tuple[list[Array], list[Array], Array, Array, GrindingTranscript]:
     ef_dtype = dense_eval.dtype
+    # [S, K] views; inside the jit XLA fuses the transposes into the consumers,
+    # so no [S, K] copy materializes.
+    mles = [block.T for block in blocks]
     # Each round's per-column evaluation at the stacking point (SP1's batch
     # evaluations, observed into the transcript). vmap over the column axis serves
     # concrete and symbolic K alike, byte-identical to a per-column unroll.
@@ -417,15 +422,15 @@ def stacked_basefold_open(
         raise ValueError(
             f"code message_len {code.message_len} != stacking height {stacking}"
         )
-    if any(rd.mle.shape[0] != stacking for rd in rounds):
-        raise ValueError(f"every round mle must stack to height {stacking}")
+    if any(rd.block.shape[1] != stacking for rd in rounds):
+        raise ValueError(f"every round block must stack to height {stacking}")
 
     stack_point = z_final[-log_stacking_height:]
-    mles = [rd.mle for rd in rounds]
-    total_width = None if rlc_bits is not None else sum(int(m.shape[1]) for m in mles)
+    blocks = [rd.block for rd in rounds]
+    total_width = None if rlc_bits is not None else sum(int(b.shape[0]) for b in blocks)
     batch_evals, round_codewords, mle, claim, t = _open_prologue(
         code,
-        mles,
+        blocks,
         stack_point,
         dense_eval,
         transcript,

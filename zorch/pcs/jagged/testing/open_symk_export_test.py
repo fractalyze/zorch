@@ -68,10 +68,9 @@ class SymbolicKOpenExportTest(absltest.TestCase):
 
     def _make_round(self, k: int) -> StackedRound:
         block = jnp.asarray(self.rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
-        mle = block.T
         codeword = self.code.encode(block).T
         _root, digest_layers = self.smcs.commit(codeword)
-        return StackedRound(mle=mle, digest_layers=digest_layers)
+        return StackedRound(block=block, digest_layers=digest_layers)
 
     def _export_symbolic(self) -> export.Exported:
         # Abstract round over a symbolic column count constrained to the bracket;
@@ -82,7 +81,7 @@ class SymbolicKOpenExportTest(absltest.TestCase):
             "k", constraints=[f"k <= {1 << _RLC_BITS}", "k >= 9"]
         )
         rd_abs = StackedRound(
-            mle=frx.ShapeDtypeStruct((_S, k), BF),
+            block=frx.ShapeDtypeStruct((k, _S), BF),
             digest_layers=[
                 frx.ShapeDtypeStruct(layer.shape, layer.dtype)
                 for layer in template.digest_layers

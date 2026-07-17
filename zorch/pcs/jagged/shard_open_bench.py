@@ -174,7 +174,7 @@ def main() -> None:
     _codeword, digest_layers = cw_dl
     del _codeword, cw_dl  # free the GB codeword now; the open re-encodes it
     t_merkle = t_commit - t_encode
-    rd = StackedRound(mle=dmat.T, digest_layers=digest_layers)
+    rd = StackedRound(block=dmat, digest_layers=digest_layers)
 
     # OPEN at a random point (jit'd; one batched FRI).
     key, kr, kd = frx.random.split(key, 3)
