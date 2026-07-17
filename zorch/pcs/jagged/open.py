@@ -174,77 +174,30 @@ class StackedOpenProof:
     query_openings: list[Opening]
 
 
-# One @jit zone: collapses the FRI fold loop's ~1.2k eager per-op module compiles
-# into one.
-@partial(
-    frx.jit,
-    static_argnames=(
-        "smcs",
-        "code",
-        "log_stacking_height",
-        "num_queries",
-        "pow_bits",
-        "rlc_bits",
-    ),
-)
-def stacked_basefold_open(
-    smcs: SingleMatrixCommitmentScheme,
+# K-shaped zone: everything whose shapes carry a round's column count K,
+# collapsed to the single [S] RLC'd mle + scalar claim the fold zone consumes.
+# Recompiles per K tuple, but its graph is a few simple large-data kernels, so
+# that compile is cheap.
+@partial(frx.jit, static_argnames=("code", "rlc_bits", "total_width"))
+def _open_prologue(
     code: BitReversedReedSolomon,
-    rounds: Sequence[StackedRound],
-    z_final: Array,
+    mles: list[Array],
+    stack_point: Array,
     dense_eval: Array,
-    log_stacking_height: int,
-    *,
-    num_queries: int,
-    pow_bits: int,
     transcript: GrindingTranscript,
-    rlc_bits: int | None = None,
-) -> tuple[StackedOpenProof, GrindingTranscript]:
-    """Open the stacked dense at ``z_final`` via one batched FRI over ``rounds``.
-
-    ``transcript`` must be a real grinding transcript at the state SP1 enters the
-    open with (the component roots already bound upstream) — the open observes
-    ``dense_eval`` and the batch evals, samples the RLC + fold challenges, grinds,
-    then samples query positions, so a scripted replay cannot drive it. Returns
-    ``(proof, transcript)``.
-
-    ``rlc_bits`` switches the open into the **symbolic-K** mode used for a
-    recompile-free ``frx.export``: when set, each round's column count ``K`` may
-    be a symbolic dim. The two K-dependent steps are made shape-polymorphic — the
-    per-column evals run under ``vmap`` over the column axis (not a static
-    ``range(K)``), and the RLC samples exactly ``rlc_bits`` challenges instead of
-    deriving the count from ``log2_ceil(total_width)``. ``rlc_bits`` must equal
-    ``log2_ceil`` of the bracket's total column width (one binary per power-of-2
-    column bracket); the resulting ``2^rlc_bits`` weights cover any ``K`` in the
-    bracket, and ``batch_staggered`` consumes the leading ``total_width`` of them.
-    Left ``None`` (the default) the open is byte-identical to the concrete path.
-    """
-    if not rounds:
-        raise ValueError("the stacked open needs at least one committed round")
+    *,
+    rlc_bits: int | None,
+    total_width: int | None,
+) -> tuple[list[Array], list[Array], Array, Array, GrindingTranscript]:
     ef_dtype = dense_eval.dtype
-    bf_dtype = code.dtype
-    ef_degree = efinfo(ef_dtype).degree
-
-    if log_stacking_height < 1:
-        # z_final[-0:] is the whole vector, not an empty suffix; reject the
-        # degenerate zero-stacking open up front (the verifier rejects it too).
-        raise ValueError(
-            f"need at least one stacking variable, got "
-            f"log_stacking_height={log_stacking_height}"
-        )
-    stack_point = z_final[-log_stacking_height:]
-    num_vars = stack_point.shape[0]
-
-    symbolic_k = rlc_bits is not None
-
     # Each round's per-column evaluation at the stacking point (SP1's batch
     # evaluations, observed into the transcript). vmap over the column axis serves
     # concrete and symbolic K alike, byte-identical to a per-column unroll.
     batch_evals = [
-        frx.vmap(eval_mle, in_axes=(1, None))(rd.mle, stack_point) for rd in rounds
+        frx.vmap(eval_mle, in_axes=(1, None))(mle, stack_point) for mle in mles
     ]
 
-    t: GrindingTranscript = transcript
+    t = transcript
     # SP1's prove_untrusted_evaluation observes the scalar D(z_final) first.
     t = t.observe(dense_eval)
     for evals in batch_evals:
@@ -255,33 +208,48 @@ def stacked_basefold_open(
     # bit count is the static bracket arg (``total_width`` is symbolic, so its
     # ``log2_ceil`` is unavailable); ``batch_staggered`` consumes the leading
     # ``total_width`` of the ``2^rlc_bits`` weights.
-    if symbolic_k:
-        assert rlc_bits is not None  # symbolic_k is exactly `rlc_bits is not None`
+    if rlc_bits is not None:
         t, coeffs = sample_rlc_coeffs_bits(t, rlc_bits, ef_dtype)
     else:
-        total_width = sum(int(rd.mle.shape[1]) for rd in rounds)
+        assert total_width is not None  # the wrapper passes exactly one of the two
         t, coeffs = sample_rlc_coeffs(t, total_width, ef_dtype)
-    # Fail loud at the code/mle seam: a stacking-height mismatch would otherwise
-    # surface as a cryptic RS-encode shape error inside the re-encode below.
-    stacking = 1 << log_stacking_height
-    if code.message_len != stacking:
-        raise ValueError(
-            f"code message_len {code.message_len} != stacking height {stacking}"
-        )
-    if any(rd.mle.shape[0] != stacking for rd in rounds):
-        raise ValueError(f"every round mle must stack to height {stacking}")
     # mle.T is the [K, S] message the commit encoded; the trailing .T lands the
     # [S*blowup, K] leaf-major layout whose bit-reversed rows are the committed
     # leaves, so these paths authenticate against the same digest tree. Kept
-    # per round only for the query-phase openings below.
-    round_codewords = [code.encode(rd.mle.T).T for rd in rounds]
-    mle = batch_staggered([rd.mle for rd in rounds], coeffs)
+    # per round only for the query-phase openings.
+    round_codewords = [code.encode(mle.T).T for mle in mles]
+    mle = batch_staggered(mles, coeffs)
+    claim = batch_staggered(batch_evals, coeffs)
+    return batch_evals, round_codewords, mle, claim, t
+
+
+# K-independent zone: the interleaved sumcheck + FRI fold, grind, query
+# positions, and fold-layer openings over the single RLC'd [S] mle. No shape
+# here carries K, so this — the open's dominant codegen — is shared by every
+# shard of one (S, blowup, num_queries, pow_bits) configuration.
+@partial(frx.jit, static_argnames=("smcs", "code", "num_queries", "pow_bits"))
+def _open_fold(
+    smcs: SingleMatrixCommitmentScheme,
+    code: BitReversedReedSolomon,
+    mle: Array,
+    claim: Array,
+    stack_point: Array,
+    transcript: GrindingTranscript,
+    *,
+    num_queries: int,
+    pow_bits: int,
+) -> tuple[Array, Array, Array, Array, Array, Array, list[Opening], GrindingTranscript]:
+    ef_dtype = claim.dtype
+    bf_dtype = code.dtype
+    ef_degree = efinfo(ef_dtype).degree
+    num_vars = stack_point.shape[0]
+    t = transcript
+
     # By code linearity the batched codeword is encode(mle), not
     # Σ coeffs·encode(columns) — the latter materializes the [S*blowup, K] EF
     # product (~25 GiB on wide shards) the reduce can't fuse (NTT lays the leaf
     # axis contiguous, not K).
     codeword = code.encode(mle)
-    claim = batch_staggered(batch_evals, coeffs)
 
     # Domain separation: bind the fold-round count (mirrors the reference).
     t = t.observe(jnp.asarray(num_vars, bf_dtype))
@@ -336,36 +304,161 @@ def stacked_basefold_open(
     # bitpattern.
     t, positions = sample_query_positions(t, code.block_len, num_queries)
 
-    # Each component matrix opened at the full positions; each fold layer's
-    # pair-leaf opened at the cumulatively halved positions.
-    component_openings = [
-        smcs.open_batch(positions, cw, rd.digest_layers)
-        for rd, cw in zip(rounds, round_codewords, strict=True)
-    ]
+    # Each fold layer's pair-leaf opened at the cumulatively halved positions.
     layer_positions = code.layer_positions(positions, num_vars)
     query_openings = [
         smcs.open_batch(layer_positions[i], leaves, digest_layers)
         for i, (leaves, digest_layers) in enumerate(fold_layers)
     ]
 
+    return (
+        jnp.stack(raw_roots),
+        jnp.stack(bound_roots),
+        jnp.stack(messages),
+        final_poly,
+        pow_witness,
+        positions,
+        query_openings,
+        t,
+    )
+
+
+# K-shaped query zone: per-round component row gathers and shape-bound roots.
+# Transcript-free, so it sits after the fold zone without touching the
+# Fiat-Shamir stream.
+@partial(frx.jit, static_argnames=("smcs", "bf_dtype"))
+def _open_queries(
+    smcs: SingleMatrixCommitmentScheme,
+    positions: Array,
+    round_codewords: list[Array],
+    digest_layers: list[list[Array]],
+    *,
+    bf_dtype: Any,
+) -> tuple[list[Opening], list[Array]]:
+    # Each component matrix opened at the full positions.
+    component_openings = [
+        smcs.open_batch(positions, cw, layers)
+        for layers, cw in zip(digest_layers, round_codewords, strict=True)
+    ]
     # The per-round shape-bound roots (SP1's merkle_tree_commitments): the
     # verifier checks the component openings against these, then ties each to
     # the statement's commitment via the structure rebind.
     component_commitments = [
         smcs.bind_root(
-            rd.digest_layers[-1][0],
+            layers[-1][0],
             log2_strict_usize(cw.shape[0]),
             cw.shape[1],
             bf_dtype,
         )
-        for rd, cw in zip(rounds, round_codewords, strict=True)
+        for layers, cw in zip(digest_layers, round_codewords, strict=True)
     ]
+    return component_openings, component_commitments
+
+
+def stacked_basefold_open(
+    smcs: SingleMatrixCommitmentScheme,
+    code: BitReversedReedSolomon,
+    rounds: Sequence[StackedRound],
+    z_final: Array,
+    dense_eval: Array,
+    log_stacking_height: int,
+    *,
+    num_queries: int,
+    pow_bits: int,
+    transcript: GrindingTranscript,
+    rlc_bits: int | None = None,
+) -> tuple[StackedOpenProof, GrindingTranscript]:
+    """Open the stacked dense at ``z_final`` via one batched FRI over ``rounds``.
+
+    ``transcript`` must be a real grinding transcript at the state SP1 enters the
+    open with (the component roots already bound upstream) — the open observes
+    ``dense_eval`` and the batch evals, samples the RLC + fold challenges, grinds,
+    then samples query positions, so a scripted replay cannot drive it. Returns
+    ``(proof, transcript)``.
+
+    Runs as three ``@jit`` zones split on the K (column count) compile key —
+    K-shaped prologue, K-independent fold core (the dominant codegen),
+    K-shaped component queries — so shards differing only in K share the fold
+    executable and re-pay only the two cheap zones. Under a consumer's outer
+    ``@jit`` the zones inline. Byte-identical either way: the cuts sit on the
+    value flow, not in it.
+
+    ``rlc_bits`` switches the open into the **symbolic-K** mode used for a
+    ``frx.export``: when set, each round's column count ``K`` may be a symbolic
+    dim. The two K-dependent steps are made shape-polymorphic — the per-column
+    evals run under ``vmap`` over the column axis (not a static ``range(K)``),
+    and the RLC samples exactly ``rlc_bits`` challenges instead of deriving the
+    count from ``log2_ceil(total_width)``. ``rlc_bits`` must equal ``log2_ceil``
+    of the bracket's total column width (one binary per power-of-2 column
+    bracket); the resulting ``2^rlc_bits`` weights cover any ``K`` in the
+    bracket, and ``batch_staggered`` consumes the leading ``total_width`` of
+    them. Left ``None`` (the default) the open is byte-identical to the
+    concrete path.
+    """
+    if not rounds:
+        raise ValueError("the stacked open needs at least one committed round")
+
+    if log_stacking_height < 1:
+        # z_final[-0:] is the whole vector, not an empty suffix; reject the
+        # degenerate zero-stacking open up front (the verifier rejects it too).
+        raise ValueError(
+            f"need at least one stacking variable, got "
+            f"log_stacking_height={log_stacking_height}"
+        )
+    # Fail loud at the code/mle seam: a stacking-height mismatch would otherwise
+    # surface as a cryptic RS-encode shape error inside the re-encode.
+    stacking = 1 << log_stacking_height
+    if code.message_len != stacking:
+        raise ValueError(
+            f"code message_len {code.message_len} != stacking height {stacking}"
+        )
+    if any(rd.mle.shape[0] != stacking for rd in rounds):
+        raise ValueError(f"every round mle must stack to height {stacking}")
+
+    stack_point = z_final[-log_stacking_height:]
+    mles = [rd.mle for rd in rounds]
+    total_width = None if rlc_bits is not None else sum(int(m.shape[1]) for m in mles)
+    batch_evals, round_codewords, mle, claim, t = _open_prologue(
+        code,
+        mles,
+        stack_point,
+        dense_eval,
+        transcript,
+        rlc_bits=rlc_bits,
+        total_width=total_width,
+    )
+    (
+        fri_raw_roots,
+        fri_commitments,
+        univariate_messages,
+        final_poly,
+        pow_witness,
+        positions,
+        query_openings,
+        t,
+    ) = _open_fold(
+        smcs,
+        code,
+        mle,
+        claim,
+        stack_point,
+        t,
+        num_queries=num_queries,
+        pow_bits=pow_bits,
+    )
+    component_openings, component_commitments = _open_queries(
+        smcs,
+        positions,
+        round_codewords,
+        [rd.digest_layers for rd in rounds],
+        bf_dtype=code.dtype,
+    )
 
     proof = StackedOpenProof(
         component_commitments=component_commitments,
-        fri_raw_roots=jnp.stack(raw_roots),
-        fri_commitments=jnp.stack(bound_roots),
-        univariate_messages=jnp.stack(messages),
+        fri_raw_roots=fri_raw_roots,
+        fri_commitments=fri_commitments,
+        univariate_messages=univariate_messages,
         final_poly=final_poly,
         pow_witness=pow_witness,
         batch_evals=batch_evals,
