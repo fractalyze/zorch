@@ -407,6 +407,11 @@ def stacked_basefold_open(
         )
     # Fail loud at the code/mle seam: a stacking-height mismatch would otherwise
     # surface as a cryptic RS-encode shape error inside the re-encode.
+    if z_final.shape[0] < log_stacking_height:
+        raise ValueError(
+            f"z_final has {z_final.shape[0]} coordinates, fewer than "
+            f"log_stacking_height={log_stacking_height}"
+        )
     stacking = 1 << log_stacking_height
     if code.message_len != stacking:
         raise ValueError(
