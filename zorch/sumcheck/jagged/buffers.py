@@ -35,22 +35,20 @@ def _resize_zero(arr: Array, width: int) -> Array:
     return _pad_to_width(arr, width, 0)
 
 
-# Layer-entry donated cap buffers (xla#179 pad donation). Under a machine
-# cap the entry pad materializes FRESH cap-wide buffers every layer -- an
-# alloc + zero-fill + prefix copy per plane/eq table, ~2x cap-width writes,
-# a top GPU item of the warm prove (wrapped_concatenate + wrapped_broadcast at
-# a cap many times the live prefix's width). The pool instead holds ONE
-# persistent cap-wide array per (role, width, dtype); the zone donates it back
-# via `_lay_prefix_many` (in `_jagged_round_via_zone`, before the trace),
-# which writes only the live prefix in place. The tail keeps the PREVIOUS
-# layer's bytes: the capped-round contract masks every read by the `live`
-# operand and resolves dead slots through the sentinel neutral blend, so the
-# tail is never read as data -- the old pad's zero tail was deterministic
-# filler, not a consumed value. Byte-gated by the runner reference test (which
-# reuses the pool across layouts, so stale tails are exercised) and the shard
-# golden. The pre-lay is concrete (outside the trace); the whole-layer program
-# it feeds is untouched.
-_LAYER_BUF_POOL: dict[tuple[str, int, Any], Array] = {}
+class LayerBuffers:
+    """Donated cap-wide layer-entry buffers, owned by ONE prove chain:
+    one array per (role, width, dtype), re-donated
+    each layer via `_lay_prefix_many` so only the live prefix is written —
+    a fresh cap pad per layer costs ~2x cap-width writes, a top GPU item of
+    the warm prove. The tail keeps the previous layer's bytes; the capped
+    rounds mask every read by the `live` operand, byte-gated by the
+    capped-chain test. Scoped to the chain so the buffers die with the
+    prove — a module-global pool retained every width class's planes
+    (~5.3 GiB per 80M-cap class), capping a resident multi-class prover at
+    one big class per 32 GB card."""
+
+    def __init__(self) -> None:
+        self.pool: dict[tuple[str, int, Any], Array] = {}
 
 
 @partial(frx.jit, donate_argnums=(0,))
@@ -68,13 +66,17 @@ def _lay_prefix_many(
     )
 
 
-def _pool_lay_batch(entries: Sequence[tuple[str, Array, int]]) -> list[Array]:
-    """Lay every `(role, src, width)` entry into its pooled, donated cap-width
-    buffer through ONE `_lay_prefix_many` dispatch (the batched layer-entry
-    lay-in). `role` keys the pool entry: two planes share a width/dtype and
-    each must own its buffer -- one shared buffer would be donated twice per
-    layer. Equal-width entries pass through untouched; the rest donate their
-    pooled buffer and re-enter the pool as the laid result."""
+def _pool_lay_batch(
+    entries: Sequence[tuple[str, Array, int]], layer_bufs: LayerBuffers
+) -> list[Array]:
+    """Lay every `(role, src, width)` entry into its holder's donated
+    cap-width buffer through ONE `_lay_prefix_many` dispatch (the batched
+    layer-entry lay-in). `role` keys the holder entry: two planes share a
+    width/dtype and each must own its buffer -- one shared buffer would be
+    donated twice per layer. Equal-width entries pass through untouched; the
+    rest donate their held buffer and re-enter the holder as the laid
+    result."""
+    pool = layer_bufs.pool
     out: list[Array] = []
     laid_at: list[int] = []
     bufs: list[Array] = []
@@ -83,7 +85,7 @@ def _pool_lay_batch(entries: Sequence[tuple[str, Array, int]]) -> list[Array]:
         if src.shape[0] == width:
             out.append(src)
             continue
-        buf = _LAYER_BUF_POOL.get((role, width, src.dtype))
+        buf = pool.get((role, width, src.dtype))
         if buf is None:
             buf = jnp.zeros((width,), src.dtype)
         laid_at.append(len(out))
@@ -94,6 +96,6 @@ def _pool_lay_batch(entries: Sequence[tuple[str, Array, int]]) -> list[Array]:
         laid = _lay_prefix_many(tuple(bufs), tuple(srcs))
         for i, arr in zip(laid_at, laid):
             role, src, width = entries[i]
-            _LAYER_BUF_POOL[(role, width, src.dtype)] = arr
+            pool[(role, width, src.dtype)] = arr
             out[i] = arr
     return out

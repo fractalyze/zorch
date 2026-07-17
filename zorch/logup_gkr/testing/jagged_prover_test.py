@@ -28,6 +28,7 @@ from zorch.logup_gkr.circuit import (
 from zorch.logup_gkr.jagged_prover import (
     JaggedGkrLayerRound,
     JaggedLayerProof,
+    RoundWidthCaps,
     _jagged_round_zone,
     prove_jagged_layer,
 )
@@ -42,6 +43,7 @@ from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.poly.univariate import eval_coeffs
 from zorch.round import ProveChain
+from zorch.sumcheck.jagged.buffers import LayerBuffers
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -393,6 +395,40 @@ class ChainedJaggedProveTest(absltest.TestCase):
         _, want_r = want_t.sample(1)
         _, got_r = got_t.sample(1)
         self.assertTrue(bool(got_r[0] == want_r[0]))
+
+    def test_capped_chain_with_shared_layer_bufs_matches_bare(self) -> None:
+        # The chain-owned `LayerBuffers` holder: capped rounds lay every
+        # layer's planes into the SAME donated cap-wide buffers, so later
+        # layers write their live prefix over the previous layer's stale
+        # tail — the stream must still match the bare (uncapped) chain
+        # byte-for-byte, because the rounds mask every read past the live
+        # prefix.
+        layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
+        output = extract_jagged_outputs(layers[-1])
+        carry, transcript = bind_output(output, cheap_transcript(KB))
+        bare = ProveChain(JaggedGkrLayerRound(layer) for layer in reversed(layers[:-1]))
+        want_carry, want_t, want_proofs = bare(carry, transcript)
+
+        caps = RoundWidthCaps(elements=64, eq_row=64, interaction=8)
+        bufs = LayerBuffers()
+        capped = ProveChain(
+            JaggedGkrLayerRound(layer, caps=caps, layer_bufs=bufs)
+            for layer in reversed(layers[:-1])
+        )
+        got_carry, got_t, got_proofs = capped(carry, transcript)
+
+        for got, want in zip(got_proofs, want_proofs, strict=True):
+            for field in fields(JaggedLayerProof):
+                self.assertTrue(
+                    bool(jnp.all(getattr(got, field.name) == getattr(want, field.name)))
+                )
+        for got, want in zip(got_carry, want_carry, strict=True):
+            self.assertTrue(bool(jnp.all(got == want)))
+        _, want_r = want_t.sample(1)
+        _, got_r = got_t.sample(1)
+        self.assertTrue(bool(got_r[0] == want_r[0]))
+        # The holder actually engaged: it owns laid cap-wide entries.
+        self.assertTrue(bufs.pool)
 
     def test_chained_prove_keeps_at_most_one_layer_alive(self) -> None:
         # The #154 acceptance bound: of the layers handed to the chain, at
