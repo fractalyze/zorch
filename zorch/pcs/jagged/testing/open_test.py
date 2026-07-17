@@ -22,7 +22,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import frx
 import frx.numpy as jnp
@@ -44,7 +44,7 @@ from zorch.pcs.jagged.open import (
     stacked_basefold_open,
 )
 from zorch.pcs.jagged.verifier import stacked_basefold_verify
-from zorch.transcript import DuplexTranscript
+from zorch.transcript import DuplexTranscript, GrindingTranscript
 
 _FIXTURE = Path(__file__).parent / "testdata" / "gpu_fibonacci"
 # The committed dense buffer is the same shard the zerocheck stage commits; its
@@ -186,7 +186,11 @@ class StackedOpenByteMatchTest(absltest.TestCase):
             log_s,
             num_queries=int(cfg["num_queries"]),
             pow_bits=int(cfg["pow_bits"]),
-            transcript=_ScriptedTranscript.of(samples, witness),
+            # The scripted replay implements only the observe/sample/grind
+            # subset the open exercises; cast to the protocol it stands in for.
+            transcript=cast(
+                GrindingTranscript, _ScriptedTranscript.of(samples, witness)
+            ),
         )
         # A second open under a real Fiat-Shamir transcript (not the SP1-scripted
         # one) for the open->verify completeness roundtrip: open and verify derive

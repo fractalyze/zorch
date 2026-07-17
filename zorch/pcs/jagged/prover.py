@@ -359,15 +359,28 @@ def eval_round_core(
     return msg, transcript
 
 
+def eval_column_arrays(
+    col_heights: Sequence[int], *, dtype: Any
+) -> tuple[Array, Array]:
+    """Host-build the two height-dependent column arrays ``eval_round_core``
+    consumes: the offset tensor ``(L+1, n_d)`` and the merged prefix-bit
+    buffer ``(L, 2·n_d)``. Heights live in the array VALUES, so a jitted
+    consumer taking these as traced arguments keys its compile on the
+    ``(L, n_d)`` class alone."""
+    heights = list(col_heights)
+    l_max = len(heights)
+    _, n_d = build_jagged_layout(heights, l_max, dtype)
+    offsets = _offset_bit_tensor(heights, l_max, n_d, dtype)
+    merged = merged_prefix_bits(heights, n_d, dtype=dtype)
+    return offsets, merged
+
+
 def _eval_inputs(
     col_heights: Sequence[int], z_col: Array, dtype: Any
 ) -> tuple[Array, Array, Array]:
-    """Host-build the column arrays ``eval_round_core`` consumes: the canonical-limb
-    offset tensor ``(L+1, n_d)``, the merged prefix-bit buffer ``(L, 2·n_d)``, and
-    the column-eq weights ``col_eq[:L]``. ``n_d`` (= log-area tier) is the only
-    static dim; the shape-polymorphic cores derive the rest from these shapes."""
-    heights = list(col_heights)
-    l_max = len(heights)
+    """The column arrays plus the column-eq weights ``col_eq[:L]`` — the eager
+    ``JaggedEvalRound`` form, where ``z_col`` is already concrete."""
+    l_max = len(col_heights)
     # col_eq = expand_eq(z_col) has 2^len(z_col) entries; too few z_col vars would
     # silently truncate weights[:l_max] below l_max and mismatch merged downstream.
     if z_col.shape[0] < log2_ceil_usize(l_max):
@@ -375,9 +388,7 @@ def _eval_inputs(
             f"z_col has {z_col.shape[0]} variables, too few for {l_max} columns "
             f"(need ≥ {log2_ceil_usize(l_max)})"
         )
-    _, n_d = build_jagged_layout(heights, l_max, dtype)
-    offsets = _offset_bit_tensor(heights, l_max, n_d, dtype)
-    merged = merged_prefix_bits(heights, n_d, dtype=dtype)
+    offsets, merged = eval_column_arrays(col_heights, dtype=dtype)
     weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:l_max]
     return offsets, merged, weights
 
@@ -423,6 +434,7 @@ __all__ = [
     "JaggedEvalMsg",
     "JaggedEvalRound",
     "assemble_columns",
+    "eval_column_arrays",
     "merged_prefix_bits",
     "outer_sumcheck_claim",
     "outer_sumcheck",
