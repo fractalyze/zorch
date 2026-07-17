@@ -98,28 +98,24 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
-    The power-sum is carried through a ``lax.scan`` over the coefficient axis
-    (degree moved to the leading axis): the carry threads
-    ``(accumulator, point**i)``, keeping the traced graph O(1) in the degree so
-    the fused kernel takes one array operand regardless of ``n``. A
-    coefficient-count-dependent graph (e.g. an explicit power chain) makes the
-    fused kernel's operand count scale with ``n``, which past a few thousand
-    coefficients exceeds the GPU's 32 KB kernel-parameter space and fails to
-    compile (``ptxas: too much parameter space``) — WHIR's out-of-domain eval
-    at large stacked sizes hits exactly this. Field arithmetic is exact, so the
-    scan is byte-identical to the direct power-sum."""
-    leading = jnp.moveaxis(coeffs, -1, 0)  # (n, *batch): degree on axis 0
-
-    # Forward power accumulation rather than a reverse-scan Horner (which would
-    # carry only the accumulator): ``lax.scan(reverse=True)`` is not honored on
-    # this frx build — it runs forward and yields the wrong value.
-    def step(
-        carry: tuple[Array, Array], c_i: Array
-    ) -> tuple[tuple[Array, Array], None]:
-        acc, power = carry
-        return (acc + c_i * power, power * point), None
-
-    # acc seeds in the coeff×point promoted dtype/shape; power seeds at point**0.
-    init = (jnp.zeros_like(coeffs[..., 0] * point), jnp.ones_like(point))
-    (acc, _), _ = frx.lax.scan(step, init, leading)
-    return acc
+    The power vector ``point**i`` is a ``lax.associative_scan`` (log-depth prefix
+    product), then one batched dot with the coefficients. A *sequential* scan over
+    the coefficient axis lowers to a ``while`` the GPU runtime launches host-side
+    once per iteration, so an n-coefficient eval pays n launch latencies — WHIR's
+    out-of-domain eval at ``n = 2^13`` measured ~550 ms of pure dispatch. The
+    prefix product is O(log n) kernels instead, and each stage takes one array
+    operand, so the degree never inflates the kernel's operand count (an unrolled
+    power chain would, and overflow the GPU's 32 KB kernel-parameter space —
+    ``ptxas: too much parameter space``). Field mul/add are exact and associative,
+    so the tree-grouped prefix product and the batched sum are byte-identical to a
+    sequential power-sum."""
+    n = coeffs.shape[-1]
+    # ``point**i`` as the prefix product of ``[1, point, point, …]`` (n entries),
+    # laid out on the last axis so it dots the coefficients' degree axis directly.
+    seq = jnp.where(
+        jnp.arange(n) == 0,
+        jnp.ones_like(point)[..., None],
+        point[..., None],
+    )
+    powers = frx.lax.associative_scan(lambda a, b: a * b, seq, axis=-1)
+    return jnp.sum(coeffs * powers, axis=-1)
