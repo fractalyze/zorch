@@ -68,7 +68,11 @@ def _pack_chip_data(
 
 # Pytree: `dense` is the only array leaf; the SMCS row/column counts, stacking
 # height, and names are static aux. Lets a region cross the chain's @jit
-# boundary as part of a donatable carry.
+# boundary as part of a donatable carry — and puts the per-shard counts in the
+# jit cache key. Usage contract: a region belongs to eager orchestration and
+# the bridge; a shard-invariant jit zone must take a projection instead
+# (`block`, a packed arrival + traced heights vector, ...), or every shard's
+# layout recompiles it.
 @partial(
     frx.tree_util.register_dataclass,
     data_fields=["dense"],
