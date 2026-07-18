@@ -94,19 +94,9 @@ def commit_region(
     on a 32 GB device (see the module docstring). Byte-identical either way. The
     ~6 GB blow-up codeword never leaves this function: the open re-encodes it
     from ``mle``, so it never stays device-resident through the chain."""
-    S = 1 << region.log_stacking_height
-    dense = region.dense
-    if dense.shape[0] % S != 0:
-        raise ValueError(
-            f"dense size {dense.shape[0]} must be a multiple of the stacking "
-            f"height {S} (from_chips pads to it)"
-        )
-    K = dense.shape[0] // S
-
-    # Row k of [K, S] is stacked column k of the dense MLE.
-    message = dense.reshape(K, S)
-    row_counts = jnp.array(region.row_counts, dtype=dense.dtype)
-    column_counts = jnp.array(region.column_counts, dtype=dense.dtype)
+    message = region.block
+    row_counts = jnp.array(region.row_counts, dtype=message.dtype)
+    column_counts = jnp.array(region.column_counts, dtype=message.dtype)
     tail = _commit_jit if jit else _commit
     bound, mle, digest_layers, commitment = tail(
         message,
@@ -116,7 +106,7 @@ def commit_region(
         log_blowup=log_blowup,
     )
     return bound, TraceCommitData(
-        dense=dense,
+        dense=region.dense,
         mle=mle,
         digest_layers=digest_layers,
         row_counts=row_counts,

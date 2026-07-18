@@ -68,7 +68,11 @@ def _pack_chip_data(
 
 # Pytree: `dense` is the only array leaf; the SMCS row/column counts, stacking
 # height, and names are static aux. Lets a region cross the chain's @jit
-# boundary as part of a donatable carry.
+# boundary as part of a donatable carry — and puts the per-shard counts in the
+# jit cache key. Usage contract: a region belongs to eager orchestration and
+# the bridge; a shard-invariant jit zone must take a projection instead
+# (`block`, a packed arrival + traced heights vector, ...), or every shard's
+# layout recompiles it.
 @partial(
     frx.tree_util.register_dataclass,
     data_fields=["dense"],
@@ -113,6 +117,20 @@ class JaggedRegion:
     def raw_size(self) -> int:
         """Cumulative chip data size, excluding the trailing zero pad."""
         return int(self.chip_starts[-1])
+
+    @property
+    def block(self) -> Array:
+        """The ``[K, S]`` message-domain matrix (row ``k`` is stacked column
+        ``k`` of the dense MLE) — a free reshape view of ``dense``. The layout
+        the commit encodes and the stacked open consumes
+        (``StackedRound.block``)."""
+        S = 1 << self.log_stacking_height
+        if self.dense.shape[0] % S != 0:
+            raise ValueError(
+                f"dense size {self.dense.shape[0]} must be a multiple of the "
+                f"stacking height {S} (from_chips pads to it)"
+            )
+        return self.dense.reshape(-1, S)
 
     @classmethod
     def from_chips(

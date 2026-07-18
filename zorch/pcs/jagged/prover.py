@@ -121,23 +121,33 @@ def assemble_columns(
     the last two ``column_counts`` per round are SP1's stacking dummies, so the
     claim buffer appends ``cc[-2]+cc[-1]`` zero claims after each round's real
     ones (matching SP1's ``prove_trusted_evaluations`` layout)."""
-    col_heights: list[int] = []
+    col_heights = assemble_col_heights(row_counts_rounds, column_counts_rounds)
     claim_blocks: list[Array] = []
-    for rcs, ccs, claims_r in zip(
-        row_counts_rounds, column_counts_rounds, column_claims_rounds, strict=True
-    ):
-        for rc, cc in zip(rcs, ccs, strict=True):
-            col_heights.extend([int(rc)] * int(cc))
-        if len(ccs) < 2:
-            raise ValueError(
-                f"each round needs the trailing (stacking-dummy, leftover) "
-                f"column-count pair; got {len(ccs)} counts"
-            )
+    for ccs, claims_r in zip(column_counts_rounds, column_claims_rounds, strict=True):
         n_pad = int(ccs[-2]) + int(ccs[-1])
         claim_blocks.append(jnp.asarray(claims_r, dtype=dtype))
         if n_pad:
             claim_blocks.append(jnp.zeros((n_pad,), dtype=dtype))
     return col_heights, jnp.concatenate(claim_blocks, axis=0)
+
+
+def assemble_col_heights(
+    row_counts_rounds: Sequence[Sequence[int]],
+    column_counts_rounds: Sequence[Sequence[int]],
+) -> list[int]:
+    """The per-unit-column height list alone — host ints, no claim arrays, so a
+    consumer can derive the layout eagerly and defer the claim assembly to a
+    jitted body (``assemble_columns`` delegates here)."""
+    col_heights: list[int] = []
+    for rcs, ccs in zip(row_counts_rounds, column_counts_rounds, strict=True):
+        if len(ccs) < 2:
+            raise ValueError(
+                f"each round needs the trailing (stacking-dummy, leftover) "
+                f"column-count pair; got {len(ccs)} counts"
+            )
+        for rc, cc in zip(rcs, ccs, strict=True):
+            col_heights.extend([int(rc)] * int(cc))
+    return col_heights
 
 
 def sample_z_col(
@@ -433,6 +443,7 @@ __all__ = [
     "JaggedEvalInputs",
     "JaggedEvalMsg",
     "JaggedEvalRound",
+    "assemble_col_heights",
     "assemble_columns",
     "eval_column_arrays",
     "merged_prefix_bits",
