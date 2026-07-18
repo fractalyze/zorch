@@ -400,6 +400,18 @@ def _run_jagged_rounds(
         transcript, r, claim, pad_adj = _fs_reduce(
             poly, transcript, pad_adj, z_cur, challenge_limbs, dtype
         )
+        # Serialize the rounds' buffer assignment: unfenced, the scheduler
+        # overlaps rounds and co-resides their cap-width plane intermediates, so
+        # the peak grows ~linearly in the round count instead of staying flat --
+        # enough to exhaust the pool on wide shards. Fence EVERY loop-carried
+        # thread -- both the planes/eq state and the transcript sponge; omitting
+        # either lets that thread float and the overlap returns.
+        planes, eq_row, eq_int, transcript, claim, pad_adj, r = (
+            frx.lax.optimization_barrier(
+                (planes, eq_row, eq_int, transcript, claim, pad_adj, r)
+            )
+        )
+        transcript = cast(DuplexTranscript, transcript)  # barrier widens to Transcript
         polys.append(poly)
         challenges.append(r)
         if rnd == nrv - 1:
