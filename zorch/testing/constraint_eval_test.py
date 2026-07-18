@@ -666,6 +666,73 @@ class ConstraintEvalTest(absltest.TestCase):
         self.assertIn(f"window_rows = {W}", txt)
         self.assertIn("aux_operand_idxs = [5]", txt)
 
+    def test_empty_alpha_with_column_weights_is_the_masked_dot(self) -> None:
+        # Constraint-free (lookup-only) form: K = 0 with column_weights — the
+        # per-row value is just the masked column term, byte-identical to the
+        # bare dot (the zero RLC fold is exact).
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (0,), F)
+        weights = rand_field(5, (3,), F)
+        fold = rows @ weights
+        golden = fnp.where(fnp.arange(8) < 5, fold, fnp.zeros_like(fold))
+        got = constraint_eval(None, rows, alpha, live_width=5, column_weights=weights)
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
+
+    def test_empty_alpha_declares_zero_constraints(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        alpha = rand_field(2, (0,), F)
+        weights = rand_field(5, (3,), F)
+        txt = (
+            frx.jit(
+                lambda t, a, lw, cw: constraint_eval(
+                    None, t, a, live_width=lw, column_weights=cw
+                )
+            )
+            .lower(rows, alpha, fnp.int32(5), weights)
+            .as_text()
+        )
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        self.assertIn("num_constraints = 0", txt)
+        # The empty alpha is OMITTED as an operand (it carries no data; sunk
+        # into the body it would be a user-less constant the verifier
+        # rejects), so no alpha index is declared and live shifts to 1.
+        self.assertNotIn("alpha_operand_idx", txt)
+        self.assertIn("live_width_operand_idx = 1", txt)
+
+    def test_empty_alpha_without_column_weights_raises(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(None, rows, rand_field(2, (0,), F), live_width=5)
+
+    def test_empty_alpha_rejects_an_eval_fn(self) -> None:
+        # A provided-but-unused eval_fn is a caller bug, not a no-op.
+        rows = rand_field(1, (8, 3), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(
+                _eval_fn,
+                rows,
+                rand_field(2, (0,), F),
+                live_width=5,
+                column_weights=rand_field(5, (3,), F),
+            )
+
+    def test_empty_alpha_rejects_aux_operands(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(
+                None,
+                rows,
+                rand_field(2, (0,), F),
+                live_width=5,
+                column_weights=rand_field(5, (3,), F),
+                aux_operands=(rand_field(7, (2,), F),),
+            )
+
+    def test_missing_eval_fn_with_constraints_raises(self) -> None:
+        rows = rand_field(1, (8, 3), F)
+        with self.assertRaises(ValueError):
+            constraint_eval(None, rows, rand_field(2, (3,), F))
+
 
 if __name__ == "__main__":
     absltest.main()

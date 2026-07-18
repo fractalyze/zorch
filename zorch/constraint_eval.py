@@ -86,7 +86,7 @@ def _fold_coeff_operand(value: Array | int, dtype: object) -> Array:
 
 
 def constraint_eval(
-    eval_fn: Callable[..., Array],
+    eval_fn: Callable[..., Array] | None,
     trace: Array,
     alpha: Array,
     *,
@@ -109,6 +109,12 @@ def constraint_eval(
     recognizing emitter; they are metadata, so the decomposition ignores them (it
     reads K from `alpha`'s static shape). An unrecognizing compiler inlines the
     decomposition to the identical result (see the module docstring).
+
+    An empty `alpha` (K = 0) is the constraint-free form: `eval_fn` must be
+    None and `column_weights` must be given — the per-row value is just the
+    masked column term (a consumer's lookup-only evaluation). The RLC fold
+    degenerates to the field zero, which is exact, so the result is
+    byte-identical to the bare masked dot.
 
     `live_width`, when given, bounds the result's leading axis at runtime: rows
     at index >= the bound are the field's zero. It must be a scalar `int32`
@@ -182,9 +188,27 @@ def constraint_eval(
     """
     num_constraints = alpha.shape[-1]
     if num_constraints < 1:
-        raise ValueError(
-            f"alpha must carry at least one coefficient, got {num_constraints}"
-        )
+        # A constraint-free marker is just the masked column term (a consumer's
+        # lookup-only evaluation): the RLC fold degenerates to the field zero
+        # and the column dot carries the whole per-row value. Without the dot
+        # there is nothing to evaluate, so K = 0 alone stays an error.
+        if column_weights is None:
+            raise ValueError(
+                "alpha must carry at least one coefficient unless "
+                f"column_weights is given, got {num_constraints}"
+            )
+        if eval_fn is not None:
+            raise ValueError(
+                "eval_fn must be None when alpha is empty (no constraints to "
+                "evaluate)"
+            )
+        if aux_operands:
+            raise ValueError(
+                "aux_operands require constraints (nothing reads them when "
+                "alpha is empty)"
+            )
+    elif eval_fn is None:
+        raise ValueError("eval_fn is required when alpha carries coefficients")
     if start_offset is not None:
         # Rides immediately after live_width (so it requires one — the
         # window's live-height bound), and requires window_rows (the static
@@ -283,15 +307,23 @@ def constraint_eval(
 
     def decomposition(
         trace: Array,
-        alpha: Array,
         *optional: Array,
         **_attrs: object,
     ) -> Array:
         # *optional silently drops a surplus operand from the inlined path while
         # the marked kernel still carries it (a marked-vs-inlined divergence);
-        # guard loud instead.
+        # guard loud instead. alpha leads the tail only when K >= 1: an empty
+        # alpha carries no data, and as an operand it would be constant-sunk
+        # into the fused body with no user — an HLO-verifier error.
+        has_alpha = num_constraints > 0
         n_expected = (
-            has_live + has_offset + has_jagged + 2 * has_delta + has_weights + n_aux
+            has_alpha
+            + has_live
+            + has_offset
+            + has_jagged
+            + 2 * has_delta
+            + has_weights
+            + n_aux
         )
         if len(optional) != n_expected:
             raise TypeError(
@@ -300,6 +332,7 @@ def constraint_eval(
                 "accounted for here"
             )
         tail = iter(optional)
+        alpha_op = next(tail) if has_alpha else None
         live_width = next(tail) if has_live else None
         start_offset = next(tail) if has_offset else None
         col_stride = next(tail) if has_jagged else None
@@ -379,10 +412,19 @@ def constraint_eval(
                 # kernel serves every fold coefficient (runtime). Byte-identical
                 # to windowing a pre-folded `base + fold_coeff*delta` trace.
                 trace = trace + fold_coeff * _win(delta)
-        constraints = eval_fn(trace, *aux)
-        acc = constraints[..., 0] * alpha[..., 0]
-        for k in range(1, num_constraints):
-            acc = acc + constraints[..., k] * alpha[..., k]
+        if num_constraints == 0:
+            # Constraint-free (lookup-only) form: the RLC fold is the field
+            # zero and the column dot below carries the whole per-row value.
+            # Field add of zero is exact, so `0 + trace @ w` is byte-identical
+            # to the bare dot.
+            acc = fnp.zeros(trace.shape[:-1], trace.dtype)
+        else:
+            assert eval_fn is not None  # validated at entry: K >= 1 requires it
+            assert alpha_op is not None
+            constraints = eval_fn(trace, *aux)
+            acc = constraints[..., 0] * alpha_op[..., 0]
+            for k in range(1, num_constraints):
+                acc = acc + constraints[..., k] * alpha_op[..., k]
         if column_weights is not None:
             # A dot is allowed in the bounded body; a recognizing emitter folds
             # it into the per-row accumulator (hand-emitted in-kernel; the
@@ -403,14 +445,16 @@ def constraint_eval(
             acc = lax.select(rows < live_width, acc, fnp.zeros_like(acc))
         return acc
 
-    operands: tuple[Array, ...] = (trace, alpha)
-    attrs: dict[str, int] = {
-        "num_constraints": num_constraints,
-        "alpha_operand_idx": 1,
-    }
+    # K = 0 omits the alpha operand entirely: an empty array carries no data,
+    # and as an operand it would be constant-sunk into the fused body with no
+    # user — an HLO-verifier error on the recognizing compiler.
+    operands: tuple[Array, ...] = (trace, alpha) if num_constraints > 0 else (trace,)
+    attrs: dict[str, int] = {"num_constraints": num_constraints}
+    if num_constraints > 0:
+        attrs["alpha_operand_idx"] = 1
     if live_width is not None:
+        attrs["live_width_operand_idx"] = len(operands)
         operands += (_scalar_int32_operand(live_width, "live_width"),)
-        attrs["live_width_operand_idx"] = 2
     if start_offset is not None:
         operands += (_scalar_int32_operand(start_offset, "start_offset"),)
         # Computed from len(operands), not hardcoded: start_offset requires
