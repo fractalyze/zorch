@@ -126,14 +126,49 @@ class MerkleTree:
         A binary tree keeps its historical power-of-two-height contract — its
         pad-free layout is what the fold-PCS query machinery indexes; k-ary
         consumers commit any height via the per-level padding.
+
+        `hash_leaves` + `fold_digests` are this commit as two halves, for a
+        consumer that cuts a jit-zone boundary between them (only the leaf
+        hash's shapes carry the leaf width; see `zorch.pcs.jagged.commit`).
         """
+        return self.fold_digests(self.hash_leaves(matrix))
+
+    def hash_leaves(self, matrix: Array) -> Array:
+        """Hash each leaf of `matrix` (layout per `column_major`, see `commit`)
+        to its digest — the `(num_leaves, digest_elems)` leaf layer of
+        `digest_layers`. Validation lives here, where the bad shape enters."""
         if matrix.ndim != 2:
             raise ValueError(f"matrix must be 2-D, got ndim={matrix.ndim}")
         # Leaves are columns when column-major, else rows.
         num_leaves = matrix.shape[1] if self._column_major else matrix.shape[0]
+        # An empty layer folds to nothing: the arity>2 path skips the pow2 gate,
+        # then _fold_to_root reads its [0] leaf and raises deep inside the fold.
+        if num_leaves == 0:
+            raise ValueError("matrix must contain at least one leaf")
         if self.arity == 2 and not is_power_of_two(num_leaves):
             raise ValueError(f"leaf count ({num_leaves}) must be a power of two")
-        return self._build(matrix)
+        return self._hash_leaves(matrix)
+
+    def fold_digests(self, leaf_digests: Array) -> tuple[Array, list[Array]]:
+        """Fold a `(num_leaves, digest_elems)` leaf-digest layer (from
+        `hash_leaves`) to `(raw_root, digest_layers)` — `commit`'s second half.
+
+        Compresses only each level's live nodes, one right-sized level at a
+        time — a single `scan` would carry a full-width buffer and recompress
+        the zero padding every level (~height× the work, the dominant commit
+        runtime). The cost is an O(depth) compile: the per-level compresses are
+        distinct shapes, so they don't share a cubin (#163 traded the other
+        way); amortized once under the polymorphic compile-many-shards path.
+        Leaf-layout-independent: `column_major` affects only the leaf hash."""
+        # A jit-zone seam (the zoned commit folds in a separate zone from the
+        # leaf hash): fail loud on a drifted leaf-digest shape here, not with a
+        # cryptic reshape error inside _fold_to_root.
+        if leaf_digests.ndim != 2 or leaf_digests.shape[-1] != self.digest_elems:
+            raise ValueError(
+                f"leaf_digests must be (num_leaves, {self.digest_elems}), got "
+                f"shape {leaf_digests.shape}"
+            )
+        return self._fold_to_root(leaf_digests)
 
     # Batch the single-element leaf hash / compress with `vmap`: each op's
     # dedicated marker lowers identically batched (one shared decomposition), so
@@ -146,18 +181,6 @@ class MerkleTree:
 
     def _compress_groups(self, groups: Array) -> Array:
         return frx.vmap(self._compressor.compress)(groups)
-
-    def _build(self, matrix: Array) -> tuple[Array, list[Array]]:
-        """The commit body: vmap the leaf hash, fold arity-sized groups per level
-        to the root (`self._column_major` fixes the leaf layout).
-
-        `_fold_to_root` compresses only each level's live nodes — a single `scan`
-        would carry a full-width buffer and recompress the zero padding every
-        level (~height× the work, the dominant commit runtime). The cost is an
-        O(depth) compile: the per-level compresses are distinct shapes, so they
-        don't share a cubin (#163 traded the other way); amortized once under the
-        polymorphic compile-many-shards path."""
-        return self._fold_to_root(self._hash_leaves(matrix))
 
     def _fold_to_root(self, layer: Array) -> tuple[Array, list[Array]]:
         """Fold the leaf layer to the root one level at a time, completing a
