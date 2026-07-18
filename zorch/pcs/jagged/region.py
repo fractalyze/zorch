@@ -114,6 +114,19 @@ class JaggedRegion:
         """Cumulative chip data size, excluding the trailing zero pad."""
         return int(self.chip_starts[-1])
 
+    @property
+    def block(self) -> Array:
+        """The ``[K, S]`` message-domain matrix (row ``k`` is stacked dense
+        block ``k``) — a free reshape view of ``dense``. The layout the commit
+        encodes and the stacked open consumes (``StackedRound.block``)."""
+        S = 1 << self.log_stacking_height
+        if self.dense.shape[0] % S != 0:
+            raise ValueError(
+                f"dense size {self.dense.shape[0]} must be a multiple of the "
+                f"stacking height {S} (from_chips pads to it)"
+            )
+        return self.dense.reshape(-1, S)
+
     @classmethod
     def from_chips(
         cls,
