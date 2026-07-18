@@ -2,6 +2,16 @@ load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
 py_library(
+    name = "deep",
+    srcs = ["deep.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/poly",
+        requirement("frx"),
+    ],
+)
+
+py_library(
     name = "fold",
     srcs = ["fold.py"],
     visibility = ["//visibility:public"],

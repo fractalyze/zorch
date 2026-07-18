@@ -77,3 +77,18 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "deep_test",
+    size = "small",
+    srcs = ["deep_test.py"],
+    deps = [
+        "//zorch/coding:reed_solomon",
+        "//zorch/pcs:deep",
+        "//zorch/poly",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
