@@ -56,6 +56,7 @@ from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.prover import Carry, fold_carry
 from zorch.round import Round
 from zorch.sumcheck.jagged.buffers import (
+    LayerBuffers,
     _pad_to_width,
     _pool_lay_batch,
     _resize_zero,
@@ -565,6 +566,7 @@ def _jagged_round_via_zone(
     layer: JaggedGkrLayer,
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
+    layer_bufs: LayerBuffers | None,
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
@@ -597,14 +599,20 @@ def _jagged_round_via_zone(
                 "(or its ladder class) so the fixed-width pad is non-negative"
             )
         # Concrete path only: a tracer means an outer trace owns the layout
-        # (and pooling would donate a traced value).
-        if not isinstance(planes[0], frx.core.Tracer):
+        # (and pooling would donate a traced value). With no holder the
+        # in-trace `_pad_to_width` below materializes the cap buffer fresh
+        # (correct, tail-write cost back) -- perf callers thread one
+        # `LayerBuffers` per chain.
+        if layer_bufs is not None and not isinstance(planes[0], frx.core.Tracer):
             planes = tuple(
                 _pool_lay_batch(
                     [
                         (role, a, caps.elements)
-                        for role, a in zip(("n0", "n1", "d0", "d1"), planes)
-                    ]
+                        for role, a in zip(
+                            ("n0", "n1", "d0", "d1"), planes, strict=True
+                        )
+                    ],
+                    layer_bufs,
                 )
             )
     return _jagged_round_zone(
@@ -648,12 +656,14 @@ class JaggedGkrLayerRound(Round):
         challenge_limbs: int = 1,
         *,
         caps: RoundWidthCaps | None = None,
+        layer_bufs: LayerBuffers | None = None,
     ) -> None:
-        # `partial` closes over (layer, challenge_limbs, caps), not `self`, so
-        # the chain frees the round -- and its layer -- the moment it builds the
-        # next. `caps` selects the fixed-width round layout (see
-        # `prove_jagged_layer`).
-        self._call = partial(_jagged_round_via_zone, layer, challenge_limbs, caps)
+        # `partial` closes over the args, not `self`, so the chain frees the
+        # round -- and its layer -- the moment it builds the next. Pass ONE
+        # `layer_bufs` per chain (None materializes the cap pad fresh).
+        self._call = partial(
+            _jagged_round_via_zone, layer, challenge_limbs, caps, layer_bufs
+        )
 
     def __call__(
         self, carry: Carry, transcript: Transcript

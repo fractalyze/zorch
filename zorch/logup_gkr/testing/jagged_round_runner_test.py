@@ -20,7 +20,7 @@ from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
 from zorch.logup_gkr.testing._jagged_reference import _run_jagged_rounds_reference
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_inv_vandermonde
-from zorch.sumcheck.jagged.buffers import _LAYER_BUF_POOL, _pool_lay_batch
+from zorch.sumcheck.jagged.buffers import LayerBuffers, _pool_lay_batch
 from zorch.sumcheck.jagged.schedule import (
     _round_live_meta,
     _round_metadata,
@@ -205,20 +205,38 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             layer, rand_field(27, (), KB), rand_field(28, (6,), KB)
         )
 
-    def test_layer_pool_donates_in_place(self) -> None:
+    def test_layer_bufs_donate_in_place(self) -> None:
         # The layer-entry lay-in (`_pool_lay_batch`, which the zone runs to
-        # pre-lay each layer's planes) writes into pooled, DONATED cap-wide
-        # buffers. Across two lay-ins the pool entry must keep the same device
-        # allocation -- a silent donation failure would copy per layer,
-        # reintroducing the cap-wide materialization the pool removes, and the
-        # byte gates cannot see that regression (the values match either way).
+        # pre-lay each layer's planes) writes into the holder's DONATED
+        # cap-wide buffers. Across two lay-ins the entry must keep the same
+        # device allocation -- a silent donation failure would copy per
+        # layer, reintroducing the cap-wide materialization the holder
+        # removes, and the byte gates cannot see that regression (the values
+        # match either way).
         width = 36
         src = rand_field(31, (12,), KB)
         key = ("n0", width, src.dtype)
-        _pool_lay_batch([("n0", src, width)])
-        ptr = _LAYER_BUF_POOL[key].unsafe_buffer_pointer()
-        _pool_lay_batch([("n0", src, width)])
-        self.assertEqual(ptr, _LAYER_BUF_POOL[key].unsafe_buffer_pointer())
+        bufs = LayerBuffers()
+        _pool_lay_batch([("n0", src, width)], bufs)
+        ptr = bufs.pool[key].unsafe_buffer_pointer()
+        _pool_lay_batch([("n0", src, width)], bufs)
+        self.assertEqual(ptr, bufs.pool[key].unsafe_buffer_pointer())
+
+    def test_layer_bufs_holders_never_share_allocations(self) -> None:
+        # Two holders laying the same (role, width, dtype) must own distinct
+        # device buffers: a shared allocation would let concurrent chains --
+        # or a chain and a survivor of a dead one -- donate the same buffer
+        # twice, and the byte gates only see it if the writes race.
+        width = 36
+        src = rand_field(33, (12,), KB)
+        key = ("n0", width, src.dtype)
+        a, b = LayerBuffers(), LayerBuffers()
+        _pool_lay_batch([("n0", src, width)], a)
+        _pool_lay_batch([("n0", src, width)], b)
+        self.assertNotEqual(
+            a.pool[key].unsafe_buffer_pointer(),
+            b.pool[key].unsafe_buffer_pointer(),
+        )
 
     def test_matches_reference_multi_limb_ef(self) -> None:
         # koalabearx4 challenges (four squeezes reinterpreted) through the loop.
