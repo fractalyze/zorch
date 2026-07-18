@@ -42,10 +42,10 @@ class LayerBuffers:
     a fresh cap pad per layer costs ~2x cap-width writes, a top GPU item of
     the warm prove. The tail keeps the previous layer's bytes; the capped
     rounds mask every read by the `live` operand, byte-gated by the
-    capped-chain test. Scoped to the chain so the buffers die with the
-    prove — a module-global pool retained every width class's planes
-    (~5.3 GiB per 80M-cap class), capping a resident multi-class prover at
-    one big class per 32 GB card."""
+    capped-chain test. The one-chain scope is what frees the planes with
+    the prove: cap-wide planes run ~5.3 GiB per 80M-cap class, so any
+    longer-lived owner caps a resident multi-class prover at one big
+    class per 32 GB card."""
 
     def __init__(self) -> None:
         self.pool: dict[tuple[str, int, Any], Array] = {}

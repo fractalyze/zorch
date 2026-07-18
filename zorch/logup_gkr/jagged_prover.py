@@ -608,7 +608,9 @@ def _jagged_round_via_zone(
                 _pool_lay_batch(
                     [
                         (role, a, caps.elements)
-                        for role, a in zip(("n0", "n1", "d0", "d1"), planes)
+                        for role, a in zip(
+                            ("n0", "n1", "d0", "d1"), planes, strict=True
+                        )
                     ],
                     layer_bufs,
                 )

@@ -222,6 +222,22 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         _pool_lay_batch([("n0", src, width)], bufs)
         self.assertEqual(ptr, bufs.pool[key].unsafe_buffer_pointer())
 
+    def test_layer_bufs_holders_never_share_allocations(self) -> None:
+        # Two holders laying the same (role, width, dtype) must own distinct
+        # device buffers: a shared allocation would let concurrent chains --
+        # or a chain and a survivor of a dead one -- donate the same buffer
+        # twice, and the byte gates only see it if the writes race.
+        width = 36
+        src = rand_field(33, (12,), KB)
+        key = ("n0", width, src.dtype)
+        a, b = LayerBuffers(), LayerBuffers()
+        _pool_lay_batch([("n0", src, width)], a)
+        _pool_lay_batch([("n0", src, width)], b)
+        self.assertNotEqual(
+            a.pool[key].unsafe_buffer_pointer(),
+            b.pool[key].unsafe_buffer_pointer(),
+        )
+
     def test_matches_reference_multi_limb_ef(self) -> None:
         # koalabearx4 challenges (four squeezes reinterpreted) through the loop.
         layer = random_jagged_layer(41, (3, 1, 5, 2))
