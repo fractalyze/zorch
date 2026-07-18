@@ -116,9 +116,10 @@ class JaggedRegion:
 
     @property
     def block(self) -> Array:
-        """The ``[K, S]`` message-domain matrix (row ``k`` is stacked dense
-        block ``k``) — a free reshape view of ``dense``. The layout the commit
-        encodes and the stacked open consumes (``StackedRound.block``)."""
+        """The ``[K, S]`` message-domain matrix (row ``k`` is stacked column
+        ``k`` of the dense MLE) — a free reshape view of ``dense``. The layout
+        the commit encodes and the stacked open consumes
+        (``StackedRound.block``)."""
         S = 1 << self.log_stacking_height
         if self.dense.shape[0] % S != 0:
             raise ValueError(

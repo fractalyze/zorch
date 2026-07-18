@@ -66,10 +66,11 @@ class StackedRound:
     """One committed region's retained witness for the stacked open.
 
     ``block`` is the ``[K, S]`` message-domain matrix in the commit's own
-    layout (row ``k`` is dense block ``k`` at ``S = 2^log_stacking_height``) —
-    for a packed region it is a free reshape view of the dense buffer, no
-    transpose. The open evaluates each block at ``stack_point``, folds their
-    RLC, and re-encodes to the committed ``[S * blowup, K]`` codeword
+    layout (row ``k`` is stacked column ``k`` at
+    ``S = 2^log_stacking_height``) — for a packed region it is a free reshape
+    view of the dense buffer (``JaggedRegion.block``), no transpose. The open
+    evaluates each block at ``stack_point``, folds their RLC, and re-encodes
+    to the committed ``[S * blowup, K]`` codeword
     (bit-reversed rows = the leaves); any transposes happen inside the jitted
     zones, where XLA fuses them. ``digest_layers`` is that SMCS commit's
     layered digest tree.
