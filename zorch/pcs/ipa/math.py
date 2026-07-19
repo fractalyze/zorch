@@ -32,7 +32,7 @@ pins that identity so the succinct path and the explicit path cannot drift.
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -49,9 +49,9 @@ def challenge_vector(u: Array) -> Array:
     evaluation vector (`b`) fold with this same low/high pattern, so the one `s`
     serves both `⟨s, G⟩` and `⟨s, b⟩`."""
     k = u.shape[0]
-    s = jnp.ones((1,), dtype=u.dtype)
+    s = fnp.ones((1,), dtype=u.dtype)
     for j in range(k - 1, -1, -1):
-        s = jnp.concatenate([s, u[j] * s])
+        s = fnp.concatenate([s, u[j] * s])
     return s
 
 
@@ -61,14 +61,14 @@ def eval_challenge_poly(u: Array, x: Array) -> Array:
     `challenge_vector`). `x^{2^m}` comes from repeated squaring, so no field `pow`
     by a large exponent is needed."""
     k = u.shape[0]
-    one = jnp.ones((), dtype=x.dtype)
+    one = fnp.ones((), dtype=x.dtype)
     # squares[m] = x^{2^m}, m = 0 .. k-1
     squares = []
     cur = x
     for _ in range(k):
         squares.append(cur)
         cur = cur * cur
-    acc = jnp.ones((), dtype=x.dtype)
+    acc = fnp.ones((), dtype=x.dtype)
     for j in range(k):
         acc = acc * (one + u[j] * squares[k - 1 - j])
     return acc

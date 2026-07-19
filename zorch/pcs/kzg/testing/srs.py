@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import cast
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from frx import lax
 
@@ -26,13 +26,13 @@ def toy_srs(tau: int, n: int) -> tuple[KzgProvingKey, KzgVerifierKey]:
     internally consistent."""
     fr = zk_dtypes.pfinfo(SF).modulus
     e1, e2 = zk_dtypes.ecinfo(G1), zk_dtypes.ecinfo(G2)
-    g1 = jnp.asarray(G1((e1.gx, e1.gy)))
-    g2 = jnp.asarray(
+    g1 = fnp.asarray(G1((e1.gx, e1.gy)))
+    g2 = fnp.asarray(
         G2((tuple(cast("list[int]", e2.gx)), tuple(cast("list[int]", e2.gy))))
     )
     powers = [
-        lax.convert_element_type(jnp.array(pow(tau, i, fr), SF) * g1, G1)
+        lax.convert_element_type(fnp.array(pow(tau, i, fr), SF) * g1, G1)
         for i in range(n)
     ]
-    tau_g2 = lax.convert_element_type(jnp.array(tau, SF) * g2, G2)
-    return setup(jnp.stack(powers), tau_g2, g1, g2)
+    tau_g2 = lax.convert_element_type(fnp.array(tau, SF) * g2, G2)
+    return setup(fnp.stack(powers), tau_g2, g1, g2)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
 
@@ -13,7 +13,7 @@ from zorch.hash.permutation import Permutation
 
 class _Id:
     width = 3
-    dtype = jnp.int32
+    dtype = fnp.int32
     has_dedicated_fusion = False  # no dedicated marker -> consumers use a fallback
 
     def permute(self, state: Array) -> Array:
@@ -32,9 +32,9 @@ class PermutationProtocolTest(absltest.TestCase):
 
     def test_consumer_reads_width_and_dtype_without_naming_a_hash(self) -> None:
         p = _Id()
-        state = jnp.zeros(p.width, dtype=p.dtype)  # sponge-style allocation
+        state = fnp.zeros(p.width, dtype=p.dtype)  # sponge-style allocation
         self.assertEqual(state.shape, (3,))
-        self.assertTrue(bool(jnp.array_equal(p.permute(state), state)))
+        self.assertTrue(bool(fnp.array_equal(p.permute(state), state)))
 
 
 if __name__ == "__main__":

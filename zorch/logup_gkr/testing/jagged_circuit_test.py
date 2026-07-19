@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import fields
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -37,8 +37,8 @@ def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
     for i in range(layer.num_batches):
         lo, hi = starts[i], starts[i + 1]
         sums.append(
-            jnp.sum(layer.numerator_0[lo:hi] / layer.denominator_0[lo:hi])
-            + jnp.sum(layer.numerator_1[lo:hi] / layer.denominator_1[lo:hi])
+            fnp.sum(layer.numerator_0[lo:hi] / layer.denominator_0[lo:hi])
+            + fnp.sum(layer.numerator_1[lo:hi] / layer.denominator_1[lo:hi])
         )
     return sums
 
@@ -54,30 +54,30 @@ class JaggedGkrLayerTest(absltest.TestCase):
     def test_rejects_mle_length_not_matching_row_counts(self) -> None:
         with self.assertRaises(ValueError):
             JaggedGkrLayer(
-                numerator_0=jnp.ones((5,), KB),
-                numerator_1=jnp.ones((5,), KB),
-                denominator_0=jnp.ones((5,), KB),
-                denominator_1=jnp.ones((5,), KB),
+                numerator_0=fnp.ones((5,), KB),
+                numerator_1=fnp.ones((5,), KB),
+                denominator_0=fnp.ones((5,), KB),
+                denominator_1=fnp.ones((5,), KB),
                 row_counts=(3, 1, 2, 2),  # height 8 != 5
             )
 
     def test_rejects_non_power_of_two_interaction_count(self) -> None:
         with self.assertRaises(ValueError):
             JaggedGkrLayer(
-                numerator_0=jnp.ones((4,), KB),
-                numerator_1=jnp.ones((4,), KB),
-                denominator_0=jnp.ones((4,), KB),
-                denominator_1=jnp.ones((4,), KB),
+                numerator_0=fnp.ones((4,), KB),
+                numerator_1=fnp.ones((4,), KB),
+                denominator_0=fnp.ones((4,), KB),
+                denominator_1=fnp.ones((4,), KB),
                 row_counts=(2, 1, 1),
             )
 
     def test_rejects_mismatched_mle_widths(self) -> None:
         with self.assertRaises(ValueError):
             JaggedGkrLayer(
-                numerator_0=jnp.ones((4,), KB),
-                numerator_1=jnp.ones((2,), KB),
-                denominator_0=jnp.ones((4,), KB),
-                denominator_1=jnp.ones((4,), KB),
+                numerator_0=fnp.ones((4,), KB),
+                numerator_1=fnp.ones((2,), KB),
+                denominator_0=fnp.ones((4,), KB),
+                denominator_1=fnp.ones((4,), KB),
                 row_counts=(2, 2),
             )
 
@@ -100,10 +100,10 @@ class JaggedTransitionTest(absltest.TestCase):
         want = layer_transition(dense)
 
         self.assertEqual(out.row_counts, (2, 2, 2, 2))
-        self.assertTrue(bool(jnp.all(out.numerator_0 == want.numerator_0)))
-        self.assertTrue(bool(jnp.all(out.numerator_1 == want.numerator_1)))
-        self.assertTrue(bool(jnp.all(out.denominator_0 == want.denominator_0)))
-        self.assertTrue(bool(jnp.all(out.denominator_1 == want.denominator_1)))
+        self.assertTrue(bool(fnp.all(out.numerator_0 == want.numerator_0)))
+        self.assertTrue(bool(fnp.all(out.numerator_1 == want.numerator_1)))
+        self.assertTrue(bool(fnp.all(out.denominator_0 == want.denominator_0)))
+        self.assertTrue(bool(fnp.all(out.denominator_1 == want.denominator_1)))
 
     def test_odd_segment_prepad_preserves_fraction_sums(self) -> None:
         layer = _random_jagged_layer(20, (3, 1, 2, 1))
@@ -126,10 +126,10 @@ class JaggedTransitionTest(absltest.TestCase):
         starts = out.start_indices
         for i, rc in enumerate(folded):
             lo, hi = starts[i] + rc, starts[i + 1]
-            self.assertTrue(bool(jnp.all(out.numerator_0[lo:hi] == 0)))
-            self.assertTrue(bool(jnp.all(out.numerator_1[lo:hi] == 0)))
-            self.assertTrue(bool(jnp.all(out.denominator_0[lo:hi] == 1)))
-            self.assertTrue(bool(jnp.all(out.denominator_1[lo:hi] == 1)))
+            self.assertTrue(bool(fnp.all(out.numerator_0[lo:hi] == 0)))
+            self.assertTrue(bool(fnp.all(out.numerator_1[lo:hi] == 0)))
+            self.assertTrue(bool(fnp.all(out.denominator_0[lo:hi] == 1)))
+            self.assertTrue(bool(fnp.all(out.denominator_1[lo:hi] == 1)))
 
     def test_rejects_schedule_length_mismatch(self) -> None:
         layer = _random_jagged_layer(40, (2, 2, 2, 2))
@@ -157,7 +157,7 @@ class JaggedTransitionJitTest(absltest.TestCase):
         self.assertEqual(fused.row_counts, eager.row_counts)
         for name in ("numerator_0", "numerator_1", "denominator_0", "denominator_1"):
             self.assertTrue(
-                bool(jnp.all(getattr(fused, name) == getattr(eager, name))),
+                bool(fnp.all(getattr(fused, name) == getattr(eager, name))),
                 f"{name} diverged",
             )
 
@@ -245,7 +245,7 @@ class MixedFieldFirstLayerTest(absltest.TestCase):
         # transition.
         for name in ("numerator_0", "numerator_1", "denominator_0", "denominator_1"):
             self.assertTrue(
-                bool(jnp.all(getattr(out, name) == getattr(want, name))),
+                bool(fnp.all(getattr(out, name) == getattr(want, name))),
                 f"{name} diverged",
             )
 
@@ -254,10 +254,10 @@ class ExtractJaggedOutputsTest(absltest.TestCase):
     def test_all_ones_interleaves_children(self) -> None:
         layer = _random_jagged_layer(60, (1, 1, 1, 1))
         out = extract_jagged_outputs(layer)
-        want_num = jnp.stack([layer.numerator_0, layer.numerator_1], -1).flatten()
-        want_den = jnp.stack([layer.denominator_0, layer.denominator_1], -1).flatten()
-        self.assertTrue(bool(jnp.all(out.numerator == want_num)))
-        self.assertTrue(bool(jnp.all(out.denominator == want_den)))
+        want_num = fnp.stack([layer.numerator_0, layer.numerator_1], -1).flatten()
+        want_den = fnp.stack([layer.denominator_0, layer.denominator_1], -1).flatten()
+        self.assertTrue(bool(fnp.all(out.numerator == want_num)))
+        self.assertTrue(bool(fnp.all(out.denominator == want_den)))
 
     def test_rejects_uniform_above_floor_row_counts(self) -> None:
         layer = _random_jagged_layer(70, (2, 2, 2, 2))
@@ -280,7 +280,7 @@ class JaggedEndToEndTest(absltest.TestCase):
             schedule = tuple((rc + 1) // 2 for rc in layer.row_counts)
             layer = jagged_layer_transition(layer, schedule)
         out = extract_jagged_outputs(layer)
-        self.assertTrue(bool(total == jnp.sum(out.numerator / out.denominator)))
+        self.assertTrue(bool(total == fnp.sum(out.numerator / out.denominator)))
 
 
 class BuildJaggedPyramidTest(absltest.TestCase):
@@ -298,7 +298,7 @@ class BuildJaggedPyramidTest(absltest.TestCase):
                 if field.name == "row_counts":
                     continue
                 self.assertTrue(
-                    bool(jnp.all(getattr(g, field.name) == getattr(w, field.name))),
+                    bool(fnp.all(getattr(g, field.name) == getattr(w, field.name))),
                     f"{field.name} diverged for row_counts={w.row_counts}",
                 )
 

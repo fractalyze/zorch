@@ -35,7 +35,7 @@ from functools import partial
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 from zk_dtypes import efinfo
@@ -125,10 +125,10 @@ def assemble_columns(
     claim_blocks: list[Array] = []
     for ccs, claims_r in zip(column_counts_rounds, column_claims_rounds, strict=True):
         n_pad = int(ccs[-2]) + int(ccs[-1])
-        claim_blocks.append(jnp.asarray(claims_r, dtype=dtype))
+        claim_blocks.append(fnp.asarray(claims_r, dtype=dtype))
         if n_pad:
-            claim_blocks.append(jnp.zeros((n_pad,), dtype=dtype))
-    return col_heights, jnp.concatenate(claim_blocks, axis=0)
+            claim_blocks.append(fnp.zeros((n_pad,), dtype=dtype))
+    return col_heights, fnp.concatenate(claim_blocks, axis=0)
 
 
 def assemble_col_heights(
@@ -161,7 +161,7 @@ def sample_z_col(
     for _ in range(log2_ceil_usize(num_columns)):
         transcript, challenge = sample_challenge(transcript, dtype, limbs)
         parts.append(challenge)
-    z_col = jnp.stack(parts) if parts else jnp.zeros((0,), dtype)
+    z_col = fnp.stack(parts) if parts else fnp.zeros((0,), dtype)
     return transcript, z_col
 
 
@@ -173,7 +173,7 @@ def merged_prefix_bits(
     its verifier leaf check read."""
     prefix_int = build_prefix_sums(list(col_heights))
     bits = msb_first_bits(prefix_int, num_bits)
-    return jnp.asarray(np.concatenate([bits[:-1], bits[1:]], axis=1), dtype=dtype)
+    return fnp.asarray(np.concatenate([bits[:-1], bits[1:]], axis=1), dtype=dtype)
 
 
 def outer_sumcheck_claim(all_claims: Array, z_col: Array) -> Array:
@@ -183,8 +183,8 @@ def outer_sumcheck_claim(all_claims: Array, z_col: Array) -> Array:
     real columns (``col_eq[:L]``) is identical and shape-polymorphic in ``L`` — a
     symbolic-length pad-and-concatenate does not lower to a static width."""
     dtype = z_col.dtype
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))  # (2ⁿᶜ,)
-    return jnp.sum(col_eq[: all_claims.shape[0]] * all_claims)
+    col_eq = expand_eq_to_hypercube(z_col, fnp.ones((), dtype))  # (2ⁿᶜ,)
+    return fnp.sum(col_eq[: all_claims.shape[0]] * all_claims)
 
 
 def outer_sumcheck(
@@ -208,7 +208,7 @@ def outer_sumcheck(
     n_rounds = (state_a.shape[0] - 1).bit_length()
     ef = claim.dtype
     ef_limbs = efinfo(ef).degree
-    two = jnp.array(2, ef)
+    two = fnp.array(2, ef)
 
     cur = claim
     polys: list[Array] = []
@@ -216,9 +216,9 @@ def outer_sumcheck(
     for _ in range(n_rounds):
         p0a, p1a = state_a[0::2], state_a[1::2]
         p0b, p1b = state_b[0::2], state_b[1::2]
-        s0 = jnp.sum(p0a * p0b)
-        s_inf = jnp.sum((p1a - p0a) * (p1b - p0b))
-        coef = jnp.stack([s0, cur - two * s0 - s_inf, s_inf])
+        s0 = fnp.sum(p0a * p0b)
+        s_inf = fnp.sum((p1a - p0a) * (p1b - p0b))
+        coef = fnp.stack([s0, cur - two * s0 - s_inf, s_inf])
 
         # One extension challenge per variable; fused absorb+squeeze, so byte
         # for byte the same as observe + sample_challenge.
@@ -231,8 +231,8 @@ def outer_sumcheck(
         challenges.append(alpha)
 
     dense_eval = state_a[0]
-    z_final = jnp.stack(challenges)[::-1]
-    return jnp.stack(polys), z_final, dense_eval, transcript
+    z_final = fnp.stack(challenges)[::-1]
+    return fnp.stack(polys), z_final, dense_eval, transcript
 
 
 def _bp_all(
@@ -268,23 +268,23 @@ def inner_sumcheck_core(
     """Branching-program sumcheck over a prebuilt (merged, weights).
 
     Polymorphic in the column count L = merged.shape[0]: per-column work is a
-    vmap + jnp.sum over the real columns (no padding), so L can be a symbolic
+    vmap + fnp.sum over the real columns (no padding), so L can be a symbolic
     export dim. The 2*num_bits round loop is unrolled (num_bits concrete) — one
     fused zorch.duplex_fs kernel per round. weights is the column-eq table
     col_eq[:L]; the caller keeps z_col at its true length (n_c, unpadded) so those
     weights are exact even when L is a symbolic dim."""
     n_vars = 2 * num_bits
-    t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
-    one = jnp.ones((), dtype)
-    two = jnp.array(2, dtype)
+    t_matrix = fnp.asarray(_TRANSITION_ROWS, dtype=dtype)
+    one = fnp.ones((), dtype)
+    two = fnp.array(2, dtype)
     ef_limbs = efinfo(dtype).degree
 
     def bp_all(buf: Array) -> Array:
         return _bp_all(buf, z_row, z_trace, t_matrix, num_bits)
 
-    # claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c — a jnp.sum,
+    # claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c — a fnp.sum,
     # not eval_jagged_mle's ~1700-deep trace-time unroll (which compiles abysmally).
-    claimed_sum = jnp.sum(weights * bp_all(merged))
+    claimed_sum = fnp.sum(weights * bp_all(merged))
 
     # SP1's prove_jagged_evaluation absorbs the claimed J̃ value before the
     # rounds; its verifier re-absorbs it the same way (fractalyze/sp1-zorch#90).
@@ -302,9 +302,9 @@ def inner_sumcheck_core(
         eq0 = one - bits_i
         bp0 = bp_all(buf.at[:, round_idx].set(0))
         bp1 = bp_all(buf.at[:, round_idx].set(1))
-        p0 = jnp.sum(weights_c * eq0 * bp0)
-        p_inf = jnp.sum(weights_c * (bits_i - eq0) * (bp1 - bp0))
-        coef = jnp.stack([p0, claim - two * p0 - p_inf, p_inf])
+        p0 = fnp.sum(weights_c * eq0 * bp0)
+        p_inf = fnp.sum(weights_c * (bits_i - eq0) * (bp1 - bp0))
+        coef = fnp.stack([p0, claim - two * p0 - p_inf, p_inf])
 
         # One extension challenge per variable; fused absorb+squeeze, so byte
         # for byte the same as observe + sample_challenge.
@@ -315,7 +315,7 @@ def inner_sumcheck_core(
         claim = eval_coeffs(coef, alpha)
         polys.append(coef)
         challenges.append(alpha)
-    return jnp.stack(polys), jnp.stack(challenges[::-1]), claimed_sum, transcript
+    return fnp.stack(polys), fnp.stack(challenges[::-1]), claimed_sum, transcript
 
 
 def eval_round_core(
@@ -399,7 +399,7 @@ def _eval_inputs(
             f"(need ≥ {log2_ceil_usize(l_max)})"
         )
     offsets, merged = eval_column_arrays(col_heights, dtype=dtype)
-    weights = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))[:l_max]
+    weights = expand_eq_to_hypercube(z_col, fnp.ones((), dtype))[:l_max]
     return offsets, merged, weights
 
 

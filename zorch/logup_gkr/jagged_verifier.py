@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
@@ -82,7 +82,7 @@ class JaggedGkrLayerRound(Round):
         combined = logup_combine(lam, eq_eval, n0, d1, n1, d0)
         ok = ok_sc & (combined == final_claim)
 
-        transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
+        transcript = transcript.observe(fnp.stack([n0, n1, d0, d1]))
         transcript, r = sample_challenge(
             transcript, num_eval.dtype, self.challenge_limbs
         )

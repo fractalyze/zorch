@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
@@ -64,7 +64,7 @@ def build_jagged_layout(
     prefix = build_prefix_sums(row_counts)  # length real_L+1
     n_d = log_area_tier(prefix[-1])
     padded = prefix + [prefix[-1]] * (l_max - real_L)  # length l_max+1, empty-range pad
-    cps = jnp.asarray(msb_first_bits(padded, n_d), dtype=dtype)
+    cps = fnp.asarray(msb_first_bits(padded, n_d), dtype=dtype)
     return cps, n_d
 
 
@@ -84,11 +84,11 @@ def _offset_bit_tensor(
     padded = prefix + [prefix[-1]] * (l_max - len(col_heights))  # empty-range pad
     bits = msb_first_bits(padded, n_d)  # (l_max+1, n_d) int
     # int32 limbs per field element (4 for a 128-bit EF, 1 for a 32-bit base).
-    probe = frx.lax.bitcast_convert_type(jnp.zeros((1,), dtype), jnp.int32)
+    probe = frx.lax.bitcast_convert_type(fnp.zeros((1,), dtype), fnp.int32)
     n_limbs = probe.shape[-1] if probe.ndim > 1 else 1
     limbs = np.zeros((bits.shape[0], n_d, n_limbs), dtype=np.int32)
     limbs[..., 0] = bits
-    return frx.lax.bitcast_convert_type(jnp.asarray(limbs), dtype)
+    return frx.lax.bitcast_convert_type(fnp.asarray(limbs), dtype)
 
 
 def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
@@ -99,10 +99,10 @@ def _decode_prefix_sums(col_prefix_sums: Array, n_d: Any) -> Array:
     ndim test, not a reshape (symbolic ``n_d`` can't infer the -1 limb dim). Weights
     ``2^(n_d-1-k)`` use a vectorized ``arange(n_d)`` (``range`` can't iterate a
     symbolic dim)."""
-    limbs = frx.lax.bitcast_convert_type(col_prefix_sums, jnp.int32)
+    limbs = frx.lax.bitcast_convert_type(col_prefix_sums, fnp.int32)
     bit_vals = limbs[..., 0] if limbs.ndim > col_prefix_sums.ndim else limbs
-    powers = jnp.left_shift(jnp.int32(1), n_d - 1 - jnp.arange(n_d, dtype=jnp.int32))
-    return jnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
+    powers = fnp.left_shift(fnp.int32(1), n_d - 1 - fnp.arange(n_d, dtype=fnp.int32))
+    return fnp.sum(bit_vals * powers, axis=1)  # (l_max+1,) int32
 
 
 def _count_leq_sorted(sorted_arr: Array, queries: Array, n_steps: int) -> Array:
@@ -110,18 +110,18 @@ def _count_leq_sorted(sorted_arr: Array, queries: Array, n_steps: int) -> Array:
     ``searchsorted(side="right")`` over an ascending array.
 
     A vectorized binary search of a STATIC ``n_steps`` (>= ⌈log2(len+1)⌉): memory-
-    light and symbolic-safe in ``len(sorted_arr)`` (``jnp.searchsorted`` bakes that
+    light and symbolic-safe in ``len(sorted_arr)`` (``fnp.searchsorted`` bakes that
     length as a constant, which a symbolic column count forbids). Over-provisioned
     steps are no-ops (idempotent once ``lo == hi``)."""
     n = sorted_arr.shape[0]
-    lo = jnp.zeros(queries.shape, jnp.int32)
-    hi = jnp.full(queries.shape, n, jnp.int32)
+    lo = fnp.zeros(queries.shape, fnp.int32)
+    hi = fnp.full(queries.shape, n, fnp.int32)
     for _ in range(n_steps):
         mid = (lo + hi) // 2
-        val = sorted_arr[jnp.minimum(mid, n - 1)]  # guard mid == n
+        val = sorted_arr[fnp.minimum(mid, n - 1)]  # guard mid == n
         go_right = (mid < n) & (val <= queries)
-        lo = jnp.where(go_right, mid + 1, lo)
-        hi = jnp.where(go_right, hi, mid)
+        lo = fnp.where(go_right, mid + 1, lo)
+        hi = fnp.where(go_right, hi, mid)
     return lo
 
 
@@ -143,22 +143,22 @@ def _partial_eval_decomposition(
     col_eq the column-eq table, z_row the row point. size and search_steps ride as
     static attrs; the decode and eq table stay outside the marker."""
     dtype = z_row.dtype
-    one = jnp.ones([], dtype=dtype)
+    one = fnp.ones([], dtype=dtype)
     n_r = z_row.shape[0]
-    row_len = jnp.left_shift(jnp.int32(1), n_r)  # 2ⁿʳ, as a value (n_r symbolic)
+    row_len = fnp.left_shift(fnp.int32(1), n_r)  # 2ⁿʳ, as a value (n_r symbolic)
 
     # c_idx = owning column = (#prefix entries ≤ i) − 1 (searchsorted side="right";
     # duplicate prefixes from zero-height columns resolve to the real owner). No
     # clamp: the tail i ≥ t_L lands at the last index, where the height mask zeros
     # it. `search_steps` covers the prefix array (>= ⌈log2(len)⌉).
-    i_idx = jnp.arange(size, dtype=jnp.int32)
+    i_idx = fnp.arange(size, dtype=fnp.int32)
     c_idx = _count_leq_sorted(prefix_sums_int, i_idx, search_steps) - 1
     t_c = prefix_sums_int[c_idx]
     h = prefix_sums_int[c_idx + 1] - t_c  # column height (0 for padding columns)
     local = i_idx - t_c
     # min(h, row_len): the row eq covers 2ⁿʳ rows, so a taller-than-capacity
     # column truncates — identical to the scatter form's fixed-width window.
-    mask = local < jnp.minimum(h, row_len)
+    mask = local < fnp.minimum(h, row_len)
 
     # eq(z_row, local) per element instead of a 2ⁿʳ gather table, so n_r can be
     # symbolic. row_eq[j] = ∏_k eq(z_row[k], bit_{n_r-1-k}(j)), MSB-first per
@@ -169,10 +169,10 @@ def _partial_eval_decomposition(
         return acc * (bit * z_k + (one - bit) * (one - z_k)), None
 
     row_vals, _ = frx.lax.scan(
-        _eq_bit, jnp.ones(i_idx.shape, dtype), jnp.arange(n_r, dtype=jnp.int32)
+        _eq_bit, fnp.ones(i_idx.shape, dtype), fnp.arange(n_r, dtype=fnp.int32)
     )
     val = col_eq[c_idx] * row_vals
-    return jnp.where(mask, val, jnp.zeros([], dtype=dtype))
+    return fnp.where(mask, val, fnp.zeros([], dtype=dtype))
 
 
 def partial_eval_core(
@@ -190,7 +190,7 @@ def partial_eval_core(
     on the n_d class, never the per-column heights."""
     n_d = col_prefix_sums.shape[1]
     prefix_sums_int = _decode_prefix_sums(col_prefix_sums, n_d)
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=z_row.dtype))
+    col_eq = expand_eq_to_hypercube(z_col, fnp.ones([], dtype=z_row.dtype))
     # Search depth from the real column count when static, so a cap far above 2ⁿᶜ
     # is searched fully; +2 keeps l_max==1 safe. Symbolic L has no static length, so
     # it falls back to the n_c+2 proxy.

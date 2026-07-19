@@ -18,7 +18,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.fusion import fused_region
@@ -89,7 +89,7 @@ def _absorb(
     mode = _MODES[sponge_type]
     n = input.shape[0]
     nb = (n + rate - 1) // rate
-    lanes = jnp.arange(rate)
+    lanes = fnp.arange(rate)
 
     def cond(carry: tuple[Array, Array]) -> Array:
         return carry[1] < nb
@@ -97,15 +97,15 @@ def _absorb(
     def body(carry: tuple[Array, Array]) -> tuple[Array, Array]:
         s, i = carry
         start = i * rate
-        w = jnp.minimum(rate, n - start)
+        w = fnp.minimum(rate, n - start)
         # Last block reads past n; clamp OOB indices (masked out below).
-        block = input[jnp.clip(start + lanes, 0, n - 1)]
+        block = input[fnp.clip(start + lanes, 0, n - 1)]
         cap = s[:out]  # prior digest (zeros on block 0); snapshot before overwrite
-        s = s.at[:rate].set(jnp.where(lanes < w, block, mode.tail_fill(s, rate)))
+        s = s.at[:rate].set(fnp.where(lanes < w, block, mode.tail_fill(s, rate)))
         s = mode.set_capacity(s, cap, rate, out)
         return permute(s), i + 1
 
-    state, _ = lax.while_loop(cond, body, (state, jnp.int32(0)))
+    state, _ = lax.while_loop(cond, body, (state, fnp.int32(0)))
     return state[:out]
 
 
@@ -124,7 +124,7 @@ def _fused_hash(
     operands, permute_from_operands, perm_attrs = perm.fused_region_spec(input)
 
     def sponge(inp: Array, *constants: Array, **_attrs: object) -> Array:
-        state = jnp.zeros(perm.width, dtype=inp.dtype)
+        state = fnp.zeros(perm.width, dtype=inp.dtype)
         return _absorb(
             inp,
             state,
@@ -253,5 +253,5 @@ class Sponge:
         perm = self._permutation
         if perm.has_dedicated_fusion:
             return _fused_hash(perm, input, self.rate, self.out, sponge_type)
-        state = jnp.zeros(perm.width, dtype=input.dtype)
+        state = fnp.zeros(perm.width, dtype=input.dtype)
         return _absorb(input, state, self.rate, self.out, perm.permute, sponge_type)

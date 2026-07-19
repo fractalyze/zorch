@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from frx import Array, lax
 
@@ -165,7 +165,7 @@ def lane_combine(lanes: Array, challenges: Sequence[Array]) -> Array:
     for r in challenges:
         pairs = buf.reshape(buf.shape[0], -1, 2)
         e0, e1 = pairs[..., 0], pairs[..., 1]
-        one = jnp.ones((), e0.dtype)
+        one = fnp.ones((), e0.dtype)
         buf = (one - r) * e0 + r * e1
     return buf[:, 0]
 
@@ -178,8 +178,8 @@ def sample_positions(
     field element's low limb is reduced mod `block_len`. Generic over the
     transcript flavor so a `GrindingTranscript` caller keeps its type."""
     t, raw = transcript.sample(count)
-    limbs = lax.bitcast_convert_type(raw, jnp.uint32).reshape(count, -1)
-    return t, (limbs[:, 0] % block_len).astype(jnp.int32)
+    limbs = lax.bitcast_convert_type(raw, fnp.uint32).reshape(count, -1)
+    return t, (limbs[:, 0] % block_len).astype(fnp.int32)
 
 
 def sample_distinct_positions(
@@ -193,27 +193,27 @@ def sample_distinct_positions(
         raise ValueError(
             f"cannot sample {count} distinct positions from a block of {block_len}"
         )
-    bl = jnp.uint32(block_len)
-    idx = jnp.arange(count, dtype=jnp.int32)
+    bl = fnp.uint32(block_len)
+    idx = fnp.arange(count, dtype=fnp.int32)
 
     def body(
         carry: tuple[TranscriptT, Array, Array]
     ) -> tuple[TranscriptT, Array, Array]:
         t, out, n = carry
         t, raw = t.sample(1)
-        pos = (lax.bitcast_convert_type(raw, jnp.uint32).reshape(-1)[0] % bl).astype(
-            jnp.int32
+        pos = (lax.bitcast_convert_type(raw, fnp.uint32).reshape(-1)[0] % bl).astype(
+            fnp.int32
         )
-        hit = jnp.any((idx < n) & (out == pos))  # already drawn?
-        out = jnp.where(hit, out, out.at[n].set(pos))
-        return t, out, jnp.where(hit, n, n + jnp.int32(1))
+        hit = fnp.any((idx < n) & (out == pos))  # already drawn?
+        out = fnp.where(hit, out, out.at[n].set(pos))
+        return t, out, fnp.where(hit, n, n + fnp.int32(1))
 
     t, out, _ = lax.while_loop(
         lambda c: c[2] < count,
         body,
-        (transcript, jnp.zeros(count, jnp.int32), jnp.int32(0)),
+        (transcript, fnp.zeros(count, fnp.int32), fnp.int32(0)),
     )
-    return t, jnp.sort(out)
+    return t, fnp.sort(out)
 
 
 @dataclass(frozen=True)
@@ -356,29 +356,29 @@ def verify_openings(
     for root, idx, opening in legs:
         groups.setdefault(opening.row.shape[-1], []).append((root, idx, opening))
 
-    ok = jnp.bool_(True)
+    ok = fnp.bool_(True)
     for group in groups.values():
         max_depth = max(len(opening.path) for _, _, opening in group)
         rows, indices, paths, valid, roots = [], [], [], [], []
         for root, idx, opening in group:
             q = idx.shape[0]
             depth = len(opening.path)
-            path = jnp.stack(opening.path, axis=1)  # (queries, depth, digest)
-            path = jnp.pad(path, ((0, 0), (0, max_depth - depth), (0, 0)))
+            path = fnp.stack(opening.path, axis=1)  # (queries, depth, digest)
+            path = fnp.pad(path, ((0, 0), (0, max_depth - depth), (0, 0)))
             rows.append(opening.row)
             indices.append(idx)
             paths.append(path)
             valid.append(
-                jnp.broadcast_to(jnp.arange(max_depth) < depth, (q, max_depth))
+                fnp.broadcast_to(fnp.arange(max_depth) < depth, (q, max_depth))
             )
-            roots.append(jnp.broadcast_to(root, (q, *root.shape)))
+            roots.append(fnp.broadcast_to(root, (q, *root.shape)))
         rebuilt = tree.reconstruct_roots(
-            jnp.concatenate(rows),
-            jnp.concatenate(indices),
-            jnp.concatenate(paths),
-            jnp.concatenate(valid),
+            fnp.concatenate(rows),
+            fnp.concatenate(indices),
+            fnp.concatenate(paths),
+            fnp.concatenate(valid),
         )
-        ok = ok & jnp.all(rebuilt == jnp.concatenate(roots))
+        ok = ok & fnp.all(rebuilt == fnp.concatenate(roots))
     return ok
 
 
@@ -401,7 +401,7 @@ def verify_fold_chain(
     control-flow boundary for no trace+lower win
     (docs/reference/conventions.md "Loops")."""
     num_rounds = len(query_openings)
-    ok = jnp.bool_(True)
+    ok = fnp.bool_(True)
     for i in range(num_rounds):
         leaf = from_base_field(query_openings[i].row, code.dtype, 2)  # (Q, 2)
         folded = code.fold_values(leaf[:, 0], leaf[:, 1], betas[i], leaf_indices[i], i)
@@ -410,10 +410,10 @@ def verify_fold_chain(
             # that layer's opened pair, decided by the code's layout.
             next_lo, _ = code.pair_indices(leaf_indices[i + 1], i + 1)
             nxt = from_base_field(query_openings[i + 1].row, code.dtype, 2)
-            expected = jnp.where(leaf_indices[i] == next_lo, nxt[:, 0], nxt[:, 1])
+            expected = fnp.where(leaf_indices[i] == next_lo, nxt[:, 0], nxt[:, 1])
         else:
             expected = final_poly[leaf_indices[i]]
-        ok = ok & jnp.all(folded == expected)
+        ok = ok & fnp.all(folded == expected)
     return ok
 
 
@@ -434,7 +434,7 @@ def verify_group_fold_chain(
     a static-width-k combination), so scanning it would add a control-flow
     boundary for no trace+lower win (docs/reference/conventions.md "Loops")."""
     num_rounds = len(query_openings)
-    ok = jnp.bool_(True)
+    ok = fnp.bool_(True)
     for i in range(num_rounds):
         group = query_openings[i].row  # (Q, k)
         folded = code.fold_group_values(group, betas[i], leaf_indices[i], i)
@@ -442,15 +442,15 @@ def verify_group_fold_chain(
             # The fold lands at leaf_indices[i] in layer i+1 — one of the k legs
             # of that layer's opened group. Select the leg whose full-layer index
             # equals the landing index (exactly one matches) by the k-way
-            # generalization of the binary chain's `jnp.where` on (lo, hi).
+            # generalization of the binary chain's `fnp.where` on (lo, hi).
             members = code.group_indices(leaf_indices[i + 1], i + 1)
             nxt = query_openings[i + 1].row  # (Q, k)
-            expected = jnp.zeros_like(folded)
+            expected = fnp.zeros_like(folded)
             for m in range(nxt.shape[-1]):
-                expected = jnp.where(members[m] == leaf_indices[i], nxt[:, m], expected)
+                expected = fnp.where(members[m] == leaf_indices[i], nxt[:, m], expected)
         else:
             expected = final_poly[leaf_indices[i]]
-        ok = ok & jnp.all(folded == expected)
+        ok = ok & fnp.all(folded == expected)
     return ok
 
 

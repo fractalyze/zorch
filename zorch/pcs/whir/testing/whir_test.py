@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import dataclasses
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest, parameterized
 from frx import Array
 from zk_dtypes import koalabear_mont as F
@@ -46,11 +46,11 @@ class _MobiusScheme(EqWhirScheme):
     openvm consumer)."""
 
     def _table(self, u: Array) -> Array:
-        state = jnp.ones((1,), u.dtype)
+        state = fnp.ones((1,), u.dtype)
         for j in range(u.shape[0]):  # u[j] added as the new LSB, kernel (1−2u, u)
             high = state * u[j]
-            low = state * (jnp.ones((), u.dtype) - u[j] - u[j])
-            state = jnp.column_stack([low, high]).flatten()
+            low = state * (fnp.ones((), u.dtype) - u[j] - u[j])
+            state = fnp.column_stack([low, high]).flatten()
         return state
 
     def claimed_values(self, mle: Array, z: Array) -> Array:
@@ -61,8 +61,8 @@ class _MobiusScheme(EqWhirScheme):
 
     def final_prefix(self, z: Array, alphas: Array) -> Array:
         x = alphas[::-1]  # same z↔fold pairing as eval_eq(z, alphas[::-1])
-        one = jnp.ones((), z.dtype)
-        return jnp.prod((one - x) * (one - z - z) + x * z)
+        one = fnp.ones((), z.dtype)
+        return fnp.prod((one - x) * (one - z - z) + x * z)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -185,7 +185,7 @@ class WhirTest(parameterized.TestCase):
         ok, _ = verifier.verify(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
         w = proof.mu_pow_witness
-        tampered = dataclasses.replace(proof, mu_pow_witness=w + jnp.ones((), w.dtype))
+        tampered = dataclasses.replace(proof, mu_pow_witness=w + fnp.ones((), w.dtype))
         ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
         self.assertFalse(bool(ok))
 
@@ -207,7 +207,7 @@ class WhirTest(parameterized.TestCase):
         root, prover_data = prover.commit(polys)
         values, proof, _ = prover.open(prover_data, [z], _transcript())
         tampered = dataclasses.replace(
-            proof, final_poly=proof.final_poly.at[0].add(jnp.ones((), EF))
+            proof, final_poly=proof.final_poly.at[0].add(fnp.ones((), EF))
         )
         ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
         self.assertFalse(bool(ok))
@@ -219,7 +219,7 @@ class WhirTest(parameterized.TestCase):
         z = rand_ext_field(3, (4,), F, EF)
         root, prover_data = prover.commit(polys)
         values, proof, _ = prover.open(prover_data, [z], _transcript())
-        bad = values.at[1].add(jnp.ones((), EF))
+        bad = values.at[1].add(fnp.ones((), EF))
         ok, _ = verifier.verify(root, [z], bad, proof, _transcript())
         self.assertFalse(bool(ok))
 

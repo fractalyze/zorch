@@ -2,7 +2,7 @@
 
 `matrix @ state` and the internal layer `(off_diag*J + Diag(d)) @ state` written as a
 fixed, unrolled sum of column-scaled lanes. This keeps a round body straight-line
-element-wise so it fuses to one kernel: `jnp.dot`/`jnp.sum` lower to a reduction
+element-wise so it fuses to one kernel: `fnp.dot`/`fnp.sum` lower to a reduction
 (the `kInput` fusion boundary) and dynamic indexing to `gather`, either of which
 splits the kernel. Static lane indices lower to `slice`, not `gather`.
 """
@@ -12,7 +12,7 @@ from __future__ import annotations
 import functools
 import operator
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -48,7 +48,7 @@ def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
             f"external layer needs a 1-D state with width a positive multiple of "
             f"4, got {state.shape}"
         )
-    return jnp.stack(
+    return fnp.stack(
         [
             _unrolled_sum(
                 [

@@ -9,7 +9,7 @@ from functools import cache
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
@@ -171,18 +171,18 @@ def _derive_row_schedule(
     the pad blend treats as past-the-end (the folded state length). Dead
     slots past the live pairs carry the sentinel / zero, matching
     `_fixed_width_gather` / `_zero_pad_index_np`."""
-    i32 = jnp.int32
+    i32 = fnp.int32
     rc = row_counts.astype(i32)
     # ((rc − 1) >> k) + 1 = ceil(rc / 2^k) for rc >= 1, and 0 for an empty
     # segment under the arithmetic shift ((−1 >> k) + 1) — no pairs, so the
     # searchsorted below never lands on it.
     counts = (rc - i32(1) >> rnd.astype(i32)) + i32(1)
     pairs = counts + i32(1) >> 1
-    cum_pairs = jnp.cumsum(pairs)  # inclusive; cum_pairs[-1] = live pairs
-    seg_base = jnp.concatenate([jnp.zeros((1,), i32), jnp.cumsum(counts)[:-1]])
-    pr = jnp.arange(num_pairs, dtype=i32)
-    s = jnp.searchsorted(cum_pairs, pr, side="right").astype(i32)
-    s = jnp.minimum(s, i32(row_counts.shape[0] - 1))  # dead-tail clamp
+    cum_pairs = fnp.cumsum(pairs)  # inclusive; cum_pairs[-1] = live pairs
+    seg_base = fnp.concatenate([fnp.zeros((1,), i32), fnp.cumsum(counts)[:-1]])
+    pr = fnp.arange(num_pairs, dtype=i32)
+    s = fnp.searchsorted(cum_pairs, pr, side="right").astype(i32)
+    s = fnp.minimum(s, i32(row_counts.shape[0] - 1))  # dead-tail clamp
     pj = pr - (cum_pairs[s] - pairs[s])
     live = pr < cum_pairs[-1]
     j_e = pj * 2
@@ -190,12 +190,12 @@ def _derive_row_schedule(
     src_e = seg_base[s] + j_e
     src_o = seg_base[s] + j_o
     sent = i32(sentinel)
-    gather_e = jnp.where(live, src_e, sent)
-    gather_o = jnp.where(live & (j_o < counts[s]), src_o, sent)
-    gather = jnp.stack([gather_e, gather_o], axis=1).reshape(-1)
+    gather_e = fnp.where(live, src_e, sent)
+    gather_o = fnp.where(live & (j_o < counts[s]), src_o, sent)
+    gather = fnp.stack([gather_e, gather_o], axis=1).reshape(-1)
     zero = i32(0)
-    col_index = jnp.where(live, s, zero)
-    pair_index = jnp.where(live, pj, zero)
+    col_index = fnp.where(live, s, zero)
+    pair_index = fnp.where(live, pj, zero)
     return (
         gather.astype(idx_dtype),
         col_index.astype(idx_dtype),

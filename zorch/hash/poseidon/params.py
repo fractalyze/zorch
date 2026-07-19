@@ -119,7 +119,7 @@ class PoseidonParams:
         name-routed `fused_region` would lift to a leading operand) and the
         dedicated emitter carries as a marker attribute (flattened row-major at
         the call-site). Canonical ints come from a numpy object cast, which
-        Montgomery-decodes without needing jax x64."""
+        Montgomery-decodes without needing frx x64."""
         w = self.width
         canon = np.asarray(self.mds).astype(object)
         return tuple(tuple(int(canon[i, j]) for j in range(w)) for i in range(w))

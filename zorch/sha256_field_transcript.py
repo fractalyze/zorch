@@ -37,7 +37,7 @@ from dataclasses import dataclass, replace
 from functools import partial
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array, lax
 from frx.tree_util import register_dataclass
@@ -72,12 +72,12 @@ def _len8(n: int) -> bytes:
 
 def _const_u8(data: bytes) -> Array:
     """A compile-time-constant byte payload as a device uint8 array."""
-    return jnp.asarray(np.frombuffer(data, dtype=np.uint8))
+    return fnp.asarray(np.frombuffer(data, dtype=np.uint8))
 
 
 def _u32_le_bytes(values: Array) -> Array:
     """uint32 `[...]` -> uint8 `[..., 4]`, little-endian."""
-    return lax.bitcast_convert_type(values, jnp.uint8)
+    return lax.bitcast_convert_type(values, fnp.uint8)
 
 
 def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
@@ -85,7 +85,7 @@ def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
     big-endian (digest[..., 0] most significant). Traceable; byte-identical to
     `byte_transcript._leading_zero_bits_ok`."""
     full, extra = divmod(bits, 8)
-    ok = jnp.all(digests[:, :full] == 0, axis=1)
+    ok = fnp.all(digests[:, :full] == 0, axis=1)
     if extra:
         ok = ok & ((digests[:, full] >> np.uint8(8 - extra)) == 0)
     return ok
@@ -135,7 +135,7 @@ class Sha256FieldTranscript:
         vals_u8 = self._elem_bytes(values).reshape(-1)
         count = int(vals_u8.shape[0]) // self._item_bytes()
         framing = _const_u8(bytes([OP_OBSERVE, KIND_SLICE]) + _len8(count))
-        return self._absorb(jnp.concatenate([framing, vals_u8]))
+        return self._absorb(fnp.concatenate([framing, vals_u8]))
 
     def observe_scalar(self, value: Array) -> Sha256FieldTranscript:
         """Absorb under scalar framing `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
@@ -145,10 +145,10 @@ class Sha256FieldTranscript:
         `observe_scalar` per element; distinct from `observe` (the KIND tag
         differs)."""
         vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
-        framing = jnp.broadcast_to(
+        framing = fnp.broadcast_to(
             _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
         )
-        return self._absorb(jnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
+        return self._absorb(fnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
 
     def observe_label(self, label: bytes) -> Sha256FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -163,9 +163,9 @@ class Sha256FieldTranscript:
         `[OP_BYTES] || len8(len) || data`. `data` is a uint8 array whose length
         is static (it rides the framing prefix). Byte-identical to the byte
         transcript's `observe_bytes` of the same bytes."""
-        data = jnp.asarray(data, jnp.uint8).reshape(-1)
+        data = fnp.asarray(data, fnp.uint8).reshape(-1)
         framing = _const_u8(bytes([OP_BYTES]) + _len8(int(data.shape[0])))
-        return self._absorb(jnp.concatenate([framing, data]))
+        return self._absorb(fnp.concatenate([framing, data]))
 
     def sample(self, n: int = 1) -> tuple[Sha256FieldTranscript, Array]:
         """Squeeze `n` challenge elements: absorb `[OP_SQUEEZE, KIND_SLICE] ||
@@ -196,7 +196,7 @@ class Sha256FieldTranscript:
         """A fresh stream over the PoW state digest `SHA256(buffer)`: candidate
         digests are `finalize(pow_state, counter_le8)` batches. Matches the byte
         transcript's `HASH(state_digest || nonce_le8)`."""
-        digest = sha256_stream_finalize(self.state, jnp.zeros((1, 0), dtype=jnp.uint8))[
+        digest = sha256_stream_finalize(self.state, fnp.zeros((1, 0), dtype=fnp.uint8))[
             0
         ]
         return sha256_stream_absorb(sha256_stream_init(), digest)
@@ -204,12 +204,12 @@ class Sha256FieldTranscript:
     def _witness_bytes(self, witness: Array) -> Array:
         """The u64-LE nonce wire bytes of a uint32 witness (high 4 bytes zero —
         the search domain is uint32, like `DuplexTranscript._grind_search`)."""
-        lo4 = _u32_le_bytes(jnp.asarray(witness, jnp.uint32).reshape(1))[0]
-        return jnp.concatenate([lo4, jnp.zeros(4, jnp.uint8)])
+        lo4 = _u32_le_bytes(fnp.asarray(witness, fnp.uint32).reshape(1))[0]
+        return fnp.concatenate([lo4, fnp.zeros(4, fnp.uint8)])
 
     def _absorb_witness(self, witness: Array) -> Sha256FieldTranscript:
         framing = _const_u8(bytes([OP_BYTES]) + _len8(8))
-        return self._absorb(jnp.concatenate([framing, self._witness_bytes(witness)]))
+        return self._absorb(fnp.concatenate([framing, self._witness_bytes(witness)]))
 
     def grind(
         self, pow_bits: int, *, chunk: int = GRIND_WINDOW
@@ -226,13 +226,13 @@ class Sha256FieldTranscript:
             raise ValueError(f"chunk must be >= 1, got {chunk}")
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
-            witness = jnp.zeros((), jnp.uint32)
+            witness = fnp.zeros((), fnp.uint32)
             return self._absorb_witness(witness), witness
         pow_state = self._pow_state()
 
         def check_batch(counters: Array) -> Array:
-            nonce8 = jnp.concatenate(
-                [_u32_le_bytes(counters), jnp.zeros((counters.shape[0], 4), jnp.uint8)],
+            nonce8 = fnp.concatenate(
+                [_u32_le_bytes(counters), fnp.zeros((counters.shape[0], 4), fnp.uint8)],
                 axis=1,
             )
             return _leading_zero_bits_ok(
@@ -250,9 +250,9 @@ class Sha256FieldTranscript:
         transcript stays in lockstep. Returns the advanced transcript and the
         device boolean verdict."""
         _validate_pow_bits(pow_bits, _DIGEST_BYTES)
-        witness = jnp.asarray(witness, jnp.uint32).reshape(())
+        witness = fnp.asarray(witness, fnp.uint32).reshape(())
         if pow_bits == 0:
-            ok = witness == jnp.uint32(0)
+            ok = witness == fnp.uint32(0)
         else:
             nonce8 = self._witness_bytes(witness)[None, :]
             digs = sha256_stream_finalize(self._pow_state(), nonce8)
@@ -265,7 +265,7 @@ class Sha256FieldTranscript:
         (The wide-binary-field <-> uint8 bitcast once miscompiled on the CPU
         PJRT backend, flock-zorch#75, forcing a uint32-lane detour; that is
         fixed as of the dev20260713 stack.)"""
-        return lax.bitcast_convert_type(values, jnp.uint8)
+        return lax.bitcast_convert_type(values, fnp.uint8)
 
     def _u8_to_elems(self, u8: Array, n: int) -> Array:
         """Flat uint8 `[n * itemsize]` -> `[n]` `dtype` elements (inverse of

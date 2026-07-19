@@ -1,6 +1,6 @@
 """Normal-form linear layers equal the matrix form and stay fusion-ready."""
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -22,14 +22,14 @@ class LinearLayerTest(absltest.TestCase):
         w = 16
         m = rand_field(1, (w, w), F)
         s = rand_field(2, (w,), F)
-        self.assertTrue(bool(jnp.array_equal(apply_matrix(m, s), m @ s)))
+        self.assertTrue(bool(fnp.array_equal(apply_matrix(m, s), m @ s)))
 
     def test_apply_internal_equals_jdiag(self) -> None:
         w = 16
         d = rand_field(3, (w,), F)
         s = rand_field(4, (w,), F)
-        m_int = jnp.ones((w, w), dtype=F) + jnp.diag(d)
-        self.assertTrue(bool(jnp.array_equal(apply_internal(d, s), m_int @ s)))
+        m_int = fnp.ones((w, w), dtype=F) + fnp.diag(d)
+        self.assertTrue(bool(fnp.array_equal(apply_internal(d, s), m_int @ s)))
 
     def test_apply_external_m4_equals_default_matrix(self) -> None:
         # The literal-coefficient external layer must byte-match the array form
@@ -39,7 +39,7 @@ class LinearLayerTest(absltest.TestCase):
             s = rand_field(7, (w,), F)
             self.assertTrue(
                 bool(
-                    jnp.array_equal(apply_external_m4(s, _STD_M4), apply_matrix(m, s))
+                    fnp.array_equal(apply_external_m4(s, _STD_M4), apply_matrix(m, s))
                 ),
                 f"width {w}",
             )

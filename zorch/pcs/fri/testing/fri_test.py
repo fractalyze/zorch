@@ -4,7 +4,7 @@ from __future__ import annotations
 import dataclasses
 import functools
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -45,7 +45,7 @@ class FriCommitCacheTest(absltest.TestCase):
         # commit reads only code/tree, so params differing in the open-side
         # knobs (num_rounds / num_queries) — and freshly built same-config
         # instances — must share one compiled commit zone (#214).
-        coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
+        coeffs = fnp.array([1, 2, 3, 4], dtype=KB)
         calls = [
             functools.partial(
                 FriProver(
@@ -61,8 +61,8 @@ class FriCommitCacheTest(absltest.TestCase):
 class FriRoundTripTest(absltest.TestCase):
     def setUp(self) -> None:
         self.params = _params()
-        self.coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
-        self.z = jnp.array(2, dtype=KB)  # outside the order-8 subgroup
+        self.coeffs = fnp.array([1, 2, 3, 4], dtype=KB)
+        self.z = fnp.array(2, dtype=KB)  # outside the order-8 subgroup
         self.prover = FriProver(self.params)
         self.verifier = FriVerifier(self.params)
 
@@ -78,7 +78,7 @@ class FriRoundTripTest(absltest.TestCase):
 
     def test_wrong_value_rejected(self) -> None:
         roots, values, proofs = self._prove()
-        bad = values + jnp.array(1, dtype=KB)
+        bad = values + fnp.array(1, dtype=KB)
         ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
         self.assertFalse(bool(ok))
 
@@ -86,7 +86,7 @@ class FriRoundTripTest(absltest.TestCase):
         roots, values, proofs = self._prove()
         pf = proofs[0]
         tampered = dataclasses.replace(
-            pf, final_layer=pf.final_layer.at[0].add(jnp.array(1, dtype=KB))
+            pf, final_layer=pf.final_layer.at[0].add(fnp.array(1, dtype=KB))
         )
         ok, _ = self.verifier.verify(roots, [self.z], values, [tampered], _transcript())
         self.assertFalse(bool(ok))
@@ -98,7 +98,7 @@ class FriRoundTripTest(absltest.TestCase):
             self.prover.open(data, [self.z, self.z], _transcript())
         with self.assertRaises(ValueError):
             self.verifier.verify(
-                roots, [self.z, self.z], jnp.zeros(2, dtype=KB), [], _transcript()
+                roots, [self.z, self.z], fnp.zeros(2, dtype=KB), [], _transcript()
             )
 
     def test_malformed_proof_layer_count_raises(self) -> None:
@@ -120,8 +120,8 @@ class FriBitReversedRoundTripTest(absltest.TestCase):
         _, _, tree = koalabear16_merkle()
         code = BitReversedReedSolomon(message_len=4, blowup=2, dtype=KB)
         self.params = FriParams(code=code, tree=tree, num_rounds=2, num_queries=3)
-        self.coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
-        self.z = jnp.array(2, dtype=KB)
+        self.coeffs = fnp.array([1, 2, 3, 4], dtype=KB)
+        self.z = fnp.array(2, dtype=KB)
         self.prover = FriProver(self.params)
         self.verifier = FriVerifier(self.params)
 
@@ -134,7 +134,7 @@ class FriBitReversedRoundTripTest(absltest.TestCase):
     def test_wrong_value_rejected(self) -> None:
         roots, data = self.prover.commit([self.coeffs])
         values, proofs, _ = self.prover.open(data, [self.z], _transcript())
-        bad = values + jnp.array(1, dtype=KB)
+        bad = values + fnp.array(1, dtype=KB)
         ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
         self.assertFalse(bool(ok))
 
@@ -144,9 +144,9 @@ class FriCosetRoundTripTest(absltest.TestCase):
     domain). Every layer folds over the shifted domain, squaring the shift."""
 
     def setUp(self) -> None:
-        self.params = _params(coset_shift=jnp.array(3, dtype=KB))
-        self.coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
-        self.z = jnp.array(2, dtype=KB)  # outside the coset 3·<ω₈>
+        self.params = _params(coset_shift=fnp.array(3, dtype=KB))
+        self.coeffs = fnp.array([1, 2, 3, 4], dtype=KB)
+        self.z = fnp.array(2, dtype=KB)  # outside the coset 3·<ω₈>
         self.prover = FriProver(self.params)
         self.verifier = FriVerifier(self.params)
 
@@ -159,7 +159,7 @@ class FriCosetRoundTripTest(absltest.TestCase):
     def test_wrong_value_rejected(self) -> None:
         roots, data = self.prover.commit([self.coeffs])
         values, proofs, _ = self.prover.open(data, [self.z], _transcript())
-        bad = values + jnp.array(1, dtype=KB)
+        bad = values + fnp.array(1, dtype=KB)
         ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
         self.assertFalse(bool(ok))
 

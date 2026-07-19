@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array
@@ -46,11 +46,11 @@ _ZC_INPUTS = Path(__file__).parent / "testdata" / "zerocheck_dense"
 
 
 def _from_u32(u32: Any, dtype: Any) -> Array:
-    return frx.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
+    return frx.lax.bitcast_convert_type(fnp.asarray(u32, dtype=fnp.uint32), dtype)
 
 
 def _u32(a: Array) -> np.ndarray:
-    return np.asarray(frx.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
+    return np.asarray(frx.lax.bitcast_convert_type(a, fnp.uint32)).reshape(-1)
 
 
 def _raw_area(round_meta: dict[str, Any]) -> int:
@@ -84,8 +84,8 @@ class _ScriptedTranscript:
 
     @classmethod
     def create(cls, challenges: Array) -> _ScriptedTranscript:
-        stream = frx.lax.bitcast_convert_type(jnp.asarray(challenges), BF).reshape(-1)
-        return cls(stream=stream, pos=jnp.array(0, jnp.int32))
+        stream = frx.lax.bitcast_convert_type(fnp.asarray(challenges), BF).reshape(-1)
+        return cls(stream=stream, pos=fnp.array(0, fnp.int32))
 
     # No dedicated-fusion permutation: observe_and_sample falls back to the plain
     # observe+sample body, so the scripted replay drives it unchanged.
@@ -133,7 +133,7 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         main = _from_u32(
             np.load(_ZC_INPUTS / "main_dense.npy")[: _raw_area(meta["rounds"][1])], BF
         )
-        dense = jnp.concatenate([prep, main])
+        dense = fnp.concatenate([prep, main])
 
         col_heights, all_claims = assemble_columns(
             row_counts_rounds, column_counts_rounds, claims, dtype=EF
@@ -148,7 +148,7 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
         # Run via ProveChain — the round must compose, not just stand alone.
         # The outer sumcheck samples its 23 alphas first, then the inner its 48.
         chain = ProveChain([JaggedEvalRound(dtype=EF)])
-        script = jnp.concatenate([outer_alphas, inner_alphas])
+        script = fnp.concatenate([outer_alphas, inner_alphas])
         # _ScriptedTranscript is a replay-only test double that reproduces the
         # dumped Fiat-Shamir stream rather than re-deriving it.
         _, _, msgs = chain(carry, _ScriptedTranscript.create(script))
@@ -199,7 +199,7 @@ class ChallengeRuleTest(absltest.TestCase):
             ints = np.random.default_rng(seed).integers(
                 1, 1 << 30, size=(*shape, 4), dtype=np.int64
             )
-            return frx.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
+            return frx.lax.bitcast_convert_type(fnp.array(ints, dtype=BF), EF)
 
         col_heights = (2, 2)
         inputs = JaggedEvalInputs(
@@ -207,7 +207,7 @@ class ChallengeRuleTest(absltest.TestCase):
             all_claims=rand_ef(1, (2,)),
             z_row=rand_ef(2, (2,)),
             z_col=rand_ef(3, (1,)),
-            dense=jnp.array([3, 5, 7, 11], dtype=BF),
+            dense=fnp.array([3, 5, 7, 11], dtype=BF),
         )
         _, _, msg = JaggedEvalRound(dtype=EF)(inputs, cheap_transcript(BF))
 
@@ -223,7 +223,7 @@ class ChallengeRuleTest(absltest.TestCase):
                 t = t.observe(polys[r])
                 t, want = sample_challenge(t, EF, 4)
                 self.assertTrue(
-                    bool(jnp.array_equal(want, point[-1 - r])), f"{label} round {r}"
+                    bool(fnp.array_equal(want, point[-1 - r])), f"{label} round {r}"
                 )
             return t
 
@@ -244,11 +244,11 @@ class EvalInputsGuardTest(absltest.TestCase):
     _HEIGHTS = (3, 5, 2, 7)  # L=4 -> needs ceil(log2 4) = 2 z_col variables
 
     def test_exact_z_col_count_ok(self) -> None:
-        _eval_inputs(self._HEIGHTS, jnp.zeros((2,), EF), EF)  # no raise
+        _eval_inputs(self._HEIGHTS, fnp.zeros((2,), EF), EF)  # no raise
 
     def test_too_few_z_col_raises(self) -> None:
         with self.assertRaises(ValueError):
-            _eval_inputs(self._HEIGHTS, jnp.zeros((1,), EF), EF)
+            _eval_inputs(self._HEIGHTS, fnp.zeros((1,), EF), EF)
 
 
 if __name__ == "__main__":

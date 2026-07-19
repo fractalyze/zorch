@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array, export
@@ -39,14 +39,14 @@ _PRIME = 2013265921
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, fnp.uint32)).reshape(-1).tolist()
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> Array:
     ints = np.random.default_rng(seed).integers(
         1, 1 << 30, size=(*shape, 4), dtype=np.int64
     )
-    return frx.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
+    return frx.lax.bitcast_convert_type(fnp.array(ints, dtype=BF), EF)
 
 
 class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
@@ -54,7 +54,7 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
         super().setUp()
         self.z_col = _rand_ef(1, (3,))  # n_c = 3 bracket
         self.z_row = _rand_ef(2, (_N_R,))
-        self.dense = jnp.asarray(
+        self.dense = fnp.asarray(
             np.random.default_rng(9).integers(0, _PRIME, (_DENSE_LEN,), np.uint32)
         ).view(BF)
 
@@ -65,7 +65,7 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
         assert n_d == _N_D
         offsets = _offset_bit_tensor(heights, l_max, n_d, EF)
         merged = merged_prefix_bits(heights, n_d, dtype=EF)
-        weights = expand_eq_to_hypercube(self.z_col, jnp.ones((), EF))[:l_max]
+        weights = expand_eq_to_hypercube(self.z_col, fnp.ones((), EF))[:l_max]
         all_claims = _rand_ef(100 + l_max, (l_max,))
         return offsets, merged, weights, all_claims
 
@@ -138,9 +138,9 @@ class SymbolicNrEvalRoundExportTest(absltest.TestCase):
         self.z_col = _rand_ef(1, (2,))
         self.offsets = _offset_bit_tensor(heights, self.col, self._ND, EF)
         self.merged = merged_prefix_bits(heights, self._ND, dtype=EF)
-        self.weights = expand_eq_to_hypercube(self.z_col, jnp.ones((), EF))[: self.col]
+        self.weights = expand_eq_to_hypercube(self.z_col, fnp.ones((), EF))[: self.col]
         self.all_claims = _rand_ef(4, (self.col,))
-        self.dense = jnp.asarray(
+        self.dense = fnp.asarray(
             np.random.default_rng(9).integers(0, _PRIME, (_ND_DENSE,), np.uint32)
         ).view(BF)
 

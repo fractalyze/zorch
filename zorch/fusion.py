@@ -9,8 +9,8 @@ a hash permutation, …), so it is not named after any single use — see CLAUDE
 The decomposition must be straight-line element-wise — no loops, reductions, or
 gathers — so the region lowers to one kernel: a round sequence is unrolled into
 the body (fixed, small counts) and the linear layers use the normal-form helpers
-(not `jnp.dot`/`reduce`/`gather`). Use `lax` primitives over `jnp` wrappers
-(`lax.select`, not `jnp.where`): a `jnp` wrapper's internal `jit` lowers to a
+(not `fnp.dot`/`reduce`/`gather`). Use `lax` primitives over `fnp` wrappers
+(`lax.select`, not `fnp.where`): a `fnp` wrapper's internal `jit` lowers to a
 call inside the body, which the single-kernel rewriter rejects. Name-routed
 markers with a dedicated emitter (`zorch.sumcheck`, `zorch.poseidon2`) are exempt —
 their emitters tolerate reductions and calls. Loop-carrying large-N rounds

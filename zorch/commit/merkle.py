@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.hash.compression import Compression
@@ -168,8 +168,8 @@ class MerkleTree:
         while layer.shape[0] > 1:
             rem = layer.shape[0] % self.arity
             if rem:
-                pad = jnp.zeros((self.arity - rem, self.digest_elems), layer.dtype)
-                layer = jnp.concatenate([layer, pad])
+                pad = fnp.zeros((self.arity - rem, self.digest_elems), layer.dtype)
+                layer = fnp.concatenate([layer, pad])
                 digest_layers[-1] = layer
             groups = layer.reshape(-1, self.arity, self.digest_elems)
             layer = self._compress_groups(groups)
@@ -204,7 +204,7 @@ class MerkleTree:
                 # order: slot j of the entry is group position j + (j >= pos).
                 pos = idx % self.arity
                 group_start = (idx // self.arity) * self.arity
-                j = jnp.arange(self.arity - 1)
+                j = fnp.arange(self.arity - 1)
                 path.append(digest_layers[level][group_start + j + (j >= pos)])
             idx //= self.arity
         return Opening(row=matrix[index], path=path)
@@ -217,9 +217,9 @@ class MerkleTree:
         Python branch, so the fold traces under `vmap`); return the parent and
         `idx` halved for the level above."""
         is_left = idx % 2 == 0
-        left = jnp.where(is_left, node, sibling)
-        right = jnp.where(is_left, sibling, node)
-        return self._compressor.compress(jnp.stack([left, right])), idx // 2
+        left = fnp.where(is_left, node, sibling)
+        right = fnp.where(is_left, sibling, node)
+        return self._compressor.compress(fnp.stack([left, right])), idx // 2
 
     def _fold_with_siblings(
         self, node: Array, idx: Array, siblings: Array
@@ -229,11 +229,11 @@ class MerkleTree:
         Python branch, so the fold traces under `vmap`), compress the group,
         and return the parent with `idx` divided for the level above."""
         pos = idx % self.arity
-        i = jnp.arange(self.arity)
+        i = fnp.arange(self.arity)
         # Slot i holds the sibling that `open` packed for it (skipping the
         # node's own slot), except slot pos, which holds the node.
-        gathered = siblings[jnp.clip(i - (i > pos), 0, self.arity - 2)]
-        group = jnp.where((i == pos)[:, None], node[None, :], gathered)
+        gathered = siblings[fnp.clip(i - (i > pos), 0, self.arity - 2)]
+        group = fnp.where((i == pos)[:, None], node[None, :], gathered)
         return self._compressor.compress(group), idx // self.arity
 
     def reconstruct_root(self, index: int | Array, opening: Opening) -> Array:
@@ -291,7 +291,7 @@ class MerkleTree:
                 sibling, active = step
                 folded, idx = self._fold_with_sibling(node, idx, sibling)
                 # Padding past the real depth is a no-op: keep the rebuilt root.
-                node = jnp.where(active, folded, node)
+                node = fnp.where(active, folded, node)
                 return (node, idx), None
 
             (node, _), _ = frx.lax.scan(fold, (node, index), (path, mask))
@@ -303,4 +303,4 @@ class MerkleTree:
         """Rebuild the root from the row + path; compare to the committed root."""
         if not 0 <= index < self.arity ** len(opening.path):
             return False
-        return bool(jnp.array_equal(self.reconstruct_root(index, opening), root))
+        return bool(fnp.array_equal(self.reconstruct_root(index, opening), root))

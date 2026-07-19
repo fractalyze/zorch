@@ -21,7 +21,7 @@ from enum import IntEnum
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.commit.merkle import MerkleTree, Opening
@@ -108,8 +108,8 @@ class SingleMatrixCommitmentScheme:
         ``commit``, ``verify_batch``, and the stacked-open dual's raw-root wire
         pin so they can never drift. ``width`` is the base-field width
         (commit/verify both guard EF)."""
-        params = self._sponge.hash(jnp.array([log_height, width], dtype=dtype))
-        return self._compressor.compress(jnp.stack([raw_root, params]))
+        params = self._sponge.hash(fnp.array([log_height, width], dtype=dtype))
+        return self._compressor.compress(fnp.stack([raw_root, params]))
 
     def bind_structure(
         self, commitment: Array, row_counts: Array, column_counts: Array
@@ -128,10 +128,10 @@ class SingleMatrixCommitmentScheme:
                 f"row_counts shape {row_counts.shape} must match "
                 f"column_counts shape {column_counts.shape}"
             )
-        num_tables = jnp.array([row_counts.shape[0]], dtype=row_counts.dtype)
-        structure = jnp.concatenate([num_tables, row_counts, column_counts])
+        num_tables = fnp.array([row_counts.shape[0]], dtype=row_counts.dtype)
+        structure = fnp.concatenate([num_tables, row_counts, column_counts])
         return self._compressor.compress(
-            jnp.stack([commitment, self._sponge.hash(structure)])
+            fnp.stack([commitment, self._sponge.hash(structure)])
         )
 
     def open_batch(
@@ -186,20 +186,20 @@ class SingleMatrixCommitmentScheme:
         height, width = dims
         log_height = log2_strict_usize(height)
         if len(proof) != log_height:
-            return jnp.array(VerifyCode.WRONG_HEIGHT, dtype=jnp.int32)
+            return fnp.array(VerifyCode.WRONG_HEIGHT, dtype=fnp.int32)
 
         # Reconstruct the raw root via zorch's fold (row + sibling path); the
         # consumer keeps only the SP1 separator rebind, not the generic Merkle
         # fold.
         raw_root = self._tree.reconstruct_root(index, Opening(row=row, path=proof))
         bound = self.bind_root(raw_root, log_height, width, row.dtype)
-        matches = jnp.array_equal(bound, commitment)
+        matches = fnp.array_equal(bound, commitment)
         # Priority order: bounds first, then the reconstructed-root check.
-        return jnp.where(
+        return fnp.where(
             (index < 0) | (index >= height),
             VerifyCode.INDEX_OUT_OF_BOUNDS,
-            jnp.where(matches, VerifyCode.OK, VerifyCode.ROOT_MISMATCH),
-        ).astype(jnp.int32)
+            fnp.where(matches, VerifyCode.OK, VerifyCode.ROOT_MISMATCH),
+        ).astype(fnp.int32)
 
     @staticmethod
     def heap_digests(digest_layers: list[Array]) -> Array:
@@ -211,7 +211,7 @@ class SingleMatrixCommitmentScheme:
         ``2^H-1+m``). Concatenating the layers root-first lays the levels down in
         exactly that order — the adapter is just the reversal + concat.
         """
-        return jnp.concatenate(list(reversed(digest_layers)), axis=0)
+        return fnp.concatenate(list(reversed(digest_layers)), axis=0)
 
     def prove_openings_at_indices(
         self, flat_digests: Array, indices: Array, tree_height: int
@@ -237,5 +237,5 @@ class SingleMatrixCommitmentScheme:
         for _ in range(tree_height):
             sibling_indices.append(((idx - 1) ^ 1) + 1)
             idx = (idx - 1) >> 1  # ascend to the parent
-        all_sibling_idx = jnp.stack(sibling_indices, axis=1)  # (Q, tree_height)
+        all_sibling_idx = fnp.stack(sibling_indices, axis=1)  # (Q, tree_height)
         return flat_digests[all_sibling_idx]

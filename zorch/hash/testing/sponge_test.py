@@ -12,7 +12,7 @@ tests live here too, since the construction is the Sponge's, not a permutation's
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from frx import export
 from zk_dtypes import koalabear_mont as F
@@ -25,7 +25,7 @@ from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams, SpongeTy
 # PaddingFreeSponge<_, 16, 8, 8> over arange(n). arange(12) exercises the
 # partial final block (overwrite-mode, no padding).
 _PLONKY3_SPONGE = {
-    8: jnp.array(
+    8: fnp.array(
         [
             966837595,
             1699035679,
@@ -38,7 +38,7 @@ _PLONKY3_SPONGE = {
         ],
         dtype=F,
     ),
-    16: jnp.array(
+    16: fnp.array(
         [
             2093465132,
             1938411931,
@@ -51,7 +51,7 @@ _PLONKY3_SPONGE = {
         ],
         dtype=F,
     ),
-    12: jnp.array(
+    12: fnp.array(
         [
             1283734044,
             275672105,
@@ -70,36 +70,36 @@ _PLONKY3_SPONGE = {
 class SpongeTest(absltest.TestCase):
     def test_hash_returns_out_shape_and_dtype(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-        out = s.hash(jnp.arange(16, dtype=F))
+        out = s.hash(fnp.arange(16, dtype=F))
         self.assertEqual(out.shape, (8,))
         self.assertEqual(out.dtype, F)
 
     def test_hash_single_block_is_permute_truncated(self) -> None:
         perm = koalabear16_perm()
         s = Sponge(perm, SpongeParams(rate=8, out=8))
-        x = jnp.arange(8, dtype=F)  # exactly one rate block
-        expected = perm.permute(jnp.zeros(16, dtype=F).at[:8].set(x))[:8]
-        self.assertTrue(bool(jnp.array_equal(s.hash(x), expected)))
+        x = fnp.arange(8, dtype=F)  # exactly one rate block
+        expected = perm.permute(fnp.zeros(16, dtype=F).at[:8].set(x))[:8]
+        self.assertTrue(bool(fnp.array_equal(s.hash(x), expected)))
 
     def test_hash_two_full_blocks_overwrite_mode(self) -> None:
         perm = koalabear16_perm()
         s = Sponge(perm, SpongeParams(rate=8, out=8))
-        x = jnp.arange(16, dtype=F)  # two rate blocks
-        st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
+        x = fnp.arange(16, dtype=F)  # two rate blocks
+        st = fnp.zeros(16, dtype=F).at[:8].set(x[:8])
         st = perm.permute(st)
         st = st.at[:8].set(x[8:16])  # overwrite (not XOR) the rate lanes
         st = perm.permute(st)
-        self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])))
+        self.assertTrue(bool(fnp.array_equal(s.hash(x), st[:8])))
 
     def test_hash_partial_final_block_overwrites_only_its_lanes(self) -> None:
         perm = koalabear16_perm()
         s = Sponge(perm, SpongeParams(rate=8, out=8))
-        x = jnp.arange(12, dtype=F)  # rate + 4: final block is partial
-        st = jnp.zeros(16, dtype=F).at[:8].set(x[:8])
+        x = fnp.arange(12, dtype=F)  # rate + 4: final block is partial
+        st = fnp.zeros(16, dtype=F).at[:8].set(x[:8])
         st = perm.permute(st)
         st = st.at[:4].set(x[8:12])  # only 4 lanes overwritten; lanes 4..7 keep value
         st = perm.permute(st)
-        self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])))
+        self.assertTrue(bool(fnp.array_equal(s.hash(x), st[:8])))
 
     def test_rate_not_less_than_width_raises(self) -> None:
         perm = koalabear16_perm()
@@ -114,13 +114,13 @@ class SpongeTest(absltest.TestCase):
     def test_hash_non_1d_input_raises(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         with self.assertRaises(ValueError):
-            s.hash(jnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
+            s.hash(fnp.arange(16, dtype=F).reshape(2, 8))  # 2-D, not 1-D
 
     def test_hash_matches_plonky3_golden(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
         for n, golden in _PLONKY3_SPONGE.items():
             self.assertTrue(
-                bool(jnp.array_equal(s.hash(jnp.arange(n, dtype=F)), golden)),
+                bool(fnp.array_equal(s.hash(fnp.arange(n, dtype=F)), golden)),
                 f"len {n}",
             )
 
@@ -131,13 +131,13 @@ class SpongeTest(absltest.TestCase):
         perm = koalabear16_perm()
         s = Sponge(perm, SpongeParams(rate=8, out=8))
         for n in (28, 32):
-            x = jnp.arange(n, dtype=F)
-            st = jnp.zeros(16, dtype=F)
+            x = fnp.arange(n, dtype=F)
+            st = fnp.zeros(16, dtype=F)
             for start in range(0, n, 8):
                 block = x[start : start + 8]
                 st = st.at[: block.shape[0]].set(block)
                 st = perm.permute(st)
-            self.assertTrue(bool(jnp.array_equal(s.hash(x), st[:8])), f"len {n}")
+            self.assertTrue(bool(fnp.array_equal(s.hash(x), st[:8])), f"len {n}")
 
     def test_value_equality_across_fresh_instances(self) -> None:
         # A sponge seats in static jit-zone keys (#214): equal params over
@@ -151,30 +151,30 @@ class SpongeTest(absltest.TestCase):
 
     def test_hash_vmap_matches_unbatched(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=8))
-        a = jnp.arange(16, dtype=F)
-        b = jnp.arange(16, dtype=F) + F(3)
-        batched = frx.vmap(s.hash)(jnp.stack([a, b]))
-        self.assertTrue(bool(jnp.array_equal(batched[0], s.hash(a))))
-        self.assertTrue(bool(jnp.array_equal(batched[1], s.hash(b))))
+        a = fnp.arange(16, dtype=F)
+        b = fnp.arange(16, dtype=F) + F(3)
+        batched = frx.vmap(s.hash)(fnp.stack([a, b]))
+        self.assertTrue(bool(fnp.array_equal(batched[0], s.hash(a))))
+        self.assertTrue(bool(fnp.array_equal(batched[1], s.hash(b))))
 
 
 def _ref_merkle_damgard(
-    perm: Permutation, x: jnp.ndarray, rate: int, out: int
-) -> jnp.ndarray:
+    perm: Permutation, x: fnp.ndarray, rate: int, out: int
+) -> fnp.ndarray:
     """Independent Merkle-Damgard reference: per-block unroll — zero-pad a short
     final block, chain the prior digest state[:out] into capacity [rate:rate+out].
     Permutation-agnostic, so it cross-checks Sponge.hash(MERKLE_DAMGARD) over any
     permutation."""
     w = perm.width
     n = int(x.shape[0])
-    st = jnp.zeros(w, dtype=x.dtype)
+    st = fnp.zeros(w, dtype=x.dtype)
     for blk in range((n + rate - 1) // rate):
         start = blk * rate
         count = min(rate, n - start)
         cap = st[:out]  # prior digest (zeros on block 0)
         st = st.at[:count].set(x[start : start + count])
         if count < rate:  # zero-pad the partial tail
-            st = st.at[count:rate].set(jnp.zeros(rate - count, dtype=x.dtype))
+            st = st.at[count:rate].set(fnp.zeros(rate - count, dtype=x.dtype))
         st = st.at[rate : rate + out].set(cap)  # chain
         st = perm.permute(st)
     return st[:out]
@@ -195,17 +195,17 @@ class MerkleDamgardTest(absltest.TestCase):
             s = Sponge(perm, SpongeParams(rate=rate, out=out))
             # one full block, two full, then two partial-tail lengths.
             for n in (rate, 2 * rate, rate + rate // 2, 2 * rate + rate // 2):
-                x = jnp.arange(n, dtype=F)
+                x = fnp.arange(n, dtype=F)
                 got = s.hash(x, sponge_type=SpongeType.MERKLE_DAMGARD)
                 self.assertTrue(
-                    bool(jnp.array_equal(got, _ref_merkle_damgard(perm, x, rate, out))),
+                    bool(fnp.array_equal(got, _ref_merkle_damgard(perm, x, rate, out))),
                     f"width {perm.width}, len {n}",
                 )
 
     def test_requires_rate_plus_out_equals_width(self) -> None:
         s = Sponge(koalabear16_perm(), SpongeParams(rate=8, out=4))  # 8 + 4 != 16
         with self.assertRaises(ValueError):
-            s.hash(jnp.arange(8, dtype=F), sponge_type=SpongeType.MERKLE_DAMGARD)
+            s.hash(fnp.arange(8, dtype=F), sponge_type=SpongeType.MERKLE_DAMGARD)
 
     def test_lowers_under_symbolic_length(self) -> None:
         # Rides the shared while_loop absorb, so a symbolic `len(input)` lowers

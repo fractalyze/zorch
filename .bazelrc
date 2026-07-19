@@ -4,9 +4,9 @@ test --test_output=errors
 
 # Tests are backend-agnostic; CPU is the default (not a requirement) so plain
 # `bazel test` is deterministic on any machine. CI overrides it per matrix leg
-# via --test_env (the GPU leg pins JAX_PLATFORMS=cuda). Previously pinned
+# via --test_env (the GPU leg pins FRX_PLATFORMS=cuda). Previously pinned
 # per-target in each py_test's env, which made the backend unselectable from CI.
-test --test_env=JAX_PLATFORMS=cpu
+test --test_env=FRX_PLATFORMS=cpu
 
 # Buildbarn remote execution (--config=remote) lives in its own file, imported
 # so the config resolves for local and CI runs alike.

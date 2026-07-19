@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
@@ -31,7 +31,7 @@ _GOLDENS = {
 def _output_hash(num_batch_variables: int, num_row_variables: int) -> str:
     layer = random_first_layer(_SEED, num_batch_variables, num_row_variables)
     out = extract_outputs(build_pyramid(layer)[-1])
-    words = jnp.concatenate([out.numerator, out.denominator])
+    words = fnp.concatenate([out.numerator, out.denominator])
     return hashlib.sha256(np.array(words.tolist(), dtype="<u4").tobytes()).hexdigest()
 
 

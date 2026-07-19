@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from frx import Array
 
@@ -27,14 +27,14 @@ def naturals(n: int, dtype: Any) -> Array:
     Integer nodes are prime-field elements, so they are built there; an extension
     caller promotes at multiply time, which is cheaper than extension-typed nodes
     and byte-identical to embedding each node into the extension. Built as a
-    constant, NOT `jnp.arange`: these nodes feed the fused round-poly kernels, whose
+    constant, NOT `fnp.arange`: these nodes feed the fused round-poly kernels, whose
     bodies must stay straight-line element-wise (an `iota` is a forbidden op there,
     and an iota over an extension dtype is unsupported in the fork besides)."""
-    return jnp.array(list(range(n)), base_field(dtype))
+    return fnp.array(list(range(n)), base_field(dtype))
 
 
 def is_binary_field(dtype: Any) -> bool:
     """True for the binary-field family (`binary_field_ghash`, `binary_field_t*`):
     GF(2^m), characteristic 2 — field addition is a bitwise XOR of the packed
     representation, and `lax.ntt` runs the LCH additive NTT for them."""
-    return jnp.dtype(dtype).name.startswith("binary_field")
+    return fnp.dtype(dtype).name.startswith("binary_field")

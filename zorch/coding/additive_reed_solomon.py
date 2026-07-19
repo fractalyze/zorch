@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array, lax
 
@@ -53,7 +53,7 @@ def _monomial_basis(log_d: int, dtype: Any) -> Array:
     buf = np.zeros((log_d, itemsize), np.uint8)
     for i in range(log_d):
         buf[i, i // 8] = 1 << (i % 8)
-    return jnp.asarray(np.frombuffer(buf.tobytes(), dtype=dtype))
+    return fnp.asarray(np.frombuffer(buf.tobytes(), dtype=dtype))
 
 
 _TWIDDLE_CACHE: dict[tuple[int, str], Array] = {}
@@ -77,7 +77,7 @@ def additive_ntt_twiddles(log_d: int, dtype: Any) -> Array:
         )
 
     if log_d == 0:
-        table = jnp.zeros((0,), dtype)
+        table = fnp.zeros((0,), dtype)
         _TWIDDLE_CACHE[key] = table
         return table
 
@@ -88,14 +88,14 @@ def additive_ntt_twiddles(log_d: int, dtype: Any) -> Array:
         rows.append(prev[1:] * (prev[1:] + prev[0]))
     rows = [row / row[0] for row in rows]
 
-    parts = [jnp.zeros((1,), dtype)]
+    parts = [fnp.zeros((1,), dtype)]
     for layer in range(1, log_d):
         span_basis = rows[log_d - layer - 1][1:]  # length == layer
-        cur = jnp.zeros((1,), dtype)
+        cur = fnp.zeros((1,), dtype)
         for j in range(layer):
-            cur = jnp.concatenate([cur, cur + span_basis[j]])
+            cur = fnp.concatenate([cur, cur + span_basis[j]])
         parts.append(cur)
-    table = jnp.concatenate(parts)
+    table = fnp.concatenate(parts)
     _TWIDDLE_CACHE[key] = table
     return table
 
@@ -136,7 +136,7 @@ class AdditiveReedSolomon:
                 f"got {message.shape[-1]}"
             )
         tail = message.shape[:-1] + (self.block_len - self.message_len,)
-        coeffs = jnp.concatenate([message, jnp.zeros(tail, self.dtype)], axis=-1)
+        coeffs = fnp.concatenate([message, fnp.zeros(tail, self.dtype)], axis=-1)
         return lax.ntt(coeffs, ntt_type="NTT", ntt_length=self.block_len)
 
     def fold(self, codeword: Array, beta: Array) -> Array:
@@ -172,4 +172,4 @@ class AdditiveReedSolomon:
         return indices
 
     def check_final(self, final: Array, claim: Array) -> Array:
-        return jnp.all(final == claim)
+        return fnp.all(final == claim)

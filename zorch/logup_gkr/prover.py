@@ -37,7 +37,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
@@ -111,8 +111,8 @@ class LogupSummand:
         3 makes d - 2 = 1 extra beyond s(0), the Gruen seam's invariant
         (`zorch.sumcheck.gruen.GruenSummand`). The dense (value-form) round
         never reads this."""
-        one = jnp.ones((), dtype)
-        return (one / jnp.array(2, dtype),)
+        one = fnp.ones((), dtype)
+        return (one / fnp.array(2, dtype),)
 
     def paired_evals(
         self, n0: Array, n1: Array, d0: Array, d1: Array, eq_0: Array, eq_1: Array
@@ -128,9 +128,9 @@ class LogupSummand:
         scalars = self.combine_scalars()
         (n0_0, n0_1), (n1_0, n1_1) = split_pairs(n0), split_pairs(n1)
         (d0_0, d0_1), (d1_0, d1_1) = split_pairs(d0), split_pairs(d1)
-        eval_zero = jnp.sum(self.combine(scalars, eq_0, n0_0, d1_0, n1_0, d0_0))
+        eval_zero = fnp.sum(self.combine(scalars, eq_0, n0_0, d1_0, n1_0, d0_0))
         eq_h = eq_0 + eq_1
-        eval_half = jnp.sum(
+        eval_half = fnp.sum(
             self.combine(
                 scalars,
                 eq_h,
@@ -140,7 +140,7 @@ class LogupSummand:
                 d0_0 + d0_1,
             )
         )
-        return eval_zero, eval_half, jnp.sum(eq_h)
+        return eval_zero, eval_half, fnp.sum(eq_h)
 
     def correct(
         self,
@@ -164,12 +164,12 @@ class LogupSummand:
         residual scalar once the row variables are exhausted (1 before
         that)."""
         dtype = z_cur.dtype
-        one = jnp.ones((), dtype)
+        one = fnp.ones((), dtype)
         correction = pad_adj - eq_sum
         s_zero = (eval_zero + correction * (one - z_cur)) * eq_adj
         s_half = (
-            (eval_half + correction * jnp.array(4, dtype))
-            / jnp.array(8, dtype)
+            (eval_half + correction * fnp.array(4, dtype))
+            / fnp.array(8, dtype)
             * eq_adj
         )
         return s_zero, s_half
@@ -185,7 +185,7 @@ def fold_carry(
     accepts proofs the prover stopped producing."""
     num_eval = n0 + (n1 - n0) * r
     den_eval = d0 + (d1 - d0) * r
-    return num_eval, den_eval, jnp.concatenate([point, jnp.atleast_1d(r)])
+    return num_eval, den_eval, fnp.concatenate([point, fnp.atleast_1d(r)])
 
 
 @partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
@@ -297,9 +297,9 @@ class GkrLayerRound(Round):
         num_eval, den_eval, eval_point = carry
         transcript, lam = transcript.sample(1)
         lam = lam[0]
-        one = jnp.ones((), eval_point.dtype)
+        one = fnp.ones((), eval_point.dtype)
         # State order is LogupSumcheckRound's: [eq, n0, d1, n1, d0], stacked (5, N).
-        state = jnp.stack(
+        state = fnp.stack(
             [
                 expand_eq_to_hypercube(eval_point, one),
                 self.layer.numerator_0,
@@ -312,11 +312,11 @@ class GkrLayerRound(Round):
         final_state, transcript, msgs = fold_rounds(
             LogupSumcheckRound(lam), state, transcript, rounds
         )
-        round_polys = jnp.stack([m.round_poly for m in msgs])
-        point = jnp.stack([m.challenge for m in msgs])
+        round_polys = fnp.stack([m.round_poly for m in msgs])
+        point = fnp.stack([m.challenge for m in msgs])
 
         _, n0, d1, n1, d0 = final_state[:, 0]
-        transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
+        transcript, r = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
 

@@ -48,7 +48,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.coding.tensor_code import TensorCode
@@ -175,7 +175,7 @@ class LigeritoProver:
                 f"point dimension {z.shape[0]} must equal the variable count "
                 f"{self.config.num_vars}"
             )
-        one = jnp.ones((), z.dtype)
+        one = fnp.ones((), z.dtype)
         B = expand_eq_to_hypercube(z, one)
         value = (prover_data.f * B).sum()  # f(z) = <f, eq(z)>; reuse B
         proof, t = _open(self, prover_data, z, B, value, transcript)
@@ -227,7 +227,7 @@ def _open_jit(
     cfg = prover.config
     chor = prover.choreography
     dtype = B.dtype
-    one = jnp.ones((), dtype)
+    one = fnp.ones((), dtype)
     round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
     basis = select_commit_basis(cfg.monomial_commit)
 
@@ -256,7 +256,7 @@ def _open_jit(
     eager = chor.eager_messages
 
     def emit(t: Transcript, witness: Array, basis: Array) -> Transcript:
-        msg = round_._round_poly(jnp.stack([witness, basis]))
+        msg = round_._round_poly(fnp.stack([witness, basis]))
         sumcheck_messages.append(msg)
         return chor.observe_message(t, msg)
 
@@ -278,11 +278,11 @@ def _open_jit(
         for i in range(k_j):
             msg: Array | None = None  # eager: this round's is already absorbed
             if not eager:
-                msg = round_._round_poly(jnp.stack([W, B]))
+                msg = round_._round_poly(fnp.stack([W, B]))
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = fold(jnp.stack([W, B]), r)
+            W, B = fold(fnp.stack([W, B]), r)
             if eager:
                 # The freshly folded state's — the terminal residual state's
                 # included (the verifier recomputes that one in the clear).

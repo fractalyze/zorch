@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -22,11 +22,11 @@ KB = zk_dtypes.koalabear_mont
 KBx4 = zk_dtypes.koalabearx4_mont
 
 
-def _stacked(d: int, l: int) -> jnp.ndarray:
-    return jnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
+def _stacked(d: int, l: int) -> fnp.ndarray:
+    return fnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
 
 
-def _prove_product(p: jnp.ndarray, transcript: Transcript) -> list[jnp.ndarray]:
+def _prove_product(p: fnp.ndarray, transcript: Transcript) -> list[fnp.ndarray]:
     """Reference linear-time product sumcheck: fold over the product round message.
     SqrtSpace must reproduce these messages exactly."""
     msgs = []
@@ -50,7 +50,7 @@ class SqrtSpaceTest(absltest.TestCase):
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
-                    bool(jnp.array_equal(a, b)), msg=f"d={d} l={l} round {i}"
+                    bool(fnp.array_equal(a, b)), msg=f"d={d} l={l} round {i}"
                 )
 
     def test_prove_folds_to_scalar(self) -> None:
@@ -62,7 +62,7 @@ class SqrtSpaceTest(absltest.TestCase):
         # With ext_dtype set, the √-space prover must still reproduce a linear-time
         # prover that samples the SAME extension challenges — the memory trick is
         # transcript-neutral in the extension field too.
-        def ref(p: jnp.ndarray, transcript: Transcript) -> list[jnp.ndarray]:
+        def ref(p: fnp.ndarray, transcript: Transcript) -> list[fnp.ndarray]:
             msgs = []
             summand = ProductSummand(degree=p.shape[0])
             domain = natural_domain(p.shape[0], p.dtype)
@@ -87,7 +87,7 @@ class SqrtSpaceTest(absltest.TestCase):
             )
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(want, got, strict=True)):
-                self.assertTrue(bool(jnp.array_equal(a, b)), msg=f"d={d} l={l} r{i}")
+                self.assertTrue(bool(fnp.array_equal(a, b)), msg=f"d={d} l={l} r{i}")
 
 
 if __name__ == "__main__":

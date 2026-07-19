@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -21,7 +21,7 @@ from zorch.testkit.transcript import cheap_transcript
 def _states_equal(a: object, b: object) -> bool:
     la, lb = frx.tree_util.tree_leaves(a), frx.tree_util.tree_leaves(b)
     return len(la) == len(lb) and all(
-        bool(jnp.array_equal(x, y)) for x, y in zip(la, lb, strict=True)
+        bool(fnp.array_equal(x, y)) for x, y in zip(la, lb, strict=True)
     )
 
 
@@ -30,13 +30,13 @@ class RoundMessageTest(absltest.TestCase):
         chor = BasefoldChoreography()
         zero_val, one_val = F(3), F(5)
         got = chor.round_message(zero_val, one_val)
-        self.assertTrue(bool(jnp.array_equal(got, jnp.stack([zero_val, one_val]))))
+        self.assertTrue(bool(fnp.array_equal(got, fnp.stack([zero_val, one_val]))))
 
 
 class ObserveFinalTest(absltest.TestCase):
     def test_observes_whole_final_poly(self) -> None:
         chor = BasefoldChoreography()
-        final_poly = jnp.arange(4, dtype=F)
+        final_poly = fnp.arange(4, dtype=F)
         got = chor.observe_final(cheap_transcript(F), final_poly)
         want = cheap_transcript(F).observe(final_poly)
         self.assertTrue(_states_equal(got, want))
@@ -90,14 +90,14 @@ class SharedHookDefaultsTest(absltest.TestCase):
 
     def test_observe_root_default(self) -> None:
         chor = BasefoldChoreography()
-        root = jnp.arange(8, dtype=F)
+        root = fnp.arange(8, dtype=F)
         got = chor.observe_root(cheap_transcript(F), root)
         want = cheap_transcript(F).observe(root)
         self.assertTrue(_states_equal(got, want))
 
     def test_observe_message_default(self) -> None:
         chor = BasefoldChoreography()
-        msg = jnp.stack([F(1), F(2)])
+        msg = fnp.stack([F(1), F(2)])
         got = chor.observe_message(cheap_transcript(F), msg)
         want = cheap_transcript(F).observe(msg)
         self.assertTrue(_states_equal(got, want))
@@ -116,7 +116,7 @@ class SharedHookDefaultsTest(absltest.TestCase):
 
     def test_fold_challenge_default_fuses_observe_and_sample(self) -> None:
         chor = BasefoldChoreography()
-        msg = jnp.stack([F(1), F(2)])
+        msg = fnp.stack([F(1), F(2)])
         got_t, got_r = chor.fold_challenge(cheap_transcript(F), msg, 0, 0)
         want_t, want_r = cheap_transcript(F).observe_and_sample(msg, 1)
         self.assertTrue(_states_equal(got_t, want_t))
@@ -133,8 +133,8 @@ class SharedHookDefaultsTest(absltest.TestCase):
         want_t, want_positions = sample_positions(cheap_transcript(F), 16, 3)
         self.assertTrue(_states_equal(got_t, want_t))
         self.assertEqual(got_positions.tolist(), want_positions.tolist())
-        self.assertTrue(bool(jnp.all(got_positions >= 0)))
-        self.assertTrue(bool(jnp.all(got_positions < 16)))
+        self.assertTrue(bool(fnp.all(got_positions >= 0)))
+        self.assertTrue(bool(fnp.all(got_positions < 16)))
 
 
 if __name__ == "__main__":

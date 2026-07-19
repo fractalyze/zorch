@@ -12,7 +12,7 @@ slots it contributes to.
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, vmap
 
 from zorch.sumcheck.domain import extend_to_round_domain
@@ -23,17 +23,17 @@ def _extend_prefix_to_domain(evals: Array, d: int, k: int) -> Array:
     """Extend the first k variables from {0,1} to the full U_d = {∞, 0, 1, …, d−1},
     leaving the rest on the cube: {p(β)} for β ∈ U_dᵏ × {0,1}ˡ⁻ᵏ, flattened. Each
     step lifts one variable, then reassembles lexicographic order by per-node
-    slicing (not jnp.transpose, which frx ignores on 3D arrays)."""
+    slicing (not fnp.transpose, which frx ignores on 3D arrays)."""
     l = log2_strict_usize(evals.shape[0])
     size = d + 1
     for i in range(k):
         prefix, suffix = size**i, 1 << (l - i - 1)
-        reshaped = jnp.reshape(evals, (prefix, 2, suffix))
+        reshaped = fnp.reshape(evals, (prefix, 2, suffix))
         lifted = extend_to_round_domain(
             reshaped[:, 0, :].reshape(-1), reshaped[:, 1, :].reshape(-1), d
         )
-        parts = [jnp.reshape(lifted[n], (prefix, suffix)) for n in range(size)]
-        evals = jnp.concatenate(parts, axis=1).reshape(-1)
+        parts = [fnp.reshape(lifted[n], (prefix, suffix)) for n in range(size)]
+        evals = fnp.concatenate(parts, axis=1).reshape(-1)
     return evals
 
 
@@ -54,8 +54,8 @@ def precompute_accumulators(
     # Extend the first l₀ variables to U_d, then contract x_in against eq(w_in, ·):
     # tA[β, x_out] = Σ_{x_in} e_in[x_in] · Πₖ pₖ(β, x_in, x_out).
     p_beta = vmap(lambda e: _extend_prefix_to_domain(e, d, l_0))(p_evals)
-    p_beta_prod = jnp.reshape(
-        jnp.prod(p_beta, axis=0), (beta_size, x_in_size, x_out_size)
+    p_beta_prod = fnp.reshape(
+        fnp.prod(p_beta, axis=0), (beta_size, x_in_size, x_out_size)
     )
     t_a = (p_beta_prod * e_in[None, :, None]).sum(axis=1)  # (β, x_out)
 
@@ -75,10 +75,10 @@ def precompute_accumulators(
 
     accumulators = []
     for i in range(l_0):
-        betas, vus, ys = (jnp.asarray(col, dtype=jnp.int32) for col in routes[i])
+        betas, vus, ys = (fnp.asarray(col, dtype=fnp.int32) for col in routes[i])
         # contrib[k] = Σ_x_out e_out[i][y_k, :] · t_a[β_k, :]
-        contrib = jnp.sum(e_out[i][ys, :] * t_a[betas, :], axis=1)
-        flat = jnp.zeros((d + 1) ** i * d, dtype=p_evals.dtype).at[vus].add(contrib)
+        contrib = fnp.sum(e_out[i][ys, :] * t_a[betas, :], axis=1)
+        flat = fnp.zeros((d + 1) ** i * d, dtype=p_evals.dtype).at[vus].add(contrib)
         accumulators.append(flat.reshape(((d + 1) ** i, d)))
     return accumulators
 

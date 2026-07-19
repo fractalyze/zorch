@@ -9,7 +9,7 @@ the dedicated emitter consumes off the lowered StableHLO.
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
@@ -47,14 +47,14 @@ EXPECTED_ATTRS = (
 )
 
 
-def _to_field(canon: np.ndarray) -> jnp.ndarray:
+def _to_field(canon: np.ndarray) -> fnp.ndarray:
     """Canonical ints -> field array (the dtype cast Montgomery-encodes)."""
-    return jnp.asarray(canon.astype(np.int64).astype(F))
+    return fnp.asarray(canon.astype(np.int64).astype(F))
 
 
-def _to_canon(arr: jnp.ndarray) -> np.ndarray:
+def _to_canon(arr: fnp.ndarray) -> np.ndarray:
     """Field array -> canonical ints (numpy object cast Montgomery-decodes,
-    no jax x64 needed)."""
+    no frx x64 needed)."""
     return np.asarray(np.asarray(arr).astype(object), dtype=object)
 
 
@@ -136,22 +136,22 @@ class PoseidonPermuteShapeTest(absltest.TestCase):
 
     def test_permute_shape_and_vmap(self) -> None:
         p = Poseidon(_poseidon_params())
-        x = jnp.arange(_WIDTH, dtype=F)
+        x = fnp.arange(_WIDTH, dtype=F)
         out = p.permute(x)
         self.assertEqual(out.shape, (_WIDTH,))
         self.assertEqual(out.dtype, F)
-        batch = jnp.stack([x, x + F(1)])
+        batch = fnp.stack([x, x + F(1)])
         bout = frx.vmap(p.permute)(batch)  # thread-per-hash
         self.assertEqual(bout.shape, (2, _WIDTH))
         self.assertEqual(bout.dtype, F)
-        self.assertTrue(bool(jnp.array_equal(bout[0], out)))
+        self.assertTrue(bool(fnp.array_equal(bout[0], out)))
 
     def test_permute_rejects_wrong_shape(self) -> None:
         p = Poseidon(_poseidon_params())
         with self.assertRaises(ValueError):
-            p.permute(jnp.zeros((_WIDTH + 1,), dtype=F))  # width mismatch
+            p.permute(fnp.zeros((_WIDTH + 1,), dtype=F))  # width mismatch
         with self.assertRaises(ValueError):
-            p.permute(jnp.zeros((2, _WIDTH), dtype=F))  # batched, not a 1-D state
+            p.permute(fnp.zeros((2, _WIDTH), dtype=F))  # batched, not a 1-D state
 
 
 class PoseidonMarkerEmissionTest(absltest.TestCase):
@@ -161,7 +161,7 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         # composite.attributes — all four ints plus the flat MDS are required by
         # the XLA recognizer.
         p = Poseidon(_poseidon_params())
-        txt = frx.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
@@ -181,7 +181,7 @@ class PoseidonMarkerEmissionTest(absltest.TestCase):
         # GetCompositeAttrIntArray — NOT a plain ArrayAttr (`mds = [..]`), which a
         # Python list/tuple would produce.
         p = Poseidon(_poseidon_params())
-        txt = frx.jit(p.permute).lower(jnp.arange(_WIDTH, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertIn("mds = dense<[2, 3, 1, 1, 2, 3, 3, 1, 2]> : tensor<9xi64>", txt)
 
 

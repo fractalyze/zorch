@@ -25,7 +25,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.coding.linear_code import LinearCode
@@ -87,7 +87,7 @@ def _verify_body(
     transcript: Transcript,
 ) -> tuple[Array, Transcript]:
     dtype = z.dtype
-    one = jnp.ones((), dtype)
+    one = fnp.ones((), dtype)
     n = verifier.code.block_len
     num_vars = z.shape[0]
     k_row = log2_strict_usize(verifier.code.message_len)
@@ -113,7 +113,7 @@ def _verify_body(
     opened = from_base_field(proof.component_opening.row, dtype, cols)  # (Q, cols)
     lhs = (opened * r_col[None, :]).sum(axis=1)  # (Q,)  broadcast-mul + sum, not `@`
     rhs = verifier.code.encode(proof.w)[positions]  # (Q,)
-    proximity_ok = jnp.all(lhs == rhs)
+    proximity_ok = fnp.all(lhs == rhs)
 
     # Value: <r_row, w> == y.
     value_ok = (r_row * proof.w).sum() == value

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import Any, Protocol, Self
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 from frx.tree_util import register_dataclass
 
@@ -83,12 +83,12 @@ class TranscriptChallenger:
     def seed(
         self, commitment: Array, point: Array, value: Array
     ) -> tuple[TranscriptChallenger, Array]:
-        t = self.transcript.observe(commitment).observe(jnp.stack([point, value]))
+        t = self.transcript.observe(commitment).observe(fnp.stack([point, value]))
         t, xi0 = sample_challenge(t, self.dtype)
         return TranscriptChallenger(t, self.dtype), xi0
 
     def challenge(self, l: Array, r: Array) -> tuple[TranscriptChallenger, Array]:
-        t, u = sample_challenge(self.transcript.observe(jnp.stack([l, r])), self.dtype)
+        t, u = sample_challenge(self.transcript.observe(fnp.stack([l, r])), self.dtype)
         return TranscriptChallenger(t, self.dtype), u
 
     def hiding_challenge(
@@ -97,8 +97,8 @@ class TranscriptChallenger:
         """Squeeze the hiding challenge over `(commitment, hiding_comm, point,
         value)` — the zorch-native (NOT arkworks-byte-exact) read; the byte-exact
         version lives in the accumulation consumer's challenger."""
-        t = self.transcript.observe(jnp.stack([commitment, hiding_comm])).observe(
-            jnp.stack([point, value])
+        t = self.transcript.observe(fnp.stack([commitment, hiding_comm])).observe(
+            fnp.stack([point, value])
         )
         t, hc = sample_challenge(t, self.dtype)
         return TranscriptChallenger(t, self.dtype), hc
