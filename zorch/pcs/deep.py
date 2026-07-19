@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.univariate import powers
@@ -97,5 +97,5 @@ def open_columns(
     opened: list[Array] = []
     for col in range(b + c):
         column = base_sub[:, col] if col < b else cubic_sub[:, col - b]
-        opened.append(jnp.sum(weights[:, opening_pos[col]] * column))
-    return jnp.stack(opened)
+        opened.append(fnp.sum(weights[:, opening_pos[col]] * column))
+    return fnp.stack(opened)
