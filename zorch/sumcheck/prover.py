@@ -39,6 +39,7 @@ import frx.numpy as jnp
 from frx import Array
 from zk_dtypes import efinfo
 
+from zorch._composite import composite
 from zorch.round import Round
 from zorch.sumcheck.domain import (
     EvalDomain,
@@ -239,6 +240,40 @@ SUMCHECK_ROUND_MARKER = "zorch.sumcheck.round"
 # pinned together, so the version is the initial one and moves only on a future
 # cross-release ABI break. Keep in lockstep with the XLA recognizer's constant.
 SUMCHECK_ROUND_MARKER_VERSION = 1
+
+
+def _product_round_decomp(*factors: Array, **_attrs: object) -> Array:
+    """The `zorch.sumcheck.round` (variant=product) decomposition: the plain
+    product round poly `Σ_x Πₖ fₖ(x)` as `degree + 1` natural-domain evals — the
+    byte-exact fallback a recognizing emitter (the XLA `EmitProductRoundPoly`
+    baseline / its SVO strategy) replaces. `_attrs` (variant / degree / strategy)
+    are composite metadata the emitter parses; the decomposition reads only the
+    stacked factor operands."""
+    folded = jnp.stack(factors)
+    degree = len(factors)
+    return summand_evals(
+        folded, ProductSummand(degree)._combine, natural_domain(degree, folded.dtype)
+    )
+
+
+def _composite_product_round(folded: Array, *, strategy: str = "baseline") -> Array:
+    """Emit the FS-less `zorch.sumcheck.round` (variant=product) marker around the
+    plain product round poly `Σ_x Πₖ fₖ`. `strategy` picks the emitter algorithm
+    ("baseline" vs "svo" small-value); both yield the identical poly, so an
+    unclaimed marker's inline decomposition is byte-identical either way — the
+    transcript never changes. `folded` is the stacked `(d, N)` factor state; the d
+    factors ride as separate operands (the emitter ABI). Single-output and
+    phase-less (a fold-free poly reduce). See fractalyze/xla#287."""
+    d = folded.shape[0]
+    return composite(
+        _product_round_decomp,
+        *[folded[k] for k in range(d)],
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        variant="product",
+        degree=d,
+        strategy=strategy,
+    )
 
 
 if TYPE_CHECKING:

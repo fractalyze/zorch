@@ -29,6 +29,20 @@ class StandardRoundTest(absltest.TestCase):
         self.assertTrue(bool(msg[0] == jnp.sum(f[:half])))
         self.assertTrue(bool(msg[1] == jnp.sum(f[half:])))
 
+    def test_product_round_composite_byte_identical(self) -> None:
+        # The variant=product zorch.sumcheck.round marker's inline decomposition
+        # (an unclaimed marker runs its decomposition) is byte-identical to the
+        # eager StandardRound product poly — so emitting the marker, at either
+        # strategy, never changes the transcript.
+        folded = jnp.stack([rand_field(21, (16,), KB), rand_field(22, (16,), KB)])
+        want = _product_round(2)._round_poly(folded)
+        for strategy in ("baseline", "svo"):
+            got = prover._composite_product_round(folded, strategy=strategy)
+            self.assertEqual(got.shape, (3,))
+            self.assertTrue(
+                bool(jnp.array_equal(got, want)), msg=f"strategy={strategy}"
+            )
+
     def test_round_poly_degree2_product(self) -> None:
         # two MLEs, summand=prod, degree 2: s(u) = sum_x' (P0a+u*da)(P0b+u*db)
         a = rand_field(12, (8,), KB)
