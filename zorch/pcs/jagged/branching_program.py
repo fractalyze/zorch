@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.fusion import fused_region
@@ -138,19 +138,19 @@ def _bp_eval_decomposition(
     dtype = z_row.dtype
     r_dim, i_dim = z_row.shape[0], z_index.shape[0]
     p_dim, n_dim = prefix_sum.shape[0], next_prefix_sum.shape[0]
-    num_vars = jnp.maximum(r_dim, p_dim)
-    zero = jnp.zeros([], dtype=dtype)
+    num_vars = fnp.maximum(r_dim, p_dim)
+    zero = fnp.zeros([], dtype=dtype)
     # t_res: (NUM_MEMORY_STATES, NUM_BIT_STATES, NUM_MEMORY_STATES)
     t_res = t_matrix.reshape(NUM_MEMORY_STATES, NUM_BIT_STATES, NUM_MEMORY_STATES)
 
     def _bit(vec: Array, dim: int, layer: Array) -> Array:
-        # 0 when layer >= dim (high-bit padding). jnp.clip keeps the OOB index safe.
-        idx = jnp.clip(dim - 1 - layer, 0, dim - 1)
-        return jnp.where(layer < dim, vec[idx], zero)
+        # 0 when layer >= dim (high-bit padding). fnp.clip keeps the OOB index safe.
+        idx = fnp.clip(dim - 1 - layer, 0, dim - 1)
+        return fnp.where(layer < dim, vec[idx], zero)
 
     def body(k: Array, sv: Array) -> Array:
         layer = num_vars - 1 - k
-        point = jnp.stack(
+        point = fnp.stack(
             [
                 _bit(z_row, r_dim, layer),
                 _bit(z_index, i_dim, layer),
@@ -158,15 +158,15 @@ def _bp_eval_decomposition(
                 _bit(next_prefix_sum, n_dim, layer),
             ]
         )
-        eq16 = expand_eq_to_hypercube(point, jnp.ones([], dtype=dtype))  # [16]
+        eq16 = expand_eq_to_hypercube(point, fnp.ones([], dtype=dtype))  # [16]
         # t_layer[m, m'] = eq16 @ t_res[m]  — vmap over input memory state m
         t_layer = frx.vmap(lambda tm: eq16 @ tm)(t_res)  # [4,4]
         return t_layer @ sv
 
     sv0 = (
-        jnp.zeros(NUM_MEMORY_STATES, dtype=dtype)
+        fnp.zeros(NUM_MEMORY_STATES, dtype=dtype)
         .at[_SUCCESS_INDEX]
-        .set(jnp.ones([], dtype=dtype))
+        .set(fnp.ones([], dtype=dtype))
     )
     # num_vars layers (not num_vars+1): a layer == num_vars would read all-zero
     # bits (every dim <= num_vars) and is an identity on the carry-0 start

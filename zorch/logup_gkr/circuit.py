@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.sumcheck.jagged.layout import _prepad_folded, _segment_gather_np
@@ -153,7 +153,7 @@ def build_pyramid(first: GkrLayer) -> list[GkrLayer]:
 
 def _interleave(child_0: Array, child_1: Array) -> Array:
     """Interleave two equal-length children into [c0[0], c1[0], c0[1], c1[1], ...]."""
-    return jnp.stack([child_0, child_1], axis=-1).flatten()
+    return fnp.stack([child_0, child_1], axis=-1).flatten()
 
 
 def extract_outputs(layer: GkrLayer) -> LogUpGkrOutput:
@@ -234,11 +234,11 @@ def _segment_gather(
 
     Positions past a segment's source rows get the sentinel `sum(src_counts)`,
     which `_gather_pad` resolves to the padding value. None when the layouts
-    already agree (no gather needed). jnp so the unrolled `_round_metadata`
+    already agree (no gather needed). fnp so the unrolled `_round_metadata`
     schedule rides the frx round body byte-for-byte.
     """
     seg = _segment_gather_np(src_counts, dst_counts)
-    return None if seg is None else jnp.asarray(seg)
+    return None if seg is None else fnp.asarray(seg)
 
 
 def _gather_pad(arr: Array, gather: Array, pad_val: int) -> Array:
@@ -248,8 +248,8 @@ def _gather_pad(arr: Array, gather: Array, pad_val: int) -> Array:
     which would copy the whole array.
     """
     is_pad = gather >= arr.shape[0]
-    clamped = jnp.minimum(gather, arr.shape[0] - 1)
-    return jnp.where(is_pad, pad_val, arr[clamped])
+    clamped = fnp.minimum(gather, arr.shape[0] - 1)
+    return fnp.where(is_pad, pad_val, arr[clamped])
 
 
 def _pad_neutral(

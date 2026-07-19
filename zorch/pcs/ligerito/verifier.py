@@ -18,7 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.coding.tensor_code import TensorCode
@@ -78,7 +78,7 @@ class LigeritoVerifier:
                 f"{self.config.num_vars}"
             )
         self._check_shape(proof)
-        one = jnp.ones((), z.dtype)
+        one = fnp.ones((), z.dtype)
         return _verify(
             self,
             commitment,
@@ -152,12 +152,12 @@ def _verify(
     cfg = verifier.config
     chor = verifier.choreography
     dtype = B.dtype
-    one = jnp.ones((), dtype)
+    one = fnp.ones((), dtype)
     round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
     basis = select_commit_basis(cfg.monomial_commit)
 
     claim = value
-    ok = jnp.bool_(True)
+    ok = fnp.bool_(True)
 
     t = chor.bind_statement(transcript, commitment, z, value)
 
@@ -212,7 +212,7 @@ def _verify(
         # otherwise. eq of the reversed challenge vector IS the bit-reversed
         # eq table, so one expansion serves both.
         lane_chals = challenges[::-1] if cfg.monomial_commit else challenges
-        eqc = expand_eq_to_hypercube(jnp.stack(lane_chals), one)  # (kappa_j,)
+        eqc = expand_eq_to_hypercube(fnp.stack(lane_chals), one)  # (kappa_j,)
         kappa_j = 1 << k_j
         is_final = j == cfg.num_levels - 1
 
@@ -251,7 +251,7 @@ def _verify(
             # and the sumcheck's terminal claim closes against Σ_x residual·B.
             bases = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
             expected = (residual[None, :] * bases).sum(axis=1)  # (Q,)
-            ok = ok & jnp.all(expected == v)
+            ok = ok & fnp.all(expected == v)
             ok = ok & (claim == (residual * B).sum())
             if cur is not None:
                 # The eager wire's terminal emission is the residual state's
@@ -261,7 +261,7 @@ def _verify(
                     if cfg.compressed_sumcheck_messages
                     else _P_ROUND
                 )
-                ok = ok & jnp.all(cur == p_round._round_poly(jnp.stack([residual, B])))
+                ok = ok & fnp.all(cur == p_round._round_poly(fnp.stack([residual, B])))
             break
 
         # Induce the batched proximity claim into the running sumcheck (mirror

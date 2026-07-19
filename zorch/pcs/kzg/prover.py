@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.pcs.kzg.config import KzgCommitment, KzgProof
@@ -43,7 +43,7 @@ def _quotient_and_eval(coeffs: Array, z: Array) -> tuple[Array, Array]:
         carry = coeffs[i] + z * carry
         q[i - 1] = carry
     fz = coeffs[0] + z * carry
-    return jnp.stack(q), fz
+    return fnp.stack(q), fz
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ class KzgProver:
         """Commit a batch of coefficient-basis polynomials. Returns the stacked G1
         commitments and the coeffs as prover data (kept to build quotients)."""
         commitments = [lax.msm(c, self.pk.powers_g1[: c.shape[0]]) for c in polys]
-        return jnp.stack(commitments), KzgProverData(tuple(polys))
+        return fnp.stack(commitments), KzgProverData(tuple(polys))
 
     def open(
         self,
@@ -85,7 +85,7 @@ class KzgProver:
             q, fz = _quotient_and_eval(coeffs, z)
             proofs.append(lax.msm(q, self.pk.powers_g1[: q.shape[0]]))
             values.append(fz)
-        return jnp.stack(values), jnp.stack(proofs), transcript
+        return fnp.stack(values), fnp.stack(proofs), transcript
 
 
 if TYPE_CHECKING:

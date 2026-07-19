@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.transcript import DuplexTranscript
@@ -54,7 +54,7 @@ class CheapPermutation:
         # every observed lane). Enough for distinct, deterministic per-round
         # challenges; not a secure or even bijective permutation — tests only.
         mixed = state * state * state
-        return mixed + jnp.sum(mixed)
+        return mixed + fnp.sum(mixed)
 
     # Inert fused-region ABI: non-fused, never called; a conformant stub.
     def fused_region_spec(

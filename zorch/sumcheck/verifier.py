@@ -22,7 +22,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.univariate import eval_coeffs, eval_univariate
@@ -94,7 +94,7 @@ class CoeffsSumcheckRound(Round):
                 f"round message must have degree+1={self.degree + 1} "
                 f"coefficients, got {msg.shape[0]}"
             )
-        ok = claim == msg[0] + jnp.sum(msg)
+        ok = claim == msg[0] + fnp.sum(msg)
         transcript = transcript.observe(msg)
         transcript, r = sample_challenge(transcript, claim.dtype, self.challenge_limbs)
         return eval_coeffs(msg, r), transcript, r, ok
@@ -124,7 +124,7 @@ class CompressedCoeffsSumcheckRound(Round):
             )
         c0, c2 = msg[0], msg[1]
         c1 = claim - c0 - c0 - c2  # s(1) - c_0 - c_2, with s(1) = claim - c_0
-        return eval_coeffs(jnp.stack([c0, c1, c2]), r), jnp.bool_(True)
+        return eval_coeffs(fnp.stack([c0, c1, c2]), r), fnp.bool_(True)
 
     def __call__(
         self, claim: Array, msg: Array, transcript: Transcript

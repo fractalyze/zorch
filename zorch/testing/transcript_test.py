@@ -5,7 +5,7 @@ import functools
 from dataclasses import replace
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array, lax, tree_util
@@ -51,14 +51,14 @@ class DuplexTranscriptTest(absltest.TestCase):
         v = rand_field(1, (5,), F)
         _, a = self._new().observe(v).sample(2)
         _, b = self._new().observe(v).sample(2)
-        self.assertTrue(bool(jnp.all(a == b)))
+        self.assertTrue(bool(fnp.all(a == b)))
 
     def test_challenge_binds_to_observation(self) -> None:
         # Fiat-Shamir: a changed transcript must yield different challenges.
         v = rand_field(2, (5,), F)
         _, ca = self._new().observe(v).sample(2)
-        _, cb = self._new().observe(v.at[2].add(jnp.array(1, F))).sample(2)
-        self.assertFalse(bool(jnp.all(ca == cb)))
+        _, cb = self._new().observe(v.at[2].add(fnp.array(1, F))).sample(2)
+        self.assertFalse(bool(fnp.all(ca == cb)))
 
     def test_sample_stream_is_consistent(self) -> None:
         # sample(2) equals two sample(1)s in sequence.
@@ -75,7 +75,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         v = rand_field(4, (5,), F)
         got = frx.jit(lambda t, x: t.observe(x).sample(2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
-        self.assertTrue(bool(jnp.all(got == want)))
+        self.assertTrue(bool(fnp.all(got == want)))
 
     def test_observe_and_sample_matches_observe_then_sample(self) -> None:
         # The fused per-round primitive is a drop-in for observe-then-sample:
@@ -83,9 +83,9 @@ class DuplexTranscriptTest(absltest.TestCase):
         v = rand_field(7, (5,), F)
         t_ref, ref = self._new().observe(v).sample(2)
         t_fused, fused = self._new().observe_and_sample(v, 2)
-        self.assertTrue(bool(jnp.all(ref == fused)))
+        self.assertTrue(bool(fnp.all(ref == fused)))
         for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_fused)):
-            self.assertTrue(bool(jnp.all(a == b)))
+            self.assertTrue(bool(fnp.all(a == b)))
 
     def test_observe_and_sample_fuses_under_one_jit(self) -> None:
         # Acceptance: absorb+squeeze are one @jit computation (fused by
@@ -93,7 +93,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         v = rand_field(8, (5,), F)
         got = frx.jit(lambda t, x: t.observe_and_sample(x, 2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
-        self.assertTrue(bool(jnp.all(got == want)))
+        self.assertTrue(bool(fnp.all(got == want)))
 
     def _assert_marked_matches_plain(self, t0: DuplexTranscript) -> None:
         # Marked hop vs plain decomposition at a fresh entry and a mid-stream
@@ -106,13 +106,13 @@ class DuplexTranscriptTest(absltest.TestCase):
                 t, _ = _observe_and_sample_body(t, rand_field(2, (5,), F), 3)
             t_ref, ref = _observe_and_sample_body(t, v, 4)
             t_mk, mk = observe_and_sample_marked(t, v, 4)
-            self.assertTrue(bool(jnp.all(ref == mk)))
+            self.assertTrue(bool(fnp.all(ref == mk)))
             for a, b in zip(
                 tree_util.tree_leaves(t_ref),
                 tree_util.tree_leaves(t_mk),
                 strict=True,
             ):
-                self.assertTrue(bool(jnp.all(a == b)))
+                self.assertTrue(bool(fnp.all(a == b)))
 
     def test_duplex_fs_marker_byte_matches_plain(self) -> None:
         # The `zorch.duplex_fs` fusion marker is a byte-identical drop-in for the
@@ -158,7 +158,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         t_ref, _ = _observe_and_sample_body(self._new(), v, 4)
         t_mk, _ = frx.jit(consume)(self._new(), v)
         for a, b in zip(tree_util.tree_leaves(t_ref), tree_util.tree_leaves(t_mk)):
-            self.assertTrue(bool(jnp.all(a == b)))
+            self.assertTrue(bool(fnp.all(a == b)))
 
     def test_is_pytree(self) -> None:
         # 5 state buffers are the leaves; permutation + rate are static.
@@ -190,7 +190,7 @@ class SampleChallengeTest(absltest.TestCase):
         _, ch = sample_challenge(t, EF, 4)
         _, raw = t.sample(4)
         self.assertEqual(ch.dtype, EF)
-        self.assertTrue(bool(jnp.all(ch[None].view(F) == raw)))
+        self.assertTrue(bool(fnp.all(ch[None].view(F) == raw)))
 
     def test_rejects_mismatched_packing(self) -> None:
         # The squeezes are consumed before the reinterpret, so a wrong limb
@@ -221,7 +221,7 @@ class TranscriptJitCacheTest(absltest.TestCase):
 
     def test_jit_zone_does_not_retrace_per_fresh_transcript(self) -> None:
         @frx.jit
-        def zone(t: DuplexTranscript) -> jnp.ndarray:
+        def zone(t: DuplexTranscript) -> fnp.ndarray:
             return t.state.sponge_state
 
         zone(DuplexTranscript.new(koalabear16_perm(), rate=8))
@@ -242,7 +242,7 @@ class TranscriptJitCacheTest(absltest.TestCase):
     def test_observe_family_reuses_cached_zones(self) -> None:
         # The scan-bearing ops (duplex-only), same contract as sample above.
         v = rand_field(11, (5,), F)
-        w = jnp.zeros((), F)
+        w = fnp.zeros((), F)
         new = functools.partial(DuplexTranscript.new, koalabear16_perm(), rate=8)
         assert_single_trace(
             self, _observe_body, [functools.partial(new().observe, v) for _ in (0, 1)]
@@ -292,8 +292,8 @@ class GrindTest(absltest.TestCase):
         small, large = 1 << 8, 1 << 16
         _, near = self._seeded().grind(14, chunk=small)
         _, far = self._seeded().grind(14, chunk=large)
-        self.assertEqual(int(near.astype(jnp.uint32)), int(far.astype(jnp.uint32)))
-        self.assertGreater(int(near.astype(jnp.uint32)), small)
+        self.assertEqual(int(near.astype(fnp.uint32)), int(far.astype(fnp.uint32)))
+        self.assertGreater(int(near.astype(fnp.uint32)), small)
         _, ok = self._seeded().check_witness(14, near)
         self.assertTrue(bool(ok))
 
@@ -304,7 +304,7 @@ class GrindTest(absltest.TestCase):
         for a, b in zip(
             tree_util.tree_leaves(prover), tree_util.tree_leaves(verifier), strict=True
         ):
-            self.assertTrue(bool(jnp.all(a == b)))
+            self.assertTrue(bool(fnp.all(a == b)))
 
     def test_grind_traces_under_jit(self) -> None:
         # grind traces under jit; the witness it returns verifies.
@@ -322,33 +322,33 @@ class GrindTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             self._seeded().grind(32)
         with self.assertRaises(ValueError):
-            self._seeded().check_witness(-1, jnp.zeros((), F))
+            self._seeded().check_witness(-1, fnp.zeros((), F))
 
     def test_check_witness_rejects_off_domain_witness(self) -> None:
         # The witness must be a scalar base-field element -- the domain grind
         # enumerates -- so the verifier accepts exactly what the prover searched.
         seeded = self._seeded()
         with self.assertRaises(ValueError):
-            seeded.check_witness(8, jnp.zeros((2,), F))  # non-scalar
+            seeded.check_witness(8, fnp.zeros((2,), F))  # non-scalar
         with self.assertRaises(ValueError):
-            seeded.check_witness(8, jnp.zeros((), zk_dtypes.koalabearx4_mont))  # not F
+            seeded.check_witness(8, fnp.zeros((), zk_dtypes.koalabearx4_mont))  # not F
 
     def test_grind_rejects_non_positive_chunk(self) -> None:
         with self.assertRaises(ValueError):
             self._seeded().grind(8, chunk=0)
 
     def test_field_wider_than_uint32_raises_loudly(self) -> None:
-        # The uint32 counter/bit-check (jax x64 off) can't represent a field
+        # The uint32 counter/bit-check (frx x64 off) can't represent a field
         # whose order exceeds 32 bits; both entry points must say so plainly
         # rather than fail with an opaque narrowing-convert error.
         wide = zk_dtypes.goldilocks_mont
         with self.assertRaises(GrindError):
             cheap_transcript(wide).grind(8)
         with self.assertRaises(GrindError):
-            cheap_transcript(wide).check_witness(8, jnp.zeros((), wide))
+            cheap_transcript(wide).check_witness(8, fnp.zeros((), wide))
 
 
-def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]:
+def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, fnp.ndarray]:
     """The cond-based `_sample_one`: a traced-predicate `lax.cond` over
     `_duplexing`. Kept here as the byte-identity reference the production
     `select` rewrite must reproduce exactly."""
@@ -359,7 +359,7 @@ def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray
     return t2._with_state(replace(t2.state, out_pos=out_pos)), item
 
 
-def _cond_observe_body(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
+def _cond_observe_body(t: DuplexTranscript, values: fnp.ndarray) -> DuplexTranscript:
     """The cond-based `_observe_body` scan step: a traced-predicate `lax.cond`
     on the full-block flush. The byte-identity reference for the production
     `select` rewrite."""
@@ -381,18 +381,18 @@ def _cond_observe_body(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTransc
         def perm(args: tuple[Array, Array]) -> tuple[Array, Array]:
             sp, ib = args
             new_sponge = _absorb_permute(permutation, sp, ib, new_in_pos, rate)
-            return new_sponge, jnp.zeros_like(ib)
+            return new_sponge, fnp.zeros_like(ib)
 
         sponge, in_buf = lax.cond(full, perm, lambda a: a, (sponge, in_buf))
-        in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
+        in_pos_out = fnp.where(full, fnp.int32(0), new_in_pos)
         return (in_buf, in_pos_out, sponge), None
 
     init = (t.state.input_buffer, t.state.in_pos, t.state.sponge_state)
     (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
     last_was_perm = in_pos == 0
-    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
-    output_buffer = jnp.where(
-        last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
+    out_pos = fnp.where(last_was_perm, fnp.int32(rate), fnp.int32(0))
+    output_buffer = fnp.where(
+        last_was_perm, sponge[:rate], fnp.zeros(rate, dtype=base_dtype)
     )
     return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
 
@@ -421,7 +421,7 @@ class CondToSelectByteIdentityTest(absltest.TestCase):
                 tree_util.tree_leaves(t_ref),
                 strict=True,
             ):
-                self.assertTrue(bool(jnp.all(a == b)), f"sample {i} state diverged")
+                self.assertTrue(bool(fnp.all(a == b)), f"sample {i} state diverged")
 
     def test_select_observe_matches_cond_reference(self) -> None:
         # 19 elements over rate 8: two full-block flushes (`full` True) plus a
@@ -437,16 +437,16 @@ class CondToSelectByteIdentityTest(absltest.TestCase):
             tree_util.tree_leaves(t_ref),
             strict=True,
         ):
-            self.assertTrue(bool(jnp.all(a == b)), "observe state diverged")
+            self.assertTrue(bool(fnp.all(a == b)), "observe state diverged")
         _, x_sel = t_sel.sample(4)
         _, x_ref = t_ref.sample(4)
-        self.assertTrue(bool(jnp.all(x_sel == x_ref)), "post-observe sample diverged")
+        self.assertTrue(bool(fnp.all(x_sel == x_ref)), "post-observe sample diverged")
 
 
-def _ref_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
+def _ref_observe(t: DuplexTranscript, values: fnp.ndarray) -> DuplexTranscript:
     """Verbatim copy of the pre-rate-block `_observe_body`: a `lax.scan` that
     absorbs ONE base element per step and runs a full `_absorb_permute` on every
-    element, keeping the rate-boundary one via `jnp.where`. The byte-identity
+    element, keeping the rate-boundary one via `fnp.where`. The byte-identity
     reference the rate-block rewrite must reproduce exactly."""
     base_dtype = t.state.sponge_state.dtype
     flat = lax.bitcast_convert_type(values, base_dtype).reshape(-1)
@@ -463,29 +463,29 @@ def _ref_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
         new_in_pos = in_pos + 1
         full = new_in_pos == rate
         permuted_sponge = _absorb_permute(permutation, sponge, in_buf, new_in_pos, rate)
-        sponge = jnp.where(full, permuted_sponge, sponge)
-        in_buf = jnp.where(full, jnp.zeros_like(in_buf), in_buf)
-        in_pos_out = jnp.where(full, jnp.int32(0), new_in_pos)
+        sponge = fnp.where(full, permuted_sponge, sponge)
+        in_buf = fnp.where(full, fnp.zeros_like(in_buf), in_buf)
+        in_pos_out = fnp.where(full, fnp.int32(0), new_in_pos)
         return (in_buf, in_pos_out, sponge), None
 
     init = (t.state.input_buffer, t.state.in_pos, t.state.sponge_state)
     (in_buf, in_pos, sponge), _ = lax.scan(step, init, flat)
     last_was_perm = in_pos == 0
-    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
-    output_buffer = jnp.where(
-        last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
+    out_pos = fnp.where(last_was_perm, fnp.int32(rate), fnp.int32(0))
+    output_buffer = fnp.where(
+        last_was_perm, sponge[:rate], fnp.zeros(rate, dtype=base_dtype)
     )
     return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
 
 
-def _ref_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]:
+def _ref_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, fnp.ndarray]:
     """Verbatim copy of the pre-rate-block `_sample_one`: an unconditional
     `_duplexing` (one permute) selected away when not needed."""
     need_perm = (t.state.in_pos > 0) | (t.state.out_pos == 0)
     permuted = t._duplexing()
     t = t._with_state(
         tree_util.tree_map(
-            lambda p, c: jnp.where(need_perm, p, c), permuted.state, t.state
+            lambda p, c: fnp.where(need_perm, p, c), permuted.state, t.state
         )
     )
     out_pos = t.state.out_pos - 1
@@ -493,14 +493,14 @@ def _ref_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, jnp.ndarray]
     return t._with_state(replace(t.state, out_pos=out_pos)), item
 
 
-def _ref_sample(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, jnp.ndarray]:
+def _ref_sample(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, fnp.ndarray]:
     """Verbatim copy of the pre-rate-block `_sample_body`: `n` per-limb
     `_sample_one` calls, each running a permute unconditionally."""
     outs = []
     for _ in range(n):
         t, x = _ref_sample_one(t)
         outs.append(x.reshape(()))
-    return t, jnp.stack(outs)
+    return t, fnp.stack(outs)
 
 
 class RateBlockByteIdentityTest(absltest.TestCase):
@@ -531,7 +531,7 @@ class RateBlockByteIdentityTest(absltest.TestCase):
         for x, y in zip(
             tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
         ):
-            self.assertTrue(bool(jnp.all(x == y)), msg)
+            self.assertTrue(bool(fnp.all(x == y)), msg)
 
     def test_observe_matches_reference_over_many_lengths(self) -> None:
         # Rate-boundary edges explicit: 7 (under), 8 (exact one block), 9 (one
@@ -564,7 +564,7 @@ class RateBlockByteIdentityTest(absltest.TestCase):
             t_new, x_new = _sample_body(self._new(), n)
             t_ref, x_ref = _ref_sample(self._new(), n)
             self.assertTrue(
-                bool(jnp.all(x_new == x_ref)), f"sample({n}) value diverged"
+                bool(fnp.all(x_new == x_ref)), f"sample({n}) value diverged"
             )
             self._assert_state_eq(t_new, t_ref, f"sample({n}) state diverged")
 
@@ -577,7 +577,7 @@ class RateBlockByteIdentityTest(absltest.TestCase):
                 t_new, x_new = _sample_body(base, n)
                 t_ref, x_ref = _ref_sample(base, n)
                 self.assertTrue(
-                    bool(jnp.all(x_new == x_ref)),
+                    bool(fnp.all(x_new == x_ref)),
                     f"sample(drained={drained}, n={n}) value diverged",
                 )
                 self._assert_state_eq(
@@ -594,8 +594,8 @@ class RateBlockByteIdentityTest(absltest.TestCase):
         for in_pos in (1, 3, 7):
             pend = rand_field(in_pos, (8,), F)
             # Only [0:in_pos] is valid in overwrite mode; zero the rest.
-            buf = jnp.where(jnp.arange(8) < in_pos, pend, jnp.zeros(8, F))
-            state = replace(primed.state, input_buffer=buf, in_pos=jnp.int32(in_pos))
+            buf = fnp.where(fnp.arange(8) < in_pos, pend, fnp.zeros(8, F))
+            state = replace(primed.state, input_buffer=buf, in_pos=fnp.int32(in_pos))
             base = primed._with_state(state)
             self.assertEqual(int(base.state.in_pos), in_pos)
             self.assertGreater(int(base.state.out_pos), 0)
@@ -603,7 +603,7 @@ class RateBlockByteIdentityTest(absltest.TestCase):
                 t_new, x_new = _sample_body(base, n)
                 t_ref, x_ref = _ref_sample(base, n)
                 self.assertTrue(
-                    bool(jnp.all(x_new == x_ref)),
+                    bool(fnp.all(x_new == x_ref)),
                     f"pending-input sample(in_pos={in_pos}, n={n}) diverged",
                 )
                 self._assert_state_eq(
@@ -629,7 +629,7 @@ class RateBlockByteIdentityTest(absltest.TestCase):
                     t_new, x_new = _sample_body(t_new, n)
                     t_ref, x_ref = _ref_sample(t_ref, n)
                     self.assertTrue(
-                        bool(jnp.all(x_new == x_ref)),
+                        bool(fnp.all(x_new == x_ref)),
                         f"script {si} step {step_i} value diverged",
                     )
                 self._assert_state_eq(
@@ -637,11 +637,11 @@ class RateBlockByteIdentityTest(absltest.TestCase):
                 )
 
 
-def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
+def _pure_observe(t: DuplexTranscript, values: fnp.ndarray) -> DuplexTranscript:
     """Scan-free, CPU-safe per-element observe reference — the byte-identity spec.
 
     A Python loop with NO `lax.scan` and NO traced-index scatter: `in_buf[in_pos]`
-    is set with a `jnp.where` select, and `_absorb_permute`'s `sponge.at[:rate]`
+    is set with a `fnp.where` select, and `_absorb_permute`'s `sponge.at[:rate]`
     write is a static-range scatter the sample path already uses CPU-safely. So
     this is correct on the XLA CPU backend, unlike the scan-based
     `_ref_observe`,
@@ -656,18 +656,18 @@ def _pure_observe(t: DuplexTranscript, values: jnp.ndarray) -> DuplexTranscript:
         t.state.input_buffer,
         t.state.in_pos,
     )
-    slot = jnp.arange(rate, dtype=jnp.int32)
+    slot = fnp.arange(rate, dtype=fnp.int32)
     for i in range(int(flat.shape[0])):
-        in_buf = jnp.where(slot == in_pos, flat[i], in_buf)  # set [in_pos], no scatter
+        in_buf = fnp.where(slot == in_pos, flat[i], in_buf)  # set [in_pos], no scatter
         new_in_pos = in_pos + 1
         full = new_in_pos == rate
         permuted = _absorb_permute(t.permutation, sponge, in_buf, new_in_pos, rate)
-        sponge = jnp.where(full, permuted, sponge)
-        in_buf = jnp.where(full, jnp.zeros_like(in_buf), in_buf)
-        in_pos = jnp.where(full, jnp.int32(0), new_in_pos)
+        sponge = fnp.where(full, permuted, sponge)
+        in_buf = fnp.where(full, fnp.zeros_like(in_buf), in_buf)
+        in_pos = fnp.where(full, fnp.int32(0), new_in_pos)
     last_was_perm = in_pos == 0
-    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
-    output_buffer = jnp.where(last_was_perm, sponge[:rate], jnp.zeros(rate, base))
+    out_pos = fnp.where(last_was_perm, fnp.int32(rate), fnp.int32(0))
+    output_buffer = fnp.where(last_was_perm, sponge[:rate], fnp.zeros(rate, base))
     return t._with_state(DuplexState(in_buf, output_buffer, sponge, in_pos, out_pos))
 
 
@@ -699,7 +699,7 @@ class CpuByteIdentityTest(absltest.TestCase):
         for x, y in zip(
             tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
         ):
-            self.assertTrue(bool(jnp.all(x == y)), msg)
+            self.assertTrue(bool(fnp.all(x == y)), msg)
 
     def test_observe_matches_pure_reference(self) -> None:
         for mlen in (1, 7, 8, 9, 16, 17, 37, 40):
@@ -722,7 +722,7 @@ class CpuByteIdentityTest(absltest.TestCase):
                     ref_t, x = ref_t._sample_one()
                     outs.append(x.reshape(()))
                 self.assertTrue(
-                    bool(jnp.all(got == jnp.stack(outs))),
+                    bool(fnp.all(got == fnp.stack(outs))),
                     f"sample(n={n}, seed={seed}) value diverged from per-limb ref",
                 )
                 self._assert_state_eq(

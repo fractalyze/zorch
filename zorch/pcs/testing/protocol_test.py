@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from typing import TypeVar
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -68,8 +68,8 @@ class SeamRoundTripTest(absltest.TestCase):
             num_rounds=2,
             num_queries=3,
         )
-        coeffs = jnp.array([1, 2, 3, 4], dtype=KB)
-        z = jnp.array(2, dtype=KB)
+        coeffs = fnp.array([1, 2, 3, 4], dtype=KB)
+        z = fnp.array(2, dtype=KB)
         ok = _round_trip(
             FriProver(params),
             FriVerifier(params),
@@ -97,8 +97,8 @@ class SeamRoundTripTest(absltest.TestCase):
     @absltest.skipUnless(_GPU, "KZG commit/open use lax.msm, a GPU-only kernel")
     def test_kzg(self) -> None:
         pk, vk = toy_srs(tau=5, n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=SF)
-        z = jnp.array(7, dtype=SF)
+        coeffs = fnp.array([3, 1, 4, 1], dtype=SF)
+        z = fnp.array(7, dtype=SF)
         ok = _round_trip(
             KzgProver(pk),
             KzgVerifier(vk),

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
@@ -78,7 +78,7 @@ class R1CS:
     def is_satisfied(self, z: Array) -> Array:
         """Row-wise `(A·z)∘(B·z) == C·z` for all rows (scalar bool)."""
         az, bz, cz = self.matvecs(z)
-        return jnp.all(az * bz == cz)
+        return fnp.all(az * bz == cz)
 
     def combined_row_mle(self, r_x: Array, r_batch: Array) -> Array:
         """`M(y) = Σ_i eq(r_x)_i · (A + r·B + r²·C)_{i,y}`, length `num_cols`.
@@ -88,7 +88,7 @@ class R1CS:
         outer sumcheck's bind and `expand_eq_to_hypercube`.
         """
         combined = self.a + r_batch * self.b + r_batch * r_batch * self.c
-        eq_rows = expand_eq_to_hypercube(r_x, jnp.ones((), self.a.dtype))
+        eq_rows = expand_eq_to_hypercube(r_x, fnp.ones((), self.a.dtype))
         return eq_rows @ combined
 
     def eval_combined_matrix(self, r_x: Array, r_y: Array, r_batch: Array) -> Array:
@@ -96,8 +96,8 @@ class R1CS:
         `eval_ABC`. Dense here; a succinct scheme opens it from a SPARK commitment.
         """
         combined = self.a + r_batch * self.b + r_batch * r_batch * self.c
-        eq_rows = expand_eq_to_hypercube(r_x, jnp.ones((), self.a.dtype))
-        eq_cols = expand_eq_to_hypercube(r_y, jnp.ones((), self.a.dtype))
+        eq_rows = expand_eq_to_hypercube(r_x, fnp.ones((), self.a.dtype))
+        eq_cols = expand_eq_to_hypercube(r_y, fnp.ones((), self.a.dtype))
         return eq_rows @ combined @ eq_cols
 
 
@@ -113,10 +113,10 @@ def assignment(witness: Array, io: Array, num_vars_padded: int, num_io: int) -> 
     if io.shape[0] != num_io:
         raise ValueError(f"expected {num_io} public inputs, got {io.shape[0]}")
     dtype = witness.dtype
-    low = jnp.zeros((num_vars_padded,), dtype).at[: witness.shape[0]].set(witness)
-    high = jnp.zeros((num_vars_padded,), dtype).at[0].set(jnp.ones((), dtype))
+    low = fnp.zeros((num_vars_padded,), dtype).at[: witness.shape[0]].set(witness)
+    high = fnp.zeros((num_vars_padded,), dtype).at[0].set(fnp.ones((), dtype))
     high = high.at[1 : 1 + num_io].set(io)
-    return jnp.concatenate([low, high])
+    return fnp.concatenate([low, high])
 
 
 def eval_public_half(io: Array, r_y_rest: Array, num_vars_padded: int) -> Array:
@@ -126,9 +126,9 @@ def eval_public_half(io: Array, r_y_rest: Array, num_vars_padded: int) -> Array:
     witness opening `eval_W` it reconstructs `z̃(r_y)` — see `pcs_glue`.
     """
     dtype = io.dtype
-    high = jnp.zeros((num_vars_padded,), dtype).at[0].set(jnp.ones((), dtype))
+    high = fnp.zeros((num_vars_padded,), dtype).at[0].set(fnp.ones((), dtype))
     high = high.at[1 : 1 + io.shape[0]].set(io)
-    return (high * expand_eq_to_hypercube(r_y_rest, jnp.ones((), dtype))).sum()
+    return (high * expand_eq_to_hypercube(r_y_rest, fnp.ones((), dtype))).sum()
 
 
 def recombine_z_eval(eval_w: Array, eval_pub: Array, r_y0: Array) -> Array:
@@ -138,7 +138,7 @@ def recombine_z_eval(eval_w: Array, eval_pub: Array, r_y0: Array) -> Array:
     public high half; the multilinear bind on that top variable is this affine
     combination.
     """
-    one = jnp.ones((), eval_w.dtype)
+    one = fnp.ones((), eval_w.dtype)
     return (one - r_y0) * eval_w + r_y0 * eval_pub
 
 

@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array, lax
 
@@ -41,7 +41,7 @@ def _point_to_host(point: Array, cpu: frx.Device) -> Array:
     reinterprets them under the same dtype."""
     pt = np.array(point).item()
     with frx.default_device(cpu):
-        return jnp.asarray(type(pt).from_raw(pt.raw))
+        return fnp.asarray(type(pt).from_raw(pt.raw))
 
 
 @dataclass(frozen=True)
@@ -63,7 +63,7 @@ class KzgVerifier:
                 f"batch mismatch: commitment={k}, points={len(points)}, "
                 f"values={values.shape[0]}, proof={proof.shape[0]}"
             )
-        one = jnp.array(1, dtype=values.dtype)
+        one = fnp.array(1, dtype=values.dtype)
         cpu = frx.devices("cpu")[0]
         gen_g2 = _point_to_host(self.vk.gen_g2, cpu)
         tau_g2 = _point_to_host(self.vk.tau_g2, cpu)
@@ -71,16 +71,16 @@ class KzgVerifier:
         for c, z, fz, pi in zip(commitment, points, values, proof):
             # G1 side (GPU msm): linear combos keep every scalar off G2.
             g1_combo = lax.msm(
-                jnp.stack([one, -fz, z]), jnp.stack([c, self.vk.gen_g1, pi])
+                fnp.stack([one, -fz, z]), fnp.stack([c, self.vk.gen_g1, pi])
             )  # C − f(z)·G1 + z·π
-            neg_pi = lax.msm(jnp.stack([-one]), jnp.stack([pi]))  # −π
+            neg_pi = lax.msm(fnp.stack([-one]), fnp.stack([pi]))  # −π
             with frx.default_device(cpu):
-                g1 = jnp.stack(
+                g1 = fnp.stack(
                     [_point_to_host(g1_combo, cpu), _point_to_host(neg_pi, cpu)]
                 )
-                g2 = jnp.stack([gen_g2, tau_g2])
+                g2 = fnp.stack([gen_g2, tau_g2])
                 oks.append(lax.pairing_check(g1, g2))
-        return jnp.all(jnp.stack(oks)), transcript
+        return fnp.all(fnp.stack(oks)), transcript
 
 
 if TYPE_CHECKING:

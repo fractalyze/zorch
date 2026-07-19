@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -36,7 +36,7 @@ class R1CSTest(absltest.TestCase):
         inst, _, _, _ = toy_r1cs(3, s_x=2, num_vars_padded=4, num_io=2, dtype=KB)
         r_x = rand_field(40, (inst.s_x,), KB)
         r_y = rand_field(41, (inst.s_y,), KB)
-        r = jnp.asarray(rand_field(42, (1,), KB)[0])
+        r = fnp.asarray(rand_field(42, (1,), KB)[0])
         row_poly = inst.combined_row_mle(r_x, r)
         got = eval_mle(row_poly, r_y)
         want = inst.eval_combined_matrix(r_x, r_y, r)
@@ -58,10 +58,10 @@ class R1CSTest(absltest.TestCase):
         io = rand_field(51, (2,), KB)
         z = assignment(w, io, num_vars_padded=4, num_io=2)
         self.assertEqual(z.shape, (8,))
-        self.assertTrue(bool(jnp.all(z[:3] == w)))
-        self.assertTrue(bool(z[3] == jnp.zeros((), KB)))  # low-half pad
-        self.assertTrue(bool(z[4] == jnp.ones((), KB)))  # constant 1
-        self.assertTrue(bool(jnp.all(z[5:7] == io)))
+        self.assertTrue(bool(fnp.all(z[:3] == w)))
+        self.assertTrue(bool(z[3] == fnp.zeros((), KB)))  # low-half pad
+        self.assertTrue(bool(z[4] == fnp.ones((), KB)))  # constant 1
+        self.assertTrue(bool(fnp.all(z[5:7] == io)))
 
 
 if __name__ == "__main__":

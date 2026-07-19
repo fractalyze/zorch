@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -41,7 +41,7 @@ def _butterfly_scan(table: Array, combine: Callable[[Array, Array], Array]) -> A
     def level(a: Array, _: None) -> tuple[Array, None]:
         x = a.reshape(lead + (2, n // 2))
         lo, hi = x[..., 0, :], x[..., 1, :]
-        paired = jnp.stack([lo, combine(lo, hi)], axis=-2)
+        paired = fnp.stack([lo, combine(lo, hi)], axis=-2)
         # Left-rotate the bit labels: the MSB just folded drops to the LSB, so
         # the next level's fixed (2, n/2) reshape exposes the next bit.
         return paired.swapaxes(-2, -1).reshape(lead + (n,)), None
@@ -70,7 +70,7 @@ def mle_evals_to_coeffs(evals: Array) -> Array:
 def eval_mle(mle: Array, point: Array, axis: int = 0) -> Array:
     """Evaluate an MLE at `point` via the eq inner product. Contracts `axis`
     (size 2ⁿ); leading/trailing axes ride through. 1-D MLE -> scalar."""
-    eq = expand_eq_to_hypercube(point, jnp.ones((), mle.dtype))
+    eq = expand_eq_to_hypercube(point, fnp.ones((), mle.dtype))
     shape = [1] * mle.ndim
     shape[axis] = eq.shape[0]
     return (mle * eq.reshape(shape)).sum(axis=axis)

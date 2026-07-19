@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import eq_factor, expand_hypercube_step
@@ -40,7 +40,7 @@ def compute_eq_evaluations(w: Array) -> list[Array]:
     """Suffix eq tables [eq(w[-1:], ·), …, eq(w, ·)], entry i over {0,1}ⁱ.
 
     Scans w backwards, prepending each coordinate as the MSB."""
-    v = jnp.ones(1, dtype=w.dtype)
+    v = fnp.ones(1, dtype=w.dtype)
     v_list = []
     for i in range(w.shape[0] - 1, -1, -1):
         v = expand_hypercube_step(v, w[i], msb=True)
@@ -73,14 +73,14 @@ def _weighted_summand(
     if eq_w_l is not None:
         num_x_l = eq_w_l.shape[0]
         num_x_r = p0s.shape[1] // num_x_l
-        p0s = jnp.reshape(p0s, (m, num_x_l, num_x_r))
-        p1s = jnp.reshape(p1s, (m, num_x_l, num_x_r))
+        p0s = fnp.reshape(p0s, (m, num_x_l, num_x_r))
+        p1s = fnp.reshape(p1s, (m, num_x_l, num_x_r))
     combined = combine(*frx.vmap(domain.sample)(p0s, p1s))  # (num_points, *x_shape)
     if eq_w_l is not None:
-        return jnp.sum(
+        return fnp.sum(
             eq_w_l[None, :, None] * combined * eq_w_r[None, None, :], axis=(1, 2)
         )
-    return jnp.sum(combined * eq_w_r[None, :], axis=1)
+    return fnp.sum(combined * eq_w_r[None, :], axis=1)
 
 
 def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, domain: EvalDomain) -> Array:
@@ -93,7 +93,7 @@ def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, domain: EvalDomain) -> 
     finite_t = t_evals[1:] if domain.inf_index is not None else t_evals
     finite = (l_0 + domain.nodes * l_diff) * finite_t
     if domain.inf_index is not None:
-        return jnp.concatenate([jnp.atleast_1d(l_diff * t_evals[0]), finite])
+        return fnp.concatenate([fnp.atleast_1d(l_diff * t_evals[0]), finite])
     return finite
 
 
@@ -193,6 +193,6 @@ def prove_eq_poly(
             f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
         )
     rnd = EqPolyRound(summand or ProductSummand(degree=p_initial.shape[0]), w, domain)
-    state: EqPolyState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
+    state: EqPolyState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
     (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
     return p_final, transcript, msgs

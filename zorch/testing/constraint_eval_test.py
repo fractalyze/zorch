@@ -1,7 +1,7 @@
 """constraint_eval runs eval + α-RLC and emits one zorch.constraint_eval composite."""
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -16,7 +16,7 @@ def _eval_fn(rows: frx.Array) -> frx.Array:
     c0 = rows[:, 0] * rows[:, 1]
     c1 = rows[:, 1] + rows[:, 2]
     c2 = rows[:, 0] * rows[:, 2] + rows[:, 1]
-    return jnp.stack([c0, c1, c2], axis=-1)
+    return fnp.stack([c0, c1, c2], axis=-1)
 
 
 def _eval_fn_aux(rows: frx.Array, aux: frx.Array) -> frx.Array:
@@ -26,7 +26,7 @@ def _eval_fn_aux(rows: frx.Array, aux: frx.Array) -> frx.Array:
     c0 = rows[:, 0] * rows[:, 1] + aux[0]
     c1 = rows[:, 1] + rows[:, 2]
     c2 = rows[:, 0] * rows[:, 2] + rows[:, 1] * aux[1]
-    return jnp.stack([c0, c1, c2], axis=-1)
+    return fnp.stack([c0, c1, c2], axis=-1)
 
 
 class ConstraintEvalTest(absltest.TestCase):
@@ -38,7 +38,7 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         golden = _eval_fn(rows) @ alpha
         got = constraint_eval(_eval_fn, rows, alpha)
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
 
     def test_empty_alpha_raises(self) -> None:
         rows = rand_field(1, (8, 3), F)
@@ -68,22 +68,22 @@ class ConstraintEvalTest(absltest.TestCase):
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         golden = _eval_fn(rows) @ alpha
-        golden = jnp.where(jnp.arange(8) < 5, golden, jnp.zeros_like(golden))
+        golden = fnp.where(fnp.arange(8) < 5, golden, fnp.zeros_like(golden))
         got = constraint_eval(_eval_fn, rows, alpha, live_width=5)
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
 
     def test_live_width_at_full_height_keeps_every_row(self) -> None:
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         unbounded = constraint_eval(_eval_fn, rows, alpha)
         bounded = constraint_eval(_eval_fn, rows, alpha, live_width=8)
-        self.assertTrue(bool(jnp.array_equal(bounded, unbounded)))
+        self.assertTrue(bool(fnp.array_equal(bounded, unbounded)))
 
     def test_live_width_zero_masks_every_row(self) -> None:
         rows = rand_field(1, (8, 3), F)
         alpha = rand_field(2, (3,), F)
         got = constraint_eval(_eval_fn, rows, alpha, live_width=0)
-        self.assertTrue(bool(jnp.array_equal(got, jnp.zeros_like(got))))
+        self.assertTrue(bool(fnp.array_equal(got, fnp.zeros_like(got))))
 
     def test_live_width_accepts_a_traced_scalar(self) -> None:
         # The bound is a runtime value by design (per-round values share one
@@ -92,9 +92,9 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         golden = constraint_eval(_eval_fn, rows, alpha, live_width=5)
         got = frx.jit(lambda t, a, lw: constraint_eval(_eval_fn, t, a, live_width=lw))(
-            rows, alpha, jnp.int32(5)
+            rows, alpha, fnp.int32(5)
         )
-        self.assertTrue(bool(jnp.array_equal(got, golden)))
+        self.assertTrue(bool(fnp.array_equal(got, golden)))
 
     def test_live_width_rejects_bad_bounds(self) -> None:
         rows = rand_field(1, (8, 3), F)
@@ -102,7 +102,7 @@ class ConstraintEvalTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             constraint_eval(_eval_fn, rows, alpha, live_width=-1)
         with self.assertRaises(ValueError):
-            constraint_eval(_eval_fn, rows, alpha, live_width=jnp.array([5], jnp.int32))
+            constraint_eval(_eval_fn, rows, alpha, live_width=fnp.array([5], fnp.int32))
         with self.assertRaises(ValueError):
             # A field scalar is not the s32 wire type XLA validates.
             constraint_eval(_eval_fn, rows, alpha, live_width=rand_field(3, (), F))
@@ -113,7 +113,7 @@ class ConstraintEvalTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             # A scalar result has no leading row axis to bound.
             constraint_eval(
-                lambda t: jnp.stack([t[0] * t[1]]),
+                lambda t: fnp.stack([t[0] * t[1]]),
                 rand_field(4, (3,), F),
                 rand_field(2, (1,), F),
                 live_width=1,
@@ -124,7 +124,7 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         txt = (
             frx.jit(lambda t, a, lw: constraint_eval(_eval_fn, t, a, live_width=lw))
-            .lower(rows, alpha, jnp.int32(5))
+            .lower(rows, alpha, fnp.int32(5))
             .as_text()
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
@@ -145,11 +145,11 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         weights = rand_field(5, (3,), F)  # one weight per trace column
         fold = _eval_fn(rows) @ alpha + rows @ weights
-        golden = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
+        golden = fnp.where(fnp.arange(8) < 5, fold, fnp.zeros_like(fold))
         got = constraint_eval(
             _eval_fn, rows, alpha, live_width=5, column_weights=weights
         )
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
 
     @absltest.skip(
         "jit elides the field transpose in the column-weight dot, so jit output "
@@ -171,7 +171,7 @@ class ConstraintEvalTest(absltest.TestCase):
                 _eval_fn, t, a, live_width=5, column_weights=w
             )
         )(rows, alpha, weights)
-        self.assertTrue(bool(jnp.array_equal(got, golden)))
+        self.assertTrue(bool(fnp.array_equal(got, golden)))
 
     def test_column_weights_requires_live_width(self) -> None:
         # column_weights rides as the trailing operand after live_width, so the
@@ -213,7 +213,7 @@ class ConstraintEvalTest(absltest.TestCase):
         aux = rand_field(7, (2,), F)
         golden = _eval_fn_aux(rows, aux) @ alpha
         got = constraint_eval(_eval_fn_aux, rows, alpha, aux_operands=(aux,))
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
 
     def test_aux_declared_operand_survives_jit_where_a_closure_breaks(self) -> None:
         # Why aux is an operand and not a closure: under frx.jit an array closed
@@ -230,7 +230,7 @@ class ConstraintEvalTest(absltest.TestCase):
         got = frx.jit(
             lambda t, a, x: constraint_eval(_eval_fn_aux, t, a, aux_operands=(x,))
         )(rows, alpha, aux)
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
 
     def test_aux_operand_idxs_attr_rides_the_composite(self) -> None:
         rows = rand_field(1, (8, 3), F)
@@ -285,7 +285,7 @@ class ConstraintEvalTest(absltest.TestCase):
         aux = rand_field(7, (2,), F)
         golden = _eval_fn_aux(rows, aux) @ alpha
         got = constraint_eval(_eval_fn_aux, rows, alpha, aux_operands=[aux])  # type: ignore[arg-type]
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
 
     def test_multiple_aux_operands_thread_in_order(self) -> None:
         # Two aux operands feed eval_fn(trace, a0, a1) and ride at consecutive
@@ -300,7 +300,7 @@ class ConstraintEvalTest(absltest.TestCase):
 
         golden = eval2(rows, a0, a1) @ alpha
         got = constraint_eval(eval2, rows, alpha, aux_operands=(a0, a1))
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
         txt = (
             frx.jit(
                 lambda t, a, x0, x1: constraint_eval(eval2, t, a, aux_operands=(x0, x1))
@@ -317,18 +317,18 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         aux = rand_field(7, (2,), F)
         golden = _eval_fn_aux(rows, aux) @ alpha
-        golden = jnp.where(jnp.arange(8) < 5, golden, jnp.zeros_like(golden))
+        golden = fnp.where(fnp.arange(8) < 5, golden, fnp.zeros_like(golden))
         got = constraint_eval(
             _eval_fn_aux, rows, alpha, live_width=5, aux_operands=(aux,)
         )
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
         txt = (
             frx.jit(
                 lambda t, a, lw, x: constraint_eval(
                     _eval_fn_aux, t, a, live_width=lw, aux_operands=(x,)
                 )
             )
-            .lower(rows, alpha, jnp.int32(5), aux)
+            .lower(rows, alpha, fnp.int32(5), aux)
             .as_text()
         )
         self.assertIn("live_width_operand_idx = 2", txt)
@@ -344,7 +344,7 @@ class ConstraintEvalTest(absltest.TestCase):
         weights = rand_field(5, (3,), F)
         aux = rand_field(7, (2,), F)
         fold = _eval_fn_aux(rows, aux) @ alpha + rows @ weights
-        golden = jnp.where(jnp.arange(8) < 5, fold, jnp.zeros_like(fold))
+        golden = fnp.where(fnp.arange(8) < 5, fold, fnp.zeros_like(fold))
         got = constraint_eval(
             _eval_fn_aux,
             rows,
@@ -353,7 +353,7 @@ class ConstraintEvalTest(absltest.TestCase):
             column_weights=weights,
             aux_operands=(aux,),
         )
-        self.assertTrue(bool(jnp.array_equal(got, golden)), (got, golden))
+        self.assertTrue(bool(fnp.array_equal(got, golden)), (got, golden))
         txt = (
             frx.jit(
                 lambda t, a, lw, w, x: constraint_eval(
@@ -365,7 +365,7 @@ class ConstraintEvalTest(absltest.TestCase):
                     aux_operands=(x,),
                 )
             )
-            .lower(rows, alpha, jnp.int32(5), weights, aux)
+            .lower(rows, alpha, fnp.int32(5), weights, aux)
             .as_text()
         )
         self.assertIn("live_width_operand_idx = 2", txt)
@@ -385,9 +385,9 @@ class ConstraintEvalTest(absltest.TestCase):
         alpha = rand_field(2, (3,), F)
         # zero-pad rows [h:W) (Montgomery zero is all-zero bytes, a valid
         # field zero), so the window is the live rows followed by a zero tail.
-        window = jnp.concatenate([small, jnp.zeros((W - h, nc), F)], axis=0)
+        window = fnp.concatenate([small, fnp.zeros((W - h, nc), F)], axis=0)
         want = constraint_eval(
-            _eval_fn, window, alpha, live_width=jnp.asarray(h, jnp.int32)
+            _eval_fn, window, alpha, live_width=fnp.asarray(h, fnp.int32)
         )
         for off in (0, 6, T - W):
             with self.subTest(off=off):
@@ -396,16 +396,16 @@ class ConstraintEvalTest(absltest.TestCase):
                 # in-window tail [off+h, off+W) is masked by live_width, the rest
                 # is outside the window.
                 tail = rand_field(30 + off, (T - off - h, nc), F)
-                tall = jnp.concatenate([head, small, tail], axis=0)
+                tall = fnp.concatenate([head, small, tail], axis=0)
                 got = constraint_eval(
                     _eval_fn,
                     tall,
                     alpha,
-                    live_width=jnp.asarray(h, jnp.int32),
-                    start_offset=jnp.asarray(off, jnp.int32),
+                    live_width=fnp.asarray(h, fnp.int32),
+                    start_offset=fnp.asarray(off, fnp.int32),
                     window_rows=W,
                 )
-                self.assertTrue(bool(jnp.array_equal(got, want)), (off, got, want))
+                self.assertTrue(bool(fnp.array_equal(got, want)), (off, got, want))
 
     def test_col_stride_windows_a_jagged_flat_buffer(self) -> None:
         # A [h, nc] chip trace packed COLUMN-MAJOR into a flat 1-D buffer:
@@ -423,27 +423,27 @@ class ConstraintEvalTest(absltest.TestCase):
         for c in range(nc):
             parts += [small[:, c], rand_field(50 + c, (H - h,), F)]
         parts.append(rand_field(60, (4,), F))
-        flat = jnp.concatenate(parts)
-        window = jnp.concatenate([small, jnp.zeros((W - h, nc), F)], axis=0)
+        flat = fnp.concatenate(parts)
+        window = fnp.concatenate([small, fnp.zeros((W - h, nc), F)], axis=0)
         want = constraint_eval(
             _eval_fn,
             window,
             alpha,
-            live_width=jnp.asarray(h, jnp.int32),
+            live_width=fnp.asarray(h, fnp.int32),
             column_weights=weights,
         )
         got = constraint_eval(
             _eval_fn,
             flat,
             alpha,
-            live_width=jnp.asarray(h, jnp.int32),
-            start_offset=jnp.asarray(off, jnp.int32),
+            live_width=fnp.asarray(h, fnp.int32),
+            start_offset=fnp.asarray(off, fnp.int32),
             window_rows=W,
-            col_stride=jnp.asarray(H, jnp.int32),
+            col_stride=fnp.asarray(H, fnp.int32),
             num_cols=nc,
             column_weights=weights,
         )
-        self.assertTrue(bool(jnp.array_equal(got, want)), (got, want))
+        self.assertTrue(bool(fnp.array_equal(got, want)), (got, want))
 
     def test_fold_operands_fail_loud_on_wrong_type_or_field(self) -> None:
         # The decomposition and the emitter both evaluate base + k*delta in
@@ -461,7 +461,7 @@ class ConstraintEvalTest(absltest.TestCase):
                 start_offset=0,
                 window_rows=W,
                 delta=delta,
-                fold_coeff=jnp.zeros((), F),
+                fold_coeff=fnp.zeros((), F),
             )
             merged.update(kw)
             return constraint_eval(_eval_fn, tall, alpha, **merged)
@@ -469,9 +469,9 @@ class ConstraintEvalTest(absltest.TestCase):
         with self.assertRaises(TypeError):
             call(fold_coeff=1.5)
         with self.assertRaises(ValueError):
-            call(fold_coeff=jnp.zeros((), jnp.int32))
+            call(fold_coeff=fnp.zeros((), fnp.int32))
         with self.assertRaises(ValueError):
-            call(delta=delta.view(jnp.uint32))
+            call(delta=delta.view(fnp.uint32))
 
     def test_col_stride_composes_with_the_fold(self) -> None:
         # Jagged base + delta flat buffers, fold coefficient k: the marker's
@@ -487,27 +487,27 @@ class ConstraintEvalTest(absltest.TestCase):
             parts = [rand_field(seed, (off,), F)]
             for c in range(nc):
                 parts += [mat[:, c], rand_field(seed + 1 + c, (H - h,), F)]
-            return jnp.concatenate(parts)
+            return fnp.concatenate(parts)
 
         flat_b, flat_d = pack(base2, 70), pack(delta2, 80)
         eff = base2 + k * delta2
-        window = jnp.concatenate([eff, jnp.zeros((W - h, nc), F)], axis=0)
+        window = fnp.concatenate([eff, fnp.zeros((W - h, nc), F)], axis=0)
         want = constraint_eval(
-            _eval_fn, window, alpha, live_width=jnp.asarray(h, jnp.int32)
+            _eval_fn, window, alpha, live_width=fnp.asarray(h, fnp.int32)
         )
         got = constraint_eval(
             _eval_fn,
             flat_b,
             alpha,
-            live_width=jnp.asarray(h, jnp.int32),
-            start_offset=jnp.asarray(off, jnp.int32),
+            live_width=fnp.asarray(h, fnp.int32),
+            start_offset=fnp.asarray(off, fnp.int32),
             window_rows=W,
-            col_stride=jnp.asarray(H, jnp.int32),
+            col_stride=fnp.asarray(H, fnp.int32),
             num_cols=nc,
             delta=flat_d,
             fold_coeff=k,
         )
-        self.assertTrue(bool(jnp.array_equal(got, want)), (got, want))
+        self.assertTrue(bool(fnp.array_equal(got, want)), (got, want))
 
     def test_start_offset_attrs_ride_the_composite(self) -> None:
         h, off, W, nc = 5, 3, 8, 3
@@ -524,7 +524,7 @@ class ConstraintEvalTest(absltest.TestCase):
                     window_rows=W,
                 )
             )
-            .lower(tall, alpha, jnp.int32(h), jnp.int32(off))
+            .lower(tall, alpha, fnp.int32(h), fnp.int32(off))
             .as_text()
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
@@ -551,7 +551,7 @@ class ConstraintEvalTest(absltest.TestCase):
                     _eval_fn, t, a, live_width=lw, start_offset=so, window_rows=W
                 )
             )
-            .lower(tall, alpha, jnp.int32(h), jnp.int32(off))
+            .lower(tall, alpha, fnp.int32(h), fnp.int32(off))
             .as_text()
         )
         self.assertRegex(txt, r"stablehlo\.dynamic_slice %arg\d+, %arg\d+,", txt)
@@ -584,7 +584,7 @@ class ConstraintEvalTest(absltest.TestCase):
                 rows,
                 alpha,
                 live_width=8,
-                start_offset=jnp.array([5], jnp.int32),
+                start_offset=fnp.array([5], fnp.int32),
                 window_rows=8,
             )
         with self.assertRaises(ValueError):
@@ -658,7 +658,7 @@ class ConstraintEvalTest(absltest.TestCase):
                     aux_operands=(x,),
                 )
             )
-            .lower(tall, alpha, jnp.int32(h), jnp.int32(off), weights, aux)
+            .lower(tall, alpha, fnp.int32(h), fnp.int32(off), weights, aux)
             .as_text()
         )
         self.assertIn("live_width_operand_idx = 2", txt)

@@ -12,7 +12,7 @@ import functools
 import hashlib
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 
@@ -46,16 +46,16 @@ class Sha256Test(parameterized.TestCase):
         # wired it inlines its decomposition, so the marked digest must byte-equal
         # the unmarked compression at every padding boundary.
         msg = np.arange(length, dtype=np.uint8) ^ np.uint8(0x5A)
-        blocks = jnp.asarray(sha256._pad(msg[None, :]))
+        blocks = fnp.asarray(sha256._pad(msg[None, :]))
         marked = np.asarray(sha256.sha256_chain(sha256.INITIAL_STATE, blocks))
-        state = jnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
+        state = fnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
         inline = np.asarray(sha256.serialize_digest(sha256.compress(state, blocks)))
         np.testing.assert_array_equal(marked, inline)
 
     def test_emits_single_composite_marker(self) -> None:
         # digest lowers to exactly one stablehlo.composite, name-routed to the
         # dedicated zorch.sha256 emitter (parallel to zorch.poseidon2).
-        blocks = jnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
+        blocks = fnp.asarray(sha256._pad(np.arange(64, dtype=np.uint8)[None, :]))
         fn = functools.partial(sha256.sha256_chain, sha256.INITIAL_STATE)
         txt = frx.jit(fn).lower(blocks).as_text()
         self.assertIn(sha256.SHA256_MARKER, txt)
@@ -65,7 +65,7 @@ class Sha256Test(parameterized.TestCase):
         # deserialize_digest inverts serialize_digest, so unpacking a digest
         # recovers the exact midstate a stream resumes from.
         rng = np.random.default_rng(0)
-        state = jnp.asarray(rng.integers(0, 2**32, (3, 8), np.int64).astype(np.uint32))
+        state = fnp.asarray(rng.integers(0, 2**32, (3, 8), np.int64).astype(np.uint32))
         back = sha256.deserialize_digest(sha256.serialize_digest(state))
         np.testing.assert_array_equal(np.asarray(back), np.asarray(state))
 
@@ -73,7 +73,7 @@ class Sha256Test(parameterized.TestCase):
     def test_chain_resumes_from_midstate(self, split: int) -> None:
         # sha256_chain from a non-IV midstate resumes the compression: hashing a
         # 4-block message in two chained halves must equal one chain over all 4.
-        blocks = jnp.asarray(
+        blocks = fnp.asarray(
             np.random.default_rng(split)
             .integers(0, 2**32, (1, 4, 16), np.int64)
             .astype(np.uint32)
@@ -88,8 +88,8 @@ class Sha256Test(parameterized.TestCase):
     def test_compress_explicit_k_matches_default(self) -> None:
         # Threading the round-constant table as an explicit `k` operand (what the
         # marked region does) matches the module-default `_Kd`.
-        blocks = jnp.asarray(sha256._pad(np.arange(80, dtype=np.uint8)[None, :]))
-        state = jnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
+        blocks = fnp.asarray(sha256._pad(np.arange(80, dtype=np.uint8)[None, :]))
+        state = fnp.broadcast_to(sha256.INITIAL_STATE, (1, 8))
         default = sha256.compress(state, blocks)
         explicit = sha256.compress(state, blocks, sha256._Kd)
         np.testing.assert_array_equal(np.asarray(default), np.asarray(explicit))

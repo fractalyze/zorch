@@ -17,7 +17,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.pcs.fold import sample_positions, verify_fold_chain, verify_openings
@@ -61,7 +61,7 @@ class FriVerifier:
         for f_root, z, v, pf in zip(commitment, points, values, proof):
             t, ok = _verify_one(self.params, f_root, z, v, pf, t)
             oks.append(ok)
-        return jnp.all(jnp.stack(oks)), t
+        return fnp.all(fnp.stack(oks)), t
 
 
 # Jitted per-poly verify body (issue #140); one compile serves the batch. The
@@ -84,7 +84,7 @@ def _verify_one(
         t, beta = t.sample()
         return t, beta.reshape(())
 
-    t, betas_stacked = lax.scan(fold_round, t, jnp.stack(pf.fri_roots))
+    t, betas_stacked = lax.scan(fold_round, t, fnp.stack(pf.fri_roots))
     # Index, don't iterate: list(field_array) dispatches lax.sign under CUDA.
     betas = [betas_stacked[r] for r in range(num_rounds)]
     t = t.observe(pf.final_layer)
@@ -112,7 +112,7 @@ def _verify_one(
     g_lo = (f_lo - v) / (domain[lo0] - z)
     g_hi = (f_hi - v) / (domain[hi0] - z)
     layer0 = pf.query_openings[0].row  # (Q, 2)
-    ok = ok & jnp.all(g_lo == layer0[:, 0]) & jnp.all(g_hi == layer0[:, 1])
+    ok = ok & fnp.all(g_lo == layer0[:, 0]) & fnp.all(g_hi == layer0[:, 1])
 
     # Each layer's opened pair folds to the next layer's / the final layer.
     ok = ok & verify_fold_chain(code, pf.query_openings, betas, a, pf.final_layer)

@@ -7,7 +7,7 @@ import functools
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from frx import Array
 
@@ -80,12 +80,12 @@ def virtual_planes(
         parts = []
         for i, rc in enumerate(layer.row_counts):
             pad = (
-                jnp.zeros((rows - rc,), arr.dtype)
+                fnp.zeros((rows - rc,), arr.dtype)
                 if neutral == 0
-                else jnp.ones((rows - rc,), arr.dtype)
+                else fnp.ones((rows - rc,), arr.dtype)
             )
-            parts.append(jnp.concatenate([arr[starts[i] : starts[i + 1]], pad]))
-        planes.append(jnp.concatenate(parts))
+            parts.append(fnp.concatenate([arr[starts[i] : starts[i + 1]], pad]))
+        planes.append(fnp.concatenate(parts))
     return planes[0], planes[1], planes[2], planes[3]
 
 

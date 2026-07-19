@@ -31,7 +31,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import eq_factor, eq_root
@@ -84,7 +84,7 @@ def interp_matrix(extra_ts: Sequence[Array], z: Array) -> Array:
     through the scan's xs; a host-relaunch driver just calls `round_coeffs`, which
     composes this with the value assembly."""
     dtype = z.dtype
-    xs = jnp.stack([jnp.zeros((), dtype), jnp.ones((), dtype), *extra_ts, eq_root(z)])
+    xs = fnp.stack([fnp.zeros((), dtype), fnp.ones((), dtype), *extra_ts, eq_root(z)])
     return EvalDomain(xs).coeff_matrix()
 
 
@@ -107,9 +107,9 @@ def round_coeffs_from_matrix(
             f"matrix expects {matrix.shape[-1] - 3} extra evaluations "
             f"(domain {{0, 1, ..., b}}), got {len(extra_ys)}"
         )
-    zero = jnp.zeros((), claim.dtype)
-    ys = jnp.stack(jnp.broadcast_arrays(s_zero, claim - s_zero, *extra_ys, zero))
-    return jnp.dot(matrix, ys)
+    zero = fnp.zeros((), claim.dtype)
+    ys = fnp.stack(fnp.broadcast_arrays(s_zero, claim - s_zero, *extra_ys, zero))
+    return fnp.dot(matrix, ys)
 
 
 def round_coeffs(

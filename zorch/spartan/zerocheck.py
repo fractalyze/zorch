@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
@@ -49,20 +49,20 @@ class OuterProver(Stage):
     ) -> tuple[SpartanCarry, Transcript, tuple[Array, Array]]:
         transcript, tau = transcript.sample(self.s_x)
         pre = transcript
-        one = jnp.ones((), self.az.dtype)
+        one = fnp.ones((), self.az.dtype)
         e = expand_eq_to_hypercube(tau, one)
-        state = jnp.stack([e, self.az, self.bz, self.cz])
+        state = fnp.stack([e, self.az, self.bz, self.cz])
         _, transcript, msgs = fold_rounds(
             self.sumcheck.prover_round, state, pre, self.s_x
         )
-        round_polys = jnp.stack(msgs)
+        round_polys = fnp.stack(msgs)
         # Recover r_x by replaying the injected verifier round — wire-agnostic, so
         # the claim value (0) does not affect the sampled point.
-        zero = jnp.zeros((), self.az.dtype)
+        zero = fnp.zeros((), self.az.dtype)
         r_x, _, _, _ = verify(self.sumcheck.verifier_round, zero, round_polys, pre)
         # Claimed evals straight from the MLEs — independent of the engine's fold
         # representation.
-        claims = jnp.stack(
+        claims = fnp.stack(
             [eval_mle(self.az, r_x), eval_mle(self.bz, r_x), eval_mle(self.cz, r_x)]
         )
         transcript = transcript.observe(claims)
@@ -86,7 +86,7 @@ class OuterVerifier(Stage):
         round_polys, claims = msg
         s_x = round_polys.shape[0]
         transcript, tau = transcript.sample(s_x)
-        zero = jnp.zeros((), claims.dtype)
+        zero = fnp.zeros((), claims.dtype)
         r_x, final_claim, transcript, ok = verify(
             self.sumcheck.verifier_round, zero, round_polys, transcript
         )

@@ -9,7 +9,7 @@ Byte-correctness vs SP1 is ``open_test``'s job; this locks the compile key.
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as BF
@@ -51,14 +51,14 @@ class FoldZoneKIndependenceTest(absltest.TestCase):
         prologue_before = _open_prologue._cache_size()
         queries_before = _open_queries._cache_size()
         for k in (3, 5):
-            block = jnp.asarray(rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
+            block = fnp.asarray(rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
             codeword = code.encode(block).T
             _root, digest_layers = smcs.commit(codeword)
             rd = StackedRound(block=block, digest_layers=digest_layers)
-            z_final = jnp.asarray(
+            z_final = fnp.asarray(
                 rng.integers(0, _PRIME, (_LOG_S * 4,), np.uint32)
             ).view(EF)
-            dense_eval = jnp.asarray(rng.integers(0, _PRIME, (4,), np.uint32)).view(EF)[
+            dense_eval = fnp.asarray(rng.integers(0, _PRIME, (4,), np.uint32)).view(EF)[
                 0
             ]
             proof, _ = stacked_basefold_open(

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.logup_gkr._jagged_types import _DEGREE, _Planes, _RoundScalars
@@ -54,11 +54,11 @@ def _paired_sums(
         d0[0::2] + d0[1::2],
     )
     if live_pairs is not None:
-        mask = jnp.arange(terms_zero.shape[0]) < live_pairs
-        terms_zero = jnp.where(mask, terms_zero, jnp.zeros_like(terms_zero))
-        terms_half = jnp.where(mask, terms_half, jnp.zeros_like(terms_half))
-        eq_h = jnp.where(mask, eq_h, jnp.zeros_like(eq_h))
-    return jnp.sum(terms_zero), jnp.sum(terms_half), jnp.sum(eq_h)
+        mask = fnp.arange(terms_zero.shape[0]) < live_pairs
+        terms_zero = fnp.where(mask, terms_zero, fnp.zeros_like(terms_zero))
+        terms_half = fnp.where(mask, terms_half, fnp.zeros_like(terms_half))
+        eq_h = fnp.where(mask, eq_h, fnp.zeros_like(eq_h))
+    return fnp.sum(terms_zero), fnp.sum(terms_half), fnp.sum(eq_h)
 
 
 def _bind_planes(planes: _Planes, alpha: Array) -> _Planes:

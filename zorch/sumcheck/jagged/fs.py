@@ -33,7 +33,7 @@ def _reduce_body(
     """Reinterpret the squeezed challenge and fold the round scalars. The round's
     `eval_point` coordinate `z_cur` is sliced statically by the caller (the loop
     index is a compile-time constant), so no per-round gather rides here -- a
-    device-resident index would cost a ~22us `jnp.take` dispatch every round.
+    device-resident index would cost a ~22us `fnp.take` dispatch every round.
     Returns the round challenge `r`, the next `claim`, and `pad_adj`. Plain
     (un-jitted) so it fuses into whichever kernel owns it -- the round loop's
     `_fs_reduce`."""

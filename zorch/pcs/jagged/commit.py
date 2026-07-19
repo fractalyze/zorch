@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
@@ -95,8 +95,8 @@ def commit_region(
     ~6 GB blow-up codeword never leaves this function: the open re-encodes it
     from ``mle``, so it never stays device-resident through the chain."""
     message = region.block
-    row_counts = jnp.array(region.row_counts, dtype=message.dtype)
-    column_counts = jnp.array(region.column_counts, dtype=message.dtype)
+    row_counts = fnp.array(region.row_counts, dtype=message.dtype)
+    column_counts = fnp.array(region.column_counts, dtype=message.dtype)
     tail = _commit_jit if jit else _commit
     bound, mle, digest_layers, commitment = tail(
         message,

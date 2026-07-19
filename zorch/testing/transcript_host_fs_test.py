@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import tree_util
@@ -35,7 +35,7 @@ class TranscriptHostFsTest(parameterized.TestCase):
 
     def _state_eq(self, a: DuplexTranscript, b: DuplexTranscript) -> bool:
         return all(
-            bool(jnp.all(x == y))
+            bool(fnp.all(x == y))
             for x, y in zip(
                 tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
             )
@@ -53,7 +53,7 @@ class TranscriptHostFsTest(parameterized.TestCase):
         v = rand_field(2, (5,), F)
         ta, dev = self._new(False).observe(v).sample(k)
         tb, host = self._new(True).observe(v).sample(k)
-        self.assertTrue(bool(jnp.all(dev == host)))
+        self.assertTrue(bool(fnp.all(dev == host)))
         self.assertTrue(self._state_eq(ta, tb))
 
     @parameterized.parameters(1, 4)
@@ -62,7 +62,7 @@ class TranscriptHostFsTest(parameterized.TestCase):
         v = rand_field(6, (5,), F)
         ta, dev = self._new(False).observe_and_sample(v, k)
         tb, host = self._new(True).observe_and_sample(v, k)
-        self.assertTrue(bool(jnp.all(dev == host)))
+        self.assertTrue(bool(fnp.all(dev == host)))
         self.assertTrue(self._state_eq(ta, tb))
 
     @parameterized.parameters(0, 3)
@@ -83,7 +83,7 @@ class TranscriptHostFsTest(parameterized.TestCase):
         v = rand_field(3, (5,), F)
         _, dev = sample_challenge(self._new(False).observe(v), dtype, limbs)
         _, host = sample_challenge(self._new(True).observe(v), dtype, limbs)
-        self.assertTrue(bool(jnp.all(dev == host)))
+        self.assertTrue(bool(fnp.all(dev == host)))
 
     def test_flag_carries_across_steps(self) -> None:
         # fs_on_host must survive every step so the whole stream stays on host.

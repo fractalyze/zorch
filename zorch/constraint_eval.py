@@ -14,7 +14,7 @@ and fold carry no proving-scheme or zkVM knowledge. Sibling of
 `zorch.fusion::fused_region`, and shares the `lax.composite` emission in
 `zorch._composite.composite`.
 
-The RLC is emitted as an unrolled fold (`acc += alpha_k * C_k`), not `jnp.dot`
+The RLC is emitted as an unrolled fold (`acc += alpha_k * C_k`), not `fnp.dot`
 / `@`: a reduction in the marked body would split the region under the
 single-kernel rewriter, and the unrolled fold keeps the accumulation
 register-resident. Field addition is associative and exact, so the fold's order
@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch._composite import composite
@@ -54,9 +54,9 @@ def _scalar_int32_operand(value: Array | int, name: str) -> Array:
     if isinstance(value, int):
         if value < 0:
             raise ValueError(f"{name} must be non-negative, got {value}")
-        return jnp.asarray(value, jnp.int32)
-    arr = jnp.asarray(value)
-    if arr.shape != () or arr.dtype != jnp.int32:
+        return fnp.asarray(value, fnp.int32)
+    arr = fnp.asarray(value)
+    if arr.shape != () or arr.dtype != fnp.int32:
         raise ValueError(
             f"{name} must be a scalar int32 (the wire type XLA validates), "
             f"got shape {arr.shape} dtype {arr.dtype}"
@@ -71,7 +71,7 @@ def _fold_coeff_operand(value: Array | int, dtype: object) -> Array:
     and the backend emitter both evaluate `base + k*delta` in the trace's
     field, so a differently-typed k would corrupt silently downstream."""
     if isinstance(value, int):
-        return jnp.asarray(value, dtype)
+        return fnp.asarray(value, dtype)
     if not hasattr(value, "ndim"):
         raise TypeError(
             f"fold_coeff must be a field scalar or int, got {type(value).__name__}"
@@ -333,7 +333,7 @@ def constraint_eval(
                 # time the recognizer sees the body — it resolves the base
                 # from column 0 and the stride from the add starts.
                 def _win(t: Array) -> Array:
-                    return jnp.stack(
+                    return fnp.stack(
                         [
                             lax.dynamic_slice_in_dim(
                                 t,
@@ -391,7 +391,7 @@ def constraint_eval(
         if live_width is not None:
             if acc.ndim == 0:
                 raise ValueError("live_width needs a result with a leading row axis")
-            # lax.select, not jnp.where — the single-kernel body rule; see
+            # lax.select, not fnp.where — the single-kernel body rule; see
             # zorch/fusion.py's module docstring.
             # The mask comes LAST — select(rows < live_width, rlc + dot, 0) —
             # so the column term's dead rows zero out too. A window into a
@@ -399,8 +399,8 @@ def constraint_eval(
             # so the dead rows are NOT zero and an unmasked dot would leak them;
             # the live-bounded emitter kernel zeroes whole dead rows, and this
             # order is what matches it byte-for-byte.
-            rows = lax.broadcasted_iota(jnp.int32, acc.shape, 0)
-            acc = lax.select(rows < live_width, acc, jnp.zeros_like(acc))
+            rows = lax.broadcasted_iota(fnp.int32, acc.shape, 0)
+            acc = lax.select(rows < live_width, acc, fnp.zeros_like(acc))
         return acc
 
     operands: tuple[Array, ...] = (trace, alpha)

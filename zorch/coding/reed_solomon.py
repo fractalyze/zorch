@@ -7,7 +7,7 @@ two-adic subgroup (or a coset of it). The evaluation is `frx.lax.ntt` — the
 XLA-native NTT — which lowers to one fused kernel and auto-decomposes extension
 fields into prime-field NTTs.
 
-There is deliberately no hand-rolled butterfly: a `jnp` butterfly would be
+There is deliberately no hand-rolled butterfly: a `fnp` butterfly would be
 log(n) unfused kernels the compiler cannot recognize as an NTT. Reed-Solomon
 hands its evaluation to the native op, the way poseidon2 hands its algebra to
 XLA rather than fusing it by pattern-match.
@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from frx import Array, lax
@@ -61,9 +61,9 @@ def eval_domain(
     if not is_power_of_two(n):
         raise ValueError(f"eval_domain size must be a power of two, got {n}")
     if n == 1:
-        domain = jnp.ones((1,), dtype)
+        domain = fnp.ones((1,), dtype)
     else:
-        e1 = jnp.zeros(n, dtype).at[1].set(jnp.ones((), dtype))
+        e1 = fnp.zeros(n, dtype).at[1].set(fnp.ones((), dtype))
         domain = lax.ntt(e1, ntt_type="NTT", ntt_length=n, generator=generator)
     return domain if shift is None else shift * domain
 
@@ -114,11 +114,11 @@ class ReedSolomon:
         self._log2_fold_factor = log2_strict_usize(fold_factor)
         # Coset eval scales coeffs by [1, h, h^2, ..., h^{n-1}]; precompute it
         # once since h and n are fixed (paid eagerly at construction). `powers`
-        # log-doubles rather than `jnp.cumprod`/`jnp.arange` (iota raises on
+        # log-doubles rather than `fnp.cumprod`/`fnp.arange` (iota raises on
         # extension dtypes).
         self._coset_powers = None
         if coset_shift is not None:
-            self._coset_powers = powers(jnp.asarray(coset_shift, dtype), self.block_len)
+            self._coset_powers = powers(fnp.asarray(coset_shift, dtype), self.block_len)
         self._key: tuple | None = None
         # A binary field has characteristic 2 — its multiplicative group has odd
         # order and no 2^m-th roots of unity, so `lax.ntt` runs the LCH *additive*
@@ -182,7 +182,7 @@ class ReedSolomon:
             )
         n = self.block_len
         tail = message.shape[:-1] + (n - self.message_len,)
-        coeffs = jnp.concatenate([message, jnp.zeros(tail, self.dtype)], axis=-1)
+        coeffs = fnp.concatenate([message, fnp.zeros(tail, self.dtype)], axis=-1)
         if self._coset_powers is not None:
             coeffs = coeffs * self._coset_powers
         return lax.ntt(coeffs, ntt_type="NTT", ntt_length=n, generator=self.generator)
@@ -227,7 +227,7 @@ class ReedSolomon:
         `(1, dₛ, dₛ², …)` factors as the geometric tensor
         `p_s = (dₛ^{2^{k-1}}, …, dₛ², dₛ)` — MSB-first to match `eval_mle`'s
         lexicographic eq order. The `dₛ^{2^i}` are built by repeated squaring so
-        no array exponent is taken (field dtypes reject `jnp.power`).
+        no array exponent is taken (field dtypes reject `fnp.power`).
 
         For a binary field `encode` is the additive NTT (novel basis), so the
         tensor factors are the subspace polynomials `Ŵ_i` instead; those are the
@@ -246,7 +246,7 @@ class ReedSolomon:
             cols.append(cur)
             cur = cur * cur
         # MSB-first: variable 0 binds the highest power dₛ^{2^{k-1}}.
-        return jnp.stack(cols[::-1], axis=-1)  # (*positions.shape, k)
+        return fnp.stack(cols[::-1], axis=-1)  # (*positions.shape, k)
 
     def _build_binary_eval_table(self) -> Array:
         """The `(block_len, k)` additive eval-point table, column `i` = the
@@ -260,7 +260,7 @@ class ReedSolomon:
         support; the resident gather lowers cleanly. Built from concrete arrays,
         so no `.at[].set` (scatter is unsupported here)."""
         k = log2_strict_usize(self.message_len)
-        units = jnp.asarray(
+        units = fnp.asarray(
             [
                 [1 if c == (1 << i) else 0 for c in range(self.message_len)]
                 for i in range(k)
@@ -304,13 +304,13 @@ class ReedSolomon:
         """Natural order: conjugates sit a half-layer apart, so leaf `p` is
         `(codeword[p], codeword[p + half])`."""
         half = codeword.shape[0] // 2
-        return jnp.stack([codeword[:half], codeword[half:]], axis=1)
+        return fnp.stack([codeword[:half], codeword[half:]], axis=1)
 
     def check_final(self, final: Array, claim: Array) -> Array:
         """A message-length-1 RS codeword is the constant polynomial on any
         domain, so base-code membership and message == `claim` collapse into one
         comparison."""
-        return jnp.all(final == claim)
+        return fnp.all(final == claim)
 
     def pair_indices(self, positions: Array, level: int) -> tuple[Array, Array]:
         """Natural order: the conjugates of layer `level` sit a half-layer
@@ -389,7 +389,7 @@ class ReedSolomon:
         domain = eval_domain(
             _base_dtype(self.dtype), n, shift=self._group_level_shift(level)
         )
-        points = domain[jnp.stack(self.group_indices(positions, level), axis=-1)]
+        points = domain[fnp.stack(self.group_indices(positions, level), axis=-1)]
         return self._fold_groups(group, points, beta)
 
     def group_layer_positions(self, positions: Array, num_rounds: int) -> list[Array]:
@@ -541,7 +541,7 @@ class BitReversedReedSolomon:
 def fri_fold_values(fx: Array, fnx: Array, beta: Array, x: Array) -> Array:
     """g(x²) = (f(x)+f(−x))/2 + β·(f(x)−f(−x))/(2x). f-values may be EF; x carries
     the domain's dtype."""
-    one = jnp.ones((), fx.dtype)
+    one = fnp.ones((), fx.dtype)
     two = one + one
     return (fx + fnx) / two + beta * (fx - fnx) / (two * x)
 
@@ -563,7 +563,7 @@ def fri_fold_k_values(group: Array, beta: Array, points: Array) -> Array:
     query/group axis. `group`/`points` may be extension-field; the dtypes follow
     `compute_lagrange_basis`."""
     # Unroll the linear combination over the static factor k rather than
-    # `jnp.dot`: a reduction op is a kInput/gather fusion boundary on GPU, so
+    # `fnp.dot`: a reduction op is a kInput/gather fusion boundary on GPU, so
     # the fold would not lower to one fused kernel (CLAUDE.md "Fusion by
     # construction"). k is a small compile-time constant, so the unroll is cheap.
     basis = compute_lagrange_basis(beta, points)

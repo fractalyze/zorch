@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -44,7 +44,7 @@ class SpartanE2ETest(absltest.TestCase):
         inst, io, proof, pcs, _ = _prove_verify(5, s_x=3, nvp=4, num_io=2)
         round_polys, claims = proof.messages[0]
         bad_msgs = list(proof.messages)
-        bad_msgs[0] = (round_polys, claims.at[1].add(jnp.ones((), KB)))
+        bad_msgs[0] = (round_polys, claims.at[1].add(fnp.ones((), KB)))
         bad = spartan.SpartanProof(proof.commitment, bad_msgs)
         ok, _ = spartan.verify(inst, io, bad, pcs, cheap_transcript(KB))
         self.assertFalse(bool(ok))
@@ -53,7 +53,7 @@ class SpartanE2ETest(absltest.TestCase):
         inst, io, proof, pcs, _ = _prove_verify(6, s_x=3, nvp=4, num_io=2)
         values, pf = proof.messages[3]
         bad_msgs = list(proof.messages)
-        bad_msgs[3] = (values.at[0].add(jnp.ones((), KB)), pf)
+        bad_msgs[3] = (values.at[0].add(fnp.ones((), KB)), pf)
         bad = spartan.SpartanProof(proof.commitment, bad_msgs)
         ok, _ = spartan.verify(inst, io, bad, pcs, cheap_transcript(KB))
         self.assertFalse(bool(ok))
@@ -62,7 +62,7 @@ class SpartanE2ETest(absltest.TestCase):
         # A commitment to a different witness fails the opening recomputation.
         inst, io, proof, pcs, _ = _prove_verify(8, s_x=3, nvp=4, num_io=2)
         bad = spartan.SpartanProof(
-            proof.commitment.at[0].add(jnp.ones((), KB)), proof.messages
+            proof.commitment.at[0].add(fnp.ones((), KB)), proof.messages
         )
         ok, _ = spartan.verify(inst, io, bad, pcs, cheap_transcript(KB))
         self.assertFalse(bool(ok))
@@ -70,7 +70,7 @@ class SpartanE2ETest(absltest.TestCase):
     def test_unsatisfying_witness_rejected(self) -> None:
         # Perturb one witness entry: the committed W and z no longer satisfy R1CS.
         inst, z, _, io = toy_r1cs(9, s_x=3, num_vars_padded=4, num_io=2, dtype=KB)
-        bad_z = z.at[0].add(jnp.ones((), KB))
+        bad_z = z.at[0].add(fnp.ones((), KB))
         pcs = DensePcs()
         proof, _ = spartan.prove(inst, bad_z, io, pcs, cheap_transcript(KB))
         ok, _ = spartan.verify(inst, io, proof, pcs, cheap_transcript(KB))

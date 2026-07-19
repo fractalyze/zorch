@@ -14,7 +14,7 @@ the concrete commit for two distinct ``K``. Pairs with
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array, export
@@ -42,7 +42,7 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, fnp.uint32)).reshape(-1).tolist()
 
 
 class CommitSymkExportTest(absltest.TestCase):
@@ -66,7 +66,7 @@ class CommitSymkExportTest(absltest.TestCase):
 
         for k_val in (12, 16):
             rng = np.random.default_rng(k_val)
-            message = jnp.asarray(rng.integers(0, _PRIME, (k_val, _S), np.uint32)).view(
+            message = fnp.asarray(rng.integers(0, _PRIME, (k_val, _S), np.uint32)).view(
                 BF
             )
             ref_root, ref_cw = self._commit(message)

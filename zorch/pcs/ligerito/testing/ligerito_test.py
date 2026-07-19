@@ -11,7 +11,7 @@ import dataclasses
 import hashlib
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array
@@ -35,7 +35,7 @@ def _transcript() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
 
-def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
+def _rand_ef(seed: int, shape: tuple[int, ...]) -> fnp.ndarray:
     return rand_ext_field(seed, shape, F, EF)
 
 
@@ -49,7 +49,7 @@ def _setup(
     LigeritoProver,
     LigeritoVerifier,
     LigeritoCommitment,
-    jnp.ndarray,
+    fnp.ndarray,
     LigeritoProverData,
 ]:
     _, _, tree = koalabear16_merkle()
@@ -189,7 +189,7 @@ class LigeritoTamperTest(parameterized.TestCase):
     def _open(
         self,
     ) -> tuple[
-        LigeritoVerifier, LigeritoCommitment, jnp.ndarray, jnp.ndarray, LigeritoProof
+        LigeritoVerifier, LigeritoCommitment, fnp.ndarray, fnp.ndarray, LigeritoProof
     ]:
         prover, verifier, root, f, pdata = _setup(_TAMPER_CFG)
         z = _rand_ef(3, (_TAMPER_CFG.num_vars,))
@@ -200,8 +200,8 @@ class LigeritoTamperTest(parameterized.TestCase):
         self,
         verifier: LigeritoVerifier,
         root: LigeritoCommitment,
-        z: jnp.ndarray,
-        value: jnp.ndarray,
+        z: fnp.ndarray,
+        value: fnp.ndarray,
         proof: LigeritoProof,
     ) -> None:
         ok, _ = verifier.verify(root, [z], value, proof, _transcript())
@@ -210,7 +210,7 @@ class LigeritoTamperTest(parameterized.TestCase):
     def test_rejects_tampered_recursive_root(self) -> None:
         verifier, root, z, value, proof = self._open()
         roots = list(proof.recursive_roots)
-        roots[0] = roots[0] + jnp.ones_like(roots[0])
+        roots[0] = roots[0] + fnp.ones_like(roots[0])
         self._reject(
             verifier, root, z, value, dataclasses.replace(proof, recursive_roots=roots)
         )
@@ -219,7 +219,7 @@ class LigeritoTamperTest(parameterized.TestCase):
         verifier, root, z, value, proof = self._open()
         opens = list(proof.component_openings)
         co = opens[0]
-        opens[0] = dataclasses.replace(co, row=co.row + jnp.array(1, F))
+        opens[0] = dataclasses.replace(co, row=co.row + fnp.array(1, F))
         self._reject(
             verifier,
             root,
@@ -231,28 +231,28 @@ class LigeritoTamperTest(parameterized.TestCase):
     def test_rejects_tampered_residual(self) -> None:
         verifier, root, z, value, proof = self._open()
         bad = dataclasses.replace(
-            proof, final_residual=proof.final_residual + jnp.array(1, EF)
+            proof, final_residual=proof.final_residual + fnp.array(1, EF)
         )
         self._reject(verifier, root, z, value, bad)
 
     def test_rejects_tampered_sumcheck_message(self) -> None:
         verifier, root, z, value, proof = self._open()
         msgs = list(proof.sumcheck_messages)
-        msgs[0] = msgs[0] + jnp.array(1, EF)
+        msgs[0] = msgs[0] + fnp.array(1, EF)
         self._reject(
             verifier, root, z, value, dataclasses.replace(proof, sumcheck_messages=msgs)
         )
 
     def test_rejects_tampered_value(self) -> None:
         verifier, root, z, value, proof = self._open()
-        self._reject(verifier, root, z, value + jnp.array(1, EF), proof)
+        self._reject(verifier, root, z, value + fnp.array(1, EF), proof)
 
     def test_rejects_tampered_ood_value(self) -> None:
         # A shifted OOD claim desyncs the glued claim from the basis; the next
         # round's s(0)+s(1) == claim link breaks.
         verifier, root, z, value, proof = self._open()
         oods = list(proof.ood_values)
-        oods[0] = oods[0] + jnp.array(1, EF)
+        oods[0] = oods[0] + fnp.array(1, EF)
         self._reject(
             verifier, root, z, value, dataclasses.replace(proof, ood_values=oods)
         )
@@ -440,7 +440,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
     def _open(
         self,
     ) -> tuple[
-        LigeritoVerifier, LigeritoCommitment, jnp.ndarray, jnp.ndarray, LigeritoProof
+        LigeritoVerifier, LigeritoCommitment, fnp.ndarray, fnp.ndarray, LigeritoProof
     ]:
         _, _, tree = koalabear16_merkle()
         prover = LigeritoProver(_make_code, tree, _FLOCK_TAMPER_CFG, _FLOCK_TAMPER_CHOR)
@@ -458,7 +458,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         # zero-bits check outright); every later challenge diverges.
         verifier, root, z, value, proof = self._open()
         wits = list(proof.pow_witnesses)
-        wits[0] = wits[0] + jnp.array(1, F)
+        wits[0] = wits[0] + fnp.array(1, F)
         ok, _ = verifier.verify(
             root,
             [z],
@@ -473,7 +473,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         # disagrees with the tracked claim at the next round.
         verifier, root, z, value, proof = self._open()
         msgs = list(proof.sumcheck_messages)
-        msgs[2] = msgs[2] + jnp.array(1, EF)
+        msgs[2] = msgs[2] + fnp.array(1, EF)
         ok, _ = verifier.verify(
             root,
             [z],
@@ -487,7 +487,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         # The last emission is pinned against the in-clear residual's poly.
         verifier, root, z, value, proof = self._open()
         msgs = list(proof.sumcheck_messages)
-        msgs[-1] = msgs[-1] + jnp.array(1, EF)
+        msgs[-1] = msgs[-1] + fnp.array(1, EF)
         ok, _ = verifier.verify(
             root,
             [z],
@@ -552,7 +552,7 @@ class LigeritoWireGoldenTest(parameterized.TestCase):
         h = hashlib.sha256()
         for leaf in [value, *frx.tree_util.tree_leaves(proof), s_open, s_verify]:
             h.update(
-                np.asarray(jnp.asarray(leaf).reshape(-1).view(jnp.uint32)).tobytes()
+                np.asarray(fnp.asarray(leaf).reshape(-1).view(fnp.uint32)).tobytes()
             )
         self.assertEqual(h.hexdigest(), want)
 

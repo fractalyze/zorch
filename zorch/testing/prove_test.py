@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -29,7 +29,7 @@ class FoldRoundsTest(absltest.TestCase):
     `zorch.sumcheck.testing`."""
 
     def test_collects_structured_messages_as_list(self) -> None:
-        xs = jnp.arange(8, dtype=KB)
+        xs = fnp.arange(8, dtype=KB)
         _, _, msgs = fold_rounds(_CollectRound(), [xs], cheap_transcript(KB), 3)
         self.assertEqual([m["len"] for m in msgs], [8, 4, 2])
         self.assertEqual(len(msgs), 3)

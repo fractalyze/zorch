@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
@@ -64,7 +64,7 @@ def _inputs(
         lam=rand_field(16, (), KB),
     )
     consts = _InterpConsts(*_round_interp_constants(KB))
-    live = jnp.asarray([m // 4, 0], jnp.int32)
+    live = fnp.asarray([m // 4, 0], fnp.int32)
     return planes, eq_int, alpha, scalars, consts, live
 
 
@@ -75,10 +75,10 @@ def _assert_prefix(
     width-preserving round buffer convention (the tail is dead, masked by the
     `live` operand; the decomposition writes it as zeros)."""
     n = want.shape[0]
-    test.assertTrue(bool(jnp.all(got[:n] == want)), f"{what} live prefix diverged")
+    test.assertTrue(bool(fnp.all(got[:n] == want)), f"{what} live prefix diverged")
     tail = got[n:]
     test.assertTrue(
-        bool(jnp.all(tail == jnp.zeros_like(tail))), f"{what} tail not zeros"
+        bool(fnp.all(tail == fnp.zeros_like(tail))), f"{what} tail not zeros"
     )
 
 
@@ -92,7 +92,7 @@ class RoundCompositeTest(absltest.TestCase):
             planes, eq_int, alpha, scalars, consts, live
         )
         self.assertTrue(
-            bool(jnp.all(got_poly == want_poly)), "marked round poly diverged"
+            bool(fnp.all(got_poly == want_poly)), "marked round poly diverged"
         )
         # Width-preserving: the folded state returns at the input width, live
         # prefix byte-identical to the eager halved state, zero tail.
@@ -110,11 +110,11 @@ class RoundCompositeTest(absltest.TestCase):
         planes, eq_int, alpha, scalars, consts, live = _inputs()
         wide_planes = _Planes(
             *(
-                jnp.concatenate([a, jnp.zeros((8,), a.dtype)])
+                fnp.concatenate([a, fnp.zeros((8,), a.dtype)])
                 for a in (planes.n0, planes.n1, planes.d0, planes.d1)
             )
         )
-        wide_eq = jnp.concatenate([eq_int, jnp.zeros((8,), eq_int.dtype)])
+        wide_eq = fnp.concatenate([eq_int, fnp.zeros((8,), eq_int.dtype)])
         want_poly, want_planes, want_eq = _fix_and_sum_int(
             planes, eq_int, alpha, scalars, consts
         )
@@ -122,7 +122,7 @@ class RoundCompositeTest(absltest.TestCase):
             wide_planes, wide_eq, alpha, scalars, consts, live
         )
         self.assertTrue(
-            bool(jnp.all(got_poly == want_poly)), "padded round poly diverged"
+            bool(fnp.all(got_poly == want_poly)), "padded round poly diverged"
         )
         for name in ("n0", "n1", "d0", "d1"):
             _assert_prefix(
@@ -172,11 +172,11 @@ def _round0_inputs(
     planes0 = _Planes(
         layer.numerator_0, layer.numerator_1, layer.denominator_0, layer.denominator_1
     )
-    one = jnp.ones((), KB)
+    one = fnp.ones((), KB)
     rng = np.random.default_rng(seed + 99)
     niv = int(np.log2(len(counts)))
-    z_row = jnp.asarray(rng.integers(0, _PRIME, (nrv,), np.uint32)).view(KB)
-    z_int = jnp.asarray(rng.integers(0, _PRIME, (niv,), np.uint32)).view(KB)
+    z_row = fnp.asarray(rng.integers(0, _PRIME, (nrv,), np.uint32)).view(KB)
+    z_int = fnp.asarray(rng.integers(0, _PRIME, (niv,), np.uint32)).view(KB)
     eq_row = expand_eq_to_hypercube(z_row, one)
     eq_int = expand_eq_to_hypercube(z_int, one)
     scalars0 = _RoundScalars(*(rand_field(seed * 10 + i, (), KB) for i in range(5)))
@@ -251,14 +251,14 @@ class RowRoundCompositeTest(absltest.TestCase):
             pl, er, al, rc, ei, sc, consts, live, op
         )
         self.assertTrue(
-            bool(jnp.all(got_poly == want_poly)), "marked row poly diverged"
+            bool(fnp.all(got_poly == want_poly)), "marked row poly diverged"
         )
         # The re-padded planes share the gather width on both paths; eq_row
         # returns width-preserved (folded live prefix, zero tail) against the
         # eager path's halved table.
         for name in ("n0", "n1", "d0", "d1"):
             g, w = getattr(got_planes, name), getattr(want_planes, name)
-            self.assertTrue(bool(jnp.all(g == w)), f"row {name} diverged")
+            self.assertTrue(bool(fnp.all(g == w)), f"row {name} diverged")
         _assert_prefix(self, got_eq, want_eq, "eq_row")
 
     def test_emits_marker_with_abi(self) -> None:
@@ -342,7 +342,7 @@ def _boundary_inputs(
         lam=rand_field(16, (), KB),
     )
     consts = _InterpConsts(*_round_interp_constants(KB))
-    live = jnp.asarray([m // 4, 0], jnp.int32)
+    live = fnp.asarray([m // 4, 0], fnp.int32)
     return planes, eq_int, alpha, scalars, consts, live
 
 
@@ -358,7 +358,7 @@ class BoundaryRoundCompositeTest(absltest.TestCase):
         self.assertEqual(len(got_leaves), len(want_leaves))
         for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
-                bool(jnp.all(g == w)), "marked boundary round diverged from eager"
+                bool(fnp.all(g == w)), "marked boundary round diverged from eager"
             )
 
     def test_emits_marker_with_abi(self) -> None:
@@ -388,7 +388,7 @@ class FirstRoundCompositeTest(absltest.TestCase):
         self.assertEqual(len(got_leaves), len(want_leaves))
         for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
-                bool(jnp.all(g == w)), "marked first round diverged from eager"
+                bool(fnp.all(g == w)), "marked first round diverged from eager"
             )
 
     def test_none_gather_byte_identical(self) -> None:
@@ -406,7 +406,7 @@ class FirstRoundCompositeTest(absltest.TestCase):
         self.assertEqual(len(got_leaves), len(want_leaves))
         for g, w in zip(got_leaves, want_leaves, strict=True):
             self.assertTrue(
-                bool(jnp.all(g == w)), "no-re-pad first round diverged from eager"
+                bool(fnp.all(g == w)), "no-re-pad first round diverged from eager"
             )
 
     def test_emits_marker_with_abi(self) -> None:
@@ -434,7 +434,7 @@ class FinalRoundCompositeTest(absltest.TestCase):
         self.assertEqual(len(got), len(want))
         for g, w in zip(got, want, strict=True):
             self.assertTrue(
-                bool(jnp.all(g == w)), "marked final round diverged from eager"
+                bool(fnp.all(g == w)), "marked final round diverged from eager"
             )
 
     def test_emits_marker_with_abi(self) -> None:

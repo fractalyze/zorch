@@ -22,7 +22,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
@@ -165,7 +165,7 @@ def _permutation_body(
 
     # +rc -> sbox(all lanes) -> MDS
     def external_round(state: Array, rc: Array) -> Array:
-        return apply_external(jnp.power(state + rc, alpha))
+        return apply_external(fnp.power(state + rc, alpha))
 
     # +rc(lane0) -> sbox(lane0) -> diffusion. Rebuild the J scale in-trace from its
     # host-side value: a closed-over array lifts back into the operand list, which
@@ -174,14 +174,14 @@ def _permutation_body(
     off_diag = (
         None
         if j_scale_canonical == 1
-        else jnp.asarray(j_scale_canonical, dtype=p.dtype)
+        else fnp.asarray(j_scale_canonical, dtype=p.dtype)
     )
 
     def internal_round(state: Array, rc0: Array) -> Array:
-        s0 = jnp.power(state[0] + rc0, alpha)
+        s0 = fnp.power(state[0] + rc0, alpha)
         # concatenate, not state.at[0].set: a static-index set lowers to scatter,
         # which would split the fused kernel.
-        state = jnp.concatenate([s0[None], state[1:]])
+        state = fnp.concatenate([s0[None], state[1:]])
         return apply_internal(diag, state, off_diag)
 
     ext_init = ext_init_rc.reshape(e_rounds, w)
@@ -224,7 +224,7 @@ def _external_m4_attr(perm: Poseidon2) -> np.ndarray:
 def _internal_j_scale_attr(perm: Poseidon2) -> int:
     """The J scale's canonical value, for the `internal_j_scale` marker attribute
     and the reference body's in-trace constant. A numpy object cast Montgomery-
-    decodes without jax x64 (as `Poseidon2Params.external_m4` does); the recognizer
+    decodes without frx x64 (as `Poseidon2Params.external_m4` does); the recognizer
     value-encodes it back per field, so the wire value is field-representation-
     independent (e.g. plain `1` for identity)."""
     return int(np.asarray(perm._p.internal_j_scale).astype(object))

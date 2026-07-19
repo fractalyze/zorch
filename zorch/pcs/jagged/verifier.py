@@ -38,7 +38,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import efinfo
 
@@ -107,7 +107,7 @@ def verify_jagged_eval_msg(
     # The outer claim is the verifier's own derivation from the leaf-checked
     # claims; the wire copy is pinned so a stale serialization cannot drift.
     claim = outer_sumcheck_claim(all_claims, z_col)
-    ok = jnp.array_equal(claim, msg.outer_sumcheck_claim)
+    ok = fnp.array_equal(claim, msg.outer_sumcheck_claim)
 
     point, outer_final, transcript, ok_rounds = verify(
         CoeffsSumcheckRound(_DEGREE, ef_limbs),
@@ -116,7 +116,7 @@ def verify_jagged_eval_msg(
         transcript,
     )
     z_final = point[::-1]
-    ok = ok & ok_rounds & jnp.array_equal(z_final, msg.outer_sumcheck_point)
+    ok = ok & ok_rounds & fnp.array_equal(z_final, msg.outer_sumcheck_point)
 
     # SP1 absorbs the claimed J̃ value before the inner rounds
     # (fractalyze/sp1-zorch#90), then replays them with the same rule.
@@ -128,15 +128,15 @@ def verify_jagged_eval_msg(
         transcript,
     )
     inner_point = ipoint[::-1]
-    ok = ok & ok_inner & jnp.array_equal(inner_point, msg.inner_point)
+    ok = ok & ok_inner & fnp.array_equal(inner_point, msg.inner_point)
 
     # The succinct leaf check: at the bound buffer point, the prover's
     # eq-weighted branching-program sum collapses to one bp evaluation
     # (every column's bound row is the same challenge vector) weighted by
     # Σ_c eq(z_col, c)·eq(merged_c, inner_point).
-    t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
+    t_matrix = fnp.asarray(_TRANSITION_ROWS, dtype=dtype)
     merged = merged_prefix_bits(heights, num_bits, dtype=dtype)
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones((), dtype))
+    col_eq = expand_eq_to_hypercube(z_col, fnp.ones((), dtype))
     eqs = frx.vmap(lambda row: eval_eq(row, inner_point))(merged)
     h_bp = bp_eval_core(
         z_row,
@@ -145,12 +145,12 @@ def verify_jagged_eval_msg(
         inner_point[num_bits:],
         t_matrix,
     )
-    ok = ok & jnp.array_equal(inner_final, jnp.sum(col_eq[:l_max] * eqs) * h_bp)
+    ok = ok & fnp.array_equal(inner_final, fnp.sum(col_eq[:l_max] * eqs) * h_bp)
 
     # Product check: the outer reduction's final claim is D(z_final)·J̃,
     # with J̃ the inner sumcheck's (now verified) claimed sum and D(z_final)
     # the wire value the stacked open binds and opens.
-    ok = ok & jnp.array_equal(msg.dense_eval * msg.inner_claimed_sum, outer_final)
+    ok = ok & fnp.array_equal(msg.dense_eval * msg.inner_claimed_sum, outer_final)
     return transcript, z_final, ok
 
 
@@ -247,15 +247,15 @@ def stacked_basefold_verify(
 
     # SP1's stacking check: the claimed D(z_final) interpolates the batch
     # evaluations at the leading (column-selecting) coordinates.
-    flat = jnp.concatenate(list(proof.batch_evals))
+    flat = fnp.concatenate(list(proof.batch_evals))
     width = 1 << batch_point.shape[0]
     if flat.shape[0] > width:
         raise ValueError(
             f"{flat.shape[0]} stacked columns do not fit the "
             f"{batch_point.shape[0]} leading point variables"
         )
-    padded = jnp.concatenate([flat, jnp.zeros((width - flat.shape[0],), ef)])
-    ok = jnp.array_equal(dense_eval, eval_mle(padded, batch_point))
+    padded = fnp.concatenate([flat, fnp.zeros((width - flat.shape[0],), ef)])
+    ok = fnp.array_equal(dense_eval, eval_mle(padded, batch_point))
 
     # The open's absorb schedule: the scalar D(z_final), then each round's
     # batch evaluations (the component roots were bound upstream at commit).
@@ -268,31 +268,31 @@ def stacked_basefold_verify(
     t, coeffs = sample_rlc_coeffs(t, total_width, ef)
     claim = batch_staggered(list(proof.batch_evals), coeffs)
 
-    t = t.observe(jnp.asarray(num_vars, bf))
+    t = t.observe(fnp.asarray(num_vars, bf))
 
     # Interleaved sumcheck replay: round i binds stack_point's last unbound
     # variable, so the claim identity is claim == (1-x)·s(0) + x·s(1) and the
     # fold reduction s(0) + β·s(1). Each bound fold-layer root is observed
     # before β; the raw root is the serializer's wire copy, pinned through
     # the shared separator rebind.
-    one = jnp.ones((), ef)
+    one = fnp.ones((), ef)
     betas: list[Array] = []
     for i in range(num_vars):
         m = proof.univariate_messages[i]
         x = stack_point[num_vars - 1 - i]
-        ok = ok & jnp.array_equal(claim, (one - x) * m[0] + x * m[1])
+        ok = ok & fnp.array_equal(claim, (one - x) * m[0] + x * m[1])
         t = t.observe(m)
         t = t.observe(proof.fri_commitments[i])
         t, beta = sample_challenge(t, ef, ef_limbs)
         betas.append(beta)
         claim = m[0] + beta * m[1]
         log_h = log2_strict_usize(block_len >> (i + 1))
-        ok = ok & jnp.array_equal(
+        ok = ok & fnp.array_equal(
             smcs.bind_root(proof.fri_raw_roots[i], log_h, 2 * ef_limbs, bf),
             proof.fri_commitments[i],
         )
 
-    t = t.observe(jnp.atleast_1d(proof.final_poly))
+    t = t.observe(fnp.atleast_1d(proof.final_poly))
     t, ok_pow = t.check_witness(pow_bits, proof.pow_witness)
     ok = ok & ok_pow
 
@@ -312,7 +312,7 @@ def stacked_basefold_verify(
         codes = frx.vmap(
             lambda i, row, path: smcs.verify_batch(root, dims, i, row, path)
         )(idx, rows, paths)
-        return jnp.all(codes == int(VerifyCode.OK))
+        return fnp.all(codes == int(VerifyCode.OK))
 
     for r, (rows, paths) in enumerate(proof.component_openings):
         ok = ok & verify_rows(
@@ -342,9 +342,9 @@ def stacked_basefold_verify(
     comp_val = batch_staggered([rows for rows, _ in proof.component_openings], coeffs)
     leaf0 = query_ops[0].row
     lo0, _ = code.pair_indices(layer_pos[0], 0)
-    ok = ok & jnp.all(comp_val == jnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1]))
+    ok = ok & fnp.all(comp_val == fnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1]))
 
-    residual = jnp.full((block_len >> num_vars,), proof.final_poly)
+    residual = fnp.full((block_len >> num_vars,), proof.final_poly)
     ok = ok & verify_fold_chain(code, query_ops, betas, layer_pos, residual)
 
     return t, ok

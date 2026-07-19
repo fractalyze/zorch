@@ -9,7 +9,7 @@ path calls it, so it lives here rather than in `jagged_prover`.
 """
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.logup_gkr._jagged_rounds import _paired_sums
@@ -49,7 +49,7 @@ def _run_jagged_rounds_reference(
     meta, nrv, niv = sched.meta, sched.nrv, sched.niv
     naturals, inv_vand = sched.consts.naturals, sched.consts.inv_vand
     challenge_limbs = sched.challenge_limbs
-    one = jnp.ones((), eval_point.dtype)
+    one = fnp.ones((), eval_point.dtype)
     eq_adj = one
     pad_adj = one
     point = eval_point
@@ -107,9 +107,9 @@ def _run_jagged_rounds_reference(
         point = point[:-1]
 
     return (
-        jnp.stack(challenges[::-1]),
+        fnp.stack(challenges[::-1]),
         transcript,
-        jnp.stack(polys),
+        fnp.stack(polys),
         n0[0],
         n1[0],
         d0[0],

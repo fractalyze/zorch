@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.utils.field import base_field, naturals
@@ -23,10 +23,10 @@ def powers(x: Array, n: int) -> Array:
     Σ cᵢ xⁱ``."""
     if n < 1:
         raise ValueError(f"powers needs n >= 1, got {n}")
-    out = jnp.ones((1,), dtype=x.dtype)
+    out = fnp.ones((1,), dtype=x.dtype)
     step = x
     while out.shape[0] < n:
-        out = jnp.concatenate([out, out * step])
+        out = fnp.concatenate([out, out * step])
         step = step * step
     return out[:n]
 
@@ -37,7 +37,7 @@ def eval_univariate(evals: Array, x: Array) -> Array:
 
     A composer over the jitted basis kernel, so itself un-jitted."""
     nodes = naturals(evals.shape[0], evals.dtype)
-    return jnp.dot(evals, compute_lagrange_basis(x, nodes))
+    return fnp.dot(evals, compute_lagrange_basis(x, nodes))
 
 
 def _lagrange_denominators(domain: Array) -> Array:
@@ -45,9 +45,9 @@ def _lagrange_denominators(domain: Array) -> Array:
     masked matrix whose diagonal holds a typed one (a bare literal is not
     converted to a field dtype inside jit)."""
     n = domain.shape[0]
-    one = jnp.ones((), domain.dtype)
-    mask = jnp.eye(n, dtype=bool)
-    return jnp.prod(jnp.where(mask, one, domain[:, None] - domain[None, :]), axis=1)
+    one = fnp.ones((), domain.dtype)
+    mask = fnp.eye(n, dtype=bool)
+    return fnp.prod(fnp.where(mask, one, domain[:, None] - domain[None, :]), axis=1)
 
 
 @frx.jit
@@ -57,9 +57,9 @@ def compute_lagrange_basis(r: Array, domain: Array) -> Array:
 
     Direct form, not barycentric — barycentric divides by ``(r - node)``,
     which an ``r`` landing on a node would zero."""
-    one = jnp.ones((), r.dtype)
-    mask = jnp.eye(domain.shape[0], dtype=bool)
-    numerators = jnp.prod(jnp.where(mask, one, (r - domain)[None, :]), axis=1)
+    one = fnp.ones((), r.dtype)
+    mask = fnp.eye(domain.shape[0], dtype=bool)
+    numerators = fnp.prod(fnp.where(mask, one, (r - domain)[None, :]), axis=1)
     return numerators / _lagrange_denominators(domain)
 
 
@@ -72,8 +72,8 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
     evaluations promote at multiply time."""
     base = base_field(dtype)
     n = degree + 1
-    one = jnp.array(1, base)
-    zero = jnp.array(0, base)
+    one = fnp.array(1, base)
+    zero = fnp.array(0, base)
     domain = naturals(n, dtype)
     denoms = _lagrange_denominators(domain)
     # Column j = coefficients of L_j(x) = prod_{k != j} (x - k) / denom_j,
@@ -83,14 +83,14 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
         num_coeffs = [one]
         for k in range(n):
             if k != j:
-                neg_k = -jnp.array(k, base)
+                neg_k = -fnp.array(k, base)
                 expanded = [zero] * (len(num_coeffs) + 1)
                 for i, c in enumerate(num_coeffs):
                     expanded[i] = expanded[i] + c * neg_k
                     expanded[i + 1] = expanded[i + 1] + c
                 num_coeffs = expanded
-        columns.append(jnp.stack(num_coeffs) / denoms[j])
-    return jnp.stack(columns, axis=1)
+        columns.append(fnp.stack(num_coeffs) / denoms[j])
+    return fnp.stack(columns, axis=1)
 
 
 @frx.jit
@@ -112,10 +112,10 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
     n = coeffs.shape[-1]
     # ``point**i`` as the prefix product of ``[1, point, point, …]`` (n entries),
     # laid out on the last axis so it dots the coefficients' degree axis directly.
-    seq = jnp.where(
-        jnp.arange(n) == 0,
-        jnp.ones_like(point)[..., None],
+    seq = fnp.where(
+        fnp.arange(n) == 0,
+        fnp.ones_like(point)[..., None],
         point[..., None],
     )
     powers = frx.lax.associative_scan(lambda a, b: a * b, seq, axis=-1)
-    return jnp.sum(coeffs * powers, axis=-1)
+    return fnp.sum(coeffs * powers, axis=-1)

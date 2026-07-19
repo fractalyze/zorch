@@ -30,7 +30,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode
@@ -261,7 +261,7 @@ def _fold_coset(
         pairs = buf.reshape(q, half, 2)
         lo, hi = pairs[:, :, 0], pairs[:, :, 1]
         pos = (
-            leaf_index[:, None] * half + jnp.arange(half, dtype=leaf_index.dtype)
+            leaf_index[:, None] * half + fnp.arange(half, dtype=leaf_index.dtype)
         ).reshape(-1)
         folded = code.fold_values(
             lo.reshape(-1), hi.reshape(-1), beta, pos, base_level + k
@@ -355,12 +355,12 @@ def _verify_with_basis_cadence(
     # sumcheck<->FRI tie). The final codeword is constant, so `all == cw_const`
     # covers both constancy and the tie.
     ok, cw_const = kernel.verify_final(claim, proof.final_state)
-    ok = ok & jnp.all(proof.final_codeword == cw_const)
+    ok = ok & fnp.all(proof.final_codeword == cw_const)
 
     # Bind the terminal, then sample the shared query positions (mirror prover).
     t = chor.observe_final(t, proof.final_codeword)
     t, positions = chor.sample_queries(t, n_pos, config.num_queries)
-    ok = ok & jnp.all(positions == proof.positions)
+    ok = ok & fnp.all(positions == proof.positions)
 
     # Per-layer folded query indices: layer 0 the initial commit at the full
     # index, then the post-prefix layer, then one per committed epoch, each
@@ -380,19 +380,19 @@ def _verify_with_basis_cadence(
     # Fold consistency: the row-batch of the opened initial lanes must sit at the
     # queried leg of the post-prefix coset; each epoch's coset then folds to the
     # next epoch's leg, down to the final codeword.
-    q = jnp.arange(positions.shape[0])
+    q = fnp.arange(positions.shape[0])
     rb = betas[:prefix]
     fri = betas[prefix:]
     prbv = lane_combine(proof.layer_openings[0].row, rb)  # [Q]
     if not arities:
         # log_dim == 0: the row-batched value is the terminal at the query index.
-        ok = ok & jnp.all(proof.final_codeword[positions] == prbv)
+        ok = ok & fnp.all(proof.final_codeword[positions] == prbv)
         return ok, t
 
     arity0 = arities[0]
     post_rb_row = proof.layer_openings[1].row  # [Q, 2^arity0]
     inner = positions & ((1 << arity0) - 1)
-    ok = ok & jnp.all(post_rb_row[q, inner] == prbv)
+    ok = ok & fnp.all(post_rb_row[q, inner] == prbv)
     expected = _fold_coset(code, post_rb_row, fri[:arity0], 0, positions >> arity0)
 
     cum = arity0
@@ -401,13 +401,13 @@ def _verify_with_basis_cadence(
         layer_row = proof.layer_openings[2 + i].row  # [Q, 2^next_arity]
         p_at = positions >> cum
         offset = p_at & ((1 << next_arity) - 1)
-        ok = ok & jnp.all(layer_row[q, offset] == expected)
+        ok = ok & fnp.all(layer_row[q, offset] == expected)
         expected = _fold_coset(
             code, layer_row, fri[cum : cum + next_arity], cum, p_at >> next_arity
         )
         cum += next_arity
 
-    ok = ok & jnp.all(proof.final_codeword[positions >> cum] == expected)
+    ok = ok & fnp.all(proof.final_codeword[positions >> cum] == expected)
     return ok, t
 
 
@@ -444,7 +444,7 @@ def _verify_batch_body(
     total_width = sum(int(v.shape[0]) for v in values)
     t, coeffs = sample_staggered_coeffs(t, total_width, dtype)
     current_claim = batch_staggered(list(values), coeffs)
-    t = t.observe(jnp.asarray(num_vars, dtype))
+    t = t.observe(fnp.asarray(num_vars, dtype))
 
     # Replay the interleaved sumcheck + fold challenges through the kernel +
     # choreography. Every round checks the running claim against the message
@@ -457,9 +457,9 @@ def _verify_batch_body(
     # variable folded in round r. The native choreography's message/root
     # observes are pass-throughs, so the wire is byte-identical.
     z_rev = z[::-1]
-    zero_vals = jnp.stack([m[0] for m in proof.univariate_messages])
-    one_vals = jnp.stack([m[1] for m in proof.univariate_messages])
-    fri_roots = jnp.stack(proof.fri_roots)
+    zero_vals = fnp.stack([m[0] for m in proof.univariate_messages])
+    one_vals = fnp.stack([m[1] for m in proof.univariate_messages])
+    fri_roots = fnp.stack(proof.fri_roots)
 
     def fold_round(
         carry: tuple[Transcript, Array, Array],
@@ -478,7 +478,7 @@ def _verify_batch_body(
 
     (t, current_claim, ok), betas_stacked = lax.scan(
         fold_round,
-        (t, current_claim, jnp.bool_(True)),
+        (t, current_claim, fnp.bool_(True)),
         (zero_vals, one_vals, z_rev, fri_roots),
     )
     # Index, don't iterate: list(field_array) dispatches lax.sign under CUDA.
@@ -519,8 +519,8 @@ def _verify_batch_body(
     comp_val = batch_staggered(comp_rows, coeffs)  # (Q,) batched value at `positions`
     lo0, _ = verifier.code.pair_indices(a[0], 0)
     leaf0 = from_base_field(proof.query_openings[0].row, dtype, 2)  # (Q, 2)
-    in_leaf0 = jnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1])
-    ok = ok & jnp.all(comp_val == in_leaf0)
+    in_leaf0 = fnp.where(positions == lo0, leaf0[:, 0], leaf0[:, 1])
+    ok = ok & fnp.all(comp_val == in_leaf0)
 
     # Each layer's opened pair folds to the next layer's / the final poly.
     ok = ok & verify_fold_chain(

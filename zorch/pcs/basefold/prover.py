@@ -35,7 +35,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.coding.foldable_code import FoldableCode
@@ -425,7 +425,7 @@ def _commit_body(
     # one [K, S] batch — a single NTT kernel (the LinearCode seam batches over
     # leading axes) — transposed into the [n, K] row-leaf layout the Merkle
     # commit expects.
-    mle = jnp.stack(polys, axis=1)
+    mle = fnp.stack(polys, axis=1)
     codeword = code.encode(mle.T).T
     leaves = to_base_field(codeword)
     root, layers = tree.commit(leaves)
@@ -556,7 +556,7 @@ def _open_batch_body(
     cw = batch_staggered([pd.codeword for pd in rounds], coeffs)  # (n,)
     current_claim = batch_staggered(values, coeffs)  # scalar
     # Domain separation: bind the fold-round count (mirrors the reference).
-    t = t.observe(jnp.asarray(num_vars, dtype))
+    t = t.observe(fnp.asarray(num_vars, dtype))
 
     # 4-7. Config+choreography-driven fold + terminal binding + query phase.
     proof, t = _fold_and_query(

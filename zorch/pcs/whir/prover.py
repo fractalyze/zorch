@@ -21,7 +21,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 from zk_dtypes import efinfo
 
@@ -150,7 +150,7 @@ class WhirProver:
 def _commit_body(
     code: ReedSolomon, tree: StridedMerkleTree, polys: list[Array]
 ) -> tuple[WhirCommitment, WhirProverData]:
-    mle = jnp.stack(polys, axis=1)  # (S, num_polys)
+    mle = fnp.stack(polys, axis=1)  # (S, num_polys)
     codeword = code.encode(mle_evals_to_coeffs(mle.T)).T  # (block_len, num_polys)
     root, layers = tree.commit(codeword)
     return root, WhirProverData(mle=mle, codeword=codeword, digest_layers=layers)
@@ -189,7 +189,7 @@ def _island_round_poly(f_evals: Array, w_evals: Array) -> Array:
     w0, w1 = w_evals[0::2], w_evals[1::2]
     s1 = (f1 * w1).sum()
     s2 = ((f1 + f1 - f0) * (w1 + w1 - w0)).sum()
-    return jnp.stack([s1, s2])
+    return fnp.stack([s1, s2])
 
 
 @frx.jit
@@ -287,7 +287,7 @@ def _open_body(
     # the scheme's μ-power combine runs (a single commitment is the length-1
     # case, byte-identical). Each commitment keeps its own codeword tree; round 0
     # opens them all (below).
-    mle = jnp.concatenate([pd.mle for pd in prover_datas], axis=1)
+    mle = fnp.concatenate([pd.mle for pd in prover_datas], axis=1)
 
     # Bind the commitment + per-column evaluations; the scheme supplies the claimed
     # values, the μ-combined initial message, and the weight (plain MLE + eq by
@@ -328,7 +328,7 @@ def _open_body(
             f_evals, w_evals = _island_fold(f_evals, w_evals, alpha)
 
         g_coeffs = _island_coeffs(f_evals)
-        z0 = jnp.ones((), ef)  # placeholder; set + read only when not the last round
+        z0 = fnp.ones((), ef)  # placeholder; set + read only when not the last round
         next_codeword, next_layers = cur_codeword, cur_layers
         if not is_last:
             root, next_codeword, next_layers = _island_reencode(prover, g_coeffs, r)

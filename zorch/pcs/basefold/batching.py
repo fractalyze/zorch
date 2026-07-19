@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -32,7 +32,7 @@ from zorch.utils.bits import log2_ceil_usize
 def partial_lagrange(point: Array) -> Array:
     """The partial-Lagrange basis `eq(., point)` over `2^m` hypercube points for
     an `m`-dimensional `point` — the batch weights' source. `m == 0` -> `[1]`."""
-    return expand_eq_to_hypercube(point, jnp.ones((), point.dtype))
+    return expand_eq_to_hypercube(point, fnp.ones((), point.dtype))
 
 
 def sample_staggered_coeffs(
@@ -53,7 +53,7 @@ def sample_staggered_coeffs(
     """
     nbv = log2_ceil_usize(total_width)
     if nbv == 0:
-        return transcript, jnp.ones(1, dtype)
+        return transcript, fnp.ones(1, dtype)
     transcript, s = transcript.sample(nbv)
     s = s.astype(dtype)
     return transcript, partial_lagrange(s[::-1] if lsb_first else s)
@@ -66,7 +66,7 @@ def batch_staggered(columns: Sequence[Array], coeffs: Array) -> Array:
     Returns the `[...]` weighted column sum across every round."""
     if not columns:
         raise ValueError("batch_staggered needs at least one round of columns")
-    acc = jnp.zeros(columns[0].shape[:-1], dtype=columns[0].dtype)
+    acc = fnp.zeros(columns[0].shape[:-1], dtype=columns[0].dtype)
     offset = 0
     for col in columns:
         w = col.shape[-1]

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import Array
@@ -45,8 +45,8 @@ class OuterStageTest(parameterized.TestCase):
         vcarry, _, ok = OuterVerifier()(SpartanCarry(), msg, cheap_transcript(dtype))
         self.assertTrue(bool(ok))
         # prover and verifier agree on the bound point and the claimed evals.
-        self.assertTrue(bool(jnp.all(pcarry.r_x == vcarry.r_x)))
-        self.assertTrue(bool(jnp.all(pcarry.claims_outer == vcarry.claims_outer)))
+        self.assertTrue(bool(fnp.all(pcarry.r_x == vcarry.r_x)))
+        self.assertTrue(bool(fnp.all(pcarry.claims_outer == vcarry.claims_outer)))
 
     @parameterized.named_parameters(*FIELDS)
     def test_claims_are_the_matvec_evals_at_r_x(self, dtype: Any) -> None:
@@ -57,14 +57,14 @@ class OuterStageTest(parameterized.TestCase):
         carry, _ = _prove_outer(inst, z, dtype)
         r_x = cast(Array, carry.r_x)
         az, bz, cz = inst.matvecs(z)
-        want = jnp.stack([eval_mle(az, r_x), eval_mle(bz, r_x), eval_mle(cz, r_x)])
-        self.assertTrue(bool(jnp.all(carry.claims_outer == want)))
+        want = fnp.stack([eval_mle(az, r_x), eval_mle(bz, r_x), eval_mle(cz, r_x)])
+        self.assertTrue(bool(fnp.all(carry.claims_outer == want)))
 
     @parameterized.named_parameters(*FIELDS)
     def test_tampered_claim_rejected(self, dtype: Any) -> None:
         inst, z, _, _ = toy_r1cs(2, s_x=3, num_vars_padded=4, num_io=2, dtype=dtype)
         _, (round_polys, claims) = _prove_outer(inst, z, dtype)
-        bad = claims.at[0].add(jnp.ones((), dtype))
+        bad = claims.at[0].add(fnp.ones((), dtype))
         _, _, ok = OuterVerifier()(
             SpartanCarry(), (round_polys, bad), cheap_transcript(dtype)
         )
@@ -74,7 +74,7 @@ class OuterStageTest(parameterized.TestCase):
     def test_tampered_round_poly_rejected(self, dtype: Any) -> None:
         inst, z, _, _ = toy_r1cs(3, s_x=3, num_vars_padded=4, num_io=2, dtype=dtype)
         _, (round_polys, claims) = _prove_outer(inst, z, dtype)
-        bad = round_polys.at[0, 0].add(jnp.ones((), dtype))
+        bad = round_polys.at[0, 0].add(fnp.ones((), dtype))
         _, _, ok = OuterVerifier()(
             SpartanCarry(), (bad, claims), cheap_transcript(dtype)
         )
@@ -89,7 +89,7 @@ class OuterStageTest(parameterized.TestCase):
         c = rand_field(62, (8,), KB)
         e = rand_field(63, (8,), KB)
         rnd = StandardRound(ZerocheckSummand())
-        assert_fusion_ready(rnd._round_poly, jnp.stack([e, a, b, c]), reduces=1)
+        assert_fusion_ready(rnd._round_poly, fnp.stack([e, a, b, c]), reduces=1)
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
@@ -98,7 +98,7 @@ class EqWhirScheme:
         return eval_coeffs(mle.astype(mu.dtype), mu)
 
     def initial_weight(self, z: Array) -> Array:
-        return expand_eq_to_hypercube(z, jnp.ones((), z.dtype))
+        return expand_eq_to_hypercube(z, fnp.ones((), z.dtype))
 
     def final_prefix(self, z: Array, alphas: Array) -> Array:
         return eval_eq(z, alphas[::-1])

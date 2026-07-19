@@ -32,7 +32,7 @@ from functools import partial
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.univariate import eval_coeffs
@@ -77,7 +77,7 @@ def round0_message(
     size = 1 << skip_rounds
     hn = p_initial.shape[1] // size
     # (m, |D|, H_n) -> D last so the NTT axis is the last one.
-    factors = jnp.swapaxes(jnp.reshape(p_initial, (m, size, hn)), 1, 2)
+    factors = fnp.swapaxes(fnp.reshape(p_initial, (m, size, hn)), 1, 2)
     coeffs_z = subgroup_to_coeffs(factors)  # (m, H_n, |D|) ascending Z-coeffs
 
     d0 = summand.degree * (size - 1)
@@ -87,7 +87,7 @@ def round0_message(
     # `combine` + `combine_scalars` (product's are empty, LogUp's carry λ), but only
     # ProductSummand also exposes `_combine`, so this stays summand-generic.
     combined = summand.combine(summand.combine_scalars(), *lde)  # (H_n, M)
-    s0_vals = jnp.sum(combined, axis=0)  # (M,) s₀ on D_M
+    s0_vals = fnp.sum(combined, axis=0)  # (M,) s₀ on D_M
     return subgroup_to_coeffs(s0_vals)[: d0 + 1], coeffs_z
 
 
@@ -166,7 +166,7 @@ def verify_univariate_skip(
     if skip_rounds == 0:
         rnd = SumcheckRound(degree=degree)
         point: list[Array] = []
-        ok = jnp.bool_(True)
+        ok = fnp.bool_(True)
         for msg in msgs:
             claim, transcript, r, ok_r = rnd(claim, msg, transcript)
             point.append(r)

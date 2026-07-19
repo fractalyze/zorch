@@ -10,7 +10,7 @@ plain `MerkleTree` exactly.
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
 from zk_dtypes import koalabear_mont as F
@@ -31,7 +31,7 @@ def _stack(rows_per_query: int) -> tuple[Sponge, Compression, StridedMerkleTree]
 
 
 def _matrix(height: int, width: int = 3) -> Array:
-    return (jnp.arange(height * width, dtype=F)).reshape(height, width)
+    return (fnp.arange(height * width, dtype=F)).reshape(height, width)
 
 
 def _reconstruct(
@@ -41,9 +41,9 @@ def _reconstruct(
     ``rows_per_query`` rows, fold them (adjacent in coset order, which is how the
     strided levels collapse a single residue class) to the query-layer node, then
     fold that node up the plain path by leaf-index parity."""
-    layer = jnp.stack([sponge.hash(opened[t]) for t in range(opened.shape[0])])
+    layer = fnp.stack([sponge.hash(opened[t]) for t in range(opened.shape[0])])
     while layer.shape[0] > 1:
-        layer = jnp.stack(
+        layer = fnp.stack(
             [
                 comp.compress(layer[2 * x : 2 * x + 2])
                 for x in range(layer.shape[0] // 2)
@@ -52,7 +52,7 @@ def _reconstruct(
     node, idx = layer[0], index
     for level in range(path.shape[0]):
         sib = path[level]
-        pair = jnp.stack([node, sib]) if idx % 2 == 0 else jnp.stack([sib, node])
+        pair = fnp.stack([node, sib]) if idx % 2 == 0 else fnp.stack([sib, node])
         node, idx = comp.compress(pair), idx // 2
     return node
 
@@ -65,10 +65,10 @@ class StridedMerkleTest(absltest.TestCase):
         matrix = _matrix(8)
         s_root, s_layers = strided.commit(matrix)
         p_root, p_layers = plain.commit(matrix)
-        self.assertTrue(bool(jnp.array_equal(s_root, p_root)))
+        self.assertTrue(bool(fnp.array_equal(s_root, p_root)))
         self.assertEqual(len(s_layers), len(p_layers))
         for sl, pl in zip(s_layers, p_layers):
-            self.assertTrue(bool(jnp.array_equal(sl, pl)))
+            self.assertTrue(bool(fnp.array_equal(sl, pl)))
 
     def test_commit_layer_shapes(self) -> None:
         """height 16, rows_per_query 4 -> query_stride 4: stored layers start at
@@ -93,7 +93,7 @@ class StridedMerkleTest(absltest.TestCase):
         for index in range(4):  # query_stride
             opened = strided.opened_rows(matrix, index)
             self.assertEqual(opened.shape, (4, 3))
-            self.assertTrue(bool(jnp.array_equal(opened, matrix[index::4])))
+            self.assertTrue(bool(fnp.array_equal(opened, matrix[index::4])))
 
     def test_open_reconstruct_roundtrip(self) -> None:
         """Every query's opened rows + path must rebuild the committed root."""
@@ -105,7 +105,7 @@ class StridedMerkleTest(absltest.TestCase):
             path = strided.query_merkle_proof(layers, index)
             self.assertEqual(path.shape, (2, 8))  # query layer (4) -> root: 2 levels
             rebuilt = _reconstruct(sponge, comp, opened, path, index)
-            self.assertTrue(bool(jnp.array_equal(rebuilt, root)), msg=f"query {index}")
+            self.assertTrue(bool(fnp.array_equal(rebuilt, root)), msg=f"query {index}")
 
     def test_single_query_layer_when_rows_per_query_equals_height(self) -> None:
         """rows_per_query == height collapses to a single query-layer node (the
@@ -113,7 +113,7 @@ class StridedMerkleTest(absltest.TestCase):
         _, _, strided = _stack(rows_per_query=8)
         root, layers = strided.commit(_matrix(8))
         self.assertEqual([l.shape for l in layers], [(1, 8)])
-        self.assertTrue(bool(jnp.array_equal(layers[-1][0], root)))
+        self.assertTrue(bool(fnp.array_equal(layers[-1][0], root)))
 
     def test_device_open_matches_host_accessors(self) -> None:
         """`open` (device-indexed) returns the same coset + sibling path as the
@@ -124,10 +124,10 @@ class StridedMerkleTest(absltest.TestCase):
         for index in range(strided.query_stride(16)):
             opening = strided.open(matrix, layers, index)
             self.assertTrue(
-                bool(jnp.array_equal(opening.row, strided.opened_rows(matrix, index)))
+                bool(fnp.array_equal(opening.row, strided.opened_rows(matrix, index)))
             )
             host_path = strided.query_merkle_proof(layers, index)
-            self.assertTrue(bool(jnp.array_equal(jnp.stack(opening.path), host_path)))
+            self.assertTrue(bool(fnp.array_equal(fnp.stack(opening.path), host_path)))
 
     def test_device_reconstruct_root_roundtrip(self) -> None:
         """`open` -> `reconstruct_root` rebuilds the committed root for every query,
@@ -140,7 +140,7 @@ class StridedMerkleTest(absltest.TestCase):
                 opening = strided.open(matrix, layers, index)
                 rebuilt = strided.reconstruct_root(index, opening)
                 self.assertTrue(
-                    bool(jnp.array_equal(rebuilt, root)), msg=f"rpq={rpq} q={index}"
+                    bool(fnp.array_equal(rebuilt, root)), msg=f"rpq={rpq} q={index}"
                 )
 
     def test_device_reconstruct_root_vmaps_over_traced_indices(self) -> None:
@@ -149,7 +149,7 @@ class StridedMerkleTest(absltest.TestCase):
         _, _, strided = _stack(rows_per_query=4)
         matrix = _matrix(16)
         root, layers = strided.commit(matrix)
-        indices = jnp.arange(strided.query_stride(16), dtype=jnp.int32)
+        indices = fnp.arange(strided.query_stride(16), dtype=fnp.int32)
 
         @frx.jit
         def open_and_rebuild(idx: Array) -> Array:
@@ -159,7 +159,7 @@ class StridedMerkleTest(absltest.TestCase):
         roots = open_and_rebuild(indices)
         self.assertEqual(roots.shape, (4, 8))
         for q in range(4):
-            self.assertTrue(bool(jnp.array_equal(roots[q], root)), msg=f"q={q}")
+            self.assertTrue(bool(fnp.array_equal(roots[q], root)), msg=f"q={q}")
 
     def test_reconstruct_root_rejects_tampered_row(self) -> None:
         """A corrupted opened coset must not rebuild the committed root."""
@@ -168,10 +168,10 @@ class StridedMerkleTest(absltest.TestCase):
         root, layers = strided.commit(matrix)
         opening = strided.open(matrix, layers, 1)
         tampered = Opening(
-            row=opening.row.at[0, 0].add(jnp.ones((), F)), path=opening.path
+            row=opening.row.at[0, 0].add(fnp.ones((), F)), path=opening.path
         )
         rebuilt = strided.reconstruct_root(1, tampered)
-        self.assertFalse(bool(jnp.array_equal(rebuilt, root)))
+        self.assertFalse(bool(fnp.array_equal(rebuilt, root)))
 
     def test_open_rejects_out_of_range_index(self) -> None:
         """A concrete query index outside [0, query_stride) trips the eager
@@ -193,7 +193,7 @@ class StridedMerkleTest(absltest.TestCase):
         opening = strided.open(matrix, layers, 0)
         self.assertEqual(opening.path, [])
         rebuilt = strided.reconstruct_root(0, opening)
-        self.assertTrue(bool(jnp.array_equal(rebuilt, root)))
+        self.assertTrue(bool(fnp.array_equal(rebuilt, root)))
 
 
 if __name__ == "__main__":

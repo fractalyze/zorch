@@ -18,7 +18,7 @@ from functools import partial
 from typing import TYPE_CHECKING, cast
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 from zk_dtypes import efinfo
 
@@ -132,7 +132,7 @@ def _verify_body(
     m = z.shape[0]
     ef = z.dtype
     limbs = efinfo(ef).degree
-    one = jnp.ones((), ef)
+    one = fnp.ones((), ef)
 
     # Mirror the prover: bind commitment + per-column values, sample μ, and take
     # the running claim as the μ-power combine of the columns' claimed evals.
@@ -190,13 +190,13 @@ def _verify_body(
             proof.initial_openings[0] if r == 0 else proof.codeword_openings[r - 1]
         )
         rebuilt = frx.vmap(tree.reconstruct_root)(positions, opening)
-        ok = ok & jnp.all(rebuilt == cur_root)
+        ok = ok & fnp.all(rebuilt == cur_root)
 
         # Fold each opened coset to the round-folded poly's value at the query
         # point; coset points {x·ω_k^j} are the queried domain gathered at the
         # strided coset indices (conjugates a half apart).
         domain = cur_code.domain()
-        coset_idx = positions[:, None] + stride * jnp.arange(1 << k)
+        coset_idx = positions[:, None] + stride * fnp.arange(1 << k)
         coset_pts = domain[coset_idx]  # (Q, 2^k)
         # Round 0 opens the committed matrix — μ-combine its columns (mirroring
         # the prover's batch combine); later rounds open the single EF re-encode
@@ -239,7 +239,7 @@ def _verify_body(
     folded = num_rounds * k
     r_dim = m - folded
     final_poly = proof.final_poly
-    prefix = verifier.scheme.final_prefix(z[r_dim:], jnp.stack(all_alphas))
+    prefix = verifier.scheme.final_prefix(z[r_dim:], fnp.stack(all_alphas))
     if r_dim == 0:
         suffix = final_poly[0]  # no residual: final_poly is the folded constant
     else:
@@ -257,7 +257,7 @@ def _verify_body(
             remaining folds with the point's powers-of-two, times the final poly
             at the point folded through the rest."""
             pp = pow2_powers(point, rem + 1)
-            eq = eval_eq(jnp.stack(alpha_slc), jnp.stack(pp[:-1])) if rem else one
+            eq = eval_eq(fnp.stack(alpha_slc), fnp.stack(pp[:-1])) if rem else one
             return eq * eval_coeffs(final_poly, pp[-1])
 
         if r != num_rounds - 1:

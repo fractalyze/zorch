@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.transcript import Transcript
@@ -43,4 +43,4 @@ def verify(
         return (claim, transcript), (r, ok)
 
     (claim, transcript), (point, oks) = lax.scan(step, (claim, transcript), proof)
-    return point, claim, transcript, jnp.all(oks)
+    return point, claim, transcript, fnp.all(oks)

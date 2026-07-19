@@ -6,7 +6,7 @@ from functools import reduce
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
@@ -63,7 +63,7 @@ class TransitionTableTest(absltest.TestCase):
 
 
 def _bits_msb(val: int, nbits: int, dtype: Any) -> Array:
-    return jnp.array([(val >> (nbits - 1 - k)) & 1 for k in range(nbits)], dtype=dtype)
+    return fnp.array([(val >> (nbits - 1 - k)) & 1 for k in range(nbits)], dtype=dtype)
 
 
 class BpEvalCoreTest(absltest.TestCase):
@@ -72,11 +72,11 @@ class BpEvalCoreTest(absltest.TestCase):
         # At boolean points h=1 iff (i = r AND i<4). i=2,r=2 -> 1; i=2,r=1 -> 0.
         dtype = EF
         n_d, n_r = 3, 2
-        t_mat = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
+        t_mat = fnp.asarray(_TRANSITION_ROWS, dtype=dtype)
         pl = _bits_msb(0, n_d, dtype)  # t_c = 0
         pr = _bits_msb(4, n_d, dtype)  # t_{c+1} = 4
-        EF1 = jnp.array(1, dtype=dtype)
-        EF0 = jnp.array(0, dtype=dtype)
+        EF1 = fnp.array(1, dtype=dtype)
+        EF0 = fnp.array(0, dtype=dtype)
         # match: i=2 (z_index), r=2 (z_row)
         ok = bp_eval_core(
             _bits_msb(2, n_r, dtype), _bits_msb(2, n_d, dtype), pl, pr, t_mat
@@ -111,9 +111,9 @@ class LayoutBuilderTest(absltest.TestCase):
 def _eq_at(z: Array, idx: int, nbits: int) -> Array:
     # eval_eq(MSB-bits(idx), z) = Π_j (1 - z_j - b_j + 2 z_j b_j)
     bits = [(idx >> (nbits - 1 - j)) & 1 for j in range(nbits)]
-    factor = jnp.ones([], dtype=z.dtype)
+    factor = fnp.ones([], dtype=z.dtype)
     for j in range(nbits):
-        b = jnp.array(bits[j], dtype=z.dtype)
+        b = fnp.array(bits[j], dtype=z.dtype)
         factor = factor * (1 - z[j] - b + 2 * z[j] * b)
     return factor
 
@@ -126,7 +126,7 @@ def _naive_jagged_mle(
     z_index: Array,
 ) -> Array:
     prefix = build_prefix_sums(row_counts)
-    total = jnp.zeros([], dtype=cfg.dtype)
+    total = fnp.zeros([], dtype=cfg.dtype)
     for c in range(len(row_counts)):
         a_c = prefix[c + 1] - prefix[c]
         for r in range(a_c):
@@ -169,7 +169,7 @@ class EvalJaggedMleTest(absltest.TestCase):
         z_col = rand_ext_field(2, (cfg.n_c,), KB, EF)
         z_index = rand_ext_field(3, (cfg.n_d,), KB, EF)
         good = eval_jagged_mle(cps, z_row, z_col, z_index, cfg=cfg)
-        bad_cps = cps.at[3].set(jnp.zeros(cfg.n_d, dtype=EF))  # padding row -> t=0
+        bad_cps = cps.at[3].set(fnp.zeros(cfg.n_d, dtype=EF))  # padding row -> t=0
         bad = eval_jagged_mle(bad_cps, z_row, z_col, z_index, cfg=cfg)
         self.assertNotEqual(_field_val(good), _field_val(bad))
 
@@ -186,7 +186,7 @@ class EvalJaggedMleTest(absltest.TestCase):
         n_d_wide = cfg.n_d + pad
         prefix = build_prefix_sums(heights)
         padded = prefix + [prefix[-1]] * (l_max - len(heights))
-        wide_cps = jnp.stack([_bits_msb(t, n_d_wide, EF) for t in padded])
+        wide_cps = fnp.stack([_bits_msb(t, n_d_wide, EF) for t in padded])
         wide_cfg = JaggedStaticConfig(
             l_max=l_max, n_c=cfg.n_c, n_r=n_r, n_d=n_d_wide, dtype=EF
         )
@@ -196,7 +196,7 @@ class EvalJaggedMleTest(absltest.TestCase):
 
         tight = eval_jagged_mle(cps, z_row, z_col, z_wide[pad:], cfg=cfg)
         wide = eval_jagged_mle(wide_cps, z_row, z_col, z_wide, cfg=wide_cfg)
-        one = jnp.array(1, dtype=EF)
+        one = fnp.array(1, dtype=EF)
         rescale = (one - z_wide[0]) * (one - z_wide[1])
         self.assertNotEqual(_field_val(wide), _field_val(tight))
         self.assertEqual(_field_val(wide), _field_val(rescale * tight))
@@ -217,8 +217,8 @@ class PartialEvalTest(absltest.TestCase):
         z_index = rand_ext_field(12, (cfg.n_d,), KB, EF)
         indicator = _indicator(offsets, z_row, z_col, cfg.n_d)
         self.assertEqual(indicator.shape, (2**cfg.n_d,))
-        eq_idx = expand_eq_to_hypercube(z_index, jnp.array(1, EF))
-        # jnp.sum aborts on EF (koalabearx4_mont) — unroll at trace time.
+        eq_idx = expand_eq_to_hypercube(z_index, fnp.array(1, EF))
+        # fnp.sum aborts on EF (koalabearx4_mont) — unroll at trace time.
         n = 2**cfg.n_d
         got = reduce(operator.add, [indicator[i] * eq_idx[i] for i in range(n)])
         # The field-valued mont tensor stays the oracle's input.
@@ -258,14 +258,14 @@ class PartialEvalTest(absltest.TestCase):
         got = _indicator(offsets, z_row, z_col, cfg.n_d)
         want = scatter_partial_eval(offsets, z_row, z_col, cfg=cfg)
         self.assertEqual(_field_val(got), _field_val(want))
-        self.assertEqual(_field_val(got), _field_val(jnp.zeros(1 << cfg.n_d, dtype=EF)))
+        self.assertEqual(_field_val(got), _field_val(fnp.zeros(1 << cfg.n_d, dtype=EF)))
         # n_r=3: scatter-untraceable region — pin the gather's zero indicator.
         cfg = oracle_cfg(zeros, l_max, 3, EF)
         offsets = _offset_bit_tensor(zeros, l_max, cfg.n_d, cfg.dtype)
         z_row = rand_ext_field(42, (cfg.n_r,), KB, EF)
         z_col = rand_ext_field(43, (cfg.n_c,), KB, EF)
         got = _indicator(offsets, z_row, z_col, cfg.n_d)
-        self.assertEqual(_field_val(got), _field_val(jnp.zeros(1 << cfg.n_d, dtype=EF)))
+        self.assertEqual(_field_val(got), _field_val(fnp.zeros(1 << cfg.n_d, dtype=EF)))
 
     def test_partial_eval_jits_and_compiles_once_across_heights(self) -> None:
         # Two height vectors in the same tier produce the same compiled artifact.

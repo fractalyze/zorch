@@ -19,20 +19,20 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
-_LIMB = jnp.uint32
+_LIMB = fnp.uint32
 _LIMB_BITS = 32
-_BIT = jnp.binary_field_t0  # F_2 = GF(2)
+_BIT = fnp.binary_field_t0  # F_2 = GF(2)
 
 
 def field_bit_width(dtype: Any) -> int:
     """`W`: the GF(2)-dimension of `dtype` (= its storage bits)."""
-    width = jnp.dtype(dtype).itemsize * 8
+    width = fnp.dtype(dtype).itemsize * 8
     if width % _LIMB_BITS != 0:
         raise ValueError(
-            f"{jnp.dtype(dtype).name} is {width} bits; the bit kernels work over "
+            f"{fnp.dtype(dtype).name} is {width} bits; the bit kernels work over "
             f"uint{_LIMB_BITS} limbs and need a multiple of {_LIMB_BITS}"
         )
     return width
@@ -60,7 +60,7 @@ def _bits(x: Array) -> Array:
     field and sum it, which needs the bits *as integers*, not the F_2
     (`binary_field_t0`) view [`unpack`] hands public callers."""
     limbs = _to_limbs(x)
-    shifts = jnp.arange(_LIMB_BITS, dtype=_LIMB)
+    shifts = fnp.arange(_LIMB_BITS, dtype=_LIMB)
     bits = (limbs[..., :, None] >> shifts) & _LIMB(1)
     return bits.reshape(*x.shape, -1)
 
@@ -71,8 +71,8 @@ def _limbs_from_bits(bits: Array) -> Array:
     [`_bits`]' spread, shared by [`pack`] and the ring-switch tensor-algebra
     transpose. Bits are 0/1 over distinct powers, so the weighted sum equals a
     bit-OR — no overflow."""
-    weights = _LIMB(1) << jnp.arange(_LIMB_BITS, dtype=_LIMB)
-    return jnp.sum(
+    weights = _LIMB(1) << fnp.arange(_LIMB_BITS, dtype=_LIMB)
+    return fnp.sum(
         bits.reshape(*bits.shape[:-1], -1, _LIMB_BITS) * weights,
         axis=-1,
         dtype=_LIMB,
@@ -83,7 +83,7 @@ def _f2(v: int) -> Array:
     """The F_2 constant `v ∈ {0, 1}` as a `binary_field_t0` scalar. Built via the
     list constructor: a value-cast (`astype`) into `t0` is unlowered and SIGSEGVs,
     and a `uint8 → t0` bitcast is rank-invalid (t0 is 1-bit-logical)."""
-    return jnp.asarray(jnp.array([v], _BIT)[0])
+    return fnp.asarray(fnp.array([v], _BIT)[0])
 
 
 def unpack(x: Array) -> Array:
@@ -91,7 +91,7 @@ def unpack(x: Array) -> Array:
     coefficient `r` at index `r`. The GF(2^W) ≅ F_2^W iso, realized as a shift/mask
     over the storage limbs (a bitcast cannot reach sub-byte coefficients) — the
     same bits [`_bits`] returns, retyped from `uint32` to `binary_field_t0`."""
-    return jnp.where(_bits(x).astype(bool), _f2(1), _f2(0))
+    return fnp.where(_bits(x).astype(bool), _f2(1), _f2(0))
 
 
 def pack(coeffs: Array, dtype: Any) -> Array:

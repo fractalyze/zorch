@@ -21,7 +21,7 @@ import frx
 
 frx.config.update("jax_enable_x64", True)  # binary_field_ghash is uint64-backed
 
-import frx.numpy as jnp  # noqa: E402
+import frx.numpy as fnp  # noqa: E402
 import zk_dtypes  # noqa: E402
 from absl.testing import absltest, parameterized  # noqa: E402
 
@@ -31,7 +31,7 @@ from zorch.poly.multilinear import eval_mle, mle_coeffs_to_evals  # noqa: E402
 from zorch.testkit.random_field import rand_field  # noqa: E402
 
 KB = zk_dtypes.koalabear_mont  # prime field: multiplicative NTT
-GH = jnp.binary_field_ghash  # binary field: additive (LCH) NTT
+GH = fnp.binary_field_ghash  # binary field: additive (LCH) NTT
 
 
 class TensorCodeTest(parameterized.TestCase):
@@ -65,19 +65,19 @@ class TensorCodeTest(parameterized.TestCase):
     def test_eval_point_matches_mle(
         self, message_len: int, blowup: int, coset: bool, dtype: Any
     ) -> None:
-        shift = jnp.asarray(3, dtype) if coset else None  # arbitrary non-trivial coset
+        shift = fnp.asarray(3, dtype) if coset else None  # arbitrary non-trivial coset
         code = ReedSolomon(message_len, blowup, dtype, coset_shift=shift)
         self.assertIsInstance(code, TensorCode)
 
         w = rand_field(0, (message_len,), dtype)
         codeword = code.encode(w)  # (block_len,)
-        positions = jnp.arange(code.block_len)
+        positions = fnp.arange(code.block_len)
         points = code.eval_point(positions)  # (block_len, k)
 
         # Independent oracle: message-coeff -> hypercube-eval basis, then eval.
         evals = mle_coeffs_to_evals(w)
         oracle = frx.vmap(lambda p: eval_mle(evals, p))(points)  # (block_len,)
-        self.assertTrue(bool(jnp.all(oracle == codeword)))
+        self.assertTrue(bool(fnp.all(oracle == codeword)))
 
     @parameterized.named_parameters(
         dict(testcase_name="prime", dtype=KB),
@@ -85,7 +85,7 @@ class TensorCodeTest(parameterized.TestCase):
     )
     def test_eval_point_shape(self, dtype: Any) -> None:
         code = ReedSolomon(8, 2, dtype)  # k = 3
-        points = code.eval_point(jnp.array([0, 1, 5]))
+        points = code.eval_point(fnp.array([0, 1, 5]))
         self.assertEqual(points.shape, (3, 3))
 
     def test_binary_field_fold_unimplemented(self) -> None:
@@ -95,11 +95,11 @@ class TensorCodeTest(parameterized.TestCase):
         code = ReedSolomon(8, 2, GH)
         codeword = code.encode(rand_field(0, (8,), GH))
         with self.assertRaises(NotImplementedError):
-            code.fold(codeword, jnp.asarray(2, GH))
+            code.fold(codeword, fnp.asarray(2, GH))
 
     def test_binary_field_coset_unimplemented(self) -> None:
         with self.assertRaises(NotImplementedError):
-            ReedSolomon(8, 2, GH, coset_shift=jnp.asarray(3, GH))
+            ReedSolomon(8, 2, GH, coset_shift=fnp.asarray(3, GH))
 
     def test_binary_eval_table_lazy_and_jit_safe(self) -> None:
         # Construction must not build the additive eval-point table — encode-only
@@ -109,10 +109,10 @@ class TensorCodeTest(parameterized.TestCase):
         code = ReedSolomon(8, 2, GH)
         self.assertIsNone(code._binary_eval_table)
 
-        positions = jnp.array([0, 1, 5])
+        positions = fnp.array([0, 1, 5])
         under_jit = frx.jit(code.eval_point)(positions)
         reused = code.eval_point(positions)  # eager, reuses the cached table
-        self.assertTrue(bool(jnp.all(under_jit == reused)))
+        self.assertTrue(bool(fnp.all(under_jit == reused)))
 
 
 if __name__ == "__main__":

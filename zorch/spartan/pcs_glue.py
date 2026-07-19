@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.pcs.protocol import PcsProver, PcsVerifier
@@ -99,7 +99,7 @@ class DensePcs:
         transcript: Transcript,
     ) -> tuple[Array, None, Transcript]:
         poly = prover_data[0]
-        values = jnp.stack([eval_mle(poly, pt) for pt in points])
+        values = fnp.stack([eval_mle(poly, pt) for pt in points])
         return values, None, transcript
 
     def verify(
@@ -111,5 +111,5 @@ class DensePcs:
         transcript: Transcript,
     ) -> tuple[Array, Transcript]:
         del proof
-        recomputed = jnp.stack([eval_mle(commitment, pt) for pt in points])
-        return jnp.all(recomputed == values), transcript
+        recomputed = fnp.stack([eval_mle(commitment, pt) for pt in points])
+        return fnp.all(recomputed == values), transcript

@@ -5,7 +5,7 @@ the single-MLE degree-1 wire the choreography frames on top of."""
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -13,8 +13,8 @@ from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.poly.multilinear import eval_mle, mle_fold
 
 
-def _ef(x: int) -> jnp.ndarray:
-    return jnp.array(x, EF)
+def _ef(x: int) -> fnp.ndarray:
+    return fnp.array(x, EF)
 
 
 class ReduceClaimTest(absltest.TestCase):
@@ -35,14 +35,14 @@ class RoundCheckTest(absltest.TestCase):
     def test_consistent_claim_passes(self) -> None:
         k = SumcheckKernel()
         s0, s1, coord = _ef(3), _ef(5), _ef(7)
-        one = jnp.array(1, EF)
+        one = fnp.array(1, EF)
         claim = (one - coord) * s0 + coord * s1
         self.assertTrue(bool(k.round_check(claim, (s0, s1), coord)))
 
     def test_tampered_claim_fails(self) -> None:
         k = SumcheckKernel()
         s0, s1, coord = _ef(3), _ef(5), _ef(7)
-        one = jnp.array(1, EF)
+        one = fnp.array(1, EF)
         claim = (one - coord) * s0 + coord * s1 + one
         self.assertFalse(bool(k.round_check(claim, (s0, s1), coord)))
 
@@ -52,16 +52,16 @@ class MessageFoldTest(absltest.TestCase):
         # message must satisfy round_check against the claim it was built from:
         # eval_mle(mle, zs) == (1-zs[-1])*s0 + zs[-1]*s1.
         k = SumcheckKernel()
-        mle = jnp.arange(1, 9, dtype=EF)  # 3 vars
-        zs = jnp.array([2, 3, 4], EF)
+        mle = fnp.arange(1, 9, dtype=EF)  # 3 vars
+        zs = fnp.array([2, 3, 4], EF)
         claim = eval_mle(mle, zs)
         s0, s1 = k.message((mle, claim, zs))
         self.assertTrue(bool(k.round_check(claim, (s0, s1), zs[-1])))
 
     def test_fold_advances_state(self) -> None:
         k = SumcheckKernel()
-        mle = jnp.arange(1, 9, dtype=EF)
-        zs = jnp.array([2, 3, 4], EF)
+        mle = fnp.arange(1, 9, dtype=EF)
+        zs = fnp.array([2, 3, 4], EF)
         claim = eval_mle(mle, zs)
         msg = k.message((mle, claim, zs))
         r = _ef(6)
@@ -71,12 +71,12 @@ class MessageFoldTest(absltest.TestCase):
         self.assertEqual(zs2.tolist(), zs[:-1].tolist())
 
     def test_final_default_none(self) -> None:
-        self.assertIsNone(SumcheckKernel().final((jnp.arange(2, dtype=EF),)))
+        self.assertIsNone(SumcheckKernel().final((fnp.arange(2, dtype=EF),)))
 
     def test_initial_state_carries_mle_claim_point(self) -> None:
         k = SumcheckKernel()
-        mle = jnp.arange(1, 5, dtype=EF)
-        zs = jnp.array([2, 3], EF)
+        mle = fnp.arange(1, 5, dtype=EF)
+        zs = fnp.array([2, 3], EF)
         state = k.initial_state(mle, zs, _ef(9))
         self.assertEqual(state[0].tolist(), mle.tolist())
         self.assertEqual(state[1].tolist(), _ef(9).tolist())

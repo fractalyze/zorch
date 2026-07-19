@@ -12,7 +12,7 @@ vector is added in the golden-vector slice.
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -21,7 +21,7 @@ from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 
 # Plonky3 golden vector (p3_commit=4318eba..., default_koalabear_poseidon2_16):
 # TruncatedPermutation<_, 2, 8, 16> compressing arange(16) as two chunks of 8.
-_PLONKY3_COMPRESS_2X8 = jnp.array(
+_PLONKY3_COMPRESS_2X8 = fnp.array(
     [
         1259554834,
         663463928,
@@ -39,7 +39,7 @@ _PLONKY3_COMPRESS_2X8 = jnp.array(
 class CompressionTest(absltest.TestCase):
     def test_compress_returns_chunk_shape_and_dtype(self) -> None:
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-        out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
+        out = c.compress(fnp.arange(16, dtype=F).reshape(2, 8))
         self.assertEqual(out.shape, (8,))
         self.assertEqual(out.dtype, F)
 
@@ -47,18 +47,18 @@ class CompressionTest(absltest.TestCase):
         # arity*chunk == width: no padding; compress == permute(flatten)[:chunk].
         perm = koalabear16_perm()
         c = Compression(perm, CompressionParams(arity=2, chunk=8))
-        x = jnp.arange(16, dtype=F).reshape(2, 8)
+        x = fnp.arange(16, dtype=F).reshape(2, 8)
         expected = perm.permute(x.reshape(-1))[:8]
-        self.assertTrue(bool(jnp.array_equal(c.compress(x), expected)))
+        self.assertTrue(bool(fnp.array_equal(c.compress(x), expected)))
 
     def test_compress_zero_pads_when_below_width(self) -> None:
         # arity*chunk (8) < width (16): inputs go in the first lanes, rest stays zero.
         perm = koalabear16_perm()
         c = Compression(perm, CompressionParams(arity=2, chunk=4))
-        x = jnp.arange(8, dtype=F).reshape(2, 4)
-        pre = jnp.zeros(perm.width, dtype=F).at[:8].set(jnp.arange(8, dtype=F))
+        x = fnp.arange(8, dtype=F).reshape(2, 4)
+        pre = fnp.zeros(perm.width, dtype=F).at[:8].set(fnp.arange(8, dtype=F))
         expected = perm.permute(pre)[:4]
-        self.assertTrue(bool(jnp.array_equal(c.compress(x), expected)))
+        self.assertTrue(bool(fnp.array_equal(c.compress(x), expected)))
 
     def test_arity_chunk_exceeding_width_raises(self) -> None:
         perm = koalabear16_perm()
@@ -73,12 +73,12 @@ class CompressionTest(absltest.TestCase):
     def test_compress_wrong_input_shape_raises(self) -> None:
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
         with self.assertRaises(ValueError):
-            c.compress(jnp.arange(16, dtype=F))  # flat, not (2, 8)
+            c.compress(fnp.arange(16, dtype=F))  # flat, not (2, 8)
 
     def test_compress_matches_plonky3_golden(self) -> None:
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-        out = c.compress(jnp.arange(16, dtype=F).reshape(2, 8))
-        self.assertTrue(bool(jnp.array_equal(out, _PLONKY3_COMPRESS_2X8)))
+        out = c.compress(fnp.arange(16, dtype=F).reshape(2, 8))
+        self.assertTrue(bool(fnp.array_equal(out, _PLONKY3_COMPRESS_2X8)))
 
     def test_value_equality_across_fresh_instances(self) -> None:
         # A compressor seats in static jit-zone keys (#214): equal params over
@@ -94,11 +94,11 @@ class CompressionTest(absltest.TestCase):
 
     def test_compress_vmap_matches_unbatched(self) -> None:
         c = Compression(koalabear16_perm(), CompressionParams(arity=2, chunk=8))
-        a = jnp.arange(16, dtype=F).reshape(2, 8)
-        b = (jnp.arange(16, dtype=F) + F(7)).reshape(2, 8)
-        batched = frx.vmap(c.compress)(jnp.stack([a, b]))
-        self.assertTrue(bool(jnp.array_equal(batched[0], c.compress(a))))
-        self.assertTrue(bool(jnp.array_equal(batched[1], c.compress(b))))
+        a = fnp.arange(16, dtype=F).reshape(2, 8)
+        b = (fnp.arange(16, dtype=F) + F(7)).reshape(2, 8)
+        batched = frx.vmap(c.compress)(fnp.stack([a, b]))
+        self.assertTrue(bool(fnp.array_equal(batched[0], c.compress(a))))
+        self.assertTrue(bool(fnp.array_equal(batched[1], c.compress(b))))
 
 
 if __name__ == "__main__":

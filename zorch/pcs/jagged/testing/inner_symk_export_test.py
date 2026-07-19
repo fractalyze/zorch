@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Symbolic column-count export of the inner BP sumcheck byte-matches concrete.
 
-``inner_sumcheck_core`` does its per-column work as a ``vmap`` + ``jnp.sum`` over
+``inner_sumcheck_core`` does its per-column work as a ``vmap`` + ``fnp.sum`` over
 ``merged``'s REAL columns, so ONE ``frx.export`` binary serves every column count
 ``L`` at real-size cost (no padding) — the proper polymorphic form of the column
 axis, mirroring ``stacked_basefold_open``'s symbolic ``K``. This locks it: a
@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array, export
@@ -42,14 +42,14 @@ _N_D = log_area_tier(_AREA)
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, fnp.uint32)).reshape(-1).tolist()
 
 
 def _rand_ef(seed: int, shape: tuple[int, ...]) -> Array:
     ints = np.random.default_rng(seed).integers(
         1, 1 << 30, size=(*shape, 4), dtype=np.int64
     )
-    return frx.lax.bitcast_convert_type(jnp.array(ints, dtype=BF), EF)
+    return frx.lax.bitcast_convert_type(fnp.array(ints, dtype=BF), EF)
 
 
 def _build(heights: list[int], z_col: Array) -> tuple[Array, Array]:
@@ -57,7 +57,7 @@ def _build(heights: list[int], z_col: Array) -> tuple[Array, Array]:
     _, n_d = build_jagged_layout(heights, len(heights), EF)
     assert n_d == _N_D
     merged = merged_prefix_bits(heights, n_d, dtype=EF)
-    weights = expand_eq_to_hypercube(z_col, jnp.ones((), EF))[: len(heights)]
+    weights = expand_eq_to_hypercube(z_col, fnp.ones((), EF))[: len(heights)]
     return merged, weights
 
 

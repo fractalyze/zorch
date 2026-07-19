@@ -15,7 +15,7 @@ from __future__ import annotations
 import dataclasses
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -101,11 +101,11 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
         # length-2 layer is a constant codeword.
         final, _, _ = self._prove()
         self.assertEqual(final.shape, (2,))
-        self.assertTrue(bool(jnp.all(final == final[0])))
+        self.assertTrue(bool(fnp.all(final == final[0])))
 
     def test_tampered_final_layer_rejected(self) -> None:
         final, roots, query_openings = self._prove()
-        tampered = final.at[1].add(jnp.array(1, dtype=KB))
+        tampered = final.at[1].add(fnp.array(1, dtype=KB))
         self.assertFalse(bool(self._verify(tampered, roots, query_openings)))
 
     def test_tampered_query_group_rejected(self) -> None:
@@ -113,7 +113,7 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
         # fold-chain step that consumes it.
         final, roots, query_openings = self._prove()
         bad = query_openings[0]
-        bad = dataclasses.replace(bad, row=bad.row.at[0, 0].add(jnp.array(1, dtype=KB)))
+        bad = dataclasses.replace(bad, row=bad.row.at[0, 0].add(fnp.array(1, dtype=KB)))
         query_openings = [bad, query_openings[1]]
         self.assertFalse(bool(self._verify(final, roots, query_openings)))
 
@@ -123,7 +123,7 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
         beta = rand_field(60, (), KB)
         jitted = frx.jit(self.code.fold_group)
         self.assertTrue(
-            bool(jnp.all(jitted(self.f, beta) == self.code.fold_group(self.f, beta)))
+            bool(fnp.all(jitted(self.f, beta) == self.code.fold_group(self.f, beta)))
         )
 
     def test_verify_group_fold_chain_jits(self) -> None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 
@@ -27,8 +27,8 @@ KB = zk_dtypes.koalabear_mont
 KBx4 = zk_dtypes.koalabearx4_mont
 
 
-def _claim(p: jnp.ndarray) -> jnp.ndarray:
-    return jnp.sum(jnp.prod(p, axis=0))
+def _claim(p: fnp.ndarray) -> fnp.ndarray:
+    return fnp.sum(fnp.prod(p, axis=0))
 
 
 class Round0Test(parameterized.TestCase):
@@ -62,7 +62,7 @@ class SkipRoundTripTest(parameterized.TestCase):
             _claim(p), msgs, skip, total, cheap_transcript(KB), degree=m
         )
         self.assertTrue(bool(ok))
-        self.assertTrue(bool(reduced == jnp.prod(final[:, 0])))
+        self.assertTrue(bool(reduced == fnp.prod(final[:, 0])))
         # Round + challenge count both drop to 1 + n.
         self.assertLen(msgs, 1 + (total - skip))
         self.assertLen(point, 1 + (total - skip))
@@ -81,7 +81,7 @@ class SkipRoundTripTest(parameterized.TestCase):
         # Extension arithmetic entered at round 1: the folded state is extension-field.
         self.assertEqual(final.dtype, KBx4)
         self.assertTrue(bool(ok))
-        self.assertTrue(bool(reduced == jnp.prod(final[:, 0])))
+        self.assertTrue(bool(reduced == fnp.prod(final[:, 0])))
 
 
 class SkipZeroTest(absltest.TestCase):
@@ -97,8 +97,8 @@ class SkipZeroTest(absltest.TestCase):
         )
         self.assertLen(msgs0, total)
         for a, b in zip(msgs0, msgs_ref, strict=True):
-            self.assertTrue(bool(jnp.array_equal(a, b)))
-        self.assertTrue(bool(jnp.array_equal(f0, f_ref)))
+            self.assertTrue(bool(fnp.array_equal(a, b)))
+        self.assertTrue(bool(fnp.array_equal(f0, f_ref)))
 
     def test_skip0_verifies(self) -> None:
         m, total = 2, 4
@@ -110,12 +110,12 @@ class SkipZeroTest(absltest.TestCase):
             _claim(p), msgs0, 0, total, cheap_transcript(KB), degree=m
         )
         self.assertTrue(bool(ok))
-        self.assertTrue(bool(reduced == jnp.prod(f0[:, 0])))
+        self.assertTrue(bool(reduced == fnp.prod(f0[:, 0])))
         self.assertLen(point, total)
 
 
 class SkipSoundnessTest(absltest.TestCase):
-    def _proof(self) -> tuple[jnp.ndarray, int, int, list[jnp.ndarray]]:
+    def _proof(self) -> tuple[fnp.ndarray, int, int, list[fnp.ndarray]]:
         m, total = 2, 4
         p = rand_field(11, (m, 1 << total), KB)
         _, _, msgs = prove_univariate_skip(
@@ -126,7 +126,7 @@ class SkipSoundnessTest(absltest.TestCase):
     def test_tampered_round0_message_rejected(self) -> None:
         p, total, m, msgs = self._proof()
         bad = list(msgs)
-        bad[0] = bad[0].at[0].add(jnp.ones((), KB))
+        bad[0] = bad[0].at[0].add(fnp.ones((), KB))
         _, _, _, ok = verify_univariate_skip(
             _claim(p), bad, 2, total, cheap_transcript(KB), degree=m, ext_dtype=KBx4
         )
@@ -135,7 +135,7 @@ class SkipSoundnessTest(absltest.TestCase):
     def test_wrong_claim_rejected(self) -> None:
         p, total, m, msgs = self._proof()
         _, _, _, ok = verify_univariate_skip(
-            _claim(p) + jnp.ones((), KB),
+            _claim(p) + fnp.ones((), KB),
             msgs,
             2,
             total,
@@ -177,12 +177,12 @@ class ComposedTailTest(parameterized.TestCase):
 
         self.assertLen(composed, len(ref_msgs))
         for a, b in zip(composed, ref_msgs, strict=True):
-            self.assertTrue(bool(jnp.array_equal(a, b)))
+            self.assertTrue(bool(fnp.array_equal(a, b)))
         reduced, _, _, ok = verify_univariate_skip(
             c, composed, skip, total, cheap_transcript(KB), degree=m, ext_dtype=KBx4
         )
         self.assertTrue(bool(ok))
-        self.assertTrue(bool(reduced == jnp.prod(final[:, 0])))
+        self.assertTrue(bool(reduced == fnp.prod(final[:, 0])))
 
 
 class SummandGenericTest(parameterized.TestCase):
@@ -195,7 +195,7 @@ class SummandGenericTest(parameterized.TestCase):
         p = rand_field(400 + skip_rounds, (LogupSummand.NUM_FACTORS, 1 << total), KB)
         lam = rand_field(7, (), KB)
         summand = LogupSummand(lam)
-        c = jnp.sum(logup_combine(lam, *p))
+        c = fnp.sum(logup_combine(lam, *p))
         pf, _, msgs = prove_univariate_skip(
             p, skip_rounds, cheap_transcript(KB), summand, ext_dtype=KBx4
         )

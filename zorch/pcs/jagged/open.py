@@ -40,7 +40,7 @@ from functools import partial
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import efinfo
 
@@ -94,13 +94,13 @@ def sample_rlc_coeffs_bits(
     directly (``total_width`` is then a symbolic dim and ``log2_ceil`` of it is
     unavailable); both entries share this body so the weights cannot drift."""
     if nbv == 0:
-        return transcript, jnp.ones(1, dtype)
+        return transcript, fnp.ones(1, dtype)
     limbs = efinfo(dtype).degree
     samples = []
     for _ in range(nbv):
         transcript, challenge = sample_challenge(transcript, dtype, limbs)
         samples.append(challenge)
-    return transcript, partial_lagrange(jnp.stack(samples))
+    return transcript, partial_lagrange(fnp.stack(samples))
 
 
 def sample_rlc_coeffs(
@@ -121,8 +121,8 @@ def sample_query_positions(
     and its verifier dual — zorch's ``sample_positions`` reduces the Mont
     bitpattern mod the block length instead, a different wire."""
     transcript, raw = transcript.sample(num_queries)
-    mask = jnp.uint32((1 << log2_strict_usize(block_len)) - 1)
-    return transcript, (raw.astype(jnp.uint32) & mask).astype(jnp.int32)
+    mask = fnp.uint32((1 << log2_strict_usize(block_len)) - 1)
+    return transcript, (raw.astype(fnp.uint32) & mask).astype(fnp.int32)
 
 
 @partial(
@@ -258,14 +258,14 @@ def _open_fold(
     codeword = code.encode(mle)
 
     # Domain separation: bind the fold-round count (mirrors the reference).
-    t = t.observe(jnp.asarray(num_vars, bf_dtype))
+    t = t.observe(fnp.asarray(num_vars, bf_dtype))
 
     # Interleaved sumcheck + pre-fold pair-leaf FRI fold, one variable per round.
     raw_roots: list[Array] = []
     bound_roots: list[Array] = []
     messages: list[Array] = []
     fold_layers: list[Opening] = []
-    zero = jnp.zeros((), ef_dtype)
+    zero = fnp.zeros((), ef_dtype)
     for i in range(num_vars):
         # The sumcheck message (s(0), s(1)) for the variable bound this round
         # (stack_point[-(i+1)]), from the running MLE under the running claim.
@@ -286,7 +286,7 @@ def _open_fold(
         bound_roots.append(bound_root)
         fold_layers.append((leaves, digest_layers))
 
-        message = jnp.stack([zero_val, one_val])
+        message = fnp.stack([zero_val, one_val])
         messages.append(message)
         t = t.observe(message)
         t = t.observe(bound_root)
@@ -299,7 +299,7 @@ def _open_fold(
     # The residual codeword is the base-code encoding of the final claim (a
     # constant); SP1 binds only its first element as the cleartext final poly.
     final_poly = codeword[0]
-    t = t.observe(jnp.atleast_1d(final_poly))
+    t = t.observe(fnp.atleast_1d(final_poly))
 
     # FRI query-phase proof-of-work grind (zorch#170). Even at pow_bits == 0 the
     # canonical-zero witness advances the transcript (observe + squeeze), so the
@@ -318,9 +318,9 @@ def _open_fold(
     ]
 
     return (
-        jnp.stack(raw_roots),
-        jnp.stack(bound_roots),
-        jnp.stack(messages),
+        fnp.stack(raw_roots),
+        fnp.stack(bound_roots),
+        fnp.stack(messages),
         final_poly,
         pow_witness,
         positions,

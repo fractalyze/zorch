@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
@@ -20,10 +20,10 @@ def _good(**over: Any) -> Poseidon2Params:
         alpha=3,
         external_rounds=er,
         internal_rounds=ir,
-        external_constants_initial=jnp.zeros((er, w), dtype=F),
-        external_constants_terminal=jnp.zeros((er, w), dtype=F),
-        internal_constants=jnp.zeros((ir, w), dtype=F),
-        internal_diag=jnp.ones((w,), dtype=F),
+        external_constants_initial=fnp.zeros((er, w), dtype=F),
+        external_constants_terminal=fnp.zeros((er, w), dtype=F),
+        internal_constants=fnp.zeros((ir, w), dtype=F),
+        internal_diag=fnp.ones((w,), dtype=F),
     )
     base.update(over)
     return Poseidon2Params(**base)
@@ -40,14 +40,14 @@ class Poseidon2ParamsTest(absltest.TestCase):
 
     def test_bad_rc_shape_raises(self) -> None:
         with self.assertRaises(ValueError) as cm:
-            _good(internal_constants=jnp.zeros((19, 16), dtype=F))  # wrong round count
+            _good(internal_constants=fnp.zeros((19, 16), dtype=F))  # wrong round count
         self.assertIn("internal_constants", str(cm.exception))
 
     def test_nonzero_internal_lane_raises(self) -> None:
         bad = np.zeros((20, 16), dtype=np.int32)
         bad[0, 1] = 1  # lane 1 nonzero
         with self.assertRaises(ValueError) as cm:
-            _good(internal_constants=jnp.array(bad, dtype=F))
+            _good(internal_constants=fnp.array(bad, dtype=F))
         self.assertIn("lane", str(cm.exception).lower())
 
 
@@ -66,7 +66,7 @@ class Poseidon2ParamsValueEqualityTest(absltest.TestCase):
         self.assertNotEqual(_good(), _good(alpha=5))
 
     def test_differs_on_constant_arrays(self) -> None:
-        ones = jnp.ones((4, 16), dtype=F)
+        ones = fnp.ones((4, 16), dtype=F)
         self.assertNotEqual(_good(), _good(external_constants_initial=ones))
 
 

@@ -2,7 +2,7 @@
 
 The classic-Poseidon linear layer is a dense `mds @ state` applied every round,
 written as a fixed, unrolled sum of column-scaled lanes so a round body stays
-straight-line element-wise and fuses to one kernel: `jnp.dot`/`jnp.sum` lower to
+straight-line element-wise and fuses to one kernel: `fnp.dot`/`fnp.sum` lower to
 a reduction (the `kInput` fusion boundary) and dynamic indexing to `gather`,
 either of which splits the kernel. The MDS rides as integer literals (canonical
 ints), so no field array is captured — required inside a name-routed
@@ -15,7 +15,7 @@ from __future__ import annotations
 import functools
 import operator
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -29,7 +29,7 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
     `mds_rows` is the `width x width` matrix as canonical Python ints (rows of
     ints), so lanes scale by integer literals and no field array is captured —
     required inside a name-routed `fused_region`. The unrolled per-lane sum keeps
-    the layer reduction-free (no `jnp.dot`/`jnp.sum`/gather), so the round body
+    the layer reduction-free (no `fnp.dot`/`fnp.sum`/gather), so the round body
     lowers to a single fused kernel.
     """
     w = state.shape[0]
@@ -38,6 +38,6 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
             f"dense MDS needs a 1-D state matching a square matrix, got state "
             f"{state.shape}, matrix rows {len(mds_rows)}"
         )
-    return jnp.stack(
+    return fnp.stack(
         [_unrolled_sum([mds_rows[i][j] * state[j] for j in range(w)]) for i in range(w)]
     )
