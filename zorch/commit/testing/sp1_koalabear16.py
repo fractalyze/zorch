@@ -20,7 +20,7 @@ https://github.com/fractalyze/sp1/blob/cc4eb1f38/slop/crates/koala-bear/src/koal
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
 
@@ -229,16 +229,16 @@ def koalabear16_params() -> Poseidon2Params:
     """SP1's koalabear width-16 Poseidon2 parameters."""
     internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
     internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
-    monty_inverse = jnp.array(_MONTY_INVERSE, dtype=F)
+    monty_inverse = fnp.array(_MONTY_INVERSE, dtype=F)
     return Poseidon2Params(
         width=_WIDTH,
         dtype=F,
         alpha=_ALPHA,
         external_rounds=_ER,
         internal_rounds=_IR,
-        external_constants_initial=jnp.array(_EXTERNAL_INITIAL, dtype=F),
-        external_constants_terminal=jnp.array(_EXTERNAL_TERMINAL, dtype=F),
-        internal_constants=jnp.array(internal_rc, dtype=F),
-        internal_diag=jnp.multiply(jnp.array(_INTERNAL_DIAG, dtype=F), monty_inverse),
+        external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
+        external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
+        internal_constants=fnp.array(internal_rc, dtype=F),
+        internal_diag=fnp.multiply(fnp.array(_INTERNAL_DIAG, dtype=F), monty_inverse),
         internal_j_scale=monty_inverse,
     )

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array
@@ -62,11 +62,11 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _from_u32(u32: Any, dtype: Any) -> Array:
-    return frx.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
+    return frx.lax.bitcast_convert_type(fnp.asarray(u32, dtype=fnp.uint32), dtype)
 
 
 def _u32(a: Array) -> np.ndarray:
-    return np.asarray(frx.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
+    return np.asarray(frx.lax.bitcast_convert_type(a, fnp.uint32)).reshape(-1)
 
 
 def _raw_area(round_meta: dict[str, Any]) -> int:
@@ -100,13 +100,13 @@ class _ScriptedTranscript:
     challenge is four base squeezes; ``_witness`` is the dumped proof-of-work
     witness the grind returns. ``observe`` is a no-op (replay, not absorb)."""
 
-    _samples: jnp.ndarray  # (TOTAL,) flat base-field squeeze stream
-    _cursor: jnp.ndarray  # () int32 — squeezes consumed so far
-    _witness: jnp.ndarray
+    _samples: fnp.ndarray  # (TOTAL,) flat base-field squeeze stream
+    _cursor: fnp.ndarray  # () int32 — squeezes consumed so far
+    _witness: fnp.ndarray
 
     @classmethod
     def of(cls, samples: Sequence[Array], witness: Array) -> _ScriptedTranscript:
-        return cls(jnp.stack(list(samples)), jnp.zeros((), jnp.int32), witness)
+        return cls(fnp.stack(list(samples)), fnp.zeros((), fnp.int32), witness)
 
     def observe(self, values: Array) -> _ScriptedTranscript:
         return self
@@ -170,7 +170,7 @@ class StackedOpenByteMatchTest(absltest.TestCase):
             ),
             BF,
         )
-        query_stream = jnp.asarray(ch["query_indices"], dtype=jnp.uint32).astype(BF)
+        query_stream = fnp.asarray(ch["query_indices"], dtype=fnp.uint32).astype(BF)
         samples = list(ef_stream) + list(query_stream)
         witness = _from_u32(_out("pow_witness.npy"), BF)
 
@@ -309,8 +309,8 @@ class StackedOpenByteMatchTest(absltest.TestCase):
 
     def test_verify_rejects_tampered_final_poly(self) -> None:
         # The final poly is the fold chain's residual; a flipped lane breaks it.
-        u = frx.lax.bitcast_convert_type(self.real_proof.final_poly, jnp.uint32)
-        u = u.at[0].set(u[0] ^ jnp.uint32(1))
+        u = frx.lax.bitcast_convert_type(self.real_proof.final_poly, fnp.uint32)
+        u = u.at[0].set(u[0] ^ fnp.uint32(1))
         bad = dataclasses.replace(
             self.real_proof, final_poly=frx.lax.bitcast_convert_type(u, EF)
         )

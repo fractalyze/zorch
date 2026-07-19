@@ -26,7 +26,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.commit.merkle import MerkleTree
@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 def _eval_poly(coeffs: Array, z: Array) -> Array:
     """f(z) for ascending `coeffs`, by index-loop Horner (iterating a field array
     under CUDA dispatches lax.sign — index instead)."""
-    acc = jnp.zeros((), coeffs.dtype)
+    acc = fnp.zeros((), coeffs.dtype)
     for i in range(coeffs.shape[0] - 1, -1, -1):
         acc = acc * z + coeffs[i]
     return acc
@@ -85,7 +85,7 @@ class FriProver:
             _commit_one(self.params.code, self.params.tree, coeffs) for coeffs in polys
         ]
         roots = [poly.digest_layers[-1][0] for poly in committed]
-        return jnp.stack(roots), FriProverData(tuple(committed))
+        return fnp.stack(roots), FriProverData(tuple(committed))
 
     def open(
         self,
@@ -105,7 +105,7 @@ class FriProver:
             t, proof = _open_one(self.params, committed, z, v, t)
             values.append(v)
             proofs.append(proof)
-        return jnp.stack(values), proofs, t
+        return fnp.stack(values), proofs, t
 
 
 # Jitted per-poly commit/open bodies (issue #140), like basefold's zones; one

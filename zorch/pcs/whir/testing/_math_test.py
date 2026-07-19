@@ -11,7 +11,7 @@ base field, whose item size sets the bitcast's trailing shape.
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest, parameterized
 from frx import Array, lax, tree_util
@@ -33,7 +33,7 @@ def _seeded(dtype: DTypeLike) -> DuplexTranscript:
     draw would be position 0 — an order- or reduction-breaking regression would
     slip through against that. Absorbing first makes the draws distinct."""
     return cheap_transcript(dtype=dtype, rate=_RATE).observe(
-        jnp.arange(1, 6, dtype=jnp.uint32).astype(dtype)
+        fnp.arange(1, 6, dtype=fnp.uint32).astype(dtype)
     )
 
 
@@ -43,14 +43,14 @@ def _per_draw_reference(
     """The form `sample_query_positions` replaced: one squeeze per index, each
     reduced on its canonical low limb."""
     if count == 0:
-        return transcript, jnp.empty((0,), jnp.int32)
+        return transcript, fnp.empty((0,), fnp.int32)
     positions = []
     t = transcript
     for _ in range(count):
         t, raw = t.sample(1)
-        canonical = lax.bitcast_convert_type(raw, dtype).astype(jnp.uint32).reshape(-1)
-        positions.append((canonical[0] % stride).astype(jnp.int32))
-    return t, jnp.stack(positions)
+        canonical = lax.bitcast_convert_type(raw, dtype).astype(fnp.uint32).reshape(-1)
+        positions.append((canonical[0] % stride).astype(fnp.int32))
+    return t, fnp.stack(positions)
 
 
 class SampleQueryPositionsTest(parameterized.TestCase):
@@ -91,8 +91,8 @@ class SampleQueryPositionsTest(parameterized.TestCase):
 
     def test_positions_are_in_range(self) -> None:
         _, positions = sample_query_positions(_seeded(KB), _STRIDE, 4 * _RATE, KB)
-        self.assertTrue(bool(jnp.all(positions >= 0)))
-        self.assertTrue(bool(jnp.all(positions < _STRIDE)))
+        self.assertTrue(bool(fnp.all(positions >= 0)))
+        self.assertTrue(bool(fnp.all(positions < _STRIDE)))
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -48,7 +48,7 @@ class GkrRoundtripTest(absltest.TestCase):
 
         # Prover and verifier thread identical reductions.
         for pe, ve in zip(prover_final, verifier_final, strict=True):
-            self.assertTrue(bool(jnp.all(pe == ve)))
+            self.assertTrue(bool(fnp.all(pe == ve)))
 
         # GKR completeness: the reduction lands on the input leaf MLE.
         num_eval, den_eval, point = verifier_final
@@ -69,7 +69,7 @@ class GkrRoundtripTest(absltest.TestCase):
         _, output, proofs, _ = prove_gkr(first)
         bad = proofs[0]
         proofs[0] = replace(
-            bad, round_polys=bad.round_polys.at[0, 0].add(jnp.array(1, KB))
+            bad, round_polys=bad.round_polys.at[0, 0].add(fnp.array(1, KB))
         )
         _, ok = verify_gkr(output, proofs)
         self.assertFalse(bool(ok))
@@ -96,7 +96,7 @@ class GkrDuplexRoundtripTest(absltest.TestCase):
         )
         self.assertTrue(bool(ok))
         for pe, ve in zip(prover_final, verifier_final, strict=True):
-            self.assertTrue(bool(jnp.all(pe == ve)))
+            self.assertTrue(bool(fnp.all(pe == ve)))
 
 
 if __name__ == "__main__":

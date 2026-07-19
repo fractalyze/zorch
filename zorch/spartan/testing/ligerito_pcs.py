@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
@@ -26,12 +26,12 @@ from zorch.pcs.ligerito.prover import LigeritoProver, LigeritoProverData
 from zorch.pcs.ligerito.verifier import LigeritoVerifier
 from zorch.transcript import Transcript
 
-_K = jnp.dtype(EF).itemsize // jnp.dtype(F).itemsize
+_K = fnp.dtype(EF).itemsize // fnp.dtype(F).itemsize
 
 
 def embed(x: Array) -> Array:
     """Embed a base-field array into the extension (value in the low limb)."""
-    lanes = jnp.zeros((*x.shape, _K), F).at[..., 0].set(x)
+    lanes = fnp.zeros((*x.shape, _K), F).at[..., 0].set(x)
     return lanes.view(EF).reshape(x.shape)
 
 
@@ -64,7 +64,7 @@ class LigeritoSpartanProver:
         value, proof, transcript = self._inner.open(
             prover_data, [embed(points[0])], transcript
         )
-        return project(jnp.reshape(value, (1,))), proof, transcript
+        return project(fnp.reshape(value, (1,))), proof, transcript
 
 
 class LigeritoSpartanVerifier:

@@ -10,7 +10,7 @@ from functools import partial
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -22,8 +22,8 @@ def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
     pad = width - arr.shape[0]
     if pad == 0:
         return arr
-    tail = jnp.zeros((pad,), arr.dtype) if neutral == 0 else jnp.ones((pad,), arr.dtype)
-    return jnp.concatenate([arr, tail])
+    tail = fnp.zeros((pad,), arr.dtype) if neutral == 0 else fnp.ones((pad,), arr.dtype)
+    return fnp.concatenate([arr, tail])
 
 
 def _resize_zero(arr: Array, width: int) -> Array:
@@ -87,7 +87,7 @@ def _pool_lay_batch(
             continue
         buf = pool.get((role, width, src.dtype))
         if buf is None:
-            buf = jnp.zeros((width,), src.dtype)
+            buf = fnp.zeros((width,), src.dtype)
         laid_at.append(len(out))
         out.append(buf)  # placeholder, overwritten below
         bufs.append(buf)

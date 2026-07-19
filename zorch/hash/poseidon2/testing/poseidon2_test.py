@@ -6,7 +6,7 @@ import dataclasses
 import functools
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
@@ -30,22 +30,22 @@ from zorch.testkit.jit_cache import assert_single_trace
 class Poseidon2Koalabear16Test(absltest.TestCase):
     def test_permute_byte_matches_plonky3(self) -> None:
         p = koalabear16_perm()
-        out = p.permute(jnp.arange(16, dtype=F))
-        self.assertTrue(bool(jnp.array_equal(out, KOALABEAR16_EXPECTED)))
+        out = p.permute(fnp.arange(16, dtype=F))
+        self.assertTrue(bool(fnp.array_equal(out, KOALABEAR16_EXPECTED)))
 
     def test_vmap_batch_matches(self) -> None:
         p = koalabear16_perm()
-        x = jnp.arange(16, dtype=F)
-        batch = frx.vmap(p.permute)(jnp.stack([x, x]))
-        self.assertTrue(bool(jnp.array_equal(batch[0], KOALABEAR16_EXPECTED)))
-        self.assertTrue(bool(jnp.array_equal(batch[1], KOALABEAR16_EXPECTED)))
+        x = fnp.arange(16, dtype=F)
+        batch = frx.vmap(p.permute)(fnp.stack([x, x]))
+        self.assertTrue(bool(fnp.array_equal(batch[0], KOALABEAR16_EXPECTED)))
+        self.assertTrue(bool(fnp.array_equal(batch[1], KOALABEAR16_EXPECTED)))
 
     def test_permute_reuses_one_trace_across_instances(self) -> None:
         # Freshly built same-params permutations must share one module-level
         # permute trace — the static key compares by value (#214). Without the
         # zone, every composite emission re-traced the permutation body, which
         # dominated the PCS first-trace-per-config cost (#216).
-        x = jnp.arange(16, dtype=F)
+        x = fnp.arange(16, dtype=F)
         calls = [functools.partial(koalabear16_perm().permute, x) for _ in (0, 1)]
         assert_single_trace(self, _permute_body, calls)
 
@@ -55,7 +55,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # shape rides as composite.attributes — all four ints are required by
         # the XLA recognizer. W=16, E=4, I=20, alpha=3 for koalabear-16.
         p = koalabear16_perm()
-        txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
@@ -78,7 +78,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
         # not the storage 1 a raw-bits/canonical mixup would emit (fractalyze/xla#206).
         p = koalabear16_scaled_perm()
-        txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).as_text()
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
@@ -90,7 +90,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # If frx's composite batching rule regresses, vmap silently falls back to
         # generic loop fusion — the dedicated kernel lost with no error.
         p = koalabear16_perm()
-        states = jnp.arange(5 * 16, dtype=F).reshape(5, 16)
+        states = fnp.arange(5 * 16, dtype=F).reshape(5, 16)
         txt = frx.jit(lambda x: frx.vmap(p.permute)(x)).lower(states).as_text()
         comp = [ln for ln in txt.splitlines() if "stablehlo.composite" in ln]
         self.assertEqual(len(comp), 1, txt)  # one composite over the whole batch
@@ -104,9 +104,9 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # falls back to the generic zorch.fused_region marker (LoopFusion lowers
         # the real body) to stay correct. (An M4-block-structured matrix — e.g.
         # the HorizenLabs reference — does take the dedicated route.)
-        custom = jnp.arange(16 * 16, dtype=F).reshape(16, 16)
+        custom = fnp.arange(16 * 16, dtype=F).reshape(16, 16)
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=custom))
-        txt = frx.jit(p.permute).lower(jnp.arange(16, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).as_text()
         self.assertNotIn(POSEIDON2_MARKER, txt)
         self.assertIn("zorch.fused_region", txt)
 
@@ -117,7 +117,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # marker — so the dedicated emitter serves any M4 without a special case.
         hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
         w = 16
-        mds = jnp.array(
+        mds = fnp.array(
             [
                 [hl_m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(w)]
                 for i in range(w)
@@ -125,7 +125,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
             dtype=F,
         )
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
-        txt = frx.jit(p.permute).lower(jnp.arange(w, dtype=F)).as_text()
+        txt = frx.jit(p.permute).lower(fnp.arange(w, dtype=F)).as_text()
         self.assertIn(POSEIDON2_MARKER, txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"
@@ -139,7 +139,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # M4 (here the HorizenLabs reference), not a hardcoded one.
         hl_m4 = [[5, 7, 1, 3], [4, 6, 1, 1], [1, 3, 5, 7], [1, 1, 4, 6]]
         w = 16
-        mds = jnp.array(
+        mds = fnp.array(
             [
                 [hl_m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(w)]
                 for i in range(w)
@@ -148,7 +148,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         )
         p = Poseidon2(dataclasses.replace(koalabear16_params(), external_matrix=mds))
         s = Sponge(p, SpongeParams(rate=8, out=8))
-        txt = frx.jit(lambda x: s.hash(x)).lower(jnp.arange(w, dtype=F)).as_text()
+        txt = frx.jit(lambda x: s.hash(x)).lower(fnp.arange(w, dtype=F)).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', txt)
         self.assertIn(
             "external_m4 = dense<[5, 7, 1, 3, 4, 6, 1, 1, 1, 3, 5, 7, 1, 1, 4, 6]> :"

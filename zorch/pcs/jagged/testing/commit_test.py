@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array
@@ -45,11 +45,11 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _u32(a: Array) -> np.ndarray:
-    return np.asarray(frx.lax.bitcast_convert_type(a, jnp.uint32)).reshape(-1)
+    return np.asarray(frx.lax.bitcast_convert_type(a, fnp.uint32)).reshape(-1)
 
 
 def _from_u32(u32: Any, dtype: Any) -> Array:
-    return frx.lax.bitcast_convert_type(jnp.asarray(u32, dtype=jnp.uint32), dtype)
+    return frx.lax.bitcast_convert_type(fnp.asarray(u32, dtype=fnp.uint32), dtype)
 
 
 def _raw_area(round_meta: dict[str, Any]) -> int:
@@ -63,7 +63,7 @@ def _raw_area(round_meta: dict[str, Any]) -> int:
 
 def _region(heights: tuple[int, ...] = (4, 2)) -> JaggedRegion:
     chips = [
-        jnp.arange(100 * i, 100 * i + h * 3, dtype=jnp.uint32).reshape(h, 3).view(BF)
+        fnp.arange(100 * i, 100 * i + h * 3, dtype=fnp.uint32).reshape(h, 3).view(BF)
         for i, h in enumerate(heights)
     ]
     return JaggedRegion.from_chips(chips, log_stacking_height=3, max_log_row_count=4)
@@ -76,7 +76,7 @@ class CommitRegionTest(absltest.TestCase):
         c2, _ = commit_region(_region(), smcs, log_blowup=2)
         self.assertEqual(c1.shape, (8,))
         self.assertEqual(c1.dtype, BF)
-        self.assertTrue(bool(jnp.all(c1 == c2)))
+        self.assertTrue(bool(fnp.all(c1 == c2)))
         self.assertEqual(data1.dense.shape, _region().dense.shape)
         self.assertNotEmpty(data1.digest_layers)
 
@@ -93,7 +93,7 @@ class CommitRegionTest(absltest.TestCase):
         """Identical dense bytes split into different chips must commit
         differently — that is what the structure hash is for."""
         smcs = _smcs()
-        flat = jnp.arange(24, dtype=jnp.uint32).view(BF)
+        flat = fnp.arange(24, dtype=fnp.uint32).view(BF)
         a = JaggedRegion.from_chips(
             [flat.reshape(8, 3).view(BF)], log_stacking_height=3, max_log_row_count=4
         )
@@ -104,12 +104,12 @@ class CommitRegionTest(absltest.TestCase):
         )
         ca, _ = commit_region(a, smcs, log_blowup=2)
         cb, _ = commit_region(b, smcs, log_blowup=2)
-        self.assertFalse(bool(jnp.all(ca == cb)))
+        self.assertFalse(bool(fnp.all(ca == cb)))
 
     def test_unaligned_dense_raises(self) -> None:
         # Bypasses from_chips (which pads by construction) to hit the guard.
         bad = JaggedRegion(
-            dense=jnp.zeros(10, dtype=BF),
+            dense=fnp.zeros(10, dtype=BF),
             chip_starts=(0, 10),
             row_counts=(2, 8, 2),
             column_counts=(5, 0, 1),
@@ -122,7 +122,7 @@ class CommitRegionTest(absltest.TestCase):
         smcs = _smcs()
         c2, _ = commit_region(_region(), smcs, log_blowup=2)
         c1, _ = commit_region(_region(), smcs, log_blowup=1)
-        self.assertFalse(bool(jnp.all(c1 == c2)))
+        self.assertFalse(bool(fnp.all(c1 == c2)))
 
     def test_matches_inline_round_commit(self) -> None:
         """The retained ``(mle, digest_layers)`` and the shape-bound root are

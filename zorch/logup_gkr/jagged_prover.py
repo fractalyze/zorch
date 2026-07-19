@@ -40,7 +40,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.logup_gkr._jagged_composites import (
@@ -241,7 +241,7 @@ def _finalize_layer(
 ) -> tuple[Array, Array, Array, Array, Array, Array]:
     head = _Planes(*(a[:2] for a in (planes.n0, planes.n1, planes.d0, planes.d1)))
     fn0, fn1, fd0, fd1 = _composite_fix_last(head, alpha)
-    return fn0, fn1, fd0, fd1, jnp.stack(chal[::-1]), jnp.stack(poly)
+    return fn0, fn1, fd0, fd1, fnp.stack(chal[::-1]), fnp.stack(poly)
 
 
 def _run_jagged_rounds(
@@ -270,7 +270,7 @@ def _run_jagged_rounds(
     nrv, niv = sched.nrv, sched.niv
     row_counts = sched.row_counts
     challenge_limbs = sched.challenge_limbs
-    one = jnp.ones((), eval_point.dtype)
+    one = fnp.ones((), eval_point.dtype)
     eq_adj = one
     pad_adj = one
     planes = state.planes
@@ -327,7 +327,7 @@ def _run_jagged_rounds(
     for rnd in range(nrv + niv):
         # z_cur = eval_point's coordinate for round rnd (== eval_point[-(rnd+1)]).
         # `rnd` is a static Python loop index, so this is a compile-time slice --
-        # NOT a per-round `jnp.take`/`dynamic_index` (a real ~22us gather dispatch,
+        # NOT a per-round `fnp.take`/`dynamic_index` (a real ~22us gather dispatch,
         # ~one per round, one of the launch-flood kernels the eager fold pays).
         z_cur = eval_point[-(rnd + 1)]
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
@@ -467,7 +467,7 @@ def _observe_openings_and_fold(
     zone -- the layer-boundary sibling of the per-round FS hop. `observe_and_sample`
     fuses the absorb + squeeze exactly as the round FS does, so the transcript stream
     is byte-identical to the split form."""
-    transcript, raw = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), n)
+    transcript, raw = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), n)
     r = reinterpret_challenge(raw, dtype)
     return transcript, *fold_carry(n0, n1, d0, d1, point, r)
 

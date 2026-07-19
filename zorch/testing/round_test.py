@@ -12,7 +12,7 @@ from __future__ import annotations
 import weakref
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -33,7 +33,7 @@ class _ScaleProver(Round):
     """carry -> carry*factor + r; emits the input carry as its message."""
 
     def __init__(self, factor: int) -> None:
-        self.factor = jnp.array(factor, KB)
+        self.factor = fnp.array(factor, KB)
 
     def __call__(self, carry: Any, transcript: Transcript) -> Any:
         transcript, r = transcript.sample(1)
@@ -44,7 +44,7 @@ class _ScaleVerifier(Round):
     """Dual of `_ScaleProver`: replays the update, checks the emitted carry."""
 
     def __init__(self, factor: int) -> None:
-        self.factor = jnp.array(factor, KB)
+        self.factor = fnp.array(factor, KB)
 
     def __call__(
         self, carry: Any, msg: Any, transcript: Transcript
@@ -81,7 +81,7 @@ class _ReleaseProbeProver(Round):
 class ChainTest(absltest.TestCase):
     def test_roundtrip_heterogeneous(self) -> None:
         factors = (2, 3, 7)
-        carry0 = jnp.array(11, KB)
+        carry0 = fnp.array(11, KB)
 
         final, _, msgs = ProveChain([_ScaleProver(f) for f in factors])(
             carry0, cheap_transcript(KB)
@@ -100,7 +100,7 @@ class ChainTest(absltest.TestCase):
     def test_chain_is_a_round_so_chains_nest(self) -> None:
         inner = ProveChain([_ScaleProver(2), _ScaleProver(3)])
         outer = ProveChain([inner, _ScaleProver(5)])
-        _, _, msgs = outer(jnp.array(4, KB), cheap_transcript(KB))
+        _, _, msgs = outer(fnp.array(4, KB), cheap_transcript(KB))
         self.assertEqual(len(msgs), 2)  # [inner's message list, scale-5's message]
         self.assertEqual(len(msgs[0]), 2)  # inner ran two rounds
 
@@ -118,7 +118,7 @@ class ChainTest(absltest.TestCase):
             return _ReleaseProbeProver(payload, refs, live_log)
 
         chain = ProveChain(make_round() for _ in range(3))
-        chain(jnp.array(1, KB), cheap_transcript(KB))
+        chain(fnp.array(1, KB), cheap_transcript(KB))
 
         # Each round saw only its own payload alive; nothing survives the call.
         self.assertEqual(live_log, [1, 1, 1])
@@ -126,7 +126,7 @@ class ChainTest(absltest.TestCase):
 
     def test_generator_chain_matches_eager_chain(self) -> None:
         factors = (2, 3, 7)
-        carry0 = jnp.array(11, KB)
+        carry0 = fnp.array(11, KB)
         eager_carry, eager_t, eager_msgs = ProveChain(
             [_ScaleProver(f) for f in factors]
         )(carry0, cheap_transcript(KB))
@@ -147,15 +147,15 @@ class ChainTest(absltest.TestCase):
         # A short msgs list must fail loud, not silently skip rounds with ok=True.
         chain = VerifyChain([_ScaleVerifier(2), _ScaleVerifier(3)])
         with self.assertRaises(ValueError):
-            chain(jnp.array(1, KB), [jnp.array(1, KB)], cheap_transcript(KB))
+            chain(fnp.array(1, KB), [fnp.array(1, KB)], cheap_transcript(KB))
 
     def test_verify_rejects_tampered_message(self) -> None:
         factors = (2, 3)
-        carry0 = jnp.array(9, KB)
+        carry0 = fnp.array(9, KB)
         _, _, msgs = ProveChain([_ScaleProver(f) for f in factors])(
             carry0, cheap_transcript(KB)
         )
-        msgs[0] = msgs[0] + jnp.array(1, KB)
+        msgs[0] = msgs[0] + fnp.array(1, KB)
         _, _, ok = VerifyChain([_ScaleVerifier(f) for f in factors])(
             carry0, msgs, cheap_transcript(KB)
         )

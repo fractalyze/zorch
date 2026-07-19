@@ -28,7 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.pcs.ipa.challenger import (
@@ -81,27 +81,27 @@ def reduce_opening(
     challenges through the injected `fs` (challenger-generic), so an accumulation
     consumer drives it with the same arkworks-faithful FS as its prover."""
     k = proof.l.shape[0]
-    one = jnp.ones((), dtype=value.dtype)
+    one = fnp.ones((), dtype=value.dtype)
 
     fs, xi0 = fs.seed(commitment, point, value)
     us = []
     for j in range(k):
         fs, uj = fs.challenge(proof.l[j], proof.r[j])
         us.append(uj)
-    u = jnp.stack(us)
+    u = fnp.stack(us)
     u_inv = one / u
 
     # Q = P + v·h' + Σ_j (u_j⁻¹·L_j + u_j·R_j), h' = U·ξ₀, one MSM over O(log n)
     # points. The v·h' term rides U with the ξ₀ factor on its scalar; arkworks'
     # L/R labeling puts u⁻¹ on L (a_hi·G_lo) and u on R (a_lo·G_hi). Interleave the
     # per-round (u⁻¹, u) and (L, R) with static-shape ops, no per-element gather.
-    scalars = jnp.concatenate(
-        [jnp.stack([one, value * xi0]), jnp.stack([u_inv, u], axis=1).reshape(-1)]
+    scalars = fnp.concatenate(
+        [fnp.stack([one, value * xi0]), fnp.stack([u_inv, u], axis=1).reshape(-1)]
     )
-    pts = jnp.concatenate(
+    pts = fnp.concatenate(
         [
-            jnp.stack([commitment, key.u]),
-            jnp.stack([proof.l, proof.r], axis=1).reshape(-1),
+            fnp.stack([commitment, key.u]),
+            fnp.stack([proof.l, proof.r], axis=1).reshape(-1),
         ]
     )
     combined = lax.msm(scalars, pts)
@@ -127,11 +127,11 @@ def reduce_opening_zk(
     s = key.s
     if s is None:
         raise ValueError("zk verification requires the blinding generator key.s")
-    one = jnp.ones((), dtype=value.dtype)
+    one = fnp.ones((), dtype=value.dtype)
     fs, hc = fs.hiding_challenge(commitment, proof.hiding_comm, point, value)
     mod_commitment = lax.msm(
-        jnp.stack([one, hc, -proof.rand]),
-        jnp.stack([commitment, proof.hiding_comm, s]),
+        fnp.stack([one, hc, -proof.rand]),
+        fnp.stack([commitment, proof.hiding_comm, s]),
     )
     return reduce_opening(
         key, mod_commitment, point, value, IpaProof(proof.l, proof.r, proof.a), fs
@@ -147,10 +147,10 @@ def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
     g_final = lax.msm(s, key.basis[: s.shape[0]])
     # rhs = a·G_final + a·b·h', h' = U·ξ₀ → the U scalar carries the ξ₀ factor.
     rhs = lax.msm(
-        jnp.stack([claim.a, claim.a * claim.b * claim.seed]),
-        jnp.stack([g_final, key.u]),
+        fnp.stack([claim.a, claim.a * claim.b * claim.seed]),
+        fnp.stack([g_final, key.u]),
     )
-    return jnp.all(claim.combined == rhs)
+    return fnp.all(claim.combined == rhs)
 
 
 @dataclass(frozen=True)
@@ -180,7 +180,7 @@ class IpaVerifier:
         for c, x, v, pf in zip(commitment, points, values, proof):
             fs, claim = reduce_opening(self.key, c, x, v, pf, fs)
             oks.append(settle(self.key, claim))
-        return jnp.all(jnp.stack(oks)), fs.transcript
+        return fnp.all(fnp.stack(oks)), fs.transcript
 
 
 if TYPE_CHECKING:

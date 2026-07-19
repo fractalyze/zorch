@@ -21,7 +21,7 @@ def _segment_gather_np(
     (a downstream `_gather_pad` resolves it to the padding value). None when the
     layouts already agree. Stays numpy so the schedule is precomputed host-side
     and baked into the `frx.jit` trace as a constant, where an `np.asarray` of a
-    jnp value would trip on a tracer.
+    fnp value would trip on a tracer.
     """
     if src_counts == dst_counts:
         return None

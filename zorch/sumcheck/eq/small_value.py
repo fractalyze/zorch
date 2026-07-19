@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_step
@@ -45,8 +45,8 @@ def _lagrange_over_round_domain(r: Array, d: int) -> Array:
     vanishing polynomial on the finite nodes (the leading-coeff basis). Each round's
     R tensor grows by this factor."""
     finite = naturals(d, r.dtype)
-    return jnp.concatenate(
-        [jnp.atleast_1d(jnp.prod(r - finite)), compute_lagrange_basis(r, finite)]
+    return fnp.concatenate(
+        [fnp.atleast_1d(fnp.prod(r - finite)), compute_lagrange_basis(r, finite)]
     )
 
 
@@ -119,20 +119,20 @@ def _precompute(p_initial: Array, w: Array, l_0: int) -> tuple[list[Array], Arra
     (d+1)-th factor (the transition round folds all d+1 together)."""
     l = log2_strict_usize(p_initial.shape[1])
     l_half = l // 2
-    one = jnp.ones((), dtype=p_initial.dtype)
+    one = fnp.ones((), dtype=p_initial.dtype)
 
     e_in = expand_eq_to_hypercube(w[l_0 : l_0 + l_half], one)
     w_x_out = w[l_half + l_0 :]
     x_out_size = 1 << (l - l_half - l_0)
     e_out = [
-        jnp.reshape(
-            expand_eq_to_hypercube(jnp.concatenate([w[i:l_0], w_x_out]), one),
+        fnp.reshape(
+            expand_eq_to_hypercube(fnp.concatenate([w[i:l_0], w_x_out]), one),
             (1 << (l_0 - i), x_out_size),
         )
         for i in range(1, l_0 + 1)
     ]
     accumulators = precompute_accumulators(p_initial, e_in, e_out)
-    p_with_weights = jnp.vstack([p_initial, expand_eq_to_hypercube(w, one)[None, :]])
+    p_with_weights = fnp.vstack([p_initial, expand_eq_to_hypercube(w, one)[None, :]])
     return accumulators, p_with_weights
 
 
@@ -152,7 +152,7 @@ def prove_eq_poly_small_value(
 
     # Phase 1: the accumulator rounds under the standard host-loop driver. The state
     # carries the eq table the transition needs, so nothing is captured by hand.
-    one = jnp.ones(1, dtype=p_initial.dtype)
+    one = fnp.ones(1, dtype=p_initial.dtype)
     state, transcript, msgs = fold_rounds(
         SmallValueRound(d, w, accumulators), (one, one, one), transcript, l_0
     )

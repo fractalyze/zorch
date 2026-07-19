@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import cast
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -39,7 +39,7 @@ class DensePcsTest(absltest.TestCase):
         pt = rand_field(4, (3,), KB)
         pcs = DensePcs()
         comm, _ = pcs.commit([poly])
-        bad = jnp.stack([eval_mle(poly, pt) + jnp.ones((), KB)])
+        bad = fnp.stack([eval_mle(poly, pt) + fnp.ones((), KB)])
         ok, _ = pcs.verify(comm, [pt], bad, None, cheap_transcript(KB))
         self.assertFalse(bool(ok))
 
@@ -59,7 +59,7 @@ class WitnessOpenGlueTest(absltest.TestCase):
         pcs = DensePcs()
         comm, pdata = pcs.commit([z[:nvp]])
         r_x = rand_field(10, (inst.s_x,), KB)
-        r = jnp.asarray(rand_field(11, (1,), KB)[0])
+        r = fnp.asarray(rand_field(11, (1,), KB)[0])
         r_y = rand_field(12, (inst.s_y,), KB)
         carry = self._carry_for(inst, z, r_x, r, r_y)
         _, _, msg = WitnessOpenProver(pcs, pdata)(carry, cheap_transcript(KB))
@@ -74,14 +74,14 @@ class WitnessOpenGlueTest(absltest.TestCase):
         pcs = DensePcs()
         comm, pdata = pcs.commit([z[:nvp]])
         r_x = rand_field(20, (inst.s_x,), KB)
-        r = jnp.asarray(rand_field(21, (1,), KB)[0])
+        r = fnp.asarray(rand_field(21, (1,), KB)[0])
         r_y = rand_field(22, (inst.s_y,), KB)
         carry = self._carry_for(inst, z, r_x, r, r_y)
         bad = SpartanCarry(
             r_x=r_x,
             r_batch=r,
             r_y=r_y,
-            inner_final=cast(Array, carry.inner_final) + jnp.ones((), KB),
+            inner_final=cast(Array, carry.inner_final) + fnp.ones((), KB),
         )
         _, _, msg = WitnessOpenProver(pcs, pdata)(carry, cheap_transcript(KB))
         _, _, ok = WitnessOpenVerifier(pcs, comm, inst, io)(

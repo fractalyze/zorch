@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.logup_gkr.prover import Carry, LayerProof, fold_carry, logup_combine
@@ -64,7 +64,7 @@ class GkrLayerRound(Round):
         combined = logup_combine(lam, eq_eval, n0, d1, n1, d0)
         ok = ok_sc & (combined == final_claim)
 
-        transcript, r = transcript.observe_and_sample(jnp.stack([n0, n1, d0, d1]), 1)
+        transcript, r = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), 1)
         r = r[0]
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok

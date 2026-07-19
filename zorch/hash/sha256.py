@@ -22,7 +22,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 from frx.tree_util import register_dataclass
@@ -33,7 +33,7 @@ from zorch.fusion import fused_region
 if TYPE_CHECKING:
     from zorch.hash.byte_hash import ByteHash
 
-U32 = jnp.uint32
+U32 = fnp.uint32
 
 SHA256_MARKER = "zorch.sha256"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
@@ -127,7 +127,7 @@ _H0 = np.array(
 )
 
 
-_Kd = jnp.asarray(_K)
+_Kd = fnp.asarray(_K)
 
 
 def _rotr(x: Array, n: int) -> Array:
@@ -184,18 +184,18 @@ def _compress(state: Array, w16: Array, k: Array) -> Array:
         s0 = _rotr(w[:, 1], 7) ^ _rotr(w[:, 1], 18) ^ (w[:, 1] >> U32(3))
         s1 = _rotr(w[:, 14], 17) ^ _rotr(w[:, 14], 19) ^ (w[:, 14] >> U32(10))
         nxt = w[:, 0] + s0 + w[:, 9] + s1
-        w = jnp.concatenate([w[:, 1:], nxt[:, None]], axis=1)
+        w = fnp.concatenate([w[:, 1:], nxt[:, None]], axis=1)
         return (t1 + t2, a, b, c, d + t1, e, f, g, w)
 
     init = (*(state[:, i] for i in range(8)), w16)
     a, b, c, d, e, f, g, h, _ = frx.lax.fori_loop(0, 64, round_t, init)
-    return state + jnp.stack([a, b, c, d, e, f, g, h], axis=1)
+    return state + fnp.stack([a, b, c, d, e, f, g, h], axis=1)
 
 
 # The SHA-256 initial hash state (sqrt of the first 8 primes) as a device array —
 # the standard start for a full digest, and the resume point a streaming hash
 # broadcasts from.
-INITIAL_STATE = jnp.asarray(_H0)  # uint32 [8]
+INITIAL_STATE = fnp.asarray(_H0)  # uint32 [8]
 
 
 def block_to_words(blocks: Array) -> Array:
@@ -232,7 +232,7 @@ def compress(state: Array, blocks_words: Array, k: Array | None = None) -> Array
 def serialize_digest(state: Array) -> Array:
     """SHA-256 midstate uint32 [B, 8] -> uint8 [B, 32] big-endian digest."""
     b = state.shape[0]
-    out = jnp.stack(
+    out = fnp.stack(
         [
             (state >> U32(24)) & U32(0xFF),
             (state >> U32(16)) & U32(0xFF),
@@ -241,7 +241,7 @@ def serialize_digest(state: Array) -> Array:
         ],
         axis=-1,
     ).astype(
-        jnp.uint8
+        fnp.uint8
     )  # [B, 8, 4]
     return out.reshape(b, 32)
 
@@ -287,7 +287,7 @@ def sha256_chain(h0: Array, blocks: Array) -> Array:
     constant would prepend and land at operand 0."""
 
     def decomposition(h0: Array, k: Array, blocks: Array, **_attrs: object) -> Array:
-        state = jnp.broadcast_to(h0, (blocks.shape[0], 8))
+        state = fnp.broadcast_to(h0, (blocks.shape[0], 8))
         return serialize_digest(compress(state, blocks, k))
 
     return fused_region(
@@ -300,7 +300,7 @@ def sha256_chain(h0: Array, blocks: Array) -> Array:
     )
 
 
-def digest(msg: ArrayLike) -> jnp.ndarray:
+def digest(msg: ArrayLike) -> fnp.ndarray:
     """SHA-256 of a batch of equal-length messages. msg: uint8 [B, L] -> [B, 32].
 
     Byte-identical to the FIPS 180-4 standard per message. The device compression
@@ -308,7 +308,7 @@ def digest(msg: ArrayLike) -> jnp.ndarray:
     the region, since it is static and data-independent).
     """
     msg_np = np.asarray(msg, dtype=np.uint8)
-    blocks = jnp.asarray(_pad(msg_np))
+    blocks = fnp.asarray(_pad(msg_np))
     return sha256_chain(INITIAL_STATE, blocks)
 
 
@@ -342,9 +342,9 @@ def sha256_stream_init() -> Sha256State:
     """A fresh incremental hash (no bytes absorbed)."""
     return Sha256State(
         h=INITIAL_STATE,
-        pending=jnp.zeros(_BLOCK, dtype=jnp.uint8),
-        pending_len=jnp.int32(0),
-        total_len=jnp.int32(0),
+        pending=fnp.zeros(_BLOCK, dtype=fnp.uint8),
+        pending_len=fnp.int32(0),
+        total_len=fnp.int32(0),
     )
 
 
@@ -356,8 +356,8 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     — the CPU-safe pattern `transcript.DuplexTranscript` uses."""
     length = data.shape[0]
     pl = state.pending_len
-    combined_src = jnp.concatenate([state.pending, data.astype(jnp.uint8)])  # [64+L]
-    new_len = pl + jnp.int32(length)
+    combined_src = fnp.concatenate([state.pending, data.astype(fnp.uint8)])  # [64+L]
+    new_len = pl + fnp.int32(length)
     active_blocks = new_len // _BLOCK
     max_blocks = (_BLOCK - 1 + length) // _BLOCK  # static upper bound
 
@@ -365,9 +365,9 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     # stream position j, source index is j while j < pending_len, else shifted to
     # skip past the gap.
     total_slots = (max_blocks + 1) * _BLOCK
-    pos = jnp.arange(total_slots, dtype=jnp.int32)
-    src_idx = pos + jnp.where(pos < pl, jnp.int32(0), _BLOCK - pl)
-    src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+    pos = fnp.arange(total_slots, dtype=fnp.int32)
+    src_idx = pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl)
+    src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
     combined = combined_src[src_idx]  # [total_slots], valid prefix [0:new_len]
 
     # Fold the newly-complete blocks through the marked chain. The live block
@@ -392,13 +392,13 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
                 if min_blocks > 0
                 else h
             )
-            h_new = jnp.where(active_blocks == max_blocks, h_hi, h_lo)
+            h_new = fnp.where(active_blocks == max_blocks, h_hi, h_lo)
 
     tail_len = new_len - active_blocks * _BLOCK
     tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
-    slot = jnp.arange(_BLOCK, dtype=jnp.int32)
-    pending = jnp.where(slot < tail_len, tail, jnp.uint8(0))
-    return Sha256State(h_new, pending, tail_len, state.total_len + jnp.int32(length))
+    slot = fnp.arange(_BLOCK, dtype=fnp.int32)
+    pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
+    return Sha256State(h_new, pending, tail_len, state.total_len + fnp.int32(length))
 
 
 def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
@@ -413,49 +413,49 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     """
     batch, e = extras.shape
     pl = state.pending_len
-    content_len = pl + jnp.int32(e)
-    msg_bytes = state.total_len + jnp.int32(e)
+    content_len = pl + fnp.int32(e)
+    msg_bytes = state.total_len + fnp.int32(e)
     # SHA-256's 64-bit length field; the high 32 bits are zero for any message
     # below 2**32 bits (512 MiB) — so the length is a uint32 and no x64 is needed.
-    bitlen = msg_bytes.astype(jnp.uint32) * jnp.uint32(8)
-    len_bytes = jnp.array([0, 0, 0, 0], dtype=jnp.uint8)
-    len_bytes = jnp.concatenate(
+    bitlen = msg_bytes.astype(fnp.uint32) * fnp.uint32(8)
+    len_bytes = fnp.array([0, 0, 0, 0], dtype=fnp.uint8)
+    len_bytes = fnp.concatenate(
         [
             len_bytes,
-            jnp.stack(
+            fnp.stack(
                 [
-                    ((bitlen >> jnp.uint32(24)) & jnp.uint32(0xFF)).astype(jnp.uint8),
-                    ((bitlen >> jnp.uint32(16)) & jnp.uint32(0xFF)).astype(jnp.uint8),
-                    ((bitlen >> jnp.uint32(8)) & jnp.uint32(0xFF)).astype(jnp.uint8),
-                    (bitlen & jnp.uint32(0xFF)).astype(jnp.uint8),
+                    ((bitlen >> fnp.uint32(24)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                    ((bitlen >> fnp.uint32(16)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                    ((bitlen >> fnp.uint32(8)) & fnp.uint32(0xFF)).astype(fnp.uint8),
+                    (bitlen & fnp.uint32(0xFF)).astype(fnp.uint8),
                 ]
             ),
         ]
     )  # [8] big-endian
 
-    two_blocks = content_len > jnp.int32(55)  # need a 2nd block for pad + length?
-    active_bytes = jnp.where(two_blocks, jnp.int32(128), jnp.int32(64))
+    two_blocks = content_len > fnp.int32(55)  # need a 2nd block for pad + length?
+    active_bytes = fnp.where(two_blocks, fnp.int32(128), fnp.int32(64))
 
-    pos = jnp.arange(128, dtype=jnp.int32)
+    pos = fnp.arange(128, dtype=fnp.int32)
     # content = pending[:pl] ‖ extras[b], skipping the pending gap [pl:64].
-    combined_src = jnp.concatenate(
-        [jnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(jnp.uint8)],
+    combined_src = fnp.concatenate(
+        [fnp.broadcast_to(state.pending, (batch, _BLOCK)), extras.astype(fnp.uint8)],
         axis=1,
     )  # [B, 64+E]
-    src_idx = jnp.clip(
-        pos + jnp.where(pos < pl, jnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
+    src_idx = fnp.clip(
+        pos + fnp.where(pos < pl, fnp.int32(0), _BLOCK - pl), 0, _BLOCK + e - 1
     )
     content = combined_src[:, src_idx]  # [B, 128]
 
     is_content = (pos < content_len)[None, :]
     is_pad80 = (pos == content_len)[None, :]
-    len_start = active_bytes - jnp.int32(8)
+    len_start = active_bytes - fnp.int32(8)
     is_len = ((pos >= len_start) & (pos < active_bytes))[None, :]
-    len_val = len_bytes[jnp.clip(pos - len_start, 0, 7)][None, :]
-    region = jnp.where(
+    len_val = len_bytes[fnp.clip(pos - len_start, 0, 7)][None, :]
+    region = fnp.where(
         is_content,
         content,
-        jnp.where(is_pad80, jnp.uint8(0x80), jnp.where(is_len, len_val, jnp.uint8(0))),
+        fnp.where(is_pad80, fnp.uint8(0x80), fnp.where(is_len, len_val, fnp.uint8(0))),
     )  # [B, 128]
 
     # Both finalize shapes ride the marked chain from the shared midstate; the
@@ -463,7 +463,7 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
     words = block_to_words(region)  # [B, 2, 16]
     d2 = sha256_chain(state.h, words)
     d1 = sha256_chain(state.h, words[:, :1])
-    return jnp.where(two_blocks, d2, d1)
+    return fnp.where(two_blocks, d2, d1)
 
 
 # ---------------------------------------------------------------------------

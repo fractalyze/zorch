@@ -5,7 +5,7 @@ import frx
 
 frx.config.update("jax_enable_x64", True)  # binary_field_ghash is uint64-backed
 
-import frx.numpy as jnp  # noqa: E402
+import frx.numpy as fnp  # noqa: E402
 import numpy as np  # noqa: E402
 import zk_dtypes  # noqa: E402
 from absl.testing import absltest, parameterized  # noqa: E402
@@ -35,15 +35,15 @@ class NaturalsTest(absltest.TestCase):
         # [0..n−1] in the base field, whether asked for the base or an extension.
         for dt in (KB, KX):
             got = naturals(5, dt)
-            self.assertEqual(got.dtype, jnp.dtype(KB))
+            self.assertEqual(got.dtype, fnp.dtype(KB))
             self.assertEqual([int(v) for v in got], [0, 1, 2, 3, 4])
 
     def test_matches_per_element_embedding(self) -> None:
         # The base nodes an extension caller promotes must equal embedding each
         # integer into the extension directly (the pattern this replaces).
         got = naturals(6, KX).astype(KX)
-        want = jnp.stack([jnp.array(i, KX) for i in range(6)])
-        self.assertTrue(bool(jnp.all(got == want)))
+        want = fnp.stack([fnp.array(i, KX) for i in range(6)])
+        self.assertTrue(bool(fnp.all(got == want)))
 
 
 class IsBinaryFieldTest(absltest.TestCase):
@@ -59,18 +59,18 @@ def _gh(n: int, seed: int = 0) -> Array:
     """`n` GF(2^128) elements from random uint32 limbs (the ghash list constructor
     is vacuous on the CPU PJRT path; a limb bitcast is not)."""
     raw = np.random.default_rng(seed).integers(0, 1 << 32, size=(n, 4), dtype=np.uint32)
-    return lax.bitcast_convert_type(jnp.asarray(raw), GH)
+    return lax.bitcast_convert_type(fnp.asarray(raw), GH)
 
 
 def _u64(a: Array) -> np.ndarray:
     """The packed 128-bit representation as `(..., 2)` uint64 lanes."""
-    return np.asarray(lax.bitcast_convert_type(a, jnp.uint64))
+    return np.asarray(lax.bitcast_convert_type(a, fnp.uint64))
 
 
 class BinaryFieldReduceAddTest(parameterized.TestCase):
     """GF(2^128) addition is a bitwise XOR of the 128-bit representation, so a host
     XOR-reduce over the packed uint64 lanes is an exact, reduce-free oracle for the
-    native `jnp.sum`. This pins the binary-field reduce-add lowering that
+    native `fnp.sum`. This pins the binary-field reduce-add lowering that
     `ring_switch.inner_product` — and any field reduction — relies on: a wheel that
     regressed it (cf. the historical CUDA reduce-add SIGSEGV, zorch#400) would fail
     here rather than deep in a prover. Run under `jit`, where the full-reduction
@@ -89,7 +89,7 @@ class BinaryFieldReduceAddTest(parameterized.TestCase):
     ) -> None:
         n = int(np.prod(shape))
         x = _gh(n).reshape(shape)
-        got = _u64(frx.jit(lambda a: jnp.sum(a, axis=axis))(x))
+        got = _u64(frx.jit(lambda a: fnp.sum(a, axis=axis))(x))
         red = tuple(range(len(shape))) if axis is None else axis
         want = np.bitwise_xor.reduce(_u64(x), axis=red)
         self.assertEqual(got.shape, want.shape)

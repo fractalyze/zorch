@@ -33,7 +33,7 @@ through `jit`, where the threading pattern can be validated rather than guessed.
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.hash.permutation import Permutation
@@ -54,7 +54,7 @@ class DuplexSponge:
             )
         self._permutation = permutation
         self.rate = rate
-        self._state = jnp.zeros(permutation.width, dtype=permutation.dtype)
+        self._state = fnp.zeros(permutation.width, dtype=permutation.dtype)
         self._mode = _ABSORBING
         self._pos = 0
 
@@ -133,5 +133,5 @@ class DuplexSponge:
             n -= take
             start = 0
         chunks.append(state[start : start + n])
-        out = chunks[0] if len(chunks) == 1 else jnp.concatenate(chunks)
+        out = chunks[0] if len(chunks) == 1 else fnp.concatenate(chunks)
         return state, start + n, out

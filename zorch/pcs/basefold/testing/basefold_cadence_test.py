@@ -21,7 +21,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
 from zk_dtypes import koalabear_mont as F
@@ -60,14 +60,14 @@ class _ProductKernel(SumcheckKernel):
         a, b = state
         ae, ao = a[0::2], a[1::2]
         be, bo = b[0::2], b[1::2]
-        u0 = jnp.sum(ae * be)
-        u2 = jnp.sum((ao - ae) * (bo - be))
+        u0 = fnp.sum(ae * be)
+        u2 = fnp.sum((ao - ae) * (bo - be))
         return u0, u2
 
     def fold(self, state: tuple, message: tuple[Array, Array], r: Array) -> tuple:
         del message
         a, b = state
-        one = jnp.ones((), r.dtype)
+        one = fnp.ones((), r.dtype)
         af = (one - r) * a[0::2] + r * a[1::2]
         bf = (one - r) * b[0::2] + r * b[1::2]
         return (af, bf)
@@ -80,7 +80,7 @@ class _ProductKernel(SumcheckKernel):
         self, claim: Array, message: tuple[Array, Array], r: Array
     ) -> Array:
         u0, u2 = message
-        two = jnp.ones((), r.dtype) + jnp.ones((), r.dtype)
+        two = fnp.ones((), r.dtype) + fnp.ones((), r.dtype)
         u1 = claim - two * u0 - u2  # g(X) = u0 + u1·X + u2·X², g(0)+g(1) = claim
         return u0 + u1 * r + u2 * r * r
 
@@ -140,7 +140,7 @@ def _codeword(code: BitReversedReedSolomon, a: Array, num_ntts: int) -> Array:
     lanes = [
         code.encode(mle_evals_to_coeffs(a[lane::num_ntts])) for lane in range(num_ntts)
     ]
-    return jnp.stack(lanes, axis=1).reshape(-1)
+    return fnp.stack(lanes, axis=1).reshape(-1)
 
 
 class BasefoldCadenceRoundTripTest(absltest.TestCase):
@@ -192,7 +192,7 @@ class BasefoldCadenceRoundTripTest(absltest.TestCase):
             leaves=cw.reshape(n_pos, num_ntts),
             widths=(num_ntts,),
         )
-        cls.value = jnp.sum(a * cls.b)  # the product-sumcheck target Σ_x a(x)·b(x)
+        cls.value = fnp.sum(a * cls.b)  # the product-sumcheck target Σ_x a(x)·b(x)
         cls.commitment, _ = tree.commit(cw.reshape(n_pos, num_ntts))
         cls.proof, _ = prover.open_with_basis(pd, cls.b, cls.value, _transcript())
 

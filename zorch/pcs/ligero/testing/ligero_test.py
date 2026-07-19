@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import dataclasses
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest, parameterized
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
@@ -30,14 +30,14 @@ def _transcript() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
 
-def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
+def _rand_ef(seed: int, shape: tuple[int, ...]) -> fnp.ndarray:
     return rand_ext_field(seed, shape, F, EF)
 
 
 def _setup(
     log_rows: int, log_cols: int, blowup: int = 2, coset: bool = False
 ) -> tuple[
-    LigeroProver, LigeroVerifier, jnp.ndarray, jnp.ndarray, LigeroProverData, int
+    LigeroProver, LigeroVerifier, fnp.ndarray, fnp.ndarray, LigeroProverData, int
 ]:
     rows = 1 << log_rows
     shift = _rand_ef(99, ()) if coset else None
@@ -80,7 +80,7 @@ class LigeroTest(parameterized.TestCase):
         prover, verifier, root, _f, pdata, num_vars = _setup(2, 2)
         z = _rand_ef(4, (num_vars,))
         value, proof, _ = prover.open(pdata, [z], _transcript())
-        bad = dataclasses.replace(proof, w=proof.w + jnp.array(1, EF))
+        bad = dataclasses.replace(proof, w=proof.w + fnp.array(1, EF))
         ok, _ = verifier.verify(root, [z], value, bad, _transcript())
         self.assertFalse(bool(ok))
 
@@ -89,7 +89,7 @@ class LigeroTest(parameterized.TestCase):
         z = _rand_ef(5, (num_vars,))
         value, proof, _ = prover.open(pdata, [z], _transcript())
         co = proof.component_opening
-        bad_co = dataclasses.replace(co, row=co.row + jnp.array(1, F))
+        bad_co = dataclasses.replace(co, row=co.row + fnp.array(1, F))
         bad = dataclasses.replace(proof, component_opening=bad_co)
         ok, _ = verifier.verify(root, [z], value, bad, _transcript())
         self.assertFalse(bool(ok))
@@ -99,7 +99,7 @@ class LigeroTest(parameterized.TestCase):
         z = _rand_ef(6, (num_vars,))
         value, proof, _ = prover.open(pdata, [z], _transcript())
         ok, _ = verifier.verify(
-            root, [z], value + jnp.array(1, EF), proof, _transcript()
+            root, [z], value + fnp.array(1, EF), proof, _transcript()
         )
         self.assertFalse(bool(ok))
 
@@ -107,7 +107,7 @@ class LigeroTest(parameterized.TestCase):
         prover, verifier, root, _f, pdata, num_vars = _setup(2, 2)
         z = _rand_ef(7, (num_vars,))
         value, proof, _ = prover.open(pdata, [z], _transcript())
-        wrong = root + jnp.ones_like(root)
+        wrong = root + fnp.ones_like(root)
         ok, _ = verifier.verify(wrong, [z], value, proof, _transcript())
         self.assertFalse(bool(ok))
 

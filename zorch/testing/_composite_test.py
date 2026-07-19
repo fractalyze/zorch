@@ -1,7 +1,7 @@
 """composite emits one named composite marker carrying its attrs."""
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 
 from zorch._composite import composite
@@ -17,7 +17,7 @@ class CompositeTest(absltest.TestCase):
     def test_emits_one_named_composite_carrying_attrs(self) -> None:
         eqns = _composite_eqns(
             lambda x: composite(lambda a, **_: a + a, x, name="zorch.t", k=3),
-            jnp.arange(4),
+            fnp.arange(4),
         )
         self.assertLen(eqns, 1)
         self.assertEqual(eqns[0].params["name"], "zorch.t")

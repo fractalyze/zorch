@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
@@ -23,8 +23,8 @@ from zorch.hash.sha256 import (
 )
 
 
-def _u8(data: bytes) -> jnp.ndarray:
-    return jnp.asarray(np.frombuffer(data, dtype=np.uint8))
+def _u8(data: bytes) -> fnp.ndarray:
+    return fnp.asarray(np.frombuffer(data, dtype=np.uint8))
 
 
 def _stream_absorb_all(chunks: list[bytes]) -> Sha256State:
@@ -79,7 +79,7 @@ class Sha256StreamTest(absltest.TestCase):
                 for c in range(5)
             ]
         )
-        digs = np.asarray(sha256_stream_finalize(state, jnp.asarray(counters)))
+        digs = np.asarray(sha256_stream_finalize(state, fnp.asarray(counters)))
         for c in range(5):
             ref = hashlib.sha256(msg + int(c).to_bytes(8, "little")).digest()
             self.assertEqual(bytes(digs[c]), ref, f"ctr={c}")
@@ -91,7 +91,7 @@ class Sha256StreamTest(absltest.TestCase):
         extra = b"\x01\x02\x03\x04\x05\x06\x07\x08"
 
         @frx.jit
-        def run(data: jnp.ndarray, ex: jnp.ndarray) -> jnp.ndarray:
+        def run(data: fnp.ndarray, ex: fnp.ndarray) -> fnp.ndarray:
             state = sha256_stream_absorb(sha256_stream_init(), data)
             return sha256_stream_finalize(state, ex.reshape(1, -1))
 
@@ -103,17 +103,17 @@ class Sha256StreamTest(absltest.TestCase):
         # fixed shapes make it a valid `lax.scan` carry. Fold equal-size chunks
         # through a scan and check the finalized digest still matches hashlib.
         msg = bytes(range(96))  # 6 chunks of 16 -> one full block + a 32 B remainder
-        chunks = jnp.asarray(np.frombuffer(msg, np.uint8)).reshape(6, 16)
+        chunks = fnp.asarray(np.frombuffer(msg, np.uint8)).reshape(6, 16)
 
         @frx.jit
-        def run(xs: jnp.ndarray) -> jnp.ndarray:
+        def run(xs: fnp.ndarray) -> fnp.ndarray:
             def step(
-                state: Sha256State, chunk: jnp.ndarray
+                state: Sha256State, chunk: fnp.ndarray
             ) -> tuple[Sha256State, None]:
                 return sha256_stream_absorb(state, chunk), None
 
             state, _ = frx.lax.scan(step, sha256_stream_init(), xs)
-            return sha256_stream_finalize(state, jnp.zeros((1, 0), dtype=jnp.uint8))
+            return sha256_stream_finalize(state, fnp.zeros((1, 0), dtype=fnp.uint8))
 
         got = bytes(np.asarray(run(chunks))[0])
         self.assertEqual(got, hashlib.sha256(msg).digest())

@@ -24,7 +24,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
@@ -110,14 +110,14 @@ def _permute_from_rc(perm: "Poseidon", s: Array, rc_flat: Array) -> Array:
     mds_rows = perm._mds_rows
 
     def full_round(st: Array, rc: Array) -> Array:
-        return apply_dense_mds(mds_rows, jnp.power(st + rc, alpha))
+        return apply_dense_mds(mds_rows, fnp.power(st + rc, alpha))
 
     def partial_round(st: Array, rc: Array) -> Array:
         st = st + rc
-        last = jnp.power(st[w - 1], alpha)
+        last = fnp.power(st[w - 1], alpha)
         # concatenate, not a static-index set: the latter lowers to scatter,
         # which would split the fused kernel.
-        st = jnp.concatenate([st[: w - 1], last[None]])
+        st = fnp.concatenate([st[: w - 1], last[None]])
         return apply_dense_mds(mds_rows, st)
 
     rc = rc_flat.reshape(2 * half_full + partial, w)

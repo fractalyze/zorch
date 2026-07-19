@@ -10,7 +10,7 @@ unique to WHIR's coset fold and per-round geometry live here.)
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 from frx.typing import DTypeLike
 
@@ -39,12 +39,12 @@ def sample_query_positions(
     the base field the transcript squeezes (positions index a base-field
     codeword)."""
     if count == 0:
-        return transcript, jnp.empty((0,), jnp.int32)
+        return transcript, fnp.empty((0,), fnp.int32)
     transcript, raw = transcript.sample(count)
     # Per draw, take the low limb exactly as the per-draw form's `[0]` did.
-    canonical = lax.bitcast_convert_type(raw, dtype).astype(jnp.uint32)
+    canonical = lax.bitcast_convert_type(raw, dtype).astype(fnp.uint32)
     canonical = canonical.reshape(count, -1)[:, 0]
-    return transcript, (canonical % stride).astype(jnp.int32)
+    return transcript, (canonical % stride).astype(fnp.int32)
 
 
 def round_code(
@@ -74,11 +74,11 @@ def interp_quadratic_012(e0: Array, e1: Array, e2: Array, x: Array) -> Array:
     sumcheck claim reduction (the round poly is a product of two multilinears).
 
     Pure field arithmetic rather than `poly.univariate.eval_univariate`: that
-    helper's nested `compute_lagrange_basis` `@jit` + `jnp.dot` mis-lowers when
+    helper's nested `compute_lagrange_basis` `@jit` + `fnp.dot` mis-lowers when
     inlined under the verifier's own `@jit` zone on frx (eager-only).
     `eval_coeffs` (a single jitted power-chain) composes fine and is reused for the
     coefficient-form evaluations."""
-    one = jnp.ones((), x.dtype)
+    one = fnp.ones((), x.dtype)
     two = one + one
     s1 = e1 - e0
     s2 = e2 - e1
@@ -109,8 +109,8 @@ def eq_table(point: list[Array]) -> Array:
     """`eq(point, ·)` over the hypercube, indexed to match the weight table the
     sumcheck folds (LSB-first in `point`, mirroring the `[0::2]/[1::2]` fold
     order)."""
-    one = jnp.ones((), point[0].dtype)
-    return expand_eq_to_hypercube(jnp.stack(point[::-1]), one)
+    one = fnp.ones((), point[0].dtype)
+    return expand_eq_to_hypercube(fnp.stack(point[::-1]), one)
 
 
 def binary_k_fold(values: Array, alphas: list[Array], coset_points: Array) -> Array:

@@ -13,7 +13,7 @@ so a random ``z_final``/``dense_eval`` give representative timing.
 
 Run:
     PYTHONPATH=. CUDA_VISIBLE_DEVICES=0 XLA_PYTHON_CLIENT_PREALLOCATE=false \
-    JAX_COMPILATION_CACHE_DIR=/tmp/jaxcc_polybench \
+    FRX_COMPILATION_CACHE_DIR=/tmp/jaxcc_polybench \
     /tmp/sponge-venv/bin/python zorch/pcs/jagged/shard_open_bench.py \
         --shard-dir=/data/sp1_dumps/rsp_21740136_sp1/shard0
 """
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 from zk_dtypes import koalabear_mont as BF
@@ -75,22 +75,22 @@ def _load_main_traces(trace_dir: Path) -> list[Array]:
         if height == 0 or width == 0 or not bin_path.exists():
             continue
         raw = np.fromfile(bin_path, dtype=np.uint32)
-        chips.append(jnp.array(raw.reshape(height, width)).view(BF))
+        chips.append(fnp.array(raw.reshape(height, width)).view(BF))
     return chips
 
 
 def _pack_dense(chips: list[Array], S: int) -> Array:
     """Column-major concat of every chip's columns, end-padded to a multiple of
     ``S`` (mirrors trace_commit's stacked packing the commit reshapes)."""
-    flat = jnp.concatenate([c.T.reshape(-1) for c in chips])
+    flat = fnp.concatenate([c.T.reshape(-1) for c in chips])
     pad = (-flat.shape[0]) % S
     if pad:
-        flat = jnp.concatenate([flat, jnp.zeros(pad, dtype=BF)])
+        flat = fnp.concatenate([flat, fnp.zeros(pad, dtype=BF)])
     return flat
 
 
 def _rand_ef(key: Array, n: int) -> Array:
-    return frx.random.randint(key, (n * 4,), 0, MODULUS, dtype=jnp.uint32).view(EF)
+    return frx.random.randint(key, (n * 4,), 0, MODULUS, dtype=fnp.uint32).view(EF)
 
 
 def main() -> None:

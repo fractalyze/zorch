@@ -4,7 +4,7 @@ proving the witness-open glue is genuinely PCS-agnostic across the seam."""
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -47,7 +47,7 @@ class SpartanLigeritoTest(absltest.TestCase):
         )
         values, pf = proof.messages[3]
         bad_msgs = list(proof.messages)
-        bad_msgs[3] = (values.at[0].add(jnp.ones((), KB)), pf)
+        bad_msgs[3] = (values.at[0].add(fnp.ones((), KB)), pf)
         bad = spartan.SpartanProof(proof.commitment, bad_msgs)
         ok, _ = spartan.verify(
             inst, io, bad, LigeritoSpartanVerifier(_CFG), _transcript()
@@ -56,7 +56,7 @@ class SpartanLigeritoTest(absltest.TestCase):
 
     def test_unsatisfying_witness_rejected(self) -> None:
         inst, z, _, io = toy_r1cs(3, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        bad_z = z.at[0].add(jnp.ones((), KB))
+        bad_z = z.at[0].add(fnp.ones((), KB))
         proof, _ = spartan.prove(
             inst, bad_z, io, LigeritoSpartanProver(_CFG), _transcript()
         )

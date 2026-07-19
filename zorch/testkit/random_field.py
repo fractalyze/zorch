@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from frx import Array
@@ -38,11 +38,11 @@ def rand_field(seed: int, shape: Sequence[int], dtype: Any) -> Array:
             f"Use rand_ext_field(seed, shape, base, ext) for a generic element."
         )
     ints = np.random.default_rng(seed).integers(0, 1 << 30, size=shape, dtype=np.int64)
-    return jnp.array(ints, dtype=dtype)
+    return fnp.array(ints, dtype=dtype)
 
 
 def rand_ext_field(seed: int, shape: Sequence[int], base: Any, ext: Any) -> Array:
     """Random extension-field tensor: an `ext` element is `k` base-field limbs,
     so draw `(*shape, k)` base elements and bitcast."""
-    k = jnp.dtype(ext).itemsize // jnp.dtype(base).itemsize
+    k = fnp.dtype(ext).itemsize // fnp.dtype(base).itemsize
     return rand_field(seed, (*shape, k), base).view(ext).reshape(shape)

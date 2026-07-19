@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array, export
@@ -54,7 +54,7 @@ def _smcs() -> SingleMatrixCommitmentScheme:
 
 
 def _u32(x: Array) -> list[int]:
-    return np.asarray(frx.lax.bitcast_convert_type(x, jnp.uint32)).reshape(-1).tolist()
+    return np.asarray(frx.lax.bitcast_convert_type(x, fnp.uint32)).reshape(-1).tolist()
 
 
 class SymbolicKOpenExportTest(absltest.TestCase):
@@ -67,7 +67,7 @@ class SymbolicKOpenExportTest(absltest.TestCase):
         cls.rng = np.random.default_rng(0)
 
     def _make_round(self, k: int) -> StackedRound:
-        block = jnp.asarray(self.rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
+        block = fnp.asarray(self.rng.integers(0, _PRIME, (k, _S), np.uint32)).view(BF)
         codeword = self.code.encode(block).T
         _root, digest_layers = self.smcs.commit(codeword)
         return StackedRound(block=block, digest_layers=digest_layers)
@@ -119,10 +119,10 @@ class SymbolicKOpenExportTest(absltest.TestCase):
         exported = self._export_symbolic()
         for k in (12, 16):
             rd = self._make_round(k)
-            z = jnp.asarray(
+            z = fnp.asarray(
                 self.rng.integers(0, _PRIME, (_LOG_S * 4,), np.uint32)
             ).view(EF)
-            dense_eval = jnp.asarray(
+            dense_eval = fnp.asarray(
                 self.rng.integers(0, _PRIME, (4,), np.uint32)
             ).view(EF)[0]
 

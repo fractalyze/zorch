@@ -3,7 +3,7 @@
 single-column case."""
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabearx4_mont as EF
 
@@ -17,7 +17,7 @@ from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 
 
-def _rand(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
+def _rand(seed: int, shape: tuple[int, ...]) -> fnp.ndarray:
     from zk_dtypes import koalabear_mont as F
 
     return rand_ext_field(seed, shape, F, EF)
@@ -26,8 +26,8 @@ def _rand(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
 class BatchingTest(absltest.TestCase):
     def test_partial_lagrange_one_var_is_eq_basis(self) -> None:
         r = _rand(1, ())
-        coeffs = partial_lagrange(jnp.reshape(r, (1,)))
-        one = jnp.ones((), EF)
+        coeffs = partial_lagrange(fnp.reshape(r, (1,)))
+        one = fnp.ones((), EF)
         # eq(b, r) over b in {0,1} = {1-r, r} in some order; both must appear and
         # sum to 1.
         self.assertEqual(coeffs.shape, (2,))
@@ -55,7 +55,7 @@ class BatchingTest(absltest.TestCase):
     def test_sample_staggered_width1_is_unit(self) -> None:
         t = DuplexTranscript.new(koalabear16_perm(), rate=8)
         t2, coeffs = sample_staggered_coeffs(t, 1, EF)
-        self.assertEqual(coeffs.tolist(), jnp.ones(1, EF).tolist())
+        self.assertEqual(coeffs.tolist(), fnp.ones(1, EF).tolist())
         # No squeeze for width 1: the same transcript is returned untouched.
         self.assertIs(t2, t)
 
@@ -69,7 +69,7 @@ class BatchingTest(absltest.TestCase):
         # Pin the native index orientation: point[0] is the MSB of the table
         # index — table = [(1-r0)(1-r1), (1-r0)r1, r0(1-r1), r0·r1].
         r = _rand(8, (2,))
-        one = jnp.ones((), EF)
+        one = fnp.ones((), EF)
         r0, r1 = r[0], r[1]
         table = partial_lagrange(r)
         expected = [
@@ -87,7 +87,7 @@ class BatchingTest(absltest.TestCase):
         t_msb, msb = sample_staggered_coeffs(t, 8, EF)
         t_lsb, lsb = sample_staggered_coeffs(t, 8, EF, lsb_first=True)
         bitrev3 = [0, 4, 2, 6, 1, 5, 3, 7]
-        self.assertEqual(lsb.tolist(), msb[jnp.array(bitrev3)].tolist())
+        self.assertEqual(lsb.tolist(), msb[fnp.array(bitrev3)].tolist())
         # Same post-state: a follow-up squeeze from either transcript matches.
         _, a = t_msb.sample()
         _, b = t_lsb.sample()

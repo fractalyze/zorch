@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import expand_hypercube_step
@@ -50,7 +50,7 @@ def compute_folded_evaluations(p_stacked: Array, eq_evals: Array) -> Array:
     d = p_stacked.shape[0]
     l = log2_strict_usize(p_stacked.shape[1])
     i = log2_strict_usize(eq_evals.shape[0])
-    p_reshaped = jnp.reshape(p_stacked, (d, 1 << i, 1 << (l - i)))
+    p_reshaped = fnp.reshape(p_stacked, (d, 1 << i, 1 << (l - i)))
     return (p_reshaped * eq_evals[None, :, None]).sum(axis=1)
 
 
@@ -113,7 +113,7 @@ def prove_sqrt_space(
     l = log2_strict_usize(p_initial.shape[1])
     l_half = l // 2
 
-    state: SqrtSpaceState = (p_initial, jnp.ones(1, dtype=p_initial.dtype))
+    state: SqrtSpaceState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
     state, transcript, phase1 = fold_rounds(
         SqrtSpaceRound(summand, domain, ext_dtype), state, transcript, l_half
     )

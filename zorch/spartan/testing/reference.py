@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.transcript import Transcript
@@ -35,16 +35,16 @@ def naive_round_polys(
     production `summand_evals` path. Returns `(round_polys, final_tables)`.
     """
     dtype = tables[0].dtype
-    tabs = [jnp.asarray(t) for t in tables]
+    tabs = [fnp.asarray(t) for t in tables]
     polys: list[Array] = []
     for r in challenges:
         half = tabs[0].shape[0] // 2
         pts = []
         for u in range(degree + 1):
-            uf = jnp.asarray(u, dtype)
+            uf = fnp.asarray(u, dtype)
             folded = [t[:half] + uf * (t[half:] - t[:half]) for t in tabs]
-            pts.append(jnp.sum(combine(*folded)))
-        polys.append(jnp.stack(pts))
+            pts.append(fnp.sum(combine(*folded)))
+        polys.append(fnp.stack(pts))
         tabs = [t[:half] + r * (t[half:] - t[:half]) for t in tabs]
     return polys, tabs
 
@@ -77,7 +77,7 @@ def replay_challenges(
         r_y.append(r[0])
     return {
         "tau": tau,
-        "r_x": jnp.stack(r_x),
+        "r_x": fnp.stack(r_x),
         "r_batch": r_batch,
-        "r_y": jnp.stack(r_y),
+        "r_y": fnp.stack(r_y),
     }

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from frx import Array
 
@@ -34,4 +34,4 @@ VESTA = Curve(zk_dtypes.vesta_sf, zk_dtypes.vesta_g1_affine)
 def generator(g1: type) -> Array:
     """The affine G1 generator of `g1`, from its `ecinfo`."""
     e = zk_dtypes.ecinfo(g1)
-    return jnp.asarray(g1((e.gx, e.gy)))
+    return fnp.asarray(g1((e.gx, e.gy)))

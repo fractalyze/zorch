@@ -20,7 +20,7 @@ from functools import cache, reduce
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.poly.univariate import compute_inv_vandermonde, compute_lagrange_basis
@@ -46,7 +46,7 @@ def _finite_coeff_matrix(nodes: Array) -> Array:
     the n finite nodes, bridged through the naturals then the inverse Vandermonde."""
     nat, inv_vand = _interp_constants(nodes.shape[0] - 1, nodes.dtype)
     lagrange = frx.vmap(compute_lagrange_basis, in_axes=(0, None))(nat, nodes)
-    return jnp.dot(inv_vand, lagrange)
+    return fnp.dot(inv_vand, lagrange)
 
 
 @dataclass(frozen=True)
@@ -75,12 +75,12 @@ class EvalDomain:
         """Ascending coefficients from this domain's samples of a round polynomial;
         the degree (len−1) and field come from values."""
         if self.inf_index is None:
-            return jnp.dot(self.coeff_matrix(), values)
+            return fnp.dot(self.coeff_matrix(), values)
         # The ∞ sample (at `inf_index`) is the leading coefficient c_d; the finite
         # samples (naturals {0..d−1} unless given) interpolate the residual p − c_d·xᵈ.
         pos = self.inf_index % values.shape[0]
         v_inf = values[pos]
-        finite = jnp.concatenate([values[:pos], values[pos + 1 :]])
+        finite = fnp.concatenate([values[:pos], values[pos + 1 :]])
         d = finite.shape[0]
         if self.nodes is None:
             # Naturals domain: _finite_coeff_matrix(naturals(d)) is exactly the
@@ -89,8 +89,8 @@ class EvalDomain:
             nodes, cmat = _interp_constants(d - 1, values.dtype)
         else:
             nodes, cmat = self.nodes, _finite_coeff_matrix(self.nodes)
-        low = jnp.dot(cmat, finite - v_inf * nodes**d)
-        return jnp.concatenate([low, jnp.atleast_1d(v_inf)])
+        low = fnp.dot(cmat, finite - v_inf * nodes**d)
+        return fnp.concatenate([low, fnp.atleast_1d(v_inf)])
 
     def sample(self, p0: Array, p1: Array) -> Array:
         """Sample the linear factor p(x) = p0 + x·(p1−p0) at this domain's points
@@ -103,7 +103,7 @@ class EvalDomain:
         if self.inf_index is None:
             return finite
         pos = self.inf_index % (finite.shape[0] + 1)
-        return jnp.concatenate([finite[:pos], diff[None], finite[pos:]])
+        return fnp.concatenate([finite[:pos], diff[None], finite[pos:]])
 
 
 def extend_to_round_domain(
@@ -114,13 +114,13 @@ def extend_to_round_domain(
     p(u) = p(0) + u·(p(1)−p(0)). The leading axis indexes the domain."""
     diff = p1 - p0
     if d == 1:  # U_1 = [∞, 0]: u=1 is out of range {0..d−1}, so p1 is not a node
-        return jnp.stack([diff, p0])
-    base = jnp.stack([diff, p0]) if skip_one else jnp.stack([diff, p0, p1])
+        return fnp.stack([diff, p0])
+    base = fnp.stack([diff, p0]) if skip_one else fnp.stack([diff, p0, p1])
     if d == 2:
         return base
     # Python-int multiplier avoids a field-dtype iota (unsupported in frx).
-    rest = jnp.stack([p0 + diff * u for u in range(2, d)], axis=0)
-    return jnp.concatenate([base, rest], axis=0)
+    rest = fnp.stack([p0 + diff * u for u in range(2, d)], axis=0)
+    return fnp.concatenate([base, rest], axis=0)
 
 
 def _product(*factors: Array) -> Array:
@@ -142,7 +142,7 @@ def uhat_domain(degree: int, dtype: Any) -> EvalDomain:
     ∞-leading, u=1 dropped (the verifier recovers s(1) from s(0)+s(1)=claim). The
     default sampling domain for the eq-poly / sqrt-space engines."""
     nat = naturals(degree, dtype)
-    return EvalDomain(jnp.concatenate([nat[:1], nat[2:]]), inf_index=0)
+    return EvalDomain(fnp.concatenate([nat[:1], nat[2:]]), inf_index=0)
 
 
 def compressed_domain(node: int, dtype: Any) -> EvalDomain:
@@ -202,7 +202,7 @@ def summand_evals(
     combined = combine(*frx.vmap(domain.sample)(p0, p1))
     if weight is not None:
         combined = combined * weight
-    return jnp.sum(combined, axis=1)
+    return fnp.sum(combined, axis=1)
 
 
 def product_round_poly(stacked: Array) -> Array:
@@ -262,7 +262,7 @@ def subgroup_evals(coeffs: Array, size: int) -> Array:
     if size < pad:
         raise ValueError(f"subgroup_evals size {size} < coeff count {pad}")
     tail = coeffs.shape[:-1] + (size - pad,)
-    padded = jnp.concatenate([coeffs, jnp.zeros(tail, coeffs.dtype)], axis=-1)
+    padded = fnp.concatenate([coeffs, fnp.zeros(tail, coeffs.dtype)], axis=-1)
     return lax.ntt(padded, ntt_type="NTT", ntt_length=size)
 
 
@@ -272,8 +272,8 @@ def subgroup_sum(coeffs: Array, skip_rounds: int) -> Array:
     sum reads off the coefficients at multiples of |D|, scaled by |D|. |D| is built in
     the field (a bare Python int would not Montgomery-encode)."""
     size = 1 << skip_rounds
-    d_field = jnp.asarray(size, coeffs.dtype)
-    return d_field * jnp.sum(coeffs[..., ::size], axis=-1)
+    d_field = fnp.asarray(size, coeffs.dtype)
+    return d_field * fnp.sum(coeffs[..., ::size], axis=-1)
 
 
 @dataclass(frozen=True)
@@ -298,8 +298,8 @@ class UnivariateSkipDomain:
         same transform the map uses (mirrors `coding.reed_solomon.eval_domain`)."""
         base = base_field(self.dtype)
         if self.size == 1:
-            return jnp.ones((1,), base)
-        e1 = jnp.zeros(self.size, base).at[1].set(jnp.ones((), base))
+            return fnp.ones((1,), base)
+        e1 = fnp.zeros(self.size, base).at[1].set(fnp.ones((), base))
         return lax.ntt(e1, ntt_type="NTT", ntt_length=self.size)
 
     def to_coeffs(self, values: Array) -> Array:

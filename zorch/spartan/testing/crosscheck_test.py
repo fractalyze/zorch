@@ -5,7 +5,7 @@ batching, and the final identities."""
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -57,17 +57,17 @@ class StructuralCrossCheckTest(absltest.TestCase):
     def test_outer_round_polys_match_reference(self) -> None:
         inst, z, _, proof, ch = _prove(2, s_x=3, nvp=4, num_io=2)
         az, bz, cz = inst.matvecs(z)
-        e = expand_eq_to_hypercube(ch["tau"], jnp.ones((), KB))
+        e = expand_eq_to_hypercube(ch["tau"], fnp.ones((), KB))
         ref_polys, final = naive_round_polys(
             [e, az, bz, cz], lambda e, a, b, c: e * (a * b - c), 3, list(ch["r_x"])
         )
         got = proof.messages[0][0]
         for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
-            self.assertTrue(bool(jnp.all(g == ref)), f"outer round {j}")
+            self.assertTrue(bool(fnp.all(g == ref)), f"outer round {j}")
         # final claimed evals == (Az,Bz,Cz)(r_x).
         claims = proof.messages[0][1]
         self.assertTrue(
-            bool(jnp.all(claims == jnp.stack([final[1][0], final[2][0], final[3][0]])))
+            bool(fnp.all(claims == fnp.stack([final[1][0], final[2][0], final[3][0]])))
         )
 
     def test_outer_running_claim_chain(self) -> None:
@@ -76,7 +76,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
 
         inst, _, _, proof, ch = _prove(3, s_x=3, nvp=4, num_io=2)
         polys = proof.messages[0][0]
-        claim = jnp.zeros((), KB)
+        claim = fnp.zeros((), KB)
         for j in range(inst.s_x):
             s = polys[j]
             self.assertTrue(bool(claim == s[0] + s[1]), f"round {j} sum-check identity")
@@ -90,7 +90,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         want = va + r * vb + r * r * vc
         # recompute joint via the reference: the inner sumcheck's claim_0.
         m = inst.combined_row_mle(ch["r_x"], r)
-        got = jnp.sum(m * z)  # Σ_y M(y)·z(y) == joint_claim
+        got = fnp.sum(m * z)  # Σ_y M(y)·z(y) == joint_claim
         self.assertTrue(bool(got == want))
 
     def test_inner_round_polys_match_reference(self) -> None:
@@ -99,7 +99,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         ref_polys, _ = naive_round_polys([m, z], lambda a, b: a * b, 2, list(ch["r_y"]))
         got = proof.messages[2]
         for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
-            self.assertTrue(bool(jnp.all(g == ref)), f"inner round {j}")
+            self.assertTrue(bool(fnp.all(g == ref)), f"inner round {j}")
 
     def test_inner_final_identity(self) -> None:
         # inner_final == eval_ABC · z̃(r_y).
@@ -108,7 +108,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         inst, z, _, proof, ch = _prove(6, s_x=3, nvp=4, num_io=2)
         # inner_final = last inner round poly at r_y[-1].
         inner_polys = proof.messages[2]
-        claim = jnp.sum(inst.combined_row_mle(ch["r_x"], ch["r_batch"]) * z)
+        claim = fnp.sum(inst.combined_row_mle(ch["r_x"], ch["r_batch"]) * z)
         for j in range(inst.s_y):
             claim = eval_univariate(inner_polys[j], ch["r_y"][j])
         eval_abc = inst.eval_combined_matrix(ch["r_x"], ch["r_y"], ch["r_batch"])
@@ -118,13 +118,13 @@ class StructuralCrossCheckTest(absltest.TestCase):
 
 class StageFusionTest(absltest.TestCase):
     def test_outer_round_body_fuses(self) -> None:
-        stacked = jnp.stack([rand_field(70 + i, (8,), KB) for i in range(4)])
+        stacked = fnp.stack([rand_field(70 + i, (8,), KB) for i in range(4)])
         assert_fusion_ready(
             StandardRound(ZerocheckSummand())._round_poly, stacked, reduces=1
         )
 
     def test_inner_round_body_fuses(self) -> None:
-        stacked = jnp.stack([rand_field(80 + i, (8,), KB) for i in range(2)])
+        stacked = fnp.stack([rand_field(80 + i, (8,), KB) for i in range(2)])
         assert_fusion_ready(
             StandardRound(ProductSummand(2))._round_poly, stacked, reduces=1
         )

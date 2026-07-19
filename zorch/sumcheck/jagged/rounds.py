@@ -11,7 +11,7 @@ plane bodies live in `zorch.logup_gkr._jagged_rounds`."""
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -57,18 +57,18 @@ def _round_coeffs(
     -- they only depend on the degree.
     """
     dtype = claim.dtype
-    one = jnp.ones((), dtype)
+    one = fnp.ones((), dtype)
     correction = _virtual_mass_correction(pad_adj, eq_sum)
     s_zero = (eval_zero + correction * (one - z_cur)) * eq_adj
     s_half = (
-        (eval_half + correction * jnp.array(4, dtype)) / jnp.array(8, dtype) * eq_adj
+        (eval_half + correction * fnp.array(4, dtype)) / fnp.array(8, dtype) * eq_adj
     )
     s_one = claim - s_zero
-    b_root = (one - z_cur) / (one - jnp.array(2, dtype) * z_cur)
-    xs = jnp.stack([jnp.zeros((), dtype), one, one / jnp.array(2, dtype), b_root])
-    ys = jnp.stack([s_zero, s_one, s_half, jnp.zeros((), dtype)])
+    b_root = (one - z_cur) / (one - fnp.array(2, dtype) * z_cur)
+    xs = fnp.stack([fnp.zeros((), dtype), one, one / fnp.array(2, dtype), b_root])
+    ys = fnp.stack([s_zero, s_one, s_half, fnp.zeros((), dtype)])
     lagrange = frx.vmap(compute_lagrange_basis, in_axes=(0, None))(naturals, xs)
-    return jnp.dot(inv_vand, jnp.dot(lagrange, ys))
+    return fnp.dot(inv_vand, fnp.dot(lagrange, ys))
 
 
 def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
@@ -76,4 +76,4 @@ def _expand_eq_slice(eval_point: Array, niv: int, *, row: bool) -> Array:
     (`eval_point[:niv]`) coordinate block, traced into the whole-layer jit. `niv`
     (and hence the slice bounds + output length) rides static."""
     coords = eval_point[niv:] if row else eval_point[:niv]
-    return expand_eq_to_hypercube(coords, jnp.ones((), eval_point.dtype))
+    return expand_eq_to_hypercube(coords, fnp.ones((), eval_point.dtype))

@@ -31,7 +31,7 @@ folding PCS (e.g. WHIR) needs.
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.commit.merkle import MerkleTree, Opening
@@ -156,7 +156,7 @@ class StridedMerkleTree:
         for layer in digest_layers[:-1]:
             siblings.append(layer[index ^ 1])
             index >>= 1
-        return jnp.stack(siblings)
+        return fnp.stack(siblings)
 
     def open(
         self, matrix: Array, digest_layers: list[Array], index: int | Array
@@ -175,7 +175,7 @@ class StridedMerkleTree:
         stride = self.query_stride(matrix.shape[0])
         if not isinstance(index, frx.core.Tracer) and not 0 <= index < stride:
             raise IndexError(f"query index {index} out of range [0, {stride})")
-        rows = matrix[index + stride * jnp.arange(self._rows_per_query)]
+        rows = matrix[index + stride * fnp.arange(self._rows_per_query)]
         path = []
         idx = index
         for layer in digest_layers[:-1]:  # query layer up to below root
@@ -210,6 +210,6 @@ class StridedMerkleTree:
             return self._top._fold_with_sibling(*carry, sibling), None
 
         (root, _), _ = frx.lax.scan(
-            fold, (query_node, jnp.asarray(index)), jnp.stack(opening.path)
+            fold, (query_node, fnp.asarray(index)), fnp.stack(opening.path)
         )
         return root

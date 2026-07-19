@@ -14,7 +14,7 @@ standard-basis / Montgomery-scalar split KZG's round-trip test uses."""
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.pcs.ipa.setup import IpaKey, setup
@@ -30,9 +30,9 @@ def toy_key(curve: Curve, n: int, seed: int = 1) -> IpaKey:
     never reads `S`."""
     g1: Array = generator(curve.g1)
     basis = [
-        lax.convert_element_type(jnp.array(seed + i + 1, curve.sf) * g1, curve.g1)
+        lax.convert_element_type(fnp.array(seed + i + 1, curve.sf) * g1, curve.g1)
         for i in range(n)
     ]
-    u = lax.convert_element_type(jnp.array(seed + n + 1, curve.sf) * g1, curve.g1)
-    s = lax.convert_element_type(jnp.array(seed + n + 2, curve.sf) * g1, curve.g1)
-    return setup(jnp.stack(basis), u, s)
+    u = lax.convert_element_type(fnp.array(seed + n + 1, curve.sf) * g1, curve.g1)
+    s = lax.convert_element_type(fnp.array(seed + n + 2, curve.sf) * g1, curve.g1)
+    return setup(fnp.stack(basis), u, s)

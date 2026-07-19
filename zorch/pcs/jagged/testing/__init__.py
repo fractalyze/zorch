@@ -15,7 +15,7 @@ from functools import reduce as _reduce
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
@@ -63,12 +63,12 @@ def eval_jagged_mle(
 
     The branching-program reference for ``partial_eval_core``: ``col_prefix_sums``
     is ``build_jagged_layout``'s FIELD bit tensor.  Output shape () (a function of
-    shapes). jnp.sum aborts on EF, so the column sum is a trace-time
+    shapes). fnp.sum aborts on EF, so the column sum is a trace-time
     functools.reduce over the static ``cfg.l_max`` (fine for the verifier-once /
     small-l_max oracle)."""
     dtype = z_row.dtype
-    t_matrix = jnp.asarray(_TRANSITION_ROWS, dtype=dtype)
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # 2^{n_c}
+    t_matrix = fnp.asarray(_TRANSITION_ROWS, dtype=dtype)
+    col_eq = expand_eq_to_hypercube(z_col, fnp.ones([], dtype=dtype))  # 2^{n_c}
     all_left = col_prefix_sums[: cfg.l_max]
     all_right = col_prefix_sums[1:]
     bp_evals = frx.vmap(
@@ -100,11 +100,11 @@ def scatter_partial_eval(
 
     prefix_sums_int = _decode_prefix_sums(col_prefix_sums, cfg.n_d)
 
-    col_eq = expand_eq_to_hypercube(z_col, jnp.ones([], dtype=dtype))  # [2^n_c]
-    row_eq = expand_eq_to_hypercube(z_row, jnp.ones([], dtype=dtype))  # [2^n_r]
+    col_eq = expand_eq_to_hypercube(z_col, fnp.ones([], dtype=dtype))  # [2^n_c]
+    row_eq = expand_eq_to_hypercube(z_row, fnp.ones([], dtype=dtype))  # [2^n_r]
 
-    out = jnp.zeros(1 << cfg.n_d, dtype=dtype)
-    row_indices = jnp.arange(row_len, dtype=jnp.int32)
+    out = fnp.zeros(1 << cfg.n_d, dtype=dtype)
+    row_indices = fnp.arange(row_len, dtype=fnp.int32)
 
     def body(c: Array, out: Array) -> Array:
         t_c = prefix_sums_int[c]
@@ -112,7 +112,7 @@ def scatter_partial_eval(
 
         # Mask row entries beyond this column's actual height.
         mask = row_indices < h  # (2^n_r,) bool
-        contrib = col_eq[c] * jnp.where(mask, row_eq, jnp.zeros([], dtype=dtype))
+        contrib = col_eq[c] * fnp.where(mask, row_eq, fnp.zeros([], dtype=dtype))
 
         # Read-modify-write: add contrib into out[t_c : t_c + row_len].
         old = frx.lax.dynamic_slice(out, (t_c,), (row_len,))

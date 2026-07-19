@@ -66,7 +66,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, jit
 
 from zorch.utils import binary_field as bf
@@ -83,9 +83,9 @@ def bit_slice_evals(packed_witness: Array, tensor: Array) -> Array:
     w_bits = bf._bits(packed_witness)  # (n, W)
     t_limbs = bf._to_limbs(tensor)  # (n, L)
     # Each bit selects tensor[i]'s limbs (or 0); reinterpret to the field and sum
-    # under field addition (native `jnp.sum` — binary-field add is the limb XOR).
+    # under field addition (native `fnp.sum` — binary-field add is the limb XOR).
     selected = bf._from_limbs(w_bits[:, :, None] * t_limbs[:, None, :], tensor.dtype)
-    return jnp.sum(selected, axis=0)  # (W,)
+    return fnp.sum(selected, axis=0)  # (W,)
 
 
 @jit
@@ -101,7 +101,7 @@ def rs_eq_ind(tensor: Array, eq_r_dprime: Array) -> Array:
     selected = bf._from_limbs(
         t_bits[:, :, None] * eq_limbs[None, :, :], eq_r_dprime.dtype
     )
-    return jnp.sum(selected, axis=1)  # (n,)
+    return fnp.sum(selected, axis=1)  # (n,)
 
 
 @jit
@@ -113,7 +113,7 @@ def tensor_algebra_transpose(v: Array) -> Array:
         # Any other length reshapes into a rectangular bit matrix and returns
         # garbage instead of erroring.
         raise ValueError(
-            f"a tensor-algebra element over {jnp.dtype(v.dtype).name} is "
+            f"a tensor-algebra element over {fnp.dtype(v.dtype).name} is "
             f"shape ({w},), got {v.shape}"
         )
     bits_t = bf._bits(v).T  # (W, W): row h = bit h of every v[b]
@@ -124,7 +124,7 @@ def tensor_algebra_transpose(v: Array) -> Array:
 def inner_product(a: Array, b: Array) -> Array:
     """`Σ_i a[i]·b[i]` — field multiplies then a native field-additive reduce.
     `(n,) × (n,) -> ()`."""
-    return jnp.sum(a * b, axis=0)
+    return fnp.sum(a * b, axis=0)
 
 
 @partial(
@@ -181,7 +181,7 @@ def eval_rs_eq(z_vals: Array, query: Array, eq_r_dprime: Array) -> Array:
     dtype = eq_r_dprime.dtype
     # 1 ⊗ 1 by concatenation — `.at[].set` and `pad` don't legalize on these
     # dtypes.
-    e = jnp.concatenate([jnp.ones((1,), dtype), jnp.zeros((w - 1,), dtype)])
+    e = fnp.concatenate([fnp.ones((1,), dtype), fnp.zeros((w - 1,), dtype)])
     for i in range(z_vals.shape[0]):
         vert = e * z_vals[i]
         horiz = tensor_algebra_transpose(tensor_algebra_transpose(e) * query[i])

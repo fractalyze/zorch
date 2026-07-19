@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import Array, lax
@@ -34,25 +34,25 @@ SF = zk_dtypes.pallas_sf_mont
 class ChallengeMathTest(absltest.TestCase):
     def test_challenge_poly_matches_explicit_s(self) -> None:
         # eval_challenge_poly(u, x) is the succinct read of ⟨challenge_vector, b⟩.
-        u = jnp.array([2, 3, 5], dtype=SF)  # k = 3 → n = 8
-        x = jnp.array(7, dtype=SF)
+        u = fnp.array([2, 3, 5], dtype=SF)  # k = 3 → n = 8
+        x = fnp.array(7, dtype=SF)
         s = challenge_vector(u)
         self.assertEqual(s.shape, (8,))
-        explicit = jnp.sum(s * powers(x, 8))
+        explicit = fnp.sum(s * powers(x, 8))
         self.assertEqual(int(eval_challenge_poly(u, x)), int(explicit))
 
     def test_challenge_vector_is_the_fold_inverse(self) -> None:
         # Folding any vector by the prover's basis recurrence
         # (V ← V_lo + V_hi·u) collapses to ⟨s, V⟩ — the property that makes
         # G_final = ⟨s, G⟩ reproduce the prover's folded basis.
-        u = jnp.array([2, 3, 5], dtype=SF)
-        v = jnp.arange(1, 9, dtype=SF)
+        u = fnp.array([2, 3, 5], dtype=SF)
+        v = fnp.arange(1, 9, dtype=SF)
         folded = v
         for j in range(3):
             m = folded.shape[0] // 2
             folded = folded[:m] + folded[m:] * u[j]
         self.assertEqual(folded.shape, (1,))
-        self.assertEqual(int(folded[0]), int(jnp.sum(challenge_vector(u) * v)))
+        self.assertEqual(int(folded[0]), int(fnp.sum(challenge_vector(u) * v)))
 
     def test_challenge_vector_matches_arkworks_h_coeffs(self) -> None:
         # The dense coeffs are the check polynomial's coeffs:
@@ -60,7 +60,7 @@ class ChallengeMathTest(absltest.TestCase):
         # layout the decider's final-key MSM byte-matches arkworks ipa_pc over
         # (zorch#339 W4; the formula is the contract). For k=2,
         # h(X) = (1 + u0·X²)(1 + u1·X) → [1, u1, u0, u0·u1].
-        u = jnp.array([2, 3], dtype=SF)
+        u = fnp.array([2, 3], dtype=SF)
         self.assertEqual([int(c) for c in challenge_vector(u)], [1, 3, 2, 6])
 
 
@@ -88,7 +88,7 @@ class TranscriptChallengerPytreeTest(absltest.TestCase):
 
     def test_threads_through_jit_as_argument(self) -> None:
         ch = TranscriptChallenger(cheap_transcript(SF), SF)
-        lhs, rhs = jnp.array(3, SF), jnp.array(5, SF)
+        lhs, rhs = fnp.array(3, SF), fnp.array(5, SF)
         got = frx.jit(lambda c: c.challenge(lhs, rhs)[1])(ch)
         self.assertTrue(bool(got == ch.challenge(lhs, rhs)[1]))
 
@@ -133,8 +133,8 @@ class IpaRoundTripTest(parameterized.TestCase):
         self, sf: type, curve: curves.Curve
     ) -> tuple[IpaVerifier, Array, Array, Array, list[IpaProof]]:
         key = basis.toy_key(curve, n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
-        x = jnp.array(7, dtype=sf)
+        coeffs = fnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
+        x = fnp.array(7, dtype=sf)
         commitment, data = IpaProver(key).commit([coeffs])
         values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
         return IpaVerifier(key), x, commitment, values, proof
@@ -159,8 +159,8 @@ class IpaRoundTripTest(parameterized.TestCase):
         # verify round trip closes at each size (and the single-round n=2 edge), so
         # the scan fold byte-matches the shrinking fold it replaced (zorch#344).
         key = basis.toy_key(curve, n=n)
-        coeffs = jnp.arange(1, n + 1, dtype=sf)
-        x = jnp.array(7, dtype=sf)
+        coeffs = fnp.arange(1, n + 1, dtype=sf)
+        x = fnp.array(7, dtype=sf)
         commitment, data = IpaProver(key).commit([coeffs])
         values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
         ok, _ = IpaVerifier(key).verify(commitment, [x], values, proof, _transcript(sf))
@@ -169,7 +169,7 @@ class IpaRoundTripTest(parameterized.TestCase):
     @parameterized.named_parameters(*_CURVES)
     def test_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
-        bad = values + jnp.array(1, dtype=sf)
+        bad = values + fnp.array(1, dtype=sf)
         ok, _ = verifier.verify(commitment, [x], bad, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
@@ -199,8 +199,8 @@ class IpaRoundTripTest(parameterized.TestCase):
         # accumulation consumer reads it here instead of replaying the round
         # challenges and paying a second size-n MSM.
         key = basis.toy_key(curve, n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
-        x = jnp.array(7, dtype=sf)
+        coeffs = fnp.array([3, 1, 4, 1], dtype=sf)
+        x = fnp.array(7, dtype=sf)
         commitment, _ = IpaProver(key).commit([coeffs])
         _, value, proof, final_comm_key = _open_one(
             key, commitment[0], coeffs, x, TranscriptChallenger(_transcript(sf), sf)
@@ -219,7 +219,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         aff = key.basis.dtype
         self.assertTrue(
             bool(
-                jnp.all(
+                fnp.all(
                     lax.convert_element_type(final_comm_key, aff)
                     == lax.convert_element_type(g_final, aff)
                 )
@@ -231,7 +231,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         # The Fiat-Shamir now binds the commitment: verifying against a different
         # one rejects (statement binding the bare fold lacked).
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
-        bad = jnp.stack([verifier.key.u])  # U as a stand-in P ≠ the real commitment
+        bad = fnp.stack([verifier.key.u])  # U as a stand-in P ≠ the real commitment
         ok, _ = verifier.verify(bad, [x], values, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
@@ -246,11 +246,11 @@ class IpaRoundTripTest(parameterized.TestCase):
         self, sf: type, curve: curves.Curve
     ) -> tuple[IpaKey, Array, Array, Array, IpaZkProof]:
         key = basis.toy_key(curve, n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
-        x = jnp.array(7, dtype=sf)
-        hiding = jnp.array([2, 9, 1, 8], dtype=sf)  # blinding polynomial
-        hiding_rand = jnp.array(5, dtype=sf)
-        commitment_randomness = jnp.array(11, dtype=sf)
+        coeffs = fnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
+        x = fnp.array(7, dtype=sf)
+        hiding = fnp.array([2, 9, 1, 8], dtype=sf)  # blinding polynomial
+        hiding_rand = fnp.array(5, dtype=sf)
+        commitment_randomness = fnp.array(11, dtype=sf)
         # The zk path opens a *hiding* commitment ⟨coeffs,G⟩ + cr·s (the open
         # removes all randomness inside the fold).
         commitment, _ = IpaProver(key).commit_zk([coeffs], [commitment_randomness])
@@ -289,7 +289,7 @@ class IpaRoundTripTest(parameterized.TestCase):
     @parameterized.named_parameters(*_ZK_CURVES)
     def test_zk_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
         key, x, commitment, value, proof = self._commit_open_zk(sf, curve)
-        bad = value + jnp.array(1, dtype=sf)
+        bad = value + fnp.array(1, dtype=sf)
         _, claim = reduce_opening_zk(
             key,
             commitment[0],
@@ -310,11 +310,11 @@ class IpaRoundTripTest(parameterized.TestCase):
         # (commitment + hc·hiding_comm − s·rand) the verifier independently
         # reconstructs in reduce_opening_zk.
         key = basis.toy_key(curve, n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
-        x = jnp.array(7, dtype=sf)
-        hiding = jnp.array([2, 9, 1, 8], dtype=sf)
-        hiding_rand = jnp.array(5, dtype=sf)
-        commitment_randomness = jnp.array(11, dtype=sf)
+        coeffs = fnp.array([3, 1, 4, 1], dtype=sf)
+        x = fnp.array(7, dtype=sf)
+        hiding = fnp.array([2, 9, 1, 8], dtype=sf)
+        hiding_rand = fnp.array(5, dtype=sf)
+        commitment_randomness = fnp.array(11, dtype=sf)
         commitment, _ = IpaProver(key).commit_zk([coeffs], [commitment_randomness])
         _, value, proof, final_comm_key, mod_commitment = _open_one_zk(
             key,
@@ -341,7 +341,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         g_final = lax.msm(s, key.basis[: s.shape[0]])
         self.assertTrue(
             bool(
-                jnp.all(
+                fnp.all(
                     lax.convert_element_type(final_comm_key, aff)
                     == lax.convert_element_type(g_final, aff)
                 )
@@ -350,17 +350,17 @@ class IpaRoundTripTest(parameterized.TestCase):
 
         # mod_commitment == the blinded commitment the verifier reconstructs from the
         # re-squeezed hiding challenge hc (reduce_opening_zk's own formula).
-        one = jnp.ones((), dtype=sf)
+        one = fnp.ones((), dtype=sf)
         _, hc = TranscriptChallenger(_transcript(sf), sf).hiding_challenge(
             commitment[0], proof.hiding_comm, x, value
         )
         expected_mod = lax.msm(
-            jnp.stack([one, hc, -proof.rand]),
-            jnp.stack([commitment[0], proof.hiding_comm, key.s]),
+            fnp.stack([one, hc, -proof.rand]),
+            fnp.stack([commitment[0], proof.hiding_comm, key.s]),
         )
         self.assertTrue(
             bool(
-                jnp.all(
+                fnp.all(
                     lax.convert_element_type(mod_commitment, aff)
                     == lax.convert_element_type(expected_mod, aff)
                 )
@@ -373,10 +373,10 @@ class IpaBatchValidationTest(absltest.TestCase):
     def test_open_rejects_batch_mismatch(self) -> None:
         sf = zk_dtypes.bn254_sf_mont
         key = basis.toy_key(curves.BN254, n=4)
-        coeffs = jnp.array([3, 1, 4, 1], dtype=sf)
-        x = jnp.array(7, dtype=sf)
+        coeffs = fnp.array([3, 1, 4, 1], dtype=sf)
+        x = fnp.array(7, dtype=sf)
         # commitments is never read — open raises on the length check first.
-        dummy = jnp.zeros((1,), dtype=curves.BN254.g1)
+        dummy = fnp.zeros((1,), dtype=curves.BN254.g1)
         with self.assertRaises(ValueError):
             IpaProver(key).open(
                 IpaProverData((coeffs,), dummy), [x, x], _transcript(sf)

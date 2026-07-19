@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -58,7 +58,7 @@ def _bind_multi_limb(
     for _ in range(num_vars):
         transcript, c = sample_challenge(transcript, dtype, limbs)
         coords.append(c)
-    point = jnp.stack(coords)
+    point = fnp.stack(coords)
     num_eval = eval_mle(output.numerator, point)
     den_eval = eval_mle(output.denominator, point)
     return (num_eval, den_eval, point), transcript
@@ -93,7 +93,7 @@ class JaggedRoundtripTest(absltest.TestCase):
         self.assertTrue(bool(ok))
         # Fiat-Shamir lockstep: both sides reduce to the same point-claim.
         for got, want in zip(verifier_final, prover_final, strict=True):
-            self.assertTrue(bool(jnp.all(got == want)))
+            self.assertTrue(bool(fnp.all(got == want)))
 
         # The PCS-consumer closing check, done directly: the reduced claims
         # are the input layer's interleaved virtual planes at the final point.
@@ -106,7 +106,7 @@ class JaggedRoundtripTest(absltest.TestCase):
     def test_tampered_round_poly_rejected(self) -> None:
         layers = build_jagged_pyramid(random_jagged_layer(17, ROW_COUNTS))
         _, proofs, output = _prove(layers)
-        bumped = proofs[1].round_polys.at[0, 0].add(jnp.array(1, KB))
+        bumped = proofs[1].round_polys.at[0, 0].add(fnp.array(1, KB))
         proofs[1] = replace(proofs[1], round_polys=bumped)
         _, ok = _verify(output, proofs)
         self.assertFalse(bool(ok))
@@ -114,7 +114,7 @@ class JaggedRoundtripTest(absltest.TestCase):
     def test_tampered_opening_rejected(self) -> None:
         layers = build_jagged_pyramid(random_jagged_layer(27, ROW_COUNTS))
         _, proofs, output = _prove(layers)
-        bad = proofs[0].numerator_0 + jnp.array(1, KB)
+        bad = proofs[0].numerator_0 + fnp.array(1, KB)
         proofs[0] = replace(proofs[0], numerator_0=bad)
         _, ok = _verify(output, proofs)
         self.assertFalse(bool(ok))
@@ -138,7 +138,7 @@ class JaggedRoundtripTest(absltest.TestCase):
         self.assertTrue(bool(ok))
         self.assertEqual(verifier_final[0].dtype, EF)
         for got, want in zip(verifier_final, prover_final, strict=True):
-            self.assertTrue(bool(jnp.all(got == want)))
+            self.assertTrue(bool(fnp.all(got == want)))
 
 
 if __name__ == "__main__":

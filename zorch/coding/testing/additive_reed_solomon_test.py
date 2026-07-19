@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
@@ -28,7 +28,7 @@ F = zk_dtypes.binary_field_ghash
 
 def _rand(n: int, rng: np.random.Generator, dtype: Any = F) -> Array:
     itemsize = np.dtype(dtype).itemsize
-    return jnp.asarray(np.frombuffer(rng.bytes(n * itemsize), dtype=dtype))
+    return fnp.asarray(np.frombuffer(rng.bytes(n * itemsize), dtype=dtype))
 
 
 def _bytes_equal(a: Array, b: Array) -> bool:
@@ -69,7 +69,7 @@ class AdditiveReedSolomonTest(absltest.TestCase):
         msg = _rand(self.code.message_len, self.rng)
         cw_bytes = bytearray(np.asarray(self.code.encode(msg)).tobytes())
         cw_bytes[17] ^= 0x40
-        cw = jnp.asarray(np.frombuffer(bytes(cw_bytes), dtype=F))
+        cw = fnp.asarray(np.frombuffer(bytes(cw_bytes), dtype=F))
         betas = [_rand(1, self.rng)[0] for _ in range(self.num_rounds)]
         final = self._fold_chain(cw, betas)
         self.assertFalse(bool(self.code.check_final(final, final[0])))
@@ -80,7 +80,7 @@ class AdditiveReedSolomonTest(absltest.TestCase):
         for level in range(num_rounds):
             beta = _rand(1, self.rng)[0]
             folded = self.code.fold(cw, beta)
-            pos = jnp.asarray(self.rng.integers(0, folded.shape[0], (8,)), jnp.int32)
+            pos = fnp.asarray(self.rng.integers(0, folded.shape[0], (8,)), fnp.int32)
             lo_i, hi_i = self.code.pair_indices(pos, level)
             got = self.code.fold_values(cw[lo_i], cw[hi_i], beta, pos, level)
             self.assertTrue(_bytes_equal(got, folded[pos]))
@@ -88,19 +88,19 @@ class AdditiveReedSolomonTest(absltest.TestCase):
 
     def test_layer_positions_walk_pairs(self) -> None:
         num_rounds = self.num_rounds
-        pos = jnp.asarray(self.rng.integers(0, self.code.block_len, (8,)), jnp.int32)
+        pos = fnp.asarray(self.rng.integers(0, self.code.block_len, (8,)), fnp.int32)
         walk = self.code.layer_positions(pos, num_rounds)
         self.assertLen(walk, num_rounds)
         for i in range(num_rounds - 1):
             lo_i, hi_i = self.code.pair_indices(walk[i + 1], i + 1)
             landing = walk[i]
             member = (landing == lo_i) | (landing == hi_i)
-            self.assertTrue(bool(jnp.all(member)))
+            self.assertTrue(bool(fnp.all(member)))
 
     def test_pair_leaves_matches_pair_indices(self) -> None:
         cw = self.code.encode(_rand(self.code.message_len, self.rng))
         leaves = self.code.pair_leaves(cw)
-        pos = jnp.asarray(self.rng.integers(0, leaves.shape[0], (8,)), jnp.int32)
+        pos = fnp.asarray(self.rng.integers(0, leaves.shape[0], (8,)), fnp.int32)
         lo_i, hi_i = self.code.pair_indices(pos, 0)
         self.assertTrue(_bytes_equal(leaves[pos, 0], cw[lo_i]))
         self.assertTrue(_bytes_equal(leaves[pos, 1], cw[hi_i]))

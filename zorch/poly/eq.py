@@ -6,7 +6,7 @@ eq(w, x) = Π_i (1 - x_i - w_i + 2·x_i·w_i); Σ_{w∈{0,1}^n} eq(w,x) = 1.
 
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -19,7 +19,7 @@ def eq_factor(t: Array, z: Array) -> Array:
     folds variable z_k at challenge r multiplies its running bound-eq mass by
     ``eq_factor(r, z_k)`` (the jagged provers' ``pad_adj``/``eq_adj``
     accumulation step)."""
-    one = jnp.ones((), z.dtype)
+    one = fnp.ones((), z.dtype)
     return t * z + (one - t) * (one - z)
 
 
@@ -33,8 +33,8 @@ def eq_root(z: Array) -> Array:
     (https://eprint.iacr.org/2024/108, `zorch.sumcheck.gruen`). Undefined at
     z = 1/2 (the factor is constant) and colliding with the t = 1 node at
     z = 0; a transcript-sampled ``z`` avoids both w.h.p."""
-    one = jnp.ones((), z.dtype)
-    return (one - z) / (one - jnp.array(2, z.dtype) * z)
+    one = fnp.ones((), z.dtype)
+    return (one - z) / (one - fnp.array(2, z.dtype) * z)
 
 
 def eval_eq(w: Array, x: Array) -> Array:
@@ -46,7 +46,7 @@ def eval_eq(w: Array, x: Array) -> Array:
     but without materializing either 2^len vector, so a verifier evaluating eq at
     a bound point stays succinct. Symmetric in ``w``/``x`` and order-agnostic (a
     product over coordinates), so MSB/LSB indexing does not matter."""
-    return jnp.prod(eq_factor(w, x), axis=-1)
+    return fnp.prod(eq_factor(w, x), axis=-1)
 
 
 def expand_hypercube_step(state: Array, coord: Array, *, msb: bool = False) -> Array:
@@ -55,8 +55,8 @@ def expand_hypercube_step(state: Array, coord: Array, *, msb: bool = False) -> A
     high = state * coord
     low = state - high
     if msb:
-        return jnp.concatenate([low, high])
-    return jnp.column_stack([low, high]).flatten()
+        return fnp.concatenate([low, high])
+    return fnp.column_stack([low, high]).flatten()
 
 
 def contract_hypercube_step(state: Array) -> Array:
@@ -80,7 +80,7 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
     NOTE: explicit indexing instead of `for coord in x` — iterating a JAX array
     of an extension-field dtype dispatches `lax.sign`, a XLA gotcha.
     """
-    state = jnp.atleast_1d(scalar)
+    state = fnp.atleast_1d(scalar)
     for j in range(x.shape[0]):
         state = expand_hypercube_step(state, x[j], msb=msb)
     return state
@@ -90,7 +90,7 @@ def expand_monomial_step(state: Array, coord: Array) -> Array:
     """(2^k,) -> (2^{k+1},): add a new variable as the LSB, monomial basis.
     result[2j] = state[j], result[2j+1] = state[j]·coord — the ⊗(1, coord)
     factor, where `expand_hypercube_step` is ⊗(1-coord, coord)."""
-    return jnp.column_stack([state, state * coord]).flatten()
+    return fnp.column_stack([state, state * coord]).flatten()
 
 
 def expand_monomial_to_hypercube(x: Array, scalar: Array) -> Array:
@@ -99,7 +99,7 @@ def expand_monomial_to_hypercube(x: Array, scalar: Array) -> Array:
     MSB-first indexing (w[0] binds x[0]). `<coeffs, expand_monomial(x)>` is the
     monomial-basis evaluation at x, as `<evals, expand_eq(x)>` is the eval-basis
     one."""
-    state = jnp.atleast_1d(scalar)
+    state = fnp.atleast_1d(scalar)
     for j in range(x.shape[0]):
         state = expand_monomial_step(state, x[j])
     return state

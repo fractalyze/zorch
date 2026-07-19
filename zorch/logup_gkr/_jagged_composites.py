@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from functools import partial
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch._composite import composite
@@ -150,7 +150,7 @@ def _round_composite_row_decomp(
     folded_len = planes.n0.shape[0] // 2
     num_pairs = folded_len if out_pairs is None else out_pairs
     gather, col_index, pair_index = _derive_row_schedule(
-        row_counts, live[2], num_pairs, sentinel=folded_len, idx_dtype=jnp.int32
+        row_counts, live[2], num_pairs, sentinel=folded_len, idx_dtype=fnp.int32
     )
     bound = _bind_planes(planes, alpha)
     eq_bound = fold(eq_row, alpha, msb=False)
@@ -341,7 +341,7 @@ def _round_composite_first_row_decomp(
     raw_len = planes.n0.shape[0]
     num_pairs = raw_len // 2 if out_pairs is None else out_pairs
     gather, col_index, pair_index = _derive_row_schedule(
-        row_counts, live[2], num_pairs, sentinel=raw_len, idx_dtype=jnp.int32
+        row_counts, live[2], num_pairs, sentinel=raw_len, idx_dtype=fnp.int32
     )
     return _round_poly_row(
         planes,

@@ -34,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.multilinear import eval_mle, mle_fold
@@ -61,7 +61,7 @@ class SumcheckKernel:
         multilinear partial-eval at beta=0), so `zero_val` is `s(0)`; `one_val`
         is recovered from the running claim."""
         mle, claim, zs = state
-        zero_mle = mle_fold(mle, jnp.zeros((), zs.dtype))
+        zero_mle = mle_fold(mle, fnp.zeros((), zs.dtype))
         rest = zs[:-1]
         zero_val = eval_mle(zero_mle, rest) if rest.shape[0] > 0 else zero_mle[0]
         one_val = (claim - zero_val) / zs[-1] + zero_val
@@ -100,7 +100,7 @@ class SumcheckKernel:
         (`(1-coord)·s(0) + coord·s(1)`). Returns a boolean array. A consumer
         without an opening point (a raw-basis product check) overrides."""
         zero_val, one_val = message
-        one = jnp.ones((), coord.dtype)
+        one = fnp.ones((), coord.dtype)
         return claim == (one - coord) * zero_val + coord * one_val
 
     def verify_final(self, claim: Array, final_state: Any) -> tuple[Array, Array]:
@@ -117,4 +117,4 @@ class SumcheckKernel:
         product of folded vectors (`final = (a[0], b[0])`, claim `Σ a·b`)
         overrides to check `a[0]·b[0] == claim` and return `a[0]`."""
         del final_state
-        return jnp.bool_(True), claim
+        return fnp.bool_(True), claim

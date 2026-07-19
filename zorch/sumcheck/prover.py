@@ -35,7 +35,7 @@ from functools import partial, reduce
 from typing import TYPE_CHECKING, Any, Protocol
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import efinfo
 
@@ -158,8 +158,8 @@ class CompressedProductRound(Round):
                 f"compressed product round takes exactly 2 factors, got "
                 f"{folded.shape[0]}"
             )
-        (f0, f1), (b0, b1) = jnp.reshape(folded, (2, 2, -1))
-        return jnp.sum(jnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
+        (f0, f1), (b0, b1) = fnp.reshape(folded, (2, 2, -1))
+        return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
         self, folded: Array, transcript: Transcript

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.pcs.fold import FoldChoreography
@@ -54,7 +54,7 @@ class BasefoldChoreography(FoldChoreography):
         a consumer whose transcript absorbs them element-by-element (e.g. two
         scalar observes) keeps this default because `observe_message` iterates
         the stacked array under such a transcript."""
-        return jnp.stack(list(components))
+        return fnp.stack(list(components))
 
     def observe_final(self, transcript: TranscriptT, final_poly: Array) -> TranscriptT:
         """Bind the terminal poly before sampling queries. Default observes

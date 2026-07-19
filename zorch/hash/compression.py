@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.hash.permutation import Permutation
@@ -88,6 +88,6 @@ class Compression:
             raise ValueError(
                 f"inputs shape must be {(self.arity, self.chunk)}, got {inputs.shape}"
             )
-        pre = jnp.zeros(self._permutation.width, dtype=inputs.dtype)
+        pre = fnp.zeros(self._permutation.width, dtype=inputs.dtype)
         pre = pre.at[: self.arity * self.chunk].set(inputs.reshape(-1))
         return self._permutation.permute(pre)[: self.chunk]

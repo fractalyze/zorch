@@ -11,7 +11,7 @@ import unittest
 from collections.abc import Callable
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
@@ -42,7 +42,7 @@ def _basefold(
     return BasefoldProver(rs, tree), rs, tree, S
 
 
-def _columns(mle: jnp.ndarray) -> list[jnp.ndarray]:
+def _columns(mle: fnp.ndarray) -> list[fnp.ndarray]:
     """The seam commits a Sequence of column MLEs (1D), like kzg/fri."""
     return [mle[:, j] for j in range(mle.shape[1])]
 
@@ -51,11 +51,11 @@ class BasefoldTest(absltest.TestCase):
     def test_commit_matches_independent_encode_merkle(self) -> None:
         bf, rs, tree, S = _basefold()
         K = 3
-        mle = jnp.arange(S * K, dtype=F).reshape(S, K)  # [S, K]
+        mle = fnp.arange(S * K, dtype=F).reshape(S, K)  # [S, K]
         root, pdata = bf.commit(_columns(mle))
         # Independent reconstruction: column-wise RS-encode then Merkle (the
         # commit itself encodes the columns as one batch).
-        codeword = jnp.stack([rs.encode(mle[:, j]) for j in range(K)], axis=1)
+        codeword = fnp.stack([rs.encode(mle[:, j]) for j in range(K)], axis=1)
         exp_root, _ = tree.commit(codeword)
         self.assertEqual(root.tolist(), exp_root.tolist())
         self.assertIsInstance(pdata, BasefoldProverData)
@@ -65,22 +65,22 @@ class BasefoldTest(absltest.TestCase):
         # The columns share one message length, so the whole matrix encodes as
         # a single batched NTT kernel — not width per-column ffts (#144).
         bf, rs, tree, S = _basefold()
-        polys = [jnp.arange(S, dtype=F) + F(j) for j in range(3)]
+        polys = [fnp.arange(S, dtype=F) + F(j) for j in range(3)]
         hlo = _commit_body.lower(rs, tree, polys).as_text()
         self.assertEqual(len(re.findall(r"stablehlo\.ntt", hlo)), 1)
 
     def test_prover_data_pytree_round_trips(self) -> None:
         bf, rs, tree, S = _basefold()
-        mle = jnp.arange(S * 3, dtype=F).reshape(S, 3)
+        mle = fnp.arange(S * 3, dtype=F).reshape(S, 3)
         _, pdata = bf.commit(_columns(mle))
         leaves, treedef = frx.tree_util.tree_flatten(pdata)
         restored = frx.tree_util.tree_unflatten(treedef, leaves)
         self.assertEqual(restored.widths, pdata.widths)
         for a, b in zip(restored.digest_layers, pdata.digest_layers):
-            self.assertTrue(bool(jnp.array_equal(a, b)))
+            self.assertTrue(bool(fnp.array_equal(a, b)))
         # mle/codeword are data leaves -> must survive the round-trip too.
-        self.assertTrue(bool(jnp.array_equal(restored.mle, pdata.mle)))
-        self.assertTrue(bool(jnp.array_equal(restored.codeword, pdata.codeword)))
+        self.assertTrue(bool(fnp.array_equal(restored.mle, pdata.mle)))
+        self.assertTrue(bool(fnp.array_equal(restored.codeword, pdata.codeword)))
 
     def test_proof_pytree_round_trips(self) -> None:
         from zorch.commit.merkle import Opening
@@ -89,15 +89,15 @@ class BasefoldTest(absltest.TestCase):
         # num_vars = 1: one fold round (one fri root, one pair-leaf opening), one
         # committed matrix of width 3 opened at the query positions.
         comp = Opening(
-            row=jnp.zeros((2, 3), dtype=F), path=[jnp.zeros((2, 8), dtype=F)]
+            row=fnp.zeros((2, 3), dtype=F), path=[fnp.zeros((2, 8), dtype=F)]
         )
         pair = Opening(
-            row=jnp.zeros((2, 2), dtype=F), path=[jnp.zeros((2, 8), dtype=F)]
+            row=fnp.zeros((2, 2), dtype=F), path=[fnp.zeros((2, 8), dtype=F)]
         )
         proof = BasefoldProof(
-            univariate_messages=[(jnp.array(1, F), jnp.array(2, F))],
-            fri_roots=[jnp.zeros(8, dtype=F)],
-            final_poly=jnp.zeros(2, dtype=F),
+            univariate_messages=[(fnp.array(1, F), fnp.array(2, F))],
+            fri_roots=[fnp.zeros(8, dtype=F)],
+            final_poly=fnp.zeros(2, dtype=F),
             component_openings=[comp],
             query_openings=[pair],
         )
@@ -117,14 +117,14 @@ class BasefoldTest(absltest.TestCase):
             bf, _rs, _tree, S = _basefold()
             bf = dataclasses.replace(bf, num_queries=num_queries)
             for offset in (0, 1, 2):
-                mle = jnp.arange(S * 2, dtype=F).reshape(S, 2) + F(offset)
+                mle = fnp.arange(S * 2, dtype=F).reshape(S, 2) + F(offset)
                 calls.append(functools.partial(bf.commit, _columns(mle)))
         assert_single_trace(self, _commit_body, calls)
 
     def test_commit_retains_mle_and_codeword(self) -> None:
         bf, rs, _tree, S = _basefold()
         K = 3
-        mle = jnp.arange(S * K, dtype=F).reshape(S, K)
+        mle = fnp.arange(S * K, dtype=F).reshape(S, K)
         _, pdata = bf.commit(_columns(mle))
         self.assertEqual(pdata.mle.shape, (S, K))
         self.assertEqual(pdata.codeword.shape, (rs.block_len, K))
@@ -135,7 +135,7 @@ def _transcript() -> DuplexTranscript:
     return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
 
-def _rand_ef(seed: int, shape: tuple[int, ...]) -> jnp.ndarray:
+def _rand_ef(seed: int, shape: tuple[int, ...]) -> fnp.ndarray:
     return rand_ext_field(seed, shape, F, EF)
 
 
@@ -153,9 +153,9 @@ class BasefoldOpenTest(absltest.TestCase):
     ) -> tuple[
         BasefoldProver,
         BasefoldVerifier,
-        jnp.ndarray,
+        fnp.ndarray,
         BasefoldProverData,
-        jnp.ndarray,
+        fnp.ndarray,
         int,
     ]:
         S = 1 << log_s
@@ -193,7 +193,7 @@ class BasefoldOpenTest(absltest.TestCase):
         bad = dataclasses.replace(
             proof,
             univariate_messages=[
-                (z0 + jnp.array(1, EF), o0),
+                (z0 + fnp.array(1, EF), o0),
                 *proof.univariate_messages[1:],
             ],
         )
@@ -205,7 +205,7 @@ class BasefoldOpenTest(absltest.TestCase):
         z = _rand_ef(8, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
         comp = proof.component_openings[0]
-        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, F))
+        bad_comp = dataclasses.replace(comp, row=comp.row + fnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
@@ -235,7 +235,7 @@ class BasefoldOpenTest(absltest.TestCase):
         z = _rand_ef(15, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
         comp = proof.component_openings[0]
-        bad_comp = dataclasses.replace(comp, row=comp.row + jnp.array(1, F))
+        bad_comp = dataclasses.replace(comp, row=comp.row + fnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
@@ -283,7 +283,7 @@ class BasefoldOpenTest(absltest.TestCase):
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
         z = _rand_ef(9, (log_s,))
         values, proof, _ = prover.open(pdata, [z], _transcript())
-        wrong_root = root + jnp.ones_like(root)
+        wrong_root = root + fnp.ones_like(root)
         ok, _ = verifier.verify(wrong_root, [z], values, proof, _transcript())
         self.assertFalse(bool(ok))
 
@@ -332,7 +332,7 @@ class BasefoldOpenTest(absltest.TestCase):
         )
         z = _rand_ef(32, (log_s,))
         values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
-        bad_roots = [roots[0] + jnp.ones_like(roots[0]), roots[1]]
+        bad_roots = [roots[0] + fnp.ones_like(roots[0]), roots[1]]
         ok, _ = verifier.verify_batch(bad_roots, [z], values, proof, _transcript())
         self.assertFalse(bool(ok))
 
@@ -343,7 +343,7 @@ class BasefoldOpenTest(absltest.TestCase):
         z = _rand_ef(33, (log_s,))
         values, proof, _ = prover.open_batch(pdatas, [z], _transcript())
         co = proof.component_openings[1]
-        bad_co = dataclasses.replace(co, row=co.row + jnp.array(1, F))
+        bad_co = dataclasses.replace(co, row=co.row + fnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[proof.component_openings[0], bad_co]
         )
@@ -372,7 +372,7 @@ class BasefoldOpenTest(absltest.TestCase):
         t0 = _transcript()  # built eagerly; closed over as a pytree constant
 
         @functools.partial(frx.jit, static_argnums=())
-        def run(mle: jnp.ndarray, z: jnp.ndarray) -> jnp.ndarray:
+        def run(mle: fnp.ndarray, z: fnp.ndarray) -> fnp.ndarray:
             cols = [mle[:, k] for k in range(K)]
             _, pdata = prover.commit(cols)
             values, proof, _ = prover.open(pdata, [z], t0)

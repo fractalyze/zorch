@@ -15,7 +15,7 @@ from __future__ import annotations
 from typing import Any
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest, parameterized
@@ -48,7 +48,7 @@ def _rand(seed: int, shape: tuple[int, ...], dtype: Any) -> Array:
     raw = np.random.default_rng(seed).integers(
         0, 1 << 32, size=(*shape, lanes), dtype=np.uint32
     )
-    return jnp.asarray(raw.view(np.dtype(dtype)).reshape(shape))
+    return fnp.asarray(raw.view(np.dtype(dtype)).reshape(shape))
 
 
 def _np_bits(x: Array) -> np.ndarray:
@@ -159,7 +159,7 @@ class EvalRsEqTest(parameterized.TestCase):
         z_vals = _rand(21, (ell,), dtype)
         query = _rand(22, (ell,), dtype)
         eq_r = _rand(23, (w,), dtype)
-        eq_z = expand_eq_to_hypercube(z_vals, jnp.ones((), dtype))
+        eq_z = expand_eq_to_hypercube(z_vals, fnp.ones((), dtype))
         dense = eval_mle(rs_eq_ind(eq_z, eq_r), query)
         succinct = eval_rs_eq(z_vals, query, eq_r)
         np.testing.assert_array_equal(_np_lanes(dense), _np_lanes(succinct))

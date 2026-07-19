@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
@@ -24,11 +24,11 @@ class CheapPermutationTest(absltest.TestCase):
 
     def test_permute_preserves_shape_and_is_deterministic(self) -> None:
         perm = CheapPermutation(width=8, dtype=KB)
-        s = jnp.arange(8, dtype=KB)
+        s = fnp.arange(8, dtype=KB)
         out, again = perm.permute(s), perm.permute(s)
         self.assertEqual(out.shape, (8,))
         self.assertEqual(out.dtype, KB)
-        self.assertTrue(bool(jnp.all(out == again)))
+        self.assertTrue(bool(fnp.all(out == again)))
 
     def test_value_equality(self) -> None:
         # Pytree-aux seat: fresh instances must compare by value or every jit
@@ -52,16 +52,16 @@ class TestTranscriptTest(absltest.TestCase):
     def test_is_deterministic_across_fresh_instances(self) -> None:
         # Same observe/sample sequence on two fresh transcripts → same challenge,
         # so a test can drive prove and a reference from identical fresh state.
-        _, a = cheap_transcript(KB).observe_and_sample(jnp.arange(3, dtype=KB), 1)
-        _, b = cheap_transcript(KB).observe_and_sample(jnp.arange(3, dtype=KB), 1)
-        self.assertTrue(bool(jnp.all(a == b)))
+        _, a = cheap_transcript(KB).observe_and_sample(fnp.arange(3, dtype=KB), 1)
+        _, b = cheap_transcript(KB).observe_and_sample(fnp.arange(3, dtype=KB), 1)
+        self.assertTrue(bool(fnp.all(a == b)))
 
     def test_observation_changes_the_challenge(self) -> None:
         # A real sponge (observe is not a no-op): a different observation must
         # yield a different challenge.
-        _, a = cheap_transcript(KB).observe_and_sample(jnp.arange(3, dtype=KB), 1)
-        _, b = cheap_transcript(KB).observe_and_sample(jnp.arange(3, 6, dtype=KB), 1)
-        self.assertFalse(bool(jnp.all(a == b)))
+        _, a = cheap_transcript(KB).observe_and_sample(fnp.arange(3, dtype=KB), 1)
+        _, b = cheap_transcript(KB).observe_and_sample(fnp.arange(3, 6, dtype=KB), 1)
+        self.assertFalse(bool(fnp.all(a == b)))
 
 
 if __name__ == "__main__":

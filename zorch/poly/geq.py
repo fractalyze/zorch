@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from functools import partial
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -29,7 +29,7 @@ class VirtualGeq:
 
     ``threshold`` is a traced leaf, not static config: a jagged sumcheck round
     engine carries the indicator as a ``lax.scan`` carry whose threshold halves
-    each round, so the zone branches are value-generic ``jnp.where`` (a Python
+    each round, so the zone branches are value-generic ``fnp.where`` (a Python
     ``if`` on the threshold breaks under the scan). A Python ``int`` at
     construction is coerced, so the static call sites stay byte-identical."""
 
@@ -43,8 +43,8 @@ class VirtualGeq:
         Pairs strictly past the threshold bind to ``geq``; the straddling
         pair becomes the new ``eq_coefficient``, by which side of the pair
         the threshold sits on."""
-        one = jnp.ones((), alpha.dtype)
-        threshold = jnp.asarray(self.threshold, jnp.int32)
+        one = fnp.ones((), alpha.dtype)
+        threshold = fnp.asarray(self.threshold, fnp.int32)
         # Threshold even — pair (threshold, threshold+1) = (eq+geq, geq):
         # eq+geq + alpha*(geq - (eq+geq)) = geq + (1-alpha)*eq.
         even_eq = (one - alpha) * self.eq_coefficient
@@ -54,17 +54,17 @@ class VirtualGeq:
         odd_eq = (
             alpha * (self.eq_coefficient + self.geq_coefficient) - self.geq_coefficient
         )
-        new_eq = jnp.where(threshold % 2 == 0, even_eq, odd_eq)
+        new_eq = fnp.where(threshold % 2 == 0, even_eq, odd_eq)
         return VirtualGeq(threshold >> 1, self.geq_coefficient, new_eq)
 
     def eval_at(self, index: Array | int) -> Array:
-        threshold = jnp.asarray(self.threshold, jnp.int32)
-        index = jnp.asarray(index, jnp.int32)
-        at_or_above = jnp.where(
+        threshold = fnp.asarray(self.threshold, fnp.int32)
+        index = fnp.asarray(index, fnp.int32)
+        at_or_above = fnp.where(
             index == threshold,
             self.eq_coefficient + self.geq_coefficient,
             self.geq_coefficient,
         )
-        return jnp.where(
-            index < threshold, jnp.zeros_like(self.geq_coefficient), at_or_above
+        return fnp.where(
+            index < threshold, fnp.zeros_like(self.geq_coefficient), at_or_above
         )

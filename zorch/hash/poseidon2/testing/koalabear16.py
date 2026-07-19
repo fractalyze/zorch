@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from zk_dtypes import koalabear_mont as F
 
@@ -228,7 +228,7 @@ _INTERNAL_DIAG = [
     127,
 ]
 
-KOALABEAR16_EXPECTED = jnp.array(
+KOALABEAR16_EXPECTED = fnp.array(
     [
         1259554834,
         663463928,
@@ -260,10 +260,10 @@ def koalabear16_params() -> Poseidon2Params:
         alpha=_ALPHA,
         external_rounds=_ER,
         internal_rounds=_IR,
-        external_constants_initial=jnp.array(_EXTERNAL_INITIAL, dtype=F),
-        external_constants_terminal=jnp.array(_EXTERNAL_TERMINAL, dtype=F),
-        internal_constants=jnp.array(internal_rc, dtype=F),
-        internal_diag=jnp.array(_INTERNAL_DIAG, dtype=F),
+        external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
+        external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
+        internal_constants=fnp.array(internal_rc, dtype=F),
+        internal_diag=fnp.array(_INTERNAL_DIAG, dtype=F),
     )
 
 
@@ -284,5 +284,5 @@ def koalabear16_scaled_perm() -> Poseidon2:
     R⁻¹ out of an `R⁻¹·M·state` internal layer.
     """
     return Poseidon2(
-        replace(koalabear16_params(), internal_j_scale=jnp.array(1057030144, F))
+        replace(koalabear16_params(), internal_j_scale=fnp.array(1057030144, F))
     )

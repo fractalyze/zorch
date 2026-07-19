@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.spartan.r1cs import R1CS, assignment
@@ -36,5 +36,5 @@ def toy_r1cs(
     z = assignment(witness, io, num_vars_padded, num_io)
     t = (a @ z) * (b @ z)
     const_col = num_vars_padded  # z[const_col] == 1
-    c = jnp.zeros((num_cons, n), dtype).at[:, const_col].set(t)
+    c = fnp.zeros((num_cons, n), dtype).at[:, const_col].set(t)
     return R1CS(a=a, b=b, c=c, num_io=num_io), z, witness, io

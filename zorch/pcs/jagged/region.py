@@ -18,7 +18,7 @@ from functools import partial
 from typing import Any, Optional, Sequence
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 
@@ -62,8 +62,8 @@ def _pack_chip_data(
     """
     flats = [chip.T.reshape(-1) for chip in chips]
     if num_added_vals > 0:
-        flats.append(jnp.zeros(num_added_vals, dtype=pad_dtype))
-    return jnp.concatenate(flats)
+        flats.append(fnp.zeros(num_added_vals, dtype=pad_dtype))
+    return fnp.concatenate(flats)
 
 
 # Pytree: `dense` is the only array leaf; the SMCS row/column counts, stacking

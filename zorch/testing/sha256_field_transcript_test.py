@@ -11,7 +11,7 @@ scan-threadable — and threads zorch's sumcheck round driver under `@jit`.
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
@@ -32,7 +32,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         b, b_sq = b.sample_slice(3, 4)  # 3 elements * 4 bytes
 
         f = Sha256FieldTranscript.new(b"dom", np.uint32)
-        f = f.observe(jnp.asarray(vals))
+        f = f.observe(fnp.asarray(vals))
         f, f_el = f.sample(3)
         self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
 
@@ -51,20 +51,20 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         b, b_sq = b.sample_scalar(4)  # itemsize bytes
 
         f = Sha256FieldTranscript.new(b"dom", np.uint32)
-        f, f_el = f.observe_scalar(jnp.asarray(v)).sample_scalar()
+        f, f_el = f.observe_scalar(fnp.asarray(v)).sample_scalar()
         self.assertEqual(f_el.shape, ())  # scalar squeeze is 0-D
         self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
 
         # Same element, but sampled/observed under SLICE framing — must diverge.
         g = Sha256FieldTranscript.new(b"dom", np.uint32)
-        g, g_sl = g.observe(jnp.asarray(v).reshape(1)).sample(1)
+        g, g_sl = g.observe(fnp.asarray(v).reshape(1)).sample(1)
         self.assertNotEqual(np.asarray(f_el).tobytes(), np.asarray(g_sl).tobytes())
 
     def test_vector_observe_scalar_matches_scalar_chain(self) -> None:
         # observe_scalar of an [n] array frames each element as its own scalar
         # op, byte-identical to chaining n 0-d observes — same state, so the
         # next squeeze matches.
-        vals = jnp.asarray(np.array([7, 0xDEADBEEF, 0, 42], dtype=np.uint32))
+        vals = fnp.asarray(np.array([7, 0xDEADBEEF, 0, 42], dtype=np.uint32))
 
         chained = Sha256FieldTranscript.new(b"dom", np.uint32)
         for v in vals:
@@ -86,7 +86,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         b, b_sq = b.sample_slice(2, 4)
 
         f = Sha256FieldTranscript.new(b"dom", np.uint32)
-        f = f.observe_label(label).observe_bytes(jnp.asarray(root))
+        f = f.observe_label(label).observe_bytes(fnp.asarray(root))
         f, f_el = f.sample(2)
         self.assertEqual(np.asarray(f_el).astype("<u4").tobytes(), b_sq)
 
@@ -95,7 +95,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # (lowest) nonce, and the transcripts stay in lockstep (same challenge
         # afterwards). check_witness accepts the honest witness, rejects a
         # tampered one, and advances regardless (the DuplexTranscript contract).
-        root_u8 = jnp.asarray(np.frombuffer(b"root", np.uint8))
+        root_u8 = fnp.asarray(np.frombuffer(b"root", np.uint8))
         for bits in (0, 8):
             b = ByteHashTranscript.new(b"pow", HostSha256()).observe_bytes(b"root")
             b, b_nonce = b.grind_pow(bits)
@@ -132,9 +132,9 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # correct on the CPU PJRT backend. Observe a ghash element and sample
         # ghash challenges; the wire bytes match the byte transcript over the same
         # 16-byte serialization, and the samples come back as device ghash.
-        import zk_dtypes  # noqa: F401  (registers jnp.binary_field_ghash)
+        import zk_dtypes  # noqa: F401  (registers fnp.binary_field_ghash)
 
-        gh = jnp.binary_field_ghash
+        gh = fnp.binary_field_ghash
         lanes = np.array([1, 2, 3, 0xDEADBEEF], dtype=np.uint32)  # one 16-byte elem
         v_host = lanes.view(np.dtype(gh))  # shape (1,), known LE bytes
         vbytes = lanes.tobytes()  # 16 LE bytes
@@ -143,7 +143,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         b, b_sq = b.sample_slice(2, 16)  # two ghash-width challenges
 
         f = Sha256FieldTranscript.new(b"gh", gh)
-        f, f_el = f.observe(jnp.asarray(v_host)).sample(2)
+        f, f_el = f.observe(fnp.asarray(v_host)).sample(2)
         self.assertEqual(np.asarray(f_el).dtype, np.dtype(gh))  # device ghash
         self.assertEqual(f_el.shape, (2,))
         self.assertEqual(np.asarray(f_el).tobytes(), b_sq)
@@ -151,13 +151,13 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
     def test_threads_under_jit(self) -> None:
         vals = np.arange(6, dtype=np.uint32)
 
-        def run(x: jnp.ndarray) -> jnp.ndarray:
+        def run(x: fnp.ndarray) -> fnp.ndarray:
             f = Sha256FieldTranscript.new(b"dom", np.uint32)
             _, r = f.observe_and_sample(x, 1)
             return r
 
-        eager = np.asarray(run(jnp.asarray(vals)))
-        jitted = np.asarray(frx.jit(run)(jnp.asarray(vals)))
+        eager = np.asarray(run(fnp.asarray(vals)))
+        jitted = np.asarray(frx.jit(run)(fnp.asarray(vals)))
         self.assertEqual(eager.tobytes(), jitted.tobytes())
 
     def test_ghash_threads_under_jit(self) -> None:
@@ -165,20 +165,20 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # bitcast-chain simplification path has regressed before (xla#259).
         # Eager is the pinned reference
         # (test_ghash_dtype_matches_byte_transcript_via_uint32_lanes).
-        import zk_dtypes  # noqa: F401  (registers jnp.binary_field_ghash)
+        import zk_dtypes  # noqa: F401  (registers fnp.binary_field_ghash)
 
-        gh = jnp.binary_field_ghash
+        gh = fnp.binary_field_ghash
         v = np.array([1, 2, 3, 0xDEADBEEF], dtype=np.uint32).view(np.dtype(gh))
 
-        def run(x: jnp.ndarray) -> jnp.ndarray:
+        def run(x: fnp.ndarray) -> fnp.ndarray:
             f = Sha256FieldTranscript.new(b"gh", gh)
             f = f.observe_scalar(x[0]).observe(x)
             f, one = f.sample_scalar()
             _, vec = f.sample(2)
-            return jnp.concatenate([one.reshape(1), vec])
+            return fnp.concatenate([one.reshape(1), vec])
 
-        eager = np.asarray(run(jnp.asarray(v)))
-        jitted = np.asarray(frx.jit(run)(jnp.asarray(v)))
+        eager = np.asarray(run(fnp.asarray(v)))
+        jitted = np.asarray(frx.jit(run)(fnp.asarray(v)))
         self.assertEqual(eager.tobytes(), jitted.tobytes())
 
     def test_threads_through_sumcheck_prove(self) -> None:
@@ -190,15 +190,15 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         from zorch.prove import fold_rounds
         from zorch.sumcheck.prover import ProductSummand, StandardRound
 
-        a = jnp.arange(8, dtype=jnp.uint32) + 1
-        b = jnp.arange(8, dtype=jnp.uint32) + 2
+        a = fnp.arange(8, dtype=fnp.uint32) + 1
+        b = fnp.arange(8, dtype=fnp.uint32) + 2
         rnd = StandardRound(ProductSummand(degree=2))
         tr = Sha256FieldTranscript.new(b"sc", np.uint32)
 
-        def run(x: jnp.ndarray, y: jnp.ndarray) -> tuple[jnp.ndarray, jnp.ndarray]:
+        def run(x: fnp.ndarray, y: fnp.ndarray) -> tuple[fnp.ndarray, fnp.ndarray]:
             # 3 rounds folds the 2^3 stacked factors down to width 1.
-            state, _, msgs = fold_rounds(rnd, jnp.stack([x, y]), tr, 3)
-            return state[:, 0], jnp.stack(msgs)
+            state, _, msgs = fold_rounds(rnd, fnp.stack([x, y]), tr, 3)
+            return state[:, 0], fnp.stack(msgs)
 
         eager = frx.tree_util.tree_map(np.asarray, run(a, b))
         jitted = frx.tree_util.tree_map(np.asarray, frx.jit(run)(a, b))

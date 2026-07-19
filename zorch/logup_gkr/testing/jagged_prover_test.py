@@ -14,7 +14,7 @@ import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import fields
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
@@ -65,8 +65,8 @@ def _logup_combine(
 def _virtual_claim(layer: JaggedGkrLayer, nrv: int, lam: Array, z: Array) -> Array:
     """Brute-force `sum_x eq(z, x) * combine(x)` over the virtual hypercube."""
     n0, n1, d0, d1 = virtual_planes(layer, nrv)
-    eq = expand_eq_to_hypercube(z, jnp.ones((), z.dtype))
-    return jnp.sum(_logup_combine(lam, eq, n0, d1, n1, d0))
+    eq = expand_eq_to_hypercube(z, fnp.ones((), z.dtype))
+    return fnp.sum(_logup_combine(lam, eq, n0, d1, n1, d0))
 
 
 class ProveJaggedLayerTest(absltest.TestCase):
@@ -89,16 +89,16 @@ class ProveJaggedLayerTest(absltest.TestCase):
     def test_first_round_matches_virtual_hypercube_claim(self) -> None:
         _, _, _, claim, _, proof = self._prove()
         p0 = proof.round_polys[0]
-        zero = jnp.zeros((), KB)
-        one = jnp.ones((), KB)
+        zero = fnp.zeros((), KB)
+        one = fnp.ones((), KB)
         self.assertTrue(bool(eval_coeffs(p0, zero) + eval_coeffs(p0, one) == claim))
 
     def test_round_polys_thread_claims(self) -> None:
         # Each round's s(0) + s(1) must equal the previous round's claim
         # reduction -- the per-round sumcheck identity over all five rounds.
         _, _, _, claim, point, proof = self._prove()
-        zero = jnp.zeros((), KB)
-        one = jnp.ones((), KB)
+        zero = fnp.zeros((), KB)
+        one = fnp.ones((), KB)
         for poly, r in zip(proof.round_polys, point[::-1], strict=True):
             self.assertTrue(
                 bool(eval_coeffs(poly, zero) + eval_coeffs(poly, one) == claim)
@@ -142,8 +142,8 @@ class ProveJaggedLayerTest(absltest.TestCase):
         claim = _virtual_claim(layer, 3, lam, z)
         point, _, proof = prove_jagged_layer(layer, lam, claim, z, cheap_transcript(KB))
         p0 = proof.round_polys[0]
-        zero = jnp.zeros((), KB)
-        one = jnp.ones((), KB)
+        zero = fnp.zeros((), KB)
+        one = fnp.ones((), KB)
         self.assertTrue(bool(eval_coeffs(p0, zero) + eval_coeffs(p0, one) == claim))
         n0, _, _, d1 = virtual_planes(layer, 3)
         self.assertTrue(bool(proof.numerator_0 == eval_mle(n0, point)))
@@ -183,8 +183,8 @@ class ProveJaggedLayerTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             prove_jagged_layer(
                 layer,
-                jnp.array(3, KB),
-                jnp.array(5, KB),
+                fnp.array(3, KB),
+                fnp.array(5, KB),
                 rand_field(62, (1,), KB),  # only the interaction variable
                 cheap_transcript(KB),
             )
@@ -194,8 +194,8 @@ class ProveJaggedLayerTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             prove_jagged_layer(
                 layer,
-                jnp.array(3, KB),
-                jnp.array(5, KB),
+                fnp.array(3, KB),
+                fnp.array(5, KB),
                 rand_field(72, (3,), KB),  # nrv = 2 < log2(5)
                 cheap_transcript(KB),
             )
@@ -245,18 +245,18 @@ class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
             all_ef, lam, claim, z, cheap_transcript(KB), challenge_limbs=4
         )
 
-        self.assertTrue(bool(jnp.all(gp == wp)))  # bound point
+        self.assertTrue(bool(fnp.all(gp == wp)))  # bound point
         for f in fields(JaggedLayerProof):
             self.assertTrue(
-                bool(jnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
+                bool(fnp.all(getattr(gproof, f.name) == getattr(wproof, f.name))),
                 f"proof.{f.name} diverged",
             )
         if not isinstance(gt, DuplexTranscript) or not isinstance(wt, DuplexTranscript):
             raise AssertionError("both paths must thread the DuplexTranscript back")
         gs, ws = gt.state, wt.state
-        self.assertTrue(bool(jnp.all(gs.input_buffer == ws.input_buffer)))
-        self.assertTrue(bool(jnp.all(gs.output_buffer == ws.output_buffer)))
-        self.assertTrue(bool(jnp.all(gs.sponge_state == ws.sponge_state)))
+        self.assertTrue(bool(fnp.all(gs.input_buffer == ws.input_buffer)))
+        self.assertTrue(bool(fnp.all(gs.output_buffer == ws.output_buffer)))
+        self.assertTrue(bool(fnp.all(gs.sponge_state == ws.sponge_state)))
         self.assertEqual(int(gs.in_pos), int(ws.in_pos))
         self.assertEqual(int(gs.out_pos), int(ws.out_pos))
 
@@ -290,8 +290,8 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         )
 
         p0 = proof.round_polys[0]
-        zero = jnp.zeros((), KB)
-        one = jnp.ones((), KB)
+        zero = fnp.zeros((), KB)
+        one = fnp.ones((), KB)
         self.assertTrue(
             bool(
                 eval_coeffs(p0, zero) + eval_coeffs(p0, one)
@@ -317,7 +317,7 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
             carry, cheap_transcript(KB)
         )
         self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
-        self.assertTrue(bool(jnp.all(proof.point == new_point[:-1])))
+        self.assertTrue(bool(fnp.all(proof.point == new_point[:-1])))
 
     def test_proof_records_lam_and_opening_claim(self) -> None:
         # The per-layer anchors a consumer diffs when a transcript diverges
@@ -364,11 +364,11 @@ class ChainedJaggedProveTest(absltest.TestCase):
             )
             n0, n1 = proof.numerator_0, proof.numerator_1
             d0, d1 = proof.denominator_0, proof.denominator_1
-            transcript = transcript.observe(jnp.stack([n0, n1, d0, d1]))
+            transcript = transcript.observe(fnp.stack([n0, n1, d0, d1]))
             transcript, r = sample_challenge(transcript, num_eval.dtype, 1)
             num_eval = n0 + (n1 - n0) * r
             den_eval = d0 + (d1 - d0) * r
-            eval_point = jnp.concatenate([point, jnp.atleast_1d(r)])
+            eval_point = fnp.concatenate([point, fnp.atleast_1d(r)])
             proofs.append(proof)
         return (num_eval, den_eval, eval_point), transcript, proofs
 
@@ -388,10 +388,10 @@ class ChainedJaggedProveTest(absltest.TestCase):
         for got, want in zip(got_proofs, want_proofs, strict=True):
             for field in fields(JaggedLayerProof):
                 self.assertTrue(
-                    bool(jnp.all(getattr(got, field.name) == getattr(want, field.name)))
+                    bool(fnp.all(getattr(got, field.name) == getattr(want, field.name)))
                 )
         for got, want in zip(got_carry, want_carry, strict=True):
-            self.assertTrue(bool(jnp.all(got == want)))
+            self.assertTrue(bool(fnp.all(got == want)))
         _, want_r = want_t.sample(1)
         _, got_r = got_t.sample(1)
         self.assertTrue(bool(got_r[0] == want_r[0]))
@@ -420,10 +420,10 @@ class ChainedJaggedProveTest(absltest.TestCase):
         for got, want in zip(got_proofs, want_proofs, strict=True):
             for field in fields(JaggedLayerProof):
                 self.assertTrue(
-                    bool(jnp.all(getattr(got, field.name) == getattr(want, field.name)))
+                    bool(fnp.all(getattr(got, field.name) == getattr(want, field.name)))
                 )
         for got, want in zip(got_carry, want_carry, strict=True):
-            self.assertTrue(bool(jnp.all(got == want)))
+            self.assertTrue(bool(fnp.all(got == want)))
         _, want_r = want_t.sample(1)
         _, got_r = got_t.sample(1)
         self.assertTrue(bool(got_r[0] == want_r[0]))

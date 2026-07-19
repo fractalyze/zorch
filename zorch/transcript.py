@@ -14,7 +14,7 @@ from functools import cache, partial
 from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, jit, lax, vmap
 from frx.tree_util import register_dataclass, tree_map
 from zk_dtypes import pfinfo
@@ -43,12 +43,12 @@ def _pow_satisfied(sample: Array, pow_bits: int) -> Array:
     """The proof-of-work predicate: the challenge's low `pow_bits` canonical bits
     are all zero. Shared by `check_witness` and the grind search so the prover's
     search and the verifier's check can never drift."""
-    mask = jnp.uint32((1 << pow_bits) - 1)
-    return (sample.astype(jnp.uint32) & mask) == jnp.uint32(0)
+    mask = fnp.uint32((1 << pow_bits) - 1)
+    return (sample.astype(fnp.uint32) & mask) == fnp.uint32(0)
 
 
 def _require_uint32_field(field_dtype: Any) -> int:
-    """The witness counter and the canonical bit-check are both uint32 (jax x64
+    """The witness counter and the canonical bit-check are both uint32 (frx x64
     is off), so the field's order must fit 32 bits. Return the modulus, or raise
     loudly for a wider field -- otherwise the narrowing canonical convert fails
     with an opaque backend error instead of a clear one."""
@@ -56,7 +56,7 @@ def _require_uint32_field(field_dtype: Any) -> int:
     if modulus > 2**32:
         raise GrindError(
             f"field order {modulus} needs more than 32 bits; the uint32 grind "
-            "(jax x64 off) cannot represent its canonical witnesses"
+            "(frx x64 off) cannot represent its canonical witnesses"
         )
     return modulus
 
@@ -155,8 +155,8 @@ def _absorb_permute(
     `sponge[in_pos:rate]`, since zeroing it would clobber prior state — then
     permute. The one absorb step shared by `observe`'s scan body (a full block,
     `in_pos == rate`) and `_duplexing` (the partial flush at sample time)."""
-    idx = jnp.arange(rate, dtype=jnp.int32)
-    merged = jnp.where(idx < in_pos, in_buf, sponge[:rate])
+    idx = fnp.arange(rate, dtype=fnp.int32)
+    merged = fnp.where(idx < in_pos, in_buf, sponge[:rate])
     return permutation.permute(sponge.at[:rate].set(merged))
 
 
@@ -285,11 +285,11 @@ class DuplexTranscript:
             )
         dtype: Any = permutation.dtype
         state = DuplexState(
-            input_buffer=jnp.zeros(rate, dtype=dtype),
-            output_buffer=jnp.zeros(rate, dtype=dtype),
-            sponge_state=jnp.zeros(permutation.width, dtype=dtype),
-            in_pos=jnp.int32(0),
-            out_pos=jnp.int32(0),
+            input_buffer=fnp.zeros(rate, dtype=dtype),
+            output_buffer=fnp.zeros(rate, dtype=dtype),
+            sponge_state=fnp.zeros(permutation.width, dtype=dtype),
+            in_pos=fnp.int32(0),
+            out_pos=fnp.int32(0),
         )
         return cls(permutation, rate, state, _HOST_FS if fs_on_host else _DEVICE_FS)
 
@@ -304,11 +304,11 @@ class DuplexTranscript:
         )
         return self._with_state(
             DuplexState(
-                input_buffer=jnp.zeros(self.rate, dtype=sponge.dtype),
+                input_buffer=fnp.zeros(self.rate, dtype=sponge.dtype),
                 output_buffer=sponge[: self.rate],
                 sponge_state=sponge,
-                in_pos=jnp.int32(0),
-                out_pos=jnp.int32(self.rate),
+                in_pos=fnp.int32(0),
+                out_pos=fnp.int32(self.rate),
             )
         )
 
@@ -330,7 +330,7 @@ class DuplexTranscript:
         permuted = self._duplexing()
         t = self._with_state(
             tree_map(
-                lambda p, c: jnp.where(need_perm, p, c), permuted.state, self.state
+                lambda p, c: fnp.where(need_perm, p, c), permuted.state, self.state
             )
         )
         out_pos = t.state.out_pos - 1
@@ -408,7 +408,7 @@ class DuplexTranscript:
         field_dtype = self.state.sponge_state.dtype
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
-            witness = jnp.zeros((), field_dtype)
+            witness = fnp.zeros((), field_dtype)
             return self.check_witness(pow_bits, witness)[0], witness
         witness = self._grind_search(pow_bits, chunk)
         advanced, _ = self.check_witness(pow_bits, witness)
@@ -434,7 +434,7 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
         # build a chain of one, so route straight through `_sample_one` (also the
         # exact path `_grind_search` and `check_witness` replay).
         t, x = t._sample_one()
-        return t, jnp.stack([x.reshape(())])
+        return t, fnp.stack([x.reshape(())])
 
     rate = t.rate
     st = t.state
@@ -464,22 +464,22 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     def _pick(stacked: list, idx: Array) -> Array:
         acc = stacked[0]
         for i in range(1, len(stacked)):
-            acc = jnp.where(idx == i, stacked[i], acc)
+            acc = fnp.where(idx == i, stacked[i], acc)
         return acc
 
     # Replay the per-limb schedule with traced scalars only (no field ops): track
     # how many permutes have fired (`perm_count`, the chain index) and the running
     # `out_pos`; a permute fires iff input is pending or the buffer is drained --
     # the same `need_perm` the per-limb loop tested.
-    perm_count = jnp.int32(0)
+    perm_count = fnp.int32(0)
     in_pos = st.in_pos
     out_pos = st.out_pos
     outs = []
     for _ in range(n):
         need_perm = (in_pos > 0) | (out_pos == 0)
-        perm_count = jnp.where(need_perm, perm_count + 1, perm_count)
-        in_pos = jnp.where(need_perm, jnp.int32(0), in_pos)
-        out_pos = jnp.where(need_perm, jnp.int32(rate), out_pos)
+        perm_count = fnp.where(need_perm, perm_count + 1, perm_count)
+        in_pos = fnp.where(need_perm, fnp.int32(0), in_pos)
+        out_pos = fnp.where(need_perm, fnp.int32(rate), out_pos)
         out_pos = out_pos - 1
         outs.append(_pick(output_buffers, perm_count)[out_pos].reshape(()))
 
@@ -488,7 +488,7 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
         lambda *leaves: _pick(list(leaves), perm_count), *chain_state_leaves
     )
     final_state = replace(final_state, out_pos=out_pos)
-    return t._with_state(final_state), jnp.stack(outs)
+    return t._with_state(final_state), fnp.stack(outs)
 
 
 @partial(jit, inline=True)
@@ -505,7 +505,7 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
 
     # Absorb a rate-block per permutation rather than a base element per
     # permutation: the obvious per-element form runs a full `_absorb_permute` on
-    # every input and keeps only the rate-boundary one (`jnp.where(full, ...)`),
+    # every input and keeps only the rate-boundary one (`fnp.where(full, ...)`),
     # doing ~M permutes to absorb M elements when ~ceil(M/rate) suffice. This
     # scans over the rate-sized BLOCKS of the combined stream instead, permuting
     # once per block. Byte-identical to the per-element form: a full block in that
@@ -519,18 +519,18 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # count `length // rate` is masked against that static bound. The trailing
     # `length % rate` elements go back into `input_buffer` for the next absorb.
     in_pos = st.in_pos
-    length = in_pos + jnp.int32(m)
+    length = in_pos + fnp.int32(m)
     active_blocks = length // rate  # runtime count of full rate-blocks
     num_blocks = (rate - 1 + m) // rate  # static upper bound on full blocks
 
     # Drop the unused gap `input_buffer[in_pos:rate]` from the stream: for stream
     # position `j`, the source index is `j` while `j < in_pos`, else shifted by
     # `rate - in_pos` to skip past the buffer's invalid suffix.
-    combined_src = jnp.concatenate([st.input_buffer, flat])  # (rate + M,)
+    combined_src = fnp.concatenate([st.input_buffer, flat])  # (rate + M,)
     total = (num_blocks + 1) * rate  # >= length, with a rate-block of tail slack
-    pos = jnp.arange(total, dtype=jnp.int32)
-    src_idx = pos + jnp.where(pos < in_pos, jnp.int32(0), rate - in_pos)
-    src_idx = jnp.clip(src_idx, 0, combined_src.shape[0] - 1)
+    pos = fnp.arange(total, dtype=fnp.int32)
+    src_idx = pos + fnp.where(pos < in_pos, fnp.int32(0), rate - in_pos)
+    src_idx = fnp.clip(src_idx, 0, combined_src.shape[0] - 1)
     combined = combined_src[src_idx]  # (total,) — valid prefix is [0:length]
 
     # Absorb the rate-blocks with a `lax.scan`: ONE permute body regardless of
@@ -551,11 +551,11 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
         carry: tuple[Array, Array], block: Array
     ) -> tuple[tuple[Array, Array], None]:
         sponge, k = carry
-        permuted = permutation.permute(jnp.concatenate([block, sponge[rate:]]))
+        permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
         # Blocks past the live count are padding-only: leave the sponge alone.
-        return (jnp.where(k < active_blocks, permuted, sponge), k + jnp.int32(1)), None
+        return (fnp.where(k < active_blocks, permuted, sponge), k + fnp.int32(1)), None
 
-    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, jnp.int32(0)), blocks)
+    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode
@@ -563,17 +563,17 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     tail_len = length - active_blocks * rate
     tail_start = active_blocks * rate
     tail = lax.dynamic_slice_in_dim(combined, tail_start, rate)
-    slot = jnp.arange(rate, dtype=jnp.int32)
-    in_buf = jnp.where(slot < tail_len, tail, jnp.zeros(rate, dtype=base_dtype))
+    slot = fnp.arange(rate, dtype=fnp.int32)
+    in_buf = fnp.where(slot < tail_len, tail, fnp.zeros(rate, dtype=base_dtype))
     in_pos_out = tail_len
 
     # If the last full block permuted and no tail remains (in_pos_out == 0), the
     # post-permute sponge prefix is the fresh output; otherwise the next sample
     # permutes. Matches the per-element form's `last_was_perm` exactly.
     last_was_perm = in_pos_out == 0
-    out_pos = jnp.where(last_was_perm, jnp.int32(rate), jnp.int32(0))
-    output_buffer = jnp.where(
-        last_was_perm, sponge[:rate], jnp.zeros(rate, dtype=base_dtype)
+    out_pos = fnp.where(last_was_perm, fnp.int32(rate), fnp.int32(0))
+    output_buffer = fnp.where(
+        last_was_perm, sponge[:rate], fnp.zeros(rate, dtype=base_dtype)
     )
     return t._with_state(
         DuplexState(in_buf, output_buffer, sponge, in_pos_out, out_pos)

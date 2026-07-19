@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.prove import fold_rounds
@@ -59,7 +59,7 @@ class RlcVerifier(Bridge):
         transcript, r = transcript.sample(1)
         r = r[0]
         carry = replace(carry, r_batch=r, joint_claim=_joint_claim(claims, r))
-        return carry, transcript, jnp.bool_(True)
+        return carry, transcript, fnp.bool_(True)
 
 
 class InnerProver(Stage):
@@ -80,12 +80,12 @@ class InnerProver(Stage):
         r = _require(carry.r_batch, "r_batch", "RLC")
         joint = _require(carry.joint_claim, "joint_claim", "RLC")
         m = self.instance.combined_row_mle(r_x, r)
-        state = jnp.stack([m, self.z])
+        state = fnp.stack([m, self.z])
         pre = transcript
         _, transcript, msgs = fold_rounds(
             self.sumcheck.prover_round, state, pre, self.instance.s_y
         )
-        round_polys = jnp.stack(msgs)
+        round_polys = fnp.stack(msgs)
         # Recover r_y by replaying the injected verifier round (point is
         # independent of the claim value).
         r_y, _, _, _ = verify(self.sumcheck.verifier_round, joint, round_polys, pre)

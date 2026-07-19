@@ -7,7 +7,7 @@ gate."""
 from __future__ import annotations
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import Array
@@ -57,14 +57,14 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
     ]:
         niv = layer.num_batch_variables
         nrv = z.shape[0] - niv
-        one = jnp.ones((), z.dtype)
+        one = fnp.ones((), z.dtype)
         eq_row = expand_eq_to_hypercube(z[niv:], one)
         eq_int = expand_eq_to_hypercube(z[:niv], one)
         n0, n1, d0, d1 = virtual_planes(layer, nrv)
         eq = expand_eq_to_hypercube(z, one)
-        claim = jnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
+        claim = fnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
         meta = _round_metadata(layer.row_counts, nrv)
-        naturals = jnp.stack([jnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
+        naturals = fnp.stack([fnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
         inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
         state = _JaggedState(
             _Planes(
@@ -160,19 +160,19 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
     ) -> None:
         ach, at, apolys, *aopen = a
         bch, bt, bpolys, *bopen = b
-        self.assertTrue(bool(jnp.all(ach == bch)), f"challenges diverged ({label})")
+        self.assertTrue(bool(fnp.all(ach == bch)), f"challenges diverged ({label})")
         self.assertTrue(
-            bool(jnp.all(apolys == bpolys)), f"round polys diverged ({label})"
+            bool(fnp.all(apolys == bpolys)), f"round polys diverged ({label})"
         )
         for i, (x, y) in enumerate(zip(aopen, bopen, strict=True)):
             self.assertTrue(
-                bool(jnp.all(x == y)), f"pair opening {i} diverged ({label})"
+                bool(fnp.all(x == y)), f"pair opening {i} diverged ({label})"
             )
         if not isinstance(at, DuplexTranscript) or not isinstance(bt, DuplexTranscript):
             raise AssertionError("both paths must thread the DuplexTranscript back")
         for f in ("input_buffer", "output_buffer", "sponge_state"):
             self.assertTrue(
-                bool(jnp.all(getattr(at.state, f) == getattr(bt.state, f))),
+                bool(fnp.all(getattr(at.state, f) == getattr(bt.state, f))),
                 f"transcript {f} diverged ({label})",
             )
         self.assertEqual(int(at.state.in_pos), int(bt.state.in_pos), label)

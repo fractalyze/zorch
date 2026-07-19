@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 # Counters a while_loop step tests in parallel: one window covers any practical
@@ -32,24 +32,24 @@ def grind_search(
     hit. `check_batch`: uint32 `[window]` counters -> bool `[window]`, pure and
     traceable — the search is jit-composable and runs as one device program.
     `bound` caps `base` so `base + window` cannot wrap uint32."""
-    offsets = jnp.arange(window, dtype=jnp.uint32)
-    bound_u32 = jnp.uint32(min(bound, 2**32 - window))
+    offsets = fnp.arange(window, dtype=fnp.uint32)
+    bound_u32 = fnp.uint32(min(bound, 2**32 - window))
 
     def cond(carry: tuple[Array, Array, Array]) -> Array:
         found, base, _ = carry
-        return jnp.logical_and(jnp.logical_not(found), base < bound_u32)
+        return fnp.logical_and(fnp.logical_not(found), base < bound_u32)
 
     def body(carry: tuple[Array, Array, Array]) -> tuple[Array, Array, Array]:
         found, base, best = carry
         hits = check_batch(base + offsets)
-        first = jnp.min(jnp.where(hits, offsets, jnp.uint32(window)))
-        any_hit = first < jnp.uint32(window)
+        first = fnp.min(fnp.where(hits, offsets, fnp.uint32(window)))
+        any_hit = first < fnp.uint32(window)
         return (
-            jnp.logical_or(found, any_hit),
-            base + jnp.uint32(window),
-            jnp.where(any_hit, base + first, best),
+            fnp.logical_or(found, any_hit),
+            base + fnp.uint32(window),
+            fnp.where(any_hit, base + first, best),
         )
 
-    init = (jnp.bool_(False), jnp.uint32(0), jnp.uint32(0))
+    init = (fnp.bool_(False), fnp.uint32(0), fnp.uint32(0))
     _found, _base, counter = lax.while_loop(cond, body, init)
     return counter

@@ -22,7 +22,7 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array
 
 from zorch.coding.linear_code import LinearCode
@@ -144,7 +144,7 @@ def _open_body(
     transcript: Transcript,
 ) -> tuple[Array, LigeroProof, Transcript]:
     dtype = z.dtype
-    one = jnp.ones((), dtype)
+    one = fnp.ones((), dtype)
     k_row = log2_strict_usize(prover.code.message_len)
     z_row, z_col = z[:k_row], z[k_row:]
     r_row = expand_eq_to_hypercube(z_row, one)  # (rows,)

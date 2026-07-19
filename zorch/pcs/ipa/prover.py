@@ -48,7 +48,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TypeVar
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 from frx import Array, lax
 
 from zorch.pcs.ipa.challenger import (
@@ -74,8 +74,8 @@ def _hiding_commit(v: Array, r: Array, basis: Array, s: Array) -> Array:
     MSM as one extra `(r, s)` pair, so the commitment (or the blinding polynomial's)
     randomness is folded in with no separate point-add."""
     return lax.msm(
-        jnp.concatenate([v, r[None]]),
-        jnp.concatenate([basis[: v.shape[0]], s[None]]),
+        fnp.concatenate([v, r[None]]),
+        fnp.concatenate([basis[: v.shape[0]], s[None]]),
     )
 
 
@@ -98,7 +98,7 @@ class IpaProver:
         """Pedersen-commit a batch of coefficient vectors: `P_j = ⟨a_j, G⟩`.
         Returns the stacked G1 commitments and the prover data (coeffs plus the
         commitments, which the opening's Fiat-Shamir binds)."""
-        commitments = jnp.stack(
+        commitments = fnp.stack(
             [lax.msm(c, self.key.basis[: c.shape[0]]) for c in polys]
         )
         return commitments, IpaProverData(tuple(polys), commitments)
@@ -119,7 +119,7 @@ class IpaProver:
                 f"batch mismatch: {len(polys)} polys vs "
                 f"{len(randomnesses)} randomnesses"
             )
-        commitments = jnp.stack(
+        commitments = fnp.stack(
             [
                 _hiding_commit(c, r, self.key.basis, s)
                 for c, r in zip(polys, randomnesses)
@@ -151,7 +151,7 @@ class IpaProver:
             fs, value, proof, _ = _open_one(self.key, commitment, coeffs, x, fs)
             values.append(value)
             proofs.append(proof)
-        return jnp.stack(values), proofs, fs.transcript
+        return fnp.stack(values), proofs, fs.transcript
 
 
 def _open_one(
@@ -170,14 +170,14 @@ def _open_one(
     k = log2_strict_usize(n)
     hn = n // 2
     affine = key.basis.dtype  # the point representation msm consumes
-    one = jnp.ones((), dtype=coeffs.dtype)
-    fq0 = jnp.zeros((), dtype=coeffs.dtype)  # scalar fill for the masked halves
-    idx = jnp.arange(hn)  # active-half mask base (loop-invariant, hoisted)
+    one = fnp.ones((), dtype=coeffs.dtype)
+    fq0 = fnp.zeros((), dtype=coeffs.dtype)  # scalar fill for the masked halves
+    idx = fnp.arange(hn)  # active-half mask base (loop-invariant, hoisted)
 
     a = coeffs
     b = powers(x, n)
     g = key.basis[:n]
-    value = jnp.sum(a * b)  # ⟨a, b⟩ = p(x)
+    value = fnp.sum(a * b)  # ⟨a, b⟩ = p(x)
 
     # Seed ξ₀ binds the statement (P, x, v) and scales the inner-product generator
     # to h' = U·ξ₀ (arkworks h_prime). The cross-term inner products absorb the ξ₀
@@ -197,32 +197,32 @@ def _open_one(
     # `.at[j].set` buffers — `lax.scan` cannot auto-stack G1-affine outputs (no
     # zero-affine constant to init the accumulator); each slot is seeded from a real
     # point (commitment) and overwritten.
-    lr0 = jnp.broadcast_to(commitment, (k,))
+    lr0 = fnp.broadcast_to(commitment, (k,))
 
     def _round(
         carry: tuple[Array, Array, Array, _Ch, Array, Array], j: Array
     ) -> tuple[tuple[Array, Array, Array, _Ch, Array, Array], None]:
         a, b, g, fs, ls, rs = carry
-        half = lax.shift_right_logical(jnp.int32(n), j + 1)
+        half = lax.shift_right_logical(fnp.int32(n), j + 1)
         active = idx < half
         a_lo, b_lo, g_lo = a[:hn], b[:hn], g[:hn]
         a_hi = lax.dynamic_slice(a, (half,), (hn,))
         b_hi = lax.dynamic_slice(b, (half,), (hn,))
         g_hi = lax.dynamic_slice(g, (half,), (hn,))
-        a_lo_m = jnp.where(active, a_lo, fq0)
-        a_hi_m = jnp.where(active, a_hi, fq0)
+        a_lo_m = fnp.where(active, a_lo, fq0)
+        a_hi_m = fnp.where(active, a_hi, fq0)
 
         # arkworks L/R: L pairs a_hi with G_lo, R pairs a_lo with G_hi; the
         # inner-product cross term rides h' = U·ξ₀ (the ·ξ₀ on the U scalar). Only the
         # a-side scalars need masking — `a_*_m` is already 0 past half, so its product
         # with the unmasked b half is too.
         lj = lax.msm(
-            jnp.concatenate([a_hi_m, (jnp.sum(a_hi_m * b_lo) * xi0)[None]]),
-            jnp.concatenate([g_lo, key.u[None]]),
+            fnp.concatenate([a_hi_m, (fnp.sum(a_hi_m * b_lo) * xi0)[None]]),
+            fnp.concatenate([g_lo, key.u[None]]),
         )
         rj = lax.msm(
-            jnp.concatenate([a_lo_m, (jnp.sum(a_lo_m * b_hi) * xi0)[None]]),
-            jnp.concatenate([g_hi, key.u[None]]),
+            fnp.concatenate([a_lo_m, (fnp.sum(a_lo_m * b_hi) * xi0)[None]]),
+            fnp.concatenate([g_hi, key.u[None]]),
         )
         fs, uj = fs.challenge(lj, rj)
         uj_inv = one / uj
@@ -244,7 +244,7 @@ def _open_one(
         return (a, b, g, fs, ls.at[j].set(lj), rs.at[j].set(rj)), None
 
     (a, _, g, fs, ls, rs), _ = lax.scan(
-        _round, (a, b, g, fs, lr0, lr0), jnp.arange(k, dtype=jnp.int32)
+        _round, (a, b, g, fs, lr0, lr0), fnp.arange(k, dtype=fnp.int32)
     )
     # g[0] is the fully-folded committer generator: the scan folds g in place each
     # round (G ← G_lo + u·G_hi), so the final carry's head equals verifier.settle's
@@ -280,16 +280,16 @@ def _open_one_zk(
     if s is None:
         raise ValueError("zk opening requires the blinding generator key.s")
     n = coeffs.shape[0]
-    one = jnp.ones((), dtype=coeffs.dtype)
+    one = fnp.ones((), dtype=coeffs.dtype)
     b = powers(x, n)
-    value = jnp.sum(coeffs * b)  # p(x); the blinding below preserves it
+    value = fnp.sum(coeffs * b)  # p(x); the blinding below preserves it
 
     # Shift the blinding poly to vanish at x (keeps the value), Pedersen-commit it
     # under the blinding generator s, and squeeze the one hiding challenge hc. The
     # shift is an elementwise select on the constant term (not a scatter) so the
     # open stays one fused kernel.
-    raw_eval = jnp.sum(hiding_poly * b)
-    hiding_poly = jnp.where(jnp.arange(n) == 0, hiding_poly - raw_eval, hiding_poly)
+    raw_eval = fnp.sum(hiding_poly * b)
+    hiding_poly = fnp.where(fnp.arange(n) == 0, hiding_poly - raw_eval, hiding_poly)
     hiding_comm = _hiding_commit(hiding_poly, hiding_rand, key.basis, s)
     fs, hc = fs.hiding_challenge(commitment, hiding_comm, x, value)
 
@@ -299,8 +299,8 @@ def _open_one_zk(
     mod_coeffs = coeffs + hc * hiding_poly
     combined_rand = commitment_randomness + hc * hiding_rand
     mod_commitment = lax.msm(
-        jnp.stack([one, hc, -combined_rand]),
-        jnp.stack([commitment, hiding_comm, s]),
+        fnp.stack([one, hc, -combined_rand]),
+        fnp.stack([commitment, hiding_comm, s]),
     )
 
     fs, _, proof, final_comm_key = _open_one(key, mod_commitment, mod_coeffs, x, fs)

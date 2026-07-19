@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 from frx import Array
 
@@ -13,7 +13,7 @@ from frx import Array
 def default_external_matrix(width: int, dtype: Any) -> Array:
     """Standard Poseidon2 external matrix for width >= 8 (M4-circulant + 2x block).
 
-    M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> jnp.array so
+    M[i][j] = M4[i%4][j%4] * (2 if same 4-block). Built list -> fnp.array so
     HLO sees a kConstant. Determined wholly by (width, dtype); carries no
     field/scheme identity. `width` must be a positive multiple of 4. (At width == 4
     the canonical Poseidon2 external matrix is plain M4; the 2x-diagonal-block form
@@ -26,7 +26,7 @@ def default_external_matrix(width: int, dtype: Any) -> Array:
         [m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) for j in range(width)]
         for i in range(width)
     ]
-    return jnp.array(mds, dtype=dtype)
+    return fnp.array(mds, dtype=dtype)
 
 
 @dataclass(frozen=True)
@@ -74,7 +74,7 @@ class Poseidon2Params:
                 self, "external_matrix", default_external_matrix(w, self.dtype)
             )
         if self.internal_j_scale is None:
-            object.__setattr__(self, "internal_j_scale", jnp.array(1, dtype=self.dtype))
+            object.__setattr__(self, "internal_j_scale", fnp.array(1, dtype=self.dtype))
         checks = {
             "external_matrix": ((w, w), self.external_matrix),
             "external_constants_initial": (
@@ -162,7 +162,7 @@ class Poseidon2Params:
         attribute and applies per 4-block. Read off the off-diagonal block (the
         M4×1 image), so it is free of the 2× diagonal scaling. Meaningful only when
         `is_m4_block_structured`. Canonical ints come from a numpy object cast,
-        which Montgomery-decodes without needing jax x64."""
+        which Montgomery-decodes without needing frx x64."""
         canon = np.asarray(self.external_matrix).astype(object)
         return tuple(tuple(int(canon[i, 4 + j]) for j in range(4)) for i in range(4))
 

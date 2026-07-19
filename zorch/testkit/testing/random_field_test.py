@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import frx.numpy as jnp
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
@@ -18,12 +18,12 @@ class RandFieldTest(absltest.TestCase):
         b = rand_field(0, (8,), KB)
         self.assertEqual(a.shape, (8,))
         self.assertEqual(a.dtype, KB)
-        self.assertTrue(bool(jnp.all(a == b)))  # same seed -> same values
+        self.assertTrue(bool(fnp.all(a == b)))  # same seed -> same values
 
     def test_different_seed_differs(self) -> None:
         a = rand_field(0, (16,), KB)
         b = rand_field(1, (16,), KB)
-        self.assertFalse(bool(jnp.all(a == b)))
+        self.assertFalse(bool(fnp.all(a == b)))
 
     def test_rejects_extension_dtype(self) -> None:
         # Casting an integer to an extension field embeds it into the base
