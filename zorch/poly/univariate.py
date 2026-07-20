@@ -154,11 +154,16 @@ def coset_intt(
             f"omega_inv must be a scalar, got shape {fnp.shape(omega_inv)}"
         )
     if coset_inv is not None:
+        # `broadcast_to`, not `broadcast_shapes`: the latter is symmetric, so a
+        # `coset_inv` of `(3, 1)` against batch dims `(3,)` passes as compatible
+        # and then silently widens the result to `(3, 3, k)`, breaking the
+        # documented `(..., k)` contract. Broadcasting *to* the batch dims admits
+        # only shapes that fit them.
         try:
-            fnp.broadcast_shapes(fnp.shape(coset_inv), groups.shape[:-1])
+            coset_inv = fnp.broadcast_to(coset_inv, groups.shape[:-1])
         except ValueError as e:
             raise ValueError(
-                f"coset_inv shape {fnp.shape(coset_inv)} must broadcast with the "
+                f"coset_inv shape {fnp.shape(coset_inv)} must broadcast to the "
                 f"batch dims {groups.shape[:-1]}"
             ) from e
 

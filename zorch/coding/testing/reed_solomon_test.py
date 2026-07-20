@@ -197,6 +197,14 @@ class ReedSolomonTest(absltest.TestCase):
             coset_intt(groups, fnp.ones((2,), F))  # non-scalar omega_inv
         with self.assertRaises(ValueError):
             coset_intt(groups, omega_inv, fnp.ones((5,), F))  # (5,) vs batch (3,)
+        # (3, 1) *is* broadcast-compatible with (3,), but widens the result to
+        # (3, 3, 4) instead of the documented (3, 4) — a compatibility check
+        # alone lets this through.
+        with self.assertRaises(ValueError):
+            coset_intt(groups, omega_inv, fnp.ones((3, 1), F))
+        # A scalar and an exact-match batch both stay (3, 4).
+        for ok in (fnp.ones((), F), fnp.ones((3,), F)):
+            self.assertEqual(coset_intt(groups, omega_inv, ok).shape, (3, 4))
 
     def test_check_final_accepts_only_the_constant_claim(self) -> None:
         rs = ReedSolomon(message_len=1, blowup=4, dtype=F)
