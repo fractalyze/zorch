@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Field-dtype helpers: the base prime field of a (possibly extension) dtype, the
 naturals {0..n−1} built in it, the binary-field predicate, and the views between
-an extension array and its base limbs."""
+an extension array and its base-field coefficients."""
 
 from __future__ import annotations
 
@@ -41,14 +41,15 @@ def is_binary_field(dtype: Any) -> bool:
     return fnp.dtype(dtype).name.startswith("binary_field")
 
 
-def split_limbs(values: Array) -> Array:
-    """Split each extension element into its base limbs:
+def split_coeffs(values: Array) -> Array:
+    """Split each extension element into its base-field coefficients:
     `(..., N)` extension -> `(..., N, degree)` base.
 
-    A view, not a copy — `lax.bitcast_convert_type` changes dtype and shape
-    metadata on device, so a surrounding loop still traces as one jitted
-    function. Reshape the result if the consumer wants the limbs contiguous in
-    the trailing axis.
+    An element of a degree-`d` extension is `c0 + c1·X + ... + c(d-1)·X^(d-1)`;
+    this exposes those `d` coefficients as the trailing axis. A view, not a copy
+    — `lax.bitcast_convert_type` changes dtype and shape metadata on device, so a
+    surrounding loop still traces as one jitted function. Reshape the result if
+    the consumer wants the coefficients contiguous in the trailing axis.
 
     A base-field array is returned unchanged, with no length-1 axis added.
     """
@@ -58,13 +59,13 @@ def split_limbs(values: Array) -> Array:
     return lax.bitcast_convert_type(values, base_field(dtype))
 
 
-def join_limbs(values: Array, dtype: Any) -> Array:
-    """Join base limbs back into extension elements, the inverse of
-    `split_limbs`: `(..., N, degree)` base -> `(..., N)` of `dtype`.
+def join_coeffs(values: Array, dtype: Any) -> Array:
+    """Join base-field coefficients back into extension elements, the inverse of
+    `split_coeffs`: `(..., N, degree)` base -> `(..., N)` of `dtype`.
 
-    `dtype` is required because limbs carry no record of what they were: a
-    trailing axis of 12 could be 4 cubic elements or 3 quartic ones. The
-    trailing axis must equal the degree.
+    `dtype` is required because coefficients carry no record of what they were: a
+    trailing axis of 12 could be 4 cubic elements or 3 quartic ones. The trailing
+    axis must equal the degree.
 
     A base-field `dtype` returns the input unchanged.
     """
