@@ -288,7 +288,9 @@ def stacked_basefold_verify(
         claim = m[0] + beta * m[1]
         log_h = log2_strict_usize(block_len >> (i + 1))
         ok = ok & fnp.array_equal(
-            smcs.bind_root(proof.fri_raw_roots[i], log_h, 2 * ef_limbs, bf),
+            smcs.bind_root(
+                proof.fri_raw_roots[i], fnp.array([log_h, 2 * ef_limbs], dtype=bf)
+            ),
             proof.fri_commitments[i],
         )
 

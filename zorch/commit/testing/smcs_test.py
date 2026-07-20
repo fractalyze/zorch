@@ -219,6 +219,14 @@ class SingleMatrixCommitmentSchemeTest(absltest.TestCase):
         with self.assertRaisesRegex(TypeError, "must match the sponge field"):
             smcs.commit(fnp.zeros((4, 4), dtype=EF))
 
+    def test_bind_root_rejects_wrong_preimage_size(self) -> None:
+        # The separator preimage is exactly [log_height, width]; sponge.hash would
+        # otherwise silently hash a wrong-length vector to a different root.
+        _, _, smcs = _smcs()
+        raw_root = fnp.arange(8, dtype=fnp.uint32).view(F)
+        with self.assertRaises(ValueError):
+            smcs.bind_root(raw_root, fnp.array([2, 8, 8], dtype=F))
+
 
 class BindStructureTest(absltest.TestCase):
     def test_count_shape_mismatch_raises(self) -> None:
