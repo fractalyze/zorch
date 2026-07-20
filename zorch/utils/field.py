@@ -41,23 +41,16 @@ def is_binary_field(dtype: Any) -> bool:
     return fnp.dtype(dtype).name.startswith("binary_field")
 
 
-def to_limb_rows(values: Array) -> Array:
-    """View an extension array as its base coefficients, one row per element:
+def split_limbs(values: Array) -> Array:
+    """Split each extension element into its base limbs:
     `(..., N)` extension -> `(..., N, degree)` base.
 
-    The reinterpret is `lax.bitcast_convert_type`, so it stays on device and a
-    caller's surrounding loop still traces as one jitted function — a host
-    `np.asarray(...).view` round-trip forces eager execution instead. No bytes
-    move; only the dtype and shape metadata change.
+    A view, not a copy — `lax.bitcast_convert_type` changes dtype and shape
+    metadata on device, so a surrounding loop still traces as one jitted
+    function. Reshape the result if the consumer wants the limbs contiguous in
+    the trailing axis.
 
-    The limb axis is left in place. A caller that wants the limbs contiguous in
-    the trailing axis (a transcript batch, a hash leaf row) reshapes, which is
-    free — the layout it wants is the caller's to state, not this function's to
-    guess. `from_limb_rows` is the exact inverse.
-
-    A base-field array is returned unchanged: it is already its own coefficients,
-    one per element, and adding a length-1 axis would imply an extension that is
-    not there.
+    A base-field array is returned unchanged, with no length-1 axis added.
     """
     dtype = values.dtype
     if base_field(dtype) == dtype:
@@ -65,16 +58,15 @@ def to_limb_rows(values: Array) -> Array:
     return lax.bitcast_convert_type(values, base_field(dtype))
 
 
-def from_limb_rows(values: Array, dtype: Any) -> Array:
-    """The exact inverse: `(..., N, degree)` base -> `(..., N)` elements of
-    `dtype`, each row read as one element's coefficients.
+def join_limbs(values: Array, dtype: Any) -> Array:
+    """Join base limbs back into extension elements, the inverse of
+    `split_limbs`: `(..., N, degree)` base -> `(..., N)` of `dtype`.
 
-    `dtype` must be given because limbs carry no record of what they were —
-    a trailing axis of 12 could be 4 cubic elements or 3 quartic ones.
+    `dtype` is required because limbs carry no record of what they were: a
+    trailing axis of 12 could be 4 cubic elements or 3 quartic ones. The
+    trailing axis must equal the degree.
 
-    The trailing axis must be exactly the extension degree; anything else is a
-    layout error at the caller rather than something to pad, truncate, or
-    silently regroup.
+    A base-field `dtype` returns the input unchanged.
     """
     if base_field(dtype) == dtype:
         return values
