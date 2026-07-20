@@ -579,9 +579,13 @@ def fri_fold_k(
     if coset is not None:
         coset_inv, omega_inv = coset
         coeffs = coset_intt(group, omega_inv, coset_inv)
-        # Horner at beta, unrolled over the static k — not `eval_coeffs`, whose
-        # `lax.scan` is a fusion barrier that materialises the coeffs (measured
-        # +40% at 2^23); the unroll fuses through `coset_intt`'s stack.
+        # Horner at beta, unrolled over the static k, rather than `eval_coeffs`.
+        # Byte-identical either way; the unroll fuses through `coset_intt`'s
+        # stack, where `eval_coeffs` materialises the coefficients first. It wins
+        # only while k stays small: the unroll is O(k) deep against
+        # `eval_coeffs`'s O(log k) prefix product, so on an RTX 5090 at k=8 it is
+        # 2.1x faster at 2^20 and 1.2x at 2^23, but by k=16 it has lost — 1.34 ms
+        # against 0.94 ms at 2^23. Revisit this if the fold factor grows past 8.
         folded = coeffs[..., -1]
         for m in range(coeffs.shape[-1] - 2, -1, -1):
             folded = folded * beta + coeffs[..., m]
