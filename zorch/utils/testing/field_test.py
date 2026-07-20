@@ -73,7 +73,7 @@ class LimbViewTest(absltest.TestCase):
     """`to_base_limbs` / `from_base_limbs`: the view between an extension array
     and the contiguous base limbs that hash leaves and wire formats carry."""
 
-    def _ext(self, shape, start=1):
+    def _ext(self, shape: tuple[int, ...], start: int = 1) -> Array:
         n = int(np.prod(shape)) * 4  # KX is degree 4
         limbs = fnp.array(np.arange(start, start + n, dtype=np.uint64), dtype=KB)
         return from_base_limbs(limbs.reshape(*shape[:-1], -1), KX)
