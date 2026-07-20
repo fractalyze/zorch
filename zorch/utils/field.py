@@ -46,10 +46,11 @@ def split_coeffs(values: Array) -> Array:
     `(..., N)` extension -> `(..., N, degree)` base.
 
     An element of a degree-`d` extension is `c0 + c1·X + ... + c(d-1)·X^(d-1)`;
-    this exposes those `d` coefficients as the trailing axis. A view, not a copy
-    — `lax.bitcast_convert_type` changes dtype and shape metadata on device, so a
-    surrounding loop still traces as one jitted function. Reshape the result if
-    the consumer wants the coefficients contiguous in the trailing axis.
+    this exposes those `d` coefficients as the trailing axis. A view, not a copy:
+    `lax.bitcast_convert_type` reinterprets dtype and shape only, and stays in
+    the traced computation instead of forcing a host round-trip. Reshape the
+    result if the consumer wants the coefficients contiguous in the trailing
+    axis.
 
     A base-field array is returned unchanged, with no length-1 axis added.
     """
@@ -63,9 +64,9 @@ def join_coeffs(values: Array, dtype: Any) -> Array:
     """Join base-field coefficients back into extension elements, the inverse of
     `split_coeffs`: `(..., N, degree)` base -> `(..., N)` of `dtype`.
 
-    `dtype` is required because coefficients carry no record of what they were: a
-    trailing axis of 12 could be 4 cubic elements or 3 quartic ones. The trailing
-    axis must equal the degree.
+    `dtype` names which extension to build; the degree is already implied by the
+    trailing axis, but it does not fix the base field or the reduction
+    polynomial. The trailing axis must equal that dtype's degree.
 
     A base-field `dtype` returns the input unchanged.
     """
