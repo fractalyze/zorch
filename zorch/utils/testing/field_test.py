@@ -13,8 +13,10 @@ from frx import Array, lax  # noqa: E402
 
 from zorch.utils.field import (
     base_field,
+    from_base_limbs,
     is_binary_field,
     naturals,
+    to_base_limbs,
 )
 
 KB = zk_dtypes.koalabear_mont
@@ -65,6 +67,44 @@ def _gh(n: int, seed: int = 0) -> Array:
 def _u64(a: Array) -> np.ndarray:
     """The packed 128-bit representation as `(..., 2)` uint64 lanes."""
     return np.asarray(lax.bitcast_convert_type(a, fnp.uint64))
+
+
+class LimbViewTest(absltest.TestCase):
+    """`to_base_limbs` / `from_base_limbs`: the view between an extension array
+    and the contiguous base limbs that hash leaves and wire formats carry."""
+
+    def _ext(self, shape, start=1):
+        n = int(np.prod(shape)) * 4  # KX is degree 4
+        limbs = fnp.array(np.arange(start, start + n, dtype=np.uint64), dtype=KB)
+        return from_base_limbs(limbs.reshape(*shape[:-1], -1), KX)
+
+    def test_round_trip_recovers_the_elements(self) -> None:
+        values = self._ext((7,))
+        limbs = to_base_limbs(values)
+        self.assertEqual(limbs.shape, (28,))
+        self.assertEqual(limbs.dtype, fnp.dtype(KB))
+        self.assertTrue(fnp.array_equal(from_base_limbs(limbs, KX), values))
+
+    def test_limbs_are_contiguous_per_element(self) -> None:
+        # The layout every caller depends on: element i's coefficients occupy
+        # [4i, 4i+4), not a stride across the array.
+        values = self._ext((4,))
+        limbs = to_base_limbs(values)
+        for i in range(4):
+            one = from_base_limbs(limbs[4 * i : 4 * i + 4], KX)
+            self.assertTrue(fnp.array_equal(one.reshape(()), values[i]))
+
+    def test_leading_axes_are_preserved(self) -> None:
+        self.assertEqual(to_base_limbs(self._ext((2, 5))).shape, (2, 20))
+
+    def test_a_base_array_is_its_own_limbs(self) -> None:
+        values = naturals(6, KB)
+        self.assertTrue(fnp.array_equal(to_base_limbs(values), values))
+        self.assertTrue(fnp.array_equal(from_base_limbs(values, KB), values))
+
+    def test_rejects_a_trailing_axis_that_is_not_whole_elements(self) -> None:
+        with self.assertRaisesRegex(ValueError, "multiple of the degree"):
+            from_base_limbs(naturals(7, KB), KX)  # 7 % 4 != 0
 
 
 class BinaryFieldReduceAddTest(parameterized.TestCase):
