@@ -15,9 +15,15 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 
-from zorch.byte_transcript import ByteHashTranscript
+from zorch.byte_transcript import KIND_SCALAR, OP_SQUEEZE, ByteHashTranscript
 from zorch.hash.sha256 import HostSha256, Sha256
-from zorch.sha256_field_transcript import Sha256FieldTranscript
+from zorch.sha256_field_transcript import (
+    SHA256_SQUEEZE_MARKER,
+    Sha256FieldTranscript,
+    _const_u8,
+    _sha256_squeeze_zone,
+    _squeeze_hop,
+)
 
 
 class Sha256FieldTranscriptTest(absltest.TestCase):
@@ -204,6 +210,68 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         jitted = frx.tree_util.tree_map(np.asarray, frx.jit(run)(a, b))
         self.assertEqual(eager[0].tobytes(), jitted[0].tobytes())
         self.assertEqual(eager[1].tobytes(), jitted[1].tobytes())
+
+
+class Sha256SqueezeMarkerTest(absltest.TestCase):
+    """The `zorch.sha256_squeeze` hop marker is a byte-identical drop-in for the
+    plain hop, at every stream position."""
+
+    def _at_pending_len(self, nbytes: int) -> Sha256FieldTranscript:
+        """A transcript whose `pending_len` is `nbytes % 64`, reached by absorbing
+        that many opaque bytes."""
+        t = Sha256FieldTranscript.new(b"dom", np.uint32)
+        return t.observe_bytes(fnp.zeros(nbytes, fnp.uint8))
+
+    def test_marked_hop_matches_plain_at_every_stream_position(self) -> None:
+        # `pending_len` decides both data-dependent branches the hop speculates
+        # on — whether an absorb fills the 64-byte block, and whether finalize
+        # needs a second padding block — and it rides as a runtime operand, so
+        # ONE compiled hop must serve every residue. Sweep all 64.
+        for pad in range(64):
+            t = self._at_pending_len(pad)
+            for nbytes in (4, 16, 32, 40):  # 1-block and 2-block squeezes
+                framing = _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))
+                ref_state, ref = _squeeze_hop(t.state, framing, nbytes)
+                mk_state, mk = _sha256_squeeze_zone(t.state, framing, nbytes)
+                self.assertEqual(
+                    np.asarray(ref).tobytes(),
+                    np.asarray(mk).tobytes(),
+                    f"squeezed bytes differ at pending_len={pad % 64}, {nbytes=}",
+                )
+                for name in ("h", "pending", "pending_len", "total_len"):
+                    self.assertEqual(
+                        np.asarray(getattr(ref_state, name)).tobytes(),
+                        np.asarray(getattr(mk_state, name)).tobytes(),
+                        f"state.{name} differs at pending_len={pad % 64}, {nbytes=}",
+                    )
+
+    def test_marker_appears_in_lowered_hlo(self) -> None:
+        # Present by construction for a vendor to fuse — on both squeeze framings.
+        t = Sha256FieldTranscript.new(b"dom", np.uint32)
+        for fn in (lambda x: x.sample_scalar(), lambda x: x.sample(3)):
+            hlo = frx.jit(fn).lower(t).as_text()
+            self.assertIn(SHA256_SQUEEZE_MARKER, hlo)
+
+    def test_marked_squeeze_survives_in_graph_consumer(self) -> None:
+        # The composite is multi-output; consuming the challenge INSIDE the same
+        # jit forces explicit get-tuple-elements, which is where an emitter can
+        # collapse equal-shaped state leaves onto one another. Pin that the
+        # returned state still matches the eager hop leaf for leaf. (Mirrors the
+        # duplex marker's regression for the same failure mode.)
+        t = Sha256FieldTranscript.new(b"dom", np.uint32)
+
+        def consume(
+            x: Sha256FieldTranscript,
+        ) -> tuple[Sha256FieldTranscript, fnp.ndarray]:
+            t2, s = x.sample(3)
+            return t2, s * s  # in-graph consumer, then discarded
+
+        ref, _ = t.sample(3)
+        mk, _ = frx.jit(consume)(t)
+        for a, b in zip(
+            frx.tree_util.tree_leaves(ref), frx.tree_util.tree_leaves(mk), strict=True
+        ):
+            self.assertEqual(np.asarray(a).tobytes(), np.asarray(b).tobytes())
 
 
 if __name__ == "__main__":
