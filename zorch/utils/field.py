@@ -7,10 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-import frx
 import frx.numpy as fnp
 import zk_dtypes
-from frx import Array
+from frx import Array, lax
 
 
 def base_field(dtype: Any) -> Any:
@@ -57,7 +56,7 @@ def to_base_limbs(values: Array) -> Array:
     dtype = values.dtype
     if base_field(dtype) == dtype:
         return values
-    limbs = frx.lax.bitcast_convert_type(values, base_field(dtype))
+    limbs = lax.bitcast_convert_type(values, base_field(dtype))
     return limbs.reshape(*values.shape[:-1], -1)
 
 
@@ -78,4 +77,4 @@ def from_base_limbs(values: Array, dtype: Any) -> Array:
             f"of {fnp.dtype(dtype).name}"
         )
     grouped = values.reshape(*values.shape[:-1], -1, degree)
-    return frx.lax.bitcast_convert_type(grouped, dtype)
+    return lax.bitcast_convert_type(grouped, dtype)
