@@ -11,15 +11,15 @@ by the barycentric round trip: Lagrange weights at `z` recover `p(z)`.
 from __future__ import annotations
 
 import frx.numpy as fnp
-import numpy as np
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
 from zorch.coding.reed_solomon import eval_domain
 from zorch.pcs.deep import deep_composition, open_columns
-from zorch.poly.univariate import compute_lagrange_basis, powers
-from zorch.utils.field import join_coeffs, split_coeffs
+from zorch.poly.univariate import compute_lagrange_basis, eval_coeffs, powers
+from zorch.testkit.random_field import rand_ext_field, rand_field
+from zorch.utils.field import split_coeffs
 
 KB = zk_dtypes.koalabear_mont
 KB4 = zk_dtypes.koalabearx4_mont
@@ -31,20 +31,12 @@ _C = 3  # cubic committed columns
 
 def _rand_base(n: int, seed: int) -> Array:
     """`n` random koalabear elements."""
-    return fnp.array(
-        np.random.default_rng(seed).integers(0, 1 << 30, n).astype(np.uint32), dtype=KB
-    )
+    return rand_field(seed, (n,), KB)
 
 
 def _rand_ext(n: int, seed: int) -> Array:
     """`n` random koalabearx4 elements."""
-    coeffs = np.random.default_rng(seed).integers(0, 1 << 30, (n, 4)).astype(np.uint32)
-    return join_coeffs(fnp.array(coeffs.astype(KB)), KB4)
-
-
-def _poly_eval(coeffs: Array, x: Array) -> Array:
-    """`Σ_k coeffs[k]·x^k` for a scalar `x` (base or extension)."""
-    return fnp.sum(coeffs * powers(x, coeffs.shape[0]))
+    return rand_ext_field(seed, (n,), KB, KB4)
 
 
 def _quotient_coeffs(coeffs: Array, xi: Array) -> Array:
@@ -67,7 +59,7 @@ def _coeffs(x: Array) -> tuple[int, ...]:
 
 def _evals_on(coeffs: Array, domain: Array) -> Array:
     """Column of `p`'s evaluations over `domain`."""
-    return fnp.stack([_poly_eval(coeffs, x) for x in domain])
+    return fnp.stack([eval_coeffs(coeffs, x) for x in domain])
 
 
 class DeepCompositionTest(absltest.TestCase):
@@ -99,7 +91,7 @@ class DeepCompositionTest(absltest.TestCase):
         coeffs, domain, base_cols, cubic_cols, vf = self._setup(1)
         z = _rand_ext(1, 999)[0]
         m = _B + _C
-        evals = fnp.stack([_poly_eval(coeffs[i], z) for i in range(m)])
+        evals = fnp.stack([eval_coeffs(coeffs[i], z) for i in range(m)])
         got = deep_composition(
             base_cols, cubic_cols, evals, fnp.stack([z]), [0] * m, vf, domain
         )
@@ -113,7 +105,7 @@ class DeepCompositionTest(absltest.TestCase):
         xis = _rand_ext(2, 555)
         pos = [i % 2 for i in range(m)]
         xis_of = [xis[pos[i]] for i in range(m)]
-        evals = fnp.stack([_poly_eval(coeffs[i], xis_of[i]) for i in range(m)])
+        evals = fnp.stack([eval_coeffs(coeffs[i], xis_of[i]) for i in range(m)])
         got = deep_composition(base_cols, cubic_cols, evals, xis, pos, vf, domain)
         want = self._expect(coeffs, domain, vf, xis_of)
         self.assertTrue(bool(fnp.all(got == want)), "wrapped-opening mismatch")
@@ -132,8 +124,8 @@ class OpenColumnsTest(absltest.TestCase):
         base_col = _evals_on(base_coeffs, domain)[:, None]  # (N, 1) base
         cubic_col = _evals_on(cubic_coeffs, domain)[:, None]  # (N, 1) cubic
         got = open_columns(base_col, cubic_col, weights, [0, 0], stride=1)
-        self.assertEqual(_coeffs(got[0]), _coeffs(_poly_eval(base_coeffs, z)))
-        self.assertEqual(_coeffs(got[1]), _coeffs(_poly_eval(cubic_coeffs, z)))
+        self.assertEqual(_coeffs(got[0]), _coeffs(eval_coeffs(base_coeffs, z)))
+        self.assertEqual(_coeffs(got[1]), _coeffs(eval_coeffs(cubic_coeffs, z)))
 
 
 if __name__ == "__main__":
