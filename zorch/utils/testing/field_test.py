@@ -14,7 +14,9 @@ from frx import Array, lax  # noqa: E402
 from zorch.utils.field import (
     base_field,
     is_binary_field,
+    join_coeffs,
     naturals,
+    split_coeffs,
 )
 
 KB = zk_dtypes.koalabear_mont
@@ -65,6 +67,54 @@ def _gh(n: int, seed: int = 0) -> Array:
 def _u64(a: Array) -> np.ndarray:
     """The packed 128-bit representation as `(..., 2)` uint64 lanes."""
     return np.asarray(lax.bitcast_convert_type(a, fnp.uint64))
+
+
+class LimbViewTest(absltest.TestCase):
+    """`split_coeffs` / `join_coeffs`: the view between an extension array and
+    its base-field coefficients."""
+
+    def _ext(self, shape: tuple[int, ...], start: int = 1) -> Array:
+        n = int(np.prod(shape)) * 4  # KX is degree 4
+        limbs = fnp.array(np.arange(start, start + n, dtype=np.uint64), dtype=KB)
+        return join_coeffs(limbs.reshape(*shape, 4), KX)
+
+    def test_round_trip_recovers_the_elements(self) -> None:
+        values = self._ext((7,))
+        rows = split_coeffs(values)
+        self.assertEqual(rows.shape, (7, 4))
+        self.assertEqual(rows.dtype, fnp.dtype(KB))
+        self.assertTrue(fnp.array_equal(join_coeffs(rows, KX), values))
+
+    def test_each_row_is_one_element(self) -> None:
+        # The layout every caller depends on: row i holds element i's
+        # coefficients, not a stride across the array.
+        values = self._ext((4,))
+        rows = split_coeffs(values)
+        for i in range(4):
+            one = join_coeffs(rows[i : i + 1], KX)
+            self.assertTrue(fnp.array_equal(one.reshape(()), values[i]))
+
+    def test_degree_comes_from_the_dtype(self) -> None:
+        # The point of the helper: a caller writing `.reshape(n, 4)` by hand is
+        # pinned to a degree-4 field, this is not.
+        self.assertEqual(split_coeffs(self._ext((3,))).shape[-1], 4)
+
+    def test_leading_axes_are_preserved(self) -> None:
+        self.assertEqual(split_coeffs(self._ext((2, 5))).shape, (2, 5, 4))
+
+    def test_a_base_array_passes_through(self) -> None:
+        # Not (n, 1): a base element is one coefficient, and a length-1 axis
+        # would imply an extension that is not there.
+        values = naturals(6, KB)
+        self.assertTrue(fnp.array_equal(split_coeffs(values), values))
+        self.assertTrue(fnp.array_equal(join_coeffs(values, KB), values))
+
+    def test_rejects_a_trailing_axis_that_is_not_the_degree(self) -> None:
+        for bad in (3, 5, 8):
+            with self.subTest(trailing=bad):
+                limbs = naturals(bad, KB).reshape(1, bad)
+                with self.assertRaisesRegex(ValueError, "must be the degree"):
+                    join_coeffs(limbs, KX)
 
 
 class BinaryFieldReduceAddTest(parameterized.TestCase):
