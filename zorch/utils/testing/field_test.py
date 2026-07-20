@@ -13,10 +13,10 @@ from frx import Array, lax  # noqa: E402
 
 from zorch.utils.field import (
     base_field,
-    from_base_limbs,
+    from_limb_rows,
     is_binary_field,
     naturals,
-    to_base_limbs,
+    to_limb_rows,
 )
 
 KB = zk_dtypes.koalabear_mont
@@ -70,41 +70,51 @@ def _u64(a: Array) -> np.ndarray:
 
 
 class LimbViewTest(absltest.TestCase):
-    """`to_base_limbs` / `from_base_limbs`: the view between an extension array
-    and the contiguous base limbs that hash leaves and wire formats carry."""
+    """`to_limb_rows` / `from_limb_rows`: the view between an extension array and
+    its base coefficients, one row per element."""
 
     def _ext(self, shape: tuple[int, ...], start: int = 1) -> Array:
         n = int(np.prod(shape)) * 4  # KX is degree 4
         limbs = fnp.array(np.arange(start, start + n, dtype=np.uint64), dtype=KB)
-        return from_base_limbs(limbs.reshape(*shape[:-1], -1), KX)
+        return from_limb_rows(limbs.reshape(*shape, 4), KX)
 
     def test_round_trip_recovers_the_elements(self) -> None:
         values = self._ext((7,))
-        limbs = to_base_limbs(values)
-        self.assertEqual(limbs.shape, (28,))
-        self.assertEqual(limbs.dtype, fnp.dtype(KB))
-        self.assertTrue(fnp.array_equal(from_base_limbs(limbs, KX), values))
+        rows = to_limb_rows(values)
+        self.assertEqual(rows.shape, (7, 4))
+        self.assertEqual(rows.dtype, fnp.dtype(KB))
+        self.assertTrue(fnp.array_equal(from_limb_rows(rows, KX), values))
 
-    def test_limbs_are_contiguous_per_element(self) -> None:
-        # The layout every caller depends on: element i's coefficients occupy
-        # [4i, 4i+4), not a stride across the array.
+    def test_each_row_is_one_element(self) -> None:
+        # The layout every caller depends on: row i holds element i's
+        # coefficients, not a stride across the array.
         values = self._ext((4,))
-        limbs = to_base_limbs(values)
+        rows = to_limb_rows(values)
         for i in range(4):
-            one = from_base_limbs(limbs[4 * i : 4 * i + 4], KX)
+            one = from_limb_rows(rows[i : i + 1], KX)
             self.assertTrue(fnp.array_equal(one.reshape(()), values[i]))
 
+    def test_degree_comes_from_the_dtype(self) -> None:
+        # The point of the helper: a caller writing `.reshape(n, 4)` by hand is
+        # pinned to a degree-4 field, this is not.
+        self.assertEqual(to_limb_rows(self._ext((3,))).shape[-1], 4)
+
     def test_leading_axes_are_preserved(self) -> None:
-        self.assertEqual(to_base_limbs(self._ext((2, 5))).shape, (2, 20))
+        self.assertEqual(to_limb_rows(self._ext((2, 5))).shape, (2, 5, 4))
 
-    def test_a_base_array_is_its_own_limbs(self) -> None:
+    def test_a_base_array_passes_through(self) -> None:
+        # Not (n, 1): a base element is one coefficient, and a length-1 axis
+        # would imply an extension that is not there.
         values = naturals(6, KB)
-        self.assertTrue(fnp.array_equal(to_base_limbs(values), values))
-        self.assertTrue(fnp.array_equal(from_base_limbs(values, KB), values))
+        self.assertTrue(fnp.array_equal(to_limb_rows(values), values))
+        self.assertTrue(fnp.array_equal(from_limb_rows(values, KB), values))
 
-    def test_rejects_a_trailing_axis_that_is_not_whole_elements(self) -> None:
-        with self.assertRaisesRegex(ValueError, "multiple of the degree"):
-            from_base_limbs(naturals(7, KB), KX)  # 7 % 4 != 0
+    def test_rejects_a_trailing_axis_that_is_not_the_degree(self) -> None:
+        for bad in (3, 5, 8):
+            with self.subTest(trailing=bad):
+                limbs = naturals(bad, KB).reshape(1, bad)
+                with self.assertRaisesRegex(ValueError, "must be the degree"):
+                    from_limb_rows(limbs, KX)
 
 
 class BinaryFieldReduceAddTest(parameterized.TestCase):
