@@ -260,6 +260,18 @@ class MerkleTreeTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             MerkleTree(sponge, comp)
 
+    def test_zero_leaf_matrix_raises(self) -> None:
+        # arity>2 skips the pow2 gate, so a 0-leaf matrix would otherwise fold to
+        # a [0]-index error deep in _fold_to_root.
+        _, _, tree = koalabear16_merkle(out=4, arity=4, chunk=4)
+        with self.assertRaises(ValueError):
+            tree.commit(fnp.zeros((0, 4), dtype=F))
+
+    def test_fold_digests_rejects_bad_leaf_shape(self) -> None:
+        _, _, tree = koalabear16_merkle()
+        with self.assertRaises(ValueError):
+            tree.fold_digests(fnp.zeros((4, 7), dtype=F))  # digest width 7 != 8
+
     def test_verify_rejects_tampered_row(self) -> None:
         tree, matrix, root, layers = _committed_4x8()
         op = tree.open(matrix, layers, 2)

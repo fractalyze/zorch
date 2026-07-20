@@ -18,7 +18,6 @@ layout (``prove_openings_at_indices``): all SP1 glue, all here.
 from __future__ import annotations
 
 from enum import IntEnum
-from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -98,17 +97,41 @@ class SingleMatrixCommitmentScheme:
         # Column-major commit takes [width, height]; row-major takes [height, width].
         height, width = matrix.shape[::-1] if column_major else matrix.shape
         log_height = log2_strict_usize(height)  # power-of-two enforced by commit
-        return self.bind_root(raw_root, log_height, width, matrix.dtype), digest_layers
+        params = fnp.array([log_height, width], dtype=matrix.dtype)
+        return self.bind_root(raw_root, params), digest_layers
 
-    def bind_root(
-        self, raw_root: Array, log_height: int, width: int, dtype: Any
-    ) -> Array:
+    def hash_leaves(self, matrix: Array, *, column_major: bool = False) -> Array:
+        """``commit``'s leaf-hash half: each leaf of ``matrix`` (layout per
+        ``column_major``, see ``commit``) to its ``(num_leaves, digest_elems)``
+        digest layer. With ``fold_leaf_digests`` + ``bind_root``, lets a
+        consumer cut jit-zone boundaries through the commit — only this half's
+        shapes carry the leaf width (see ``zorch.pcs.jagged.commit``)."""
+        tree = self._tree_column_major if column_major else self._tree
+        return tree.hash_leaves(matrix)
+
+    def fold_leaf_digests(self, leaf_digests: Array) -> tuple[Array, list[Array]]:
+        """``commit``'s fold half: a ``hash_leaves`` layer to ``(raw_root,
+        digest_layers)``. Layout-independent (the fold only compresses digests),
+        so one method serves both leaf layouts."""
+        return self._tree.fold_digests(leaf_digests)
+
+    def bind_root(self, raw_root: Array, shape_params: Array) -> Array:
         """Apply SP1's domain separator to a raw root: the single source of the
         ``compress([root, sponge([log_height, width])])`` formula, shared by
-        ``commit``, ``verify_batch``, and the stacked-open dual's raw-root wire
-        pin so they can never drift. ``width`` is the base-field width
+        ``commit``, ``verify_batch``, the jagged verifier, and the stacked open
+        so they can never drift. ``shape_params`` is the ``[log_height, width]``
+        preimage as a field vector — a vector rather than two ints so a jit zone
+        can pass the width as a traced value instead of a compile key (the
+        zone-split commit's K-free tail). ``width`` is the base-field width
         (commit/verify both guard EF)."""
-        params = self._sponge.hash(fnp.array([log_height, width], dtype=dtype))
+        # Guard the size so a wrong-length vector fails here, not as a subtly
+        # different hash downstream (sponge.hash accepts any length).
+        if shape_params.ndim != 1 or shape_params.shape[0] != 2:
+            raise ValueError(
+                f"shape_params must be [log_height, width], got shape "
+                f"{shape_params.shape}"
+            )
+        params = self._sponge.hash(shape_params)
         return self._compressor.compress(fnp.stack([raw_root, params]))
 
     def bind_structure(
@@ -192,7 +215,9 @@ class SingleMatrixCommitmentScheme:
         # consumer keeps only the SP1 separator rebind, not the generic Merkle
         # fold.
         raw_root = self._tree.reconstruct_root(index, Opening(row=row, path=proof))
-        bound = self.bind_root(raw_root, log_height, width, row.dtype)
+        bound = self.bind_root(
+            raw_root, fnp.array([log_height, width], dtype=row.dtype)
+        )
         matches = fnp.array_equal(bound, commitment)
         # Priority order: bounds first, then the reconstructed-root check.
         return fnp.where(

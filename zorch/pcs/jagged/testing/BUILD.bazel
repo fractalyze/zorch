@@ -55,6 +55,25 @@ py_test(
 )
 
 py_test(
+    name = "commit_zones_test",
+    size = "small",
+    srcs = ["commit_zones_test.py"],
+    tags = ["local_only"],
+    deps = [
+        "//zorch/commit:smcs",
+        "//zorch/commit/testing:sp1_koalabear16",
+        "//zorch/hash:compression",
+        "//zorch/hash:sponge",
+        "//zorch/hash/poseidon2",
+        "//zorch/pcs/jagged:commit",
+        "//zorch/pcs/jagged:region",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "prover_test",
     size = "small",
     srcs = ["prover_test.py"],

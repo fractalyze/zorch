@@ -352,9 +352,7 @@ def _open_queries(
     component_commitments = [
         smcs.bind_root(
             layers[-1][0],
-            log2_strict_usize(cw.shape[0]),
-            cw.shape[1],
-            bf_dtype,
+            fnp.array([log2_strict_usize(cw.shape[0]), cw.shape[1]], dtype=bf_dtype),
         )
         for layers, cw in zip(digest_layers, round_codewords, strict=True)
     ]
