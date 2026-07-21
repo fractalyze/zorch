@@ -4,7 +4,7 @@
 `deep_composition` is checked against the quotient built by explicit polynomial
 division `(p(x) − p(ξ))/(x − ξ)` — a genuine polynomial exactly when the opening
 is correct — so the test needs no interpolation or root convention, with base
-and cubic committed columns kept in their split blocks. `open_columns` is checked
+and extension committed columns kept in their split blocks. `open_columns` is checked
 by the barycentric round trip: Lagrange weights at `z` recover `p(z)`.
 """
 
@@ -22,21 +22,11 @@ from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.utils.field import split_coeffs
 
 KB = zk_dtypes.koalabear_mont
-KB4 = zk_dtypes.koalabearx4_mont
+EF = zk_dtypes.koalabearx4_mont
 
 _N_BITS = 4  # base domain N = 16
 _B = 2  # base committed columns
-_C = 3  # cubic committed columns
-
-
-def _rand_base(n: int, seed: int) -> Array:
-    """`n` random koalabear elements."""
-    return rand_field(seed, (n,), KB)
-
-
-def _rand_ext(n: int, seed: int) -> Array:
-    """`n` random koalabearx4 elements."""
-    return rand_ext_field(seed, (n,), KB, KB4)
+_C = 3  # extension committed columns
 
 
 def _quotient_coeffs(coeffs: Array, xi: Array) -> Array:
@@ -53,7 +43,7 @@ def _quotient_coeffs(coeffs: Array, xi: Array) -> Array:
 
 
 def _coeffs(x: Array) -> tuple[int, ...]:
-    """A koalabearx4 scalar as its base coefficients, for exact equality."""
+    """An extension scalar as its base coefficients, for exact equality."""
     return tuple(int(v) for v in split_coeffs(x))
 
 
@@ -65,13 +55,14 @@ def _evals_on(coeffs: Array, domain: Array) -> Array:
 class DeepCompositionTest(absltest.TestCase):
     def _setup(self, seed: int) -> tuple[list[Array], Array, Array, Array, Array]:
         n = 1 << _N_BITS
-        base_coeffs = [_rand_base(n, seed + i) for i in range(_B)]  # deg<N base
-        cubic_coeffs = [_rand_ext(n, seed + 10 + j) for j in range(_C)]  # deg<N ext
+        # Both blocks are degree < N — the low-degree premise DEEP rests on.
+        base_coeffs = [rand_field(seed + i, (n,), KB) for i in range(_B)]
+        ext_coeffs = [rand_ext_field(seed + 10 + j, (n,), KB, EF) for j in range(_C)]
         domain = eval_domain(KB, n)  # base subgroup — any distinct points work
         base_cols = fnp.stack([_evals_on(c, domain) for c in base_coeffs], axis=1)
-        cubic_cols = fnp.stack([_evals_on(c, domain) for c in cubic_coeffs], axis=1)
-        vf = _rand_ext(1, seed + 100)[0]
-        return base_coeffs + cubic_coeffs, domain, base_cols, cubic_cols, vf
+        ext_cols = fnp.stack([_evals_on(c, domain) for c in ext_coeffs], axis=1)
+        vf = rand_ext_field(seed + 100, (), KB, EF)
+        return base_coeffs + ext_coeffs, domain, base_cols, ext_cols, vf
 
     def _expect(
         self, coeffs: list[Array], domain: Array, vf: Array, xis_of: list[Array]
@@ -88,25 +79,25 @@ class DeepCompositionTest(absltest.TestCase):
         return want
 
     def test_batched_quotient_single_opening(self) -> None:
-        coeffs, domain, base_cols, cubic_cols, vf = self._setup(1)
-        z = _rand_ext(1, 999)[0]
+        coeffs, domain, base_cols, ext_cols, vf = self._setup(1)
+        z = rand_ext_field(999, (), KB, EF)
         m = _B + _C
         evals = fnp.stack([eval_coeffs(coeffs[i], z) for i in range(m)])
         got = deep_composition(
-            base_cols, cubic_cols, evals, fnp.stack([z]), [0] * m, vf, domain
+            base_cols, ext_cols, evals, fnp.stack([z]), [0] * m, vf, domain
         )
         want = self._expect(coeffs, domain, vf, [z] * m)
         self.assertTrue(bool(fnp.all(got == want)), "batched quotient mismatch")
 
     def test_wrapped_opening_points(self) -> None:
         # Columns open at two distinct points; opening_pos maps each column.
-        coeffs, domain, base_cols, cubic_cols, vf = self._setup(7)
+        coeffs, domain, base_cols, ext_cols, vf = self._setup(7)
         m = _B + _C
-        xis = _rand_ext(2, 555)
+        xis = rand_ext_field(555, (2,), KB, EF)
         pos = [i % 2 for i in range(m)]
         xis_of = [xis[pos[i]] for i in range(m)]
         evals = fnp.stack([eval_coeffs(coeffs[i], xis_of[i]) for i in range(m)])
-        got = deep_composition(base_cols, cubic_cols, evals, xis, pos, vf, domain)
+        got = deep_composition(base_cols, ext_cols, evals, xis, pos, vf, domain)
         want = self._expect(coeffs, domain, vf, xis_of)
         self.assertTrue(bool(fnp.all(got == want)), "wrapped-opening mismatch")
 
@@ -114,18 +105,18 @@ class DeepCompositionTest(absltest.TestCase):
 class OpenColumnsTest(absltest.TestCase):
     def test_recovers_direct_eval(self) -> None:
         # Barycentric round trip: Σ_i L_i(z)·p(domain[i]) == p(z), one base + one
-        # cubic column, split as the composition consumes them.
+        # extension column, split as the composition consumes them.
         n = 1 << _N_BITS
         domain = eval_domain(KB, n)
-        z = _rand_ext(1, 42)[0]
-        weights = compute_lagrange_basis(z, domain.astype(KB4))[:, None]  # (N, 1)
-        base_coeffs = _rand_base(n, 3)
-        cubic_coeffs = _rand_ext(n, 4)
+        z = rand_ext_field(42, (), KB, EF)
+        weights = compute_lagrange_basis(z, domain.astype(EF))[:, None]  # (N, 1)
+        base_coeffs = rand_field(3, (n,), KB)
+        ext_coeffs = rand_ext_field(4, (n,), KB, EF)
         base_col = _evals_on(base_coeffs, domain)[:, None]  # (N, 1) base
-        cubic_col = _evals_on(cubic_coeffs, domain)[:, None]  # (N, 1) cubic
-        got = open_columns(base_col, cubic_col, weights, [0, 0], stride=1)
+        ext_col = _evals_on(ext_coeffs, domain)[:, None]  # (N, 1) extension
+        got = open_columns(base_col, ext_col, weights, [0, 0], stride=1)
         self.assertEqual(_coeffs(got[0]), _coeffs(eval_coeffs(base_coeffs, z)))
-        self.assertEqual(_coeffs(got[1]), _coeffs(eval_coeffs(cubic_coeffs, z)))
+        self.assertEqual(_coeffs(got[1]), _coeffs(eval_coeffs(ext_coeffs, z)))
 
 
 if __name__ == "__main__":
