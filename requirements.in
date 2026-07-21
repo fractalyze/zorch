@@ -13,10 +13,10 @@
 # frontend, which requires zk_dtypes >= 0.0.10.
 absl-py
 numpy
-frx==0.10.0.dev20260720022913
-frxlib==0.10.0.dev20260720022913
-frx-cuda12-pjrt==0.10.0.dev20260720022913
-frx-cuda12-plugin==0.10.0.dev20260720022913
+frx==0.10.0.dev20260720085939
+frxlib==0.10.0.dev20260720085939
+frx-cuda12-pjrt==0.10.0.dev20260720085939
+frx-cuda12-plugin==0.10.0.dev20260720085939
 zk-dtypes==0.0.10
 
 # Benchmark harness (shared across fractalyze repos); used only by the
