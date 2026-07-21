@@ -17,14 +17,21 @@ limbs, so a `uint64` limb would reject the 32-bit tower level (`binary_field_t5`
 """
 from __future__ import annotations
 
-from typing import Any
+from functools import partial
+from typing import Any, Literal
 
+import frx
 import frx.numpy as fnp
 from frx import Array, lax
+from frx.experimental import pallas as pl
+from frx.experimental.pallas import triton as plgpu
 
 _LIMB = fnp.uint32
 _LIMB_BITS = 32
 _BIT = fnp.binary_field_t0  # F_2 = GF(2)
+_SELECT_BLOCK = 128
+
+BitSelectReduction = Literal["bits", "elements"]
 
 
 def field_bit_width(dtype: Any) -> int:
@@ -84,6 +91,296 @@ def _f2(v: int) -> Array:
     list constructor: a value-cast (`astype`) into `t0` is unlowered and SIGSEGVs,
     and a `uint8 → t0` bitcast is rank-invalid (t0 is 1-bit-logical)."""
     return fnp.asarray(fnp.array([v], _BIT)[0])
+
+
+def _xor_reduce_registers(x: Array) -> Array:
+    """XOR-reduce up to 255 `uint32` registers with eight integer sums.
+
+    Each sum counts one bit position independently in all four bytes. The block
+    stays below 256 elements so those byte counters cannot carry into each
+    other; their low bits are exactly the four requested parities.
+    """
+    result = _LIMB(0)
+    byte_lsbs = _LIMB(0x01010101)
+    for bit in range(8):
+        parity = fnp.sum((x >> bit) & byte_lsbs, dtype=_LIMB) & byte_lsbs
+        result |= parity << bit
+    return result
+
+
+def _bit_select_reduce_elements_pallas(
+    selectors: Array, values: Array, width: int, limbs: int
+) -> Array:
+    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output."""
+    n = selectors.shape[0]
+    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
+    values = fnp.pad(values, ((0, padded_n - n), (0, 0)))
+
+    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
+        bit = pl.program_id(0)
+        limb = pl.program_id(1)
+        selector_limb = bit // _LIMB_BITS
+        shift = bit % _LIMB_BITS
+
+        def body(block: Array, acc: Array) -> Array:
+            rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
+            packed = selector_ref[rows, selector_limb]
+            value = value_ref[rows, limb]
+            selected = fnp.where(((packed >> shift) & 1) != 0, value, 0)
+            return acc ^ _xor_reduce_registers(selected)
+
+        blocks = padded_n // _SELECT_BLOCK
+        out_ref[bit, limb] = lax.fori_loop(0, blocks, body, _LIMB(0))
+
+    return pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((width, limbs), _LIMB),
+        grid=(width, limbs),
+        compiler_params=plgpu.CompilerParams(),
+        name="bit_select_xor_reduce_elements",
+    )(selectors, values)
+
+
+def _bit_select_reduce_bits_pallas(
+    selectors: Array, values: Array, width: int, limbs: int
+) -> Array:
+    """Pallas lowering for `(n,) x (W,) -> (n, L)` limb output."""
+    n = selectors.shape[0]
+    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
+
+    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
+        block = pl.program_id(0)
+        limb = pl.program_id(1)
+        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
+        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
+        for selector_limb in range(limbs):
+            packed = selector_ref[rows, selector_limb]
+            for shift in range(_LIMB_BITS):
+                bit = selector_limb * _LIMB_BITS + shift
+                value = value_ref[bit, limb]
+                acc ^= fnp.where(((packed >> shift) & 1) != 0, value, 0)
+        out_ref[rows, limb] = acc
+
+    out = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
+        grid=(padded_n // _SELECT_BLOCK, limbs),
+        compiler_params=plgpu.CompilerParams(),
+        name="bit_select_xor_reduce_bits",
+    )(selectors, values)
+    return out[:n]
+
+
+def _bit_select_unpacked_bits_pallas(
+    selectors: Array, values: Array, limbs: int
+) -> Array:
+    """Pallas lowering for 0/1 `(n, B) x (B,) -> (n, L)` limb output."""
+    n, bits = selectors.shape
+    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
+
+    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
+        block = pl.program_id(0)
+        limb = pl.program_id(1)
+        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
+        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
+        for bit in range(bits):
+            selected = selector_ref[rows, bit] != 0
+            value = value_ref[bit, limb]
+            acc ^= fnp.where(selected, value, 0)
+        out_ref[rows, limb] = acc
+
+    out = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
+        grid=(padded_n // _SELECT_BLOCK, limbs),
+        compiler_params=plgpu.CompilerParams(),
+        name="bit_select_xor_reduce_unpacked_bits",
+    )(selectors, values)
+    return out[:n]
+
+
+def _bit_select_packed_bytes_pallas(
+    selectors: Array, values: Array, limbs: int
+) -> Array:
+    """Pallas lowering for packed-byte `(n, B/8) x (B,) -> (n, L)`."""
+    n, n_bytes = selectors.shape
+    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
+
+    # Flock-core's UniSkipFoldTable: table[j, v] XORs the eight weights selected
+    # by byte value v in byte position j. At k_skip=6 this is 8*256*16 = 32 KiB.
+    byte_values = values.reshape(n_bytes, 8, limbs)
+    byte = fnp.arange(256, dtype=_LIMB)
+    shift = fnp.arange(8, dtype=_LIMB)
+    selected = ((byte[:, None] >> shift[None, :]) & 1).astype(_LIMB)
+    table = lax.reduce_xor(
+        selected[None, :, :, None] * byte_values[:, None, :, :], (2,)
+    )
+
+    def kernel(selector_ref: Any, table_ref: Any, out_ref: Any) -> None:
+        block = pl.program_id(0)
+        limb = pl.program_id(1)
+        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
+        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
+        for byte_index in range(n_bytes):
+            value = selector_ref[rows, byte_index].astype(fnp.int32)
+            acc ^= table_ref[byte_index, value, limb]
+        out_ref[rows, limb] = acc
+
+    out = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
+        grid=(padded_n // _SELECT_BLOCK, limbs),
+        compiler_params=plgpu.CompilerParams(),
+        name="bit_select_xor_reduce_packed_bytes",
+    )(selectors, table)
+    return out[:n]
+
+
+@frx.jit
+def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
+    """XOR weights selected by row-major packed bytes.
+
+    `selectors` is a `uint8` matrix `(n, B/8)`, where byte `j` stores selector
+    bits `8*j .. 8*j+7` least-significant-bit first. `values` is a binary-field
+    vector `(B,)`; the result `(n,)` XORs `values[b]` wherever row bit `b` is set.
+
+    On GPU a 256-entry XOR table per byte position feeds a Pallas gather, matching
+    flock-core's `UniSkipFoldTable`: the kernel reads `B/8` selector bytes per row
+    and never expands the `(n, B)` bit matrix. CPU keeps a compact source-level
+    expression as the portable oracle.
+    """
+    if selectors.ndim != 2 or values.ndim != 1:
+        raise ValueError("packed-byte bit selection expects 2D selectors and 1D values")
+    if fnp.dtype(selectors.dtype) != fnp.dtype(fnp.uint8):
+        raise ValueError(
+            f"packed-byte selectors must have dtype uint8, got {selectors.dtype}"
+        )
+    if selectors.shape[0] == 0 or selectors.shape[1] == 0:
+        raise ValueError("packed-byte bit selection requires a non-empty matrix")
+    bits = selectors.shape[1] * 8
+    if values.shape != (bits,):
+        raise ValueError(
+            f"values must have shape ({bits},) for {selectors.shape[1]} selector "
+            f"bytes, got {values.shape}"
+        )
+    values_dtype = fnp.dtype(values.dtype)
+    if not values_dtype.name.startswith("binary_field"):
+        raise ValueError("bit-select XOR reduction values must use a binary field")
+
+    limbs = field_bit_width(values.dtype) // _LIMB_BITS
+    values_l = _to_limbs(values)
+    if frx.default_backend() == "gpu":
+        out_l = _bit_select_packed_bytes_pallas(selectors, values_l, limbs)
+    else:
+        shifts = fnp.arange(8, dtype=fnp.uint8)
+        unpacked = ((selectors[:, :, None] >> shifts) & 1).reshape(
+            selectors.shape[0], bits
+        )
+        out_l = lax.reduce_xor(
+            unpacked[:, :, None].astype(_LIMB) * values_l[None, :, :], (1,)
+        )
+    return _from_limbs(out_l, values.dtype)
+
+
+@partial(frx.jit, static_argnames="reduce")
+def bit_select_xor_reduce(
+    selectors: Array,
+    values: Array,
+    *,
+    reduce: BitSelectReduction,
+) -> Array:
+    """Select binary-field values with packed bits and XOR-reduce one axis.
+
+    `selectors` may be a one-dimensional vector of GF(2^W) elements.
+    With `reduce="elements"`, `values` has the same shape and the result has
+    shape `(W,)`: result bit-slice `b` XORs `values[i]` wherever bit `b` of
+    selector `i` is set. With `reduce="bits"`, `values` has shape `(W,)` and
+    the result has the selectors' shape: each result `i` XORs `values[b]`
+    wherever bit `b` of selector `i` is set.
+
+    For `reduce="bits"`, selectors may instead be an explicit Boolean/integer
+    0/1 matrix of shape `(n, B)` with `values.shape == (B,)`. This is the form
+    used when a consumer already holds unpacked witness rows.
+
+    On GPU the Pallas lowering streams directly into the limb output. It never
+    materializes the broadcast `(n, W, L)` selection; its working set is one
+    fixed-size register block. CPU uses the compact source-level expression so
+    the primitive remains portable and easy to validate.
+    """
+    if values.ndim != 1 or selectors.ndim not in (1, 2):
+        raise ValueError(
+            "bit-select XOR reduction expects 1D values and 1D packed or 2D "
+            "unpacked selectors"
+        )
+    if selectors.shape[0] == 0:
+        raise ValueError("bit-select XOR reduction requires at least one selector")
+    values_dtype = fnp.dtype(values.dtype)
+    if not values_dtype.name.startswith("binary_field"):
+        raise ValueError("bit-select XOR reduction values must use a binary field")
+
+    if selectors.ndim == 2:
+        if reduce != "bits":
+            raise ValueError('unpacked selectors only support reduce="bits"')
+        bits = selectors.shape[1]
+        if bits == 0 or values.shape != (bits,):
+            raise ValueError(
+                f"values must have shape ({bits},) for unpacked selectors, got "
+                f"{values.shape}"
+            )
+        limbs = field_bit_width(values.dtype) // _LIMB_BITS
+        values_l = _to_limbs(values)
+        if frx.default_backend() == "gpu":
+            out_l = _bit_select_unpacked_bits_pallas(selectors, values_l, limbs)
+        else:
+            selected = selectors.astype(_LIMB)
+            out_l = lax.reduce_xor(selected[:, :, None] * values_l[None, :, :], (1,))
+        return _from_limbs(out_l, values.dtype)
+
+    if fnp.dtype(selectors.dtype) != values_dtype:
+        raise ValueError(
+            "bit-select XOR reduction requires selectors and values of the same "
+            "binary-field dtype"
+        )
+    width = field_bit_width(selectors.dtype)
+    limbs = width // _LIMB_BITS
+    selectors_l = _to_limbs(selectors)
+    values_l = _to_limbs(values)
+
+    if reduce == "elements":
+        if values.shape != selectors.shape:
+            raise ValueError(
+                f'values must match selectors for reduce="elements": '
+                f"{values.shape} vs {selectors.shape}"
+            )
+        if frx.default_backend() == "gpu":
+            out_l = _bit_select_reduce_elements_pallas(
+                selectors_l, values_l, width, limbs
+            )
+        else:
+            bits = _bits(selectors)
+            out_l = lax.reduce_xor(bits[:, :, None] * values_l[:, None, :], (0,))
+        return _from_limbs(out_l, values.dtype)
+
+    if reduce == "bits":
+        if values.shape != (width,):
+            raise ValueError(
+                f'values must have shape ({width},) for reduce="bits", got '
+                f"{values.shape}"
+            )
+        if frx.default_backend() == "gpu":
+            out_l = _bit_select_reduce_bits_pallas(selectors_l, values_l, width, limbs)
+        else:
+            bits = _bits(selectors)
+            out_l = lax.reduce_xor(bits[:, :, None] * values_l[None, :, :], (1,))
+        return _from_limbs(out_l, values.dtype)
+
+    raise ValueError(
+        f'unknown reduction axis {reduce!r}; expected "bits" or "elements"'
+    )
 
 
 def unpack(x: Array) -> Array:

@@ -9,7 +9,14 @@ import zk_dtypes  # noqa: F401  (registers the binary_field_* dtypes)
 from absl.testing import absltest, parameterized
 from frx import Array, lax
 
-from zorch.utils.binary_field import _to_limbs, field_bit_width, pack, unpack
+from zorch.utils.binary_field import (
+    _to_limbs,
+    bit_select_xor_reduce,
+    byte_select_xor_reduce,
+    field_bit_width,
+    pack,
+    unpack,
+)
 
 _DTYPES = (fnp.binary_field_ghash, fnp.binary_field_t7)
 
@@ -49,6 +56,66 @@ class BinaryFieldReprTest(parameterized.TestCase):
         np.testing.assert_array_equal(
             np.asarray(_to_limbs(back)), np.asarray(_to_limbs(x))
         )
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_axes_are_dual(self, dtype: Any) -> None:
+        width = field_bit_width(dtype)
+        selectors = _rand_field(dtype, 11, 2)
+        element_values = _rand_field(dtype, 11, 3)
+        bit_values = _rand_field(dtype, width, 4)
+
+        by_element = bit_select_xor_reduce(selectors, element_values, reduce="elements")
+        by_bit = bit_select_xor_reduce(selectors, bit_values, reduce="bits")
+        bits = np.unpackbits(
+            np.asarray(selectors).view(np.uint8).reshape(11, -1),
+            axis=1,
+            bitorder="little",
+        )
+        element_limbs = np.asarray(_to_limbs(element_values))
+        bit_limbs = np.asarray(_to_limbs(bit_values))
+        want_by_element = np.zeros((width, element_limbs.shape[1]), np.uint32)
+        want_by_bit = np.zeros((11, bit_limbs.shape[1]), np.uint32)
+        for i in range(11):
+            for bit in range(width):
+                if bits[i, bit]:
+                    want_by_element[bit] ^= element_limbs[i]
+                    want_by_bit[i] ^= bit_limbs[bit]
+        np.testing.assert_array_equal(
+            np.asarray(_to_limbs(by_element)), want_by_element
+        )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(by_bit)), want_by_bit)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_accepts_unpacked_rows(self, dtype: Any) -> None:
+        rows = fnp.asarray(
+            np.random.default_rng(5).integers(0, 2, size=(13, 64), dtype=np.uint8)
+        )
+        values = _rand_field(dtype, 64, 6)
+        got = bit_select_xor_reduce(rows, values, reduce="bits")
+
+        value_limbs = np.asarray(_to_limbs(values))
+        want = np.zeros((13, value_limbs.shape[1]), np.uint32)
+        for i in range(13):
+            for bit in range(64):
+                if rows[i, bit]:
+                    want[i] ^= value_limbs[bit]
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_byte_select_xor_reduce_accepts_packed_rows(self, dtype: Any) -> None:
+        rng = np.random.default_rng(7)
+        rows = rng.integers(0, 256, size=(13, 8), dtype=np.uint8)
+        values = _rand_field(dtype, 64, 8)
+        got = byte_select_xor_reduce(fnp.asarray(rows), values)
+
+        unpacked = np.unpackbits(rows, axis=1, bitorder="little")
+        value_limbs = np.asarray(_to_limbs(values))
+        want = np.zeros((13, value_limbs.shape[1]), np.uint32)
+        for i in range(13):
+            for bit in range(64):
+                if unpacked[i, bit]:
+                    want[i] ^= value_limbs[bit]
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
 
     def test_bit_width_rejects_sub_lane_tower(self) -> None:
         narrow = [

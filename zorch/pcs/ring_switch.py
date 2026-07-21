@@ -76,16 +76,10 @@ from zorch.utils import binary_field as bf
 def bit_slice_evals(packed_witness: Array, tensor: Array) -> Array:
     """`s_hat_v[r] = Σ_i bit_r(packed_witness[i]) · tensor[i]` for `r ∈ [0, W)`.
 
-    `(n,) × (n,) -> (W,)`. A bit-select then a field-additive reduce — no field
-    multiplies (the select is a `{0,1} × uint32-limb` product on the
-    representation); the `(n, W, L)` intermediate stays inside the jit fusion.
+    `(n,) × (n,) -> (W,)`. The memory-bounded bit-select reduction accumulates
+    directly into the output without materializing its `(n, W, L)` broadcast.
     """
-    w_bits = bf._bits(packed_witness)  # (n, W)
-    t_limbs = bf._to_limbs(tensor)  # (n, L)
-    # Each bit selects tensor[i]'s limbs (or 0); reinterpret to the field and sum
-    # under field addition (native `fnp.sum` — binary-field add is the limb XOR).
-    selected = bf._from_limbs(w_bits[:, :, None] * t_limbs[:, None, :], tensor.dtype)
-    return fnp.sum(selected, axis=0)  # (W,)
+    return bf.bit_select_xor_reduce(packed_witness, tensor, reduce="elements")
 
 
 @jit
@@ -96,12 +90,7 @@ def rs_eq_ind(tensor: Array, eq_r_dprime: Array) -> Array:
 
     `(n,) × (W,) -> (n,)`.
     """
-    t_bits = bf._bits(tensor)  # (n, W)
-    eq_limbs = bf._to_limbs(eq_r_dprime)  # (W, L)
-    selected = bf._from_limbs(
-        t_bits[:, :, None] * eq_limbs[None, :, :], eq_r_dprime.dtype
-    )
-    return fnp.sum(selected, axis=1)  # (n,)
+    return bf.bit_select_xor_reduce(tensor, eq_r_dprime, reduce="bits")
 
 
 @jit
