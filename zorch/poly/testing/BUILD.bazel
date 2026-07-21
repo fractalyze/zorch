@@ -33,6 +33,7 @@ py_test(
     srcs = ["univariate_test.py"],
     deps = [
         "//zorch/poly",
+        "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),

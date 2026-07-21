@@ -28,7 +28,6 @@ from zorch.coding.reed_solomon import (
     fri_fold_k,
     fri_fold_values,
 )
-from zorch.poly.univariate import coset_intt
 from zorch.testkit.random_field import rand_ext_field, rand_field
 
 F = zk_dtypes.koalabear_mont
@@ -161,52 +160,6 @@ class ReedSolomonTest(absltest.TestCase):
             fri_fold_k(group, beta)
         with self.assertRaises(ValueError):
             fri_fold_k(group, beta, points=pts, coset=(pts, pts[0]))
-
-    def test_coset_intt_recovers_coefficients(self) -> None:
-        # coset_intt inverts evaluation on the subgroup <w> (coset_inv=None) and
-        # on a coset s*<w> (coset_inv = s^-1): interpolate coefficients from the
-        # values and recover the original polynomial byte-for-byte. Oracle is a
-        # plain Horner evaluation on the coset (shares no code with the INTT
-        # butterfly), batched over columns as fri.fold's final-poly INTT is.
-        for k in (2, 4, 8):
-            subgroup = _domain(k, F)  # [w^0..w^{k-1}], canonical order-k root
-            omega_inv = fnp.ones((), F) / subgroup[1]
-            coeffs = rand_ext_field(40 + k, (3, k), F, EF)  # 3 polys, degree <k
-
-            evals = frx.vmap(lambda c: _horner(c, subgroup))(coeffs)  # (3, k)
-            self.assertTrue(
-                bool(fnp.all(coset_intt(evals, omega_inv) == coeffs)),
-                msg=f"subgroup k={k}",
-            )
-
-            shifts = rand_field(50 + k, (3,), F) + fnp.ones((), F)  # 3 nonzero shifts
-            coset_inv = fnp.ones((3,), F) / shifts
-            points = shifts[:, None] * subgroup[None, :]  # (3, k) coset points
-            cevals = frx.vmap(_horner)(coeffs, points)  # (3, k)
-            self.assertTrue(
-                bool(fnp.all(coset_intt(cevals, omega_inv, coset_inv) == coeffs)),
-                msg=f"coset k={k}",
-            )
-
-    def test_coset_intt_rejects_bad_shapes(self) -> None:
-        # Fail loud at the public seam: a non-scalar root, or a coset_inv that
-        # cannot broadcast against the batch dims, is a caller error.
-        groups = rand_ext_field(60, (3, 4), F, EF)
-        omega_inv = fnp.ones((), F)
-        with self.assertRaises(ValueError):
-            coset_intt(groups, fnp.ones((2,), F))  # non-scalar omega_inv
-        with self.assertRaises(ValueError):
-            coset_intt(groups, omega_inv, fnp.ones((5,), F))  # (5,) vs batch (3,)
-        # Both of these are broadcast-*compatible* with (3,) yet widen the
-        # result — (3, 1) to (3, 3, 4) and (2, 1) to (2, 3, 4) — instead of the
-        # documented (3, 4). A symmetric compatibility check lets them through.
-        for widening in ((3, 1), (2, 1)):
-            with self.subTest(coset_inv=widening):
-                with self.assertRaises(ValueError):
-                    coset_intt(groups, omega_inv, fnp.ones(widening, F))
-        # A scalar and an exact-match batch both stay (3, 4).
-        for ok in (fnp.ones((), F), fnp.ones((3,), F)):
-            self.assertEqual(coset_intt(groups, omega_inv, ok).shape, (3, 4))
 
     def test_check_final_accepts_only_the_constant_claim(self) -> None:
         rs = ReedSolomon(message_len=1, blowup=4, dtype=F)

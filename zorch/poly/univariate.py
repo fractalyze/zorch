@@ -122,7 +122,71 @@ def eval_coeffs(coeffs: Array, point: Array) -> Array:
     return fnp.sum(coeffs * powers, axis=-1)
 
 
-def coset_intt(
+def ntt_with_root(groups: Array, omega: Array, coset: Array | None = None) -> Array:
+    """Evaluate degree-``<k`` coefficients on the order-``k`` subgroup ``⟨ω⟩``
+    (``coset=None``) or a coset ``s·⟨ω⟩`` (``coset = s``), for the whole batch at
+    once. The exact inverse of ``intt_with_root``: ``groups`` is ``(..., k)``
+    coefficients with ``x^m`` at index ``m``, and the result is ``(..., k)``
+    values, index ``j`` at ``ωʲ`` (or ``s·ωʲ``).
+
+    Shared-twiddle NTT, mirroring ``intt_with_root``: apply the shift
+    ``coeffₘ ·= sᵐ`` (``P(s·y)=Q(y)``), bit-reverse, then ``log k`` butterfly
+    stages whose twiddles ``ω⁰..ω^(k/2-1)`` are computed once and shared across
+    the batch — no ``k⁻¹``, which is the INTT's alone.
+
+    ``ω`` must have order exactly ``k``: the butterfly rests on ``ω^(k/2) = −1``,
+    and a wrong-order root yields silent garbage, not an error. It cannot be
+    checked here — ``ω`` is traced, so the test would force a host sync. That is
+    the trade the name states: you supply the root, in your own domain order,
+    where ``lax.ntt`` derives a canonical one from a generator and length.
+
+    Same regime as ``intt_with_root`` and the same reason: many small transforms
+    batched over the leading dims, unrolled over a compile-time ``k``. For a
+    single long transform use ``lax.ntt`` (what ``ReedSolomon.encode`` does);
+    this one would unroll ``k`` stages into the graph.
+    """
+    k = groups.shape[-1]
+    if not is_power_of_two(k):
+        raise ValueError(f"ntt_with_root needs a power-of-two factor k, got {k}")
+    log_k = log2_strict_usize(k)
+    if fnp.ndim(omega) != 0:
+        raise ValueError(f"omega must be a scalar, got shape {fnp.shape(omega)}")
+    if coset is not None:
+        try:
+            coset = fnp.broadcast_to(coset, groups.shape[:-1])
+        except ValueError as e:
+            raise ValueError(
+                f"coset shape {fnp.shape(coset)} must broadcast to the "
+                f"batch dims {groups.shape[:-1]}"
+            ) from e
+
+    col = [groups[..., i] for i in range(k)]
+
+    # Shift first — the mirror of `intt_with_root` undoing it last.
+    if coset is not None:
+        shift_pow = coset
+        for m in range(1, k):
+            col[m] = col[m] * shift_pow
+            if m < k - 1:
+                shift_pow = shift_pow * coset
+
+    twiddles = powers(omega, max(k >> 1, 1))
+    col = [col[int(f"{i:0{log_k}b}"[::-1], 2)] for i in range(k)] if k > 1 else col
+    half = k >> 1
+    for i in range(log_k):
+        half_group = 1 << i
+        for j in range(half):
+            group = j >> i
+            offset = j & (half_group - 1)
+            i1 = (group << (i + 1)) + offset
+            i2 = i1 + half_group
+            odd = col[i2] * twiddles[offset * (k >> (i + 1))]
+            col[i1], col[i2] = col[i1] + odd, col[i1] - odd
+
+    return fnp.stack(col, axis=-1)
+
+
+def intt_with_root(
     groups: Array, omega_inv: Array, coset_inv: Array | None = None
 ) -> Array:
     """Recover the degree-``<k`` coefficients from evaluations on the order-``k``
@@ -140,14 +204,22 @@ def coset_intt(
     exact and the summation order a butterfly vs a matmul takes is irrelevant.
 
     Carries no root convention (like ``compute_lagrange_basis``): the caller
-    supplies ``ω⁻¹`` and per-group ``coset_inv`` in its own domain order. The
-    butterfly is hand-unrolled over the static ``k`` over a large *batch* axis, so
-    it lowers to a handful of fused elementwise kernels coalesced over the groups
-    — the native ``lax.ntt``'s single-long-axis form is the wrong tool here, and
-    its canonical root would need a per-group reindex against the caller's."""
+    supplies ``ω⁻¹`` and per-group ``coset_inv`` in its own domain order, where
+    ``lax.ntt`` derives a canonical root from a generator and the length. Two
+    primitive roots ``ω`` and ``ωᵗ`` give the same values under the relabelling
+    ``j ↦ t·j mod k``, so mixing the conventions costs a gather (cf. the zk↔pil2
+    reindex in ZisK's ``trace_commit``); taking the root as an argument is how
+    this path avoids one. ``ω⁻¹`` must have order exactly ``k`` — the butterfly
+    rests on ``ω^(k/2) = −1``, and a wrong-order root is silently wrong rather
+    than an error, unverifiable here without a host sync on a traced value.
+
+    The butterfly is hand-unrolled over the static ``k`` over a large *batch*
+    axis, so it lowers to a handful of fused elementwise kernels coalesced over
+    the groups — the native ``lax.ntt``'s single-long-axis form is the wrong tool
+    here."""
     k = groups.shape[-1]
     if not is_power_of_two(k):
-        raise ValueError(f"coset_intt needs a power-of-two factor k, got {k}")
+        raise ValueError(f"intt_with_root needs a power-of-two factor k, got {k}")
     log_k = log2_strict_usize(k)
     if fnp.ndim(omega_inv) != 0:
         raise ValueError(

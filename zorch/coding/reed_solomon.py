@@ -30,7 +30,7 @@ import numpy as np
 import zk_dtypes
 from frx import Array, lax
 
-from zorch.poly.univariate import compute_lagrange_basis, coset_intt, powers
+from zorch.poly.univariate import compute_lagrange_basis, intt_with_root, powers
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 from zorch.utils.field import is_binary_field
 
@@ -565,7 +565,7 @@ def fri_fold_k(
       interpolation, O(k²) per group, carrying no domain convention. The
       per-query verifier path; `vmap` over the group axis.
     - `coset = (coset_inv, omega_inv)`: when the points form a coset `s·⟨ω⟩` of
-      the order-`k` subgroup — a shared-twiddle INTT (`coset_intt`) then an
+      the order-`k` subgroup — a shared-twiddle INTT (`intt_with_root`) then an
       unrolled Horner, O(k log k) with one twiddle set across the whole batch and
       only the per-group shift varying. The batched prover path. `coset_inv` is
       per-group `s⁻¹` (broadcasts over the leading dims), `omega_inv` the shared
@@ -573,14 +573,14 @@ def fri_fold_k(
 
     The interpolant is unique, so the two paths are byte-identical wherever both
     apply. `group` and the coordinates may be extension-field; dtypes follow
-    `compute_lagrange_basis` / `coset_intt`."""
+    `compute_lagrange_basis` / `intt_with_root`."""
     if (points is None) == (coset is None):
         raise ValueError("fri_fold_k needs exactly one of `points` or `coset`")
     if coset is not None:
         coset_inv, omega_inv = coset
-        coeffs = coset_intt(group, omega_inv, coset_inv)
+        coeffs = intt_with_root(group, omega_inv, coset_inv)
         # Horner at beta, unrolled over the static k, rather than `eval_coeffs`.
-        # Byte-identical either way; the unroll fuses through `coset_intt`'s
+        # Byte-identical either way; the unroll fuses through `intt_with_root`'s
         # stack, where `eval_coeffs` materialises the coefficients first. It wins
         # only while k stays small: the unroll is O(k) deep against
         # `eval_coeffs`'s O(log k) prefix product, so on an RTX 5090 at k=8 it is
