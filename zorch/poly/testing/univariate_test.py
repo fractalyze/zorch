@@ -14,9 +14,9 @@ from zorch.poly.univariate import (
     compute_lagrange_basis,
     eval_coeffs,
     eval_univariate,
-    powers,
     intt_with_root,
     ntt_with_root,
+    powers,
 )
 from zorch.testkit.random_field import rand_ext_field, rand_field
 
