@@ -95,22 +95,24 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
 
 
 def _default_horner_max(dtype: Any) -> int:
-    """Measured per-field crossover (table in PR #456): base fields lose the
-    unroll immediately (the scan's reduction is cheap on slim elements), 16-byte
-    extensions flip at 8, wider AoS extensions (goldilocksx3, 24B) at 16. Do not
-    change without re-measuring both batch regimes."""
+    """Measured per-field crossover (data in PR #456's schedule commit): base
+    and binary fields lose the unroll immediately (the scan's reduction is
+    cheap on slim elements), 16-byte prime extensions flip at 8, wider AoS
+    extensions (goldilocksx3, 24B) at 16. Covers koalabear/babybear/goldilocks
+    and their extensions plus binary towers through the two branches below; do
+    not change without re-measuring both batch regimes."""
     try:
         zk_dtypes.efinfo(dtype)
     except ValueError:
-        return 0  # base field: prefix-product scan everywhere
+        return 0  # base or binary field: prefix-product scan everywhere
     return 8 if fnp.dtype(dtype).itemsize <= 16 else 16
 
 
 from functools import partial
 
 
-@partial(frx.jit, static_argnames=("horner_max",))
-def eval_coeffs(coeffs: Array, point: Array, *, horner_max: int | None = None) -> Array:
+@partial(frx.jit, static_argnames=("schedule",))
+def eval_coeffs(coeffs: Array, point: Array, *, schedule: str | None = None) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
@@ -118,11 +120,12 @@ def eval_coeffs(coeffs: Array, point: Array, *, horner_max: int | None = None) -
     any re-parenthesization is the same element), dispatched on the static
     coefficient count:
 
-    ``horner_max`` overrides the measured per-field default
-    (``_default_horner_max``) for a consumer that has benchmarked its own
-    field; 0 forces the scan.
+    ``schedule`` selects it explicitly: ``None`` (or ``"auto"``) runs the
+    measured per-field optimum (``_default_horner_max``); ``"horner"`` forces
+    the unroll (caller beware past a few dozen coefficients — the graph is
+    O(n) deep); ``"scan"`` forces the prefix product.
 
-    - ``n <= horner_max``: an unrolled Horner chain — O(n) multiply-adds
+    - Horner: an unrolled chain — O(n) multiply-adds
       consuming ``coeffs`` one slice at a time, so it needs no power vector and
       no reduction, and fuses through a producer's pending expression stack.
     - larger ``n``: the power vector ``point**i`` as a ``lax.associative_scan``
@@ -134,10 +137,17 @@ def eval_coeffs(coeffs: Array, point: Array, *, horner_max: int | None = None) -
       stage takes one array operand, so the degree never inflates the kernel's
       operand count (an unrolled power chain would, and overflow the GPU's 32 KB
       kernel-parameter space — ``ptxas: too much parameter space``)."""
+    if schedule not in (None, "auto", "horner", "scan"):
+        raise ValueError(
+            f"schedule must be None, 'auto', 'horner', or 'scan', got {schedule!r}"
+        )
     n = coeffs.shape[-1]
-    if horner_max is None:
-        horner_max = _default_horner_max(coeffs.dtype)
-    if n <= horner_max:
+    use_horner = (
+        n <= _default_horner_max(coeffs.dtype)
+        if schedule in (None, "auto")
+        else schedule == "horner"
+    )
+    if use_horner:
         folded = coeffs[..., -1]
         for m in range(n - 2, -1, -1):
             folded = folded * point + coeffs[..., m]
