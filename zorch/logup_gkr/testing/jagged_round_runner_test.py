@@ -16,7 +16,7 @@ from zorch.logup_gkr._jagged_types import _DEGREE, _JaggedState, _Planes
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import _run_jagged_rounds
 from zorch.logup_gkr.prover import logup_combine
-from zorch.logup_gkr.testing import random_jagged_layer, virtual_planes
+from zorch.logup_gkr.testing import host_counts, random_jagged_layer, virtual_planes
 from zorch.logup_gkr.testing._jagged_reference import _run_jagged_rounds_reference
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import compute_inv_vandermonde
@@ -63,7 +63,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         n0, n1, d0, d1 = virtual_planes(layer, nrv)
         eq = expand_eq_to_hypercube(z, one)
         claim = fnp.sum(logup_combine(lam, eq, n0, d1, n1, d0))
-        meta = _round_metadata(layer.row_counts, nrv)
+        meta = _round_metadata(host_counts(layer), nrv)
         naturals = fnp.stack([fnp.array(j, z.dtype) for j in range(_DEGREE + 1)])
         inv_vand = compute_inv_vandermonde(_DEGREE, z.dtype)
         state = _JaggedState(
@@ -91,9 +91,9 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         # only the reference oracle, keeping the derivation cross-checked
         # against the original construction.
         sched = _JaggedSchedule(
-            _row_counts_operand(layer.row_counts),
-            _round_live_meta(layer.row_counts, nrv),
-            _round_out_pairs(layer.row_counts, nrv),
+            _row_counts_operand(host_counts(layer)),
+            _round_live_meta(host_counts(layer), nrv),
+            _round_out_pairs(host_counts(layer), nrv),
             _InterpConsts(naturals, inv_vand),
             nrv,
             niv,
@@ -116,8 +116,8 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         for slack in (True, False):
             caps = self._caps(layer, nrv, niv, slack=slack)
             fixed_sched = _JaggedSchedule(
-                _row_counts_operand(layer.row_counts),
-                _round_live_meta(layer.row_counts, nrv),
+                _row_counts_operand(host_counts(layer)),
+                _round_live_meta(host_counts(layer), nrv),
                 None,  # capped = width-preserving; no exact padded widths
                 _InterpConsts(naturals, inv_vand),
                 nrv,
@@ -139,7 +139,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         past its natural width (the cross-layer/shard reuse shape); the tight
         variant pins the caps to the layer's own widths (rounded up only where
         the ABI demands -- elements to a multiple of 4, interaction to >= 4)."""
-        round0_width = sum(rc + rc % 2 for rc in layer.row_counts)
+        round0_width = sum(rc + rc % 2 for rc in host_counts(layer))
         if not slack:
             return RoundWidthCaps(
                 elements=round0_width + (-round0_width % 4),
@@ -258,8 +258,8 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         layer = JaggedGkrLayer(
             base.numerator_0,
             base.numerator_1,
-            rand_ext_field(61, (base.height,), KB, EF),
-            rand_ext_field(62, (base.height,), KB, EF),
+            rand_ext_field(61, (base.width,), KB, EF),
+            rand_ext_field(62, (base.width,), KB, EF),
             base.row_counts,
         )
         self._check_round_runner(

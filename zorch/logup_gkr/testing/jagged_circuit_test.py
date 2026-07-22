@@ -1,6 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import fields
 
 import frx
@@ -21,7 +22,11 @@ from zorch.logup_gkr.circuit import (
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid as eager_jagged_pyramid,
 )
-from zorch.logup_gkr.testing import mixed_field_jagged_layer
+from zorch.logup_gkr.testing import (
+    host_counts,
+    mixed_field_jagged_layer,
+    widen_jagged_layer,
+)
 from zorch.logup_gkr.testing import random_jagged_layer as _random_jagged_layer
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field, rand_field
@@ -32,7 +37,10 @@ EF = zk_dtypes.koalabearx4_mont
 
 def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
     """Per-interaction sum of both children's fractions over the segment's rows."""
-    starts = layer.start_indices
+    counts = host_counts(layer)
+    starts = [0]
+    for rc in counts:
+        starts.append(starts[-1] + rc)
     sums = []
     for i in range(layer.num_batches):
         lo, hi = starts[i], starts[i + 1]
@@ -44,22 +52,18 @@ def _segment_fraction_sums(layer: JaggedGkrLayer) -> list[Array]:
 
 
 class JaggedGkrLayerTest(absltest.TestCase):
-    def test_derives_metadata_from_row_counts(self) -> None:
+    def test_derives_metadata_from_shapes(self) -> None:
         layer = _random_jagged_layer(1, (3, 1, 2, 2))
         self.assertEqual(layer.num_batches, 4)
         self.assertEqual(layer.num_batch_variables, 2)
-        self.assertEqual(layer.height, 8)
-        self.assertEqual(layer.start_indices, (0, 3, 4, 6, 8))
+        self.assertEqual(layer.width, 8)
+        self.assertEqual(host_counts(layer), (3, 1, 2, 2))
 
-    def test_rejects_mle_length_not_matching_row_counts(self) -> None:
-        with self.assertRaises(ValueError):
-            JaggedGkrLayer(
-                numerator_0=fnp.ones((5,), KB),
-                numerator_1=fnp.ones((5,), KB),
-                denominator_0=fnp.ones((5,), KB),
-                denominator_1=fnp.ones((5,), KB),
-                row_counts=(3, 1, 2, 2),  # height 8 != 5
-            )
+    def test_admits_capacity_slack(self) -> None:
+        # width > sum(row_counts) is the capacity contract, not an error.
+        layer = widen_jagged_layer(_random_jagged_layer(2, (3, 1, 2, 2)), 12)
+        self.assertEqual(layer.width, 12)
+        self.assertEqual(host_counts(layer), (3, 1, 2, 2))
 
     def test_rejects_non_power_of_two_interaction_count(self) -> None:
         with self.assertRaises(ValueError):
@@ -68,7 +72,7 @@ class JaggedGkrLayerTest(absltest.TestCase):
                 numerator_1=fnp.ones((4,), KB),
                 denominator_0=fnp.ones((4,), KB),
                 denominator_1=fnp.ones((4,), KB),
-                row_counts=(2, 1, 1),
+                row_counts=fnp.asarray((2, 1, 1), fnp.int32),
             )
 
     def test_rejects_mismatched_mle_widths(self) -> None:
@@ -78,7 +82,7 @@ class JaggedGkrLayerTest(absltest.TestCase):
                 numerator_1=fnp.ones((2,), KB),
                 denominator_0=fnp.ones((4,), KB),
                 denominator_1=fnp.ones((4,), KB),
-                row_counts=(2, 2),
+                row_counts=fnp.asarray((2, 2), fnp.int32),
             )
 
 
@@ -99,7 +103,7 @@ class JaggedTransitionTest(absltest.TestCase):
         out = jagged_layer_transition(jagged, (2, 2, 2, 2))
         want = layer_transition(dense)
 
-        self.assertEqual(out.row_counts, (2, 2, 2, 2))
+        self.assertEqual(host_counts(out), (2, 2, 2, 2))
         self.assertTrue(bool(fnp.all(out.numerator_0 == want.numerator_0)))
         self.assertTrue(bool(fnp.all(out.numerator_1 == want.numerator_1)))
         self.assertTrue(bool(fnp.all(out.denominator_0 == want.denominator_0)))
@@ -123,7 +127,10 @@ class JaggedTransitionTest(absltest.TestCase):
             self.assertTrue(bool(got == want))
         # ...and fills the slots past each folded count with (n=0, d=1).
         folded = (2, 1, 1, 1)
-        starts = out.start_indices
+        counts = host_counts(out)
+        starts = [0]
+        for rc in counts:
+            starts.append(starts[-1] + rc)
         for i, rc in enumerate(folded):
             lo, hi = starts[i] + rc, starts[i + 1]
             self.assertTrue(bool(fnp.all(out.numerator_0[lo:hi] == 0)))
@@ -135,12 +142,6 @@ class JaggedTransitionTest(absltest.TestCase):
         layer = _random_jagged_layer(40, (2, 2, 2, 2))
         with self.assertRaises(ValueError):
             jagged_layer_transition(layer, (1, 1))
-
-    def test_rejects_truncating_schedule(self) -> None:
-        # A target below the folded count would silently drop fractions.
-        layer = _random_jagged_layer(50, (4, 4, 4, 4))
-        with self.assertRaises(ValueError):
-            jagged_layer_transition(layer, (1, 2, 2, 2))
 
 
 class JaggedTransitionJitTest(absltest.TestCase):
@@ -154,7 +155,7 @@ class JaggedTransitionJitTest(absltest.TestCase):
         with frx.disable_jit():
             eager = jagged_layer_transition(layer, schedule)
         fused = jagged_layer_transition(layer, schedule)
-        self.assertEqual(fused.row_counts, eager.row_counts)
+        self.assertTrue(bool(fnp.all(fused.row_counts == eager.row_counts)))
         for name in ("numerator_0", "numerator_1", "denominator_0", "denominator_1"):
             self.assertTrue(
                 bool(fnp.all(getattr(fused, name) == getattr(eager, name))),
@@ -231,7 +232,7 @@ class MixedFieldFirstLayerTest(absltest.TestCase):
             numerator_1=mixed.numerator_1.astype(EF),
             denominator_0=mixed.denominator_0,
             denominator_1=mixed.denominator_1,
-            row_counts=row_counts,
+            row_counts=mixed.row_counts,
         )
         schedule = (2, 1, 1, 1)
         out = jagged_layer_transition(mixed, schedule)
@@ -276,8 +277,8 @@ class JaggedEndToEndTest(absltest.TestCase):
         # total fraction sum, independent of any padding policy.
         layer = _random_jagged_layer(90, (5, 2, 3, 1))
         total = sum(_segment_fraction_sums(layer))
-        while max(layer.row_counts) > 1:
-            schedule = tuple((rc + 1) // 2 for rc in layer.row_counts)
+        while max(host_counts(layer)) > 1:
+            schedule = tuple((rc + 1) // 2 for rc in host_counts(layer))
             layer = jagged_layer_transition(layer, schedule)
         out = extract_jagged_outputs(layer)
         self.assertTrue(bool(total == fnp.sum(out.numerator / out.denominator)))
@@ -293,19 +294,19 @@ class BuildJaggedPyramidTest(absltest.TestCase):
     ) -> None:
         self.assertEqual(len(got), len(want))
         for g, w in zip(got, want, strict=True):
-            self.assertEqual(g.row_counts, w.row_counts)
+            self.assertEqual(host_counts(g), host_counts(w))
             for field in fields(JaggedGkrLayer):
                 if field.name == "row_counts":
                     continue
                 self.assertTrue(
                     bool(fnp.all(getattr(g, field.name) == getattr(w, field.name))),
-                    f"{field.name} diverged for row_counts={w.row_counts}",
+                    f"{field.name} diverged for row_counts={host_counts(w)}",
                 )
 
     def _assert_matches_eager(self, row_counts: tuple[int, ...]) -> None:
         first = _random_jagged_layer(7, row_counts)
         eager = eager_jagged_pyramid(first)
-        schedules = [layer.row_counts for layer in eager[1:]]
+        schedules = [host_counts(layer) for layer in eager[1:]]
         self._assert_layers_equal(build_jagged_pyramid(first, schedules), eager)
 
     def test_matches_eager_small(self) -> None:
@@ -326,14 +327,153 @@ class BuildJaggedPyramidTest(absltest.TestCase):
             numerator_1=rand_field(8, (height,), KB),
             denominator_0=rand_ext_field(9, (height,), KB, EF),
             denominator_1=rand_ext_field(10, (height,), KB, EF),
-            row_counts=row_counts,
+            row_counts=fnp.asarray(row_counts, fnp.int32),
         )
         eager = eager_jagged_pyramid(first)
-        built = build_jagged_pyramid(first, [layer.row_counts for layer in eager[1:]])
+        built = build_jagged_pyramid(first, [host_counts(layer) for layer in eager[1:]])
         # The first layer keeps base-field numerators; the promoted remainder is EF.
         self.assertEqual(built[0].numerator_0.dtype, KB)
         self.assertEqual(built[1].numerator_0.dtype, EF)
         self._assert_layers_equal(built, eager)
+
+
+class CapacityTransitionTest(absltest.TestCase):
+    """A transition at slack capacity (traced schedule + explicit out_width)
+    must byte-match the zero-slack layout on the live prefix and zero the
+    dead region past `sum(out_row_counts)`."""
+
+    def _assert_matches_zero_slack(
+        self,
+        layer: JaggedGkrLayer,
+        schedule: tuple[int, ...],
+        in_slack: int = 5,
+        out_slack: int = 3,
+    ) -> None:
+        want = jagged_layer_transition(layer, schedule)
+        wide = widen_jagged_layer(layer, layer.width + in_slack)
+        out_width = sum(schedule) + out_slack
+        got = jagged_layer_transition(wide, fnp.asarray(schedule, fnp.int32), out_width)
+        height = sum(schedule)
+        self.assertEqual(got.width, out_width)
+        for name in (
+            "numerator_0",
+            "numerator_1",
+            "denominator_0",
+            "denominator_1",
+        ):
+            got_a = getattr(got, name)
+            want_a = getattr(want, name)
+            self.assertEqual(got_a.dtype, want_a.dtype, f"{name} dtype")
+            self.assertTrue(
+                bool(fnp.all(got_a[:height] == want_a)), f"{name} live prefix"
+            )
+            self.assertTrue(bool(fnp.all(got_a[height:] == 0)), f"{name} dead tail")
+
+    def test_uniform_even_segments(self) -> None:
+        self._assert_matches_zero_slack(
+            _random_jagged_layer(210, (4, 4, 4, 4)), (2, 2, 2, 2)
+        )
+
+    def test_odd_segment_prepad(self) -> None:
+        self._assert_matches_zero_slack(
+            _random_jagged_layer(220, (3, 1, 5, 2)), (2, 1, 3, 1)
+        )
+
+    def test_post_padding_slots_stay_fold_neutral(self) -> None:
+        # Slots between a segment's folded count and its out count are LIVE
+        # neutral padding (the next transition reads them); only past
+        # sum(out_row_counts) is the dead zero region.
+        self._assert_matches_zero_slack(
+            _random_jagged_layer(230, (3, 1, 2, 1)), (4, 2, 2, 2)
+        )
+
+    def test_mixed_base_field_numerator_promotes(self) -> None:
+        self._assert_matches_zero_slack(
+            mixed_field_jagged_layer(240, (3, 1, 2, 2)), (2, 1, 1, 1)
+        )
+
+    def test_saturated_floor(self) -> None:
+        self._assert_matches_zero_slack(
+            _random_jagged_layer(250, (2, 2, 2, 2)), (1, 1, 1, 1)
+        )
+
+    def test_traced_schedule_requires_out_width(self) -> None:
+        layer = _random_jagged_layer(260, (2, 2, 2, 2))
+        with self.assertRaises(ValueError):
+            jagged_layer_transition(layer, fnp.asarray((1, 1, 1, 1), fnp.int32))
+
+    def test_shares_one_trace_across_layouts(self) -> None:
+        # The load-bearing property: two DIFFERENT layouts at one capacity
+        # shape reuse a single trace -- the layout values live in traced
+        # operands, never in the compile key.
+        out_width = 12
+
+        def make_call(
+            seed: int, rc: tuple[int, ...], sched: tuple[int, ...]
+        ) -> Callable[[], None]:
+            def _call() -> None:
+                jagged_layer_transition(
+                    widen_jagged_layer(_random_jagged_layer(seed, rc), 16),
+                    fnp.asarray(sched, fnp.int32),
+                    out_width,
+                )
+
+            return _call
+
+        assert_single_trace(
+            self,
+            _jagged_transition_core,
+            [
+                make_call(280, (5, 3, 1, 1), (4, 2, 2, 2)),
+                make_call(281, (2, 6, 1, 3), (2, 4, 2, 2)),
+                make_call(282, (1, 1, 1, 9), (2, 2, 2, 6)),
+            ],
+        )
+
+
+class CapacityPyramidTest(absltest.TestCase):
+    def test_matches_zero_slack_pyramid_and_extract(self) -> None:
+        # The eager zero-slack pyramid (the testing policy) rebuilt with the
+        # SAME policy evaluated on the traced counts at slack widths: every
+        # level's live prefix must byte-match, and the floor must extract
+        # identically once its width lands exactly on num_batches.
+        row_counts = (5, 3, 1, 7)
+        first = _random_jagged_layer(300, row_counts)
+        static_layers = eager_jagged_pyramid(first)
+
+        wide_first = widen_jagged_layer(first, first.width + 4)
+        schedules = []
+        cur = wide_first.row_counts
+        for i, level in enumerate(static_layers[1:]):
+            # The testing policy on traced counts: fold, then even-pad
+            # unsaturated segments. The floor takes zero slack so the
+            # capacity extract gate (width == num_batches) opens.
+            folded = cur + 1 >> 1
+            sched = fnp.where(folded == 1, folded, folded + (folded & 1))
+            slack = 0 if i == len(static_layers) - 2 else 2
+            schedules.append((sched, sum(host_counts(level)) + slack))
+            cur = sched
+        got_layers = build_jagged_pyramid(wide_first, schedules)
+
+        self.assertEqual(len(got_layers), len(static_layers))
+        for got, want in zip(got_layers[1:], static_layers[1:], strict=True):
+            height = sum(host_counts(want))
+            self.assertEqual(host_counts(got), host_counts(want))
+            for name in (
+                "numerator_0",
+                "numerator_1",
+                "denominator_0",
+                "denominator_1",
+            ):
+                self.assertTrue(
+                    bool(fnp.all(getattr(got, name)[:height] == getattr(want, name))),
+                    f"{name} diverged at row_counts={host_counts(want)}",
+                )
+
+        got_out = extract_jagged_outputs(got_layers[-1])
+        want_out = extract_jagged_outputs(static_layers[-1])
+        self.assertTrue(bool(fnp.all(got_out.numerator == want_out.numerator)))
+        self.assertTrue(bool(fnp.all(got_out.denominator == want_out.denominator)))
 
 
 if __name__ == "__main__":

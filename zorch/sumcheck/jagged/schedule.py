@@ -5,7 +5,7 @@ operands), plus their memoized device commits."""
 
 from __future__ import annotations
 
-from functools import cache
+from functools import cache, partial
 from typing import Any
 
 import frx
@@ -201,6 +201,33 @@ def _derive_row_schedule(
         col_index.astype(idx_dtype),
         pair_index.astype(idx_dtype),
     )
+
+
+@partial(frx.jit, static_argnames=("num_row_vars",))
+def _derive_live_meta(row_counts: Array, num_row_vars: int) -> list[Array]:
+    """`_round_live_meta`'s traced twin for capacity layers: the same
+    per-round i32[3] `{live pairs, eq_row entry, round}` triples, derived from
+    the traced counts via `_derive_row_schedule`'s closed form
+    (`pairs_k = ceil(rc / 2^(k+1))`, one arithmetic-shift step) and fused into
+    one dispatch per layer. Values match the host builder exactly; only where
+    `row_counts` lives differs, so the triples stay valid round-zone operands.
+    """
+    i32 = fnp.int32
+    rc = row_counts.astype(i32)
+    out = []
+    for rnd in range(num_row_vars):
+        counts = (rc - i32(1) >> i32(rnd)) + i32(1)
+        pairs = counts + i32(1) >> 1
+        out.append(
+            fnp.stack(
+                [
+                    fnp.sum(pairs),
+                    fnp.asarray((1 << num_row_vars) >> max(rnd - 1, 0), i32),
+                    fnp.asarray(rnd, i32),
+                ]
+            )
+        )
+    return out
 
 
 def _fixed_width_gather(

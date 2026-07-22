@@ -63,6 +63,20 @@ The two rounds are two wire forms of the same LogUp summand — `logup_combine`
 stays the one shared definition — and the jagged verifier replays through the
 same agnostic `zorch.verify` scan via `sumcheck.verifier.CoeffsSumcheckRound`.
 
+A jagged layer is a *capacity* layer: the four MLEs sit in a static
+`width >= sum(row_counts)` buffer (dead-zero tail) and the counts ride as
+one traced i32 vector, so a consumer whose per-segment counts vary per
+input — while the total stays under one shared bound — reuses every compile
+across inputs; the zero-slack layer is just the tight case. Transitions
+derive their gathers in-trace (the transition twin of the round side's
+schedule derivation, byte-identical to the host-built fold), rounds are
+caps-mandatory with the schedule as traced operands (any same-caps layer
+shares the zone executable), and the output extract gates on the static
+`width == num_batches` dual of the all-ones floor. What a host guard cannot
+read it cannot check: truncation-safety and the virtual-row-space fit are
+the consumer's capacity-class obligations, discharged against class bounds
+that dominate every admitted input.
+
 ## Fusion by construction
 
 Inverted from a single fused `Round`: the pyramid is folded and proved *eagerly*
