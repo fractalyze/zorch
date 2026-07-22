@@ -30,12 +30,7 @@ import numpy as np
 import zk_dtypes
 from frx import Array, lax
 
-from zorch.poly.univariate import (
-    compute_lagrange_basis,
-    eval_coeffs,
-    intt_with_root,
-    powers,
-)
+from zorch.poly.univariate import compute_lagrange_basis, eval_coeffs, powers
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 from zorch.utils.field import is_binary_field
 
@@ -569,24 +564,24 @@ def fri_fold_k(
       domain order (native `eval_domain`, or another root entirely) — a Lagrange
       interpolation, O(k²) per group, carrying no domain convention. The
       per-query verifier path; `vmap` over the group axis.
-    - `coset = (coset_inv, omega_inv)`: when the points form a coset `s·⟨ω⟩` of
-      the order-`k` subgroup — a shared-twiddle INTT (`intt_with_root`) then
-      `eval_coeffs` at `beta`, O(k log k) with one twiddle set across the whole
-      batch and only the per-group shift varying. The batched prover path.
-      `coset_inv` is
-      per-group `s⁻¹` (broadcasts over the leading dims), `omega_inv` the shared
-      `ω⁻¹`.
+    - `coset = (coset_inv, generator)`: when the points form a coset `s·⟨ω⟩` of
+      the order-`k` subgroup — a batched `lax.ntt` INTT then `eval_coeffs`,
+      O(k log k). The batched prover path. `coset_inv` is per-group `s⁻¹`
+      (broadcasts over the leading dims); `generator` selects the subgroup ω as
+      `generator^((p-1)/k)`, None for the dtype's canonical root. The coset
+      unshift folds into the evaluation point: `Σ aₘ·s⁻ᵐ·βᵐ = q(s⁻¹β)`.
 
     The interpolant is unique, so the two paths are byte-identical wherever both
     apply. `group` and the coordinates may be extension-field; dtypes follow
-    `compute_lagrange_basis` / `intt_with_root`."""
+    `compute_lagrange_basis` / `lax.ntt`."""
     if (points is None) == (coset is None):
         raise ValueError("fri_fold_k needs exactly one of `points` or `coset`")
     if coset is not None:
-        coset_inv, omega_inv = coset
-        # `eval_coeffs` picks the schedule by k: at fold factors it unrolls
-        # Horner, which fuses through `intt_with_root`'s pending stack.
-        return eval_coeffs(intt_with_root(group, omega_inv, coset_inv), beta)
+        coset_inv, generator = coset
+        coeffs = lax.ntt(
+            group, ntt_type="INTT", ntt_length=group.shape[-1], generator=generator
+        )
+        return eval_coeffs(coeffs, coset_inv * beta)
     # Lagrange path: unroll the linear combination over the static factor k
     # rather than `fnp.dot` — a reduction is a kInput/gather fusion boundary on
     # GPU, so the fold would not lower to one fused kernel (CLAUDE.md "Fusion by

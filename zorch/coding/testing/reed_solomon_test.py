@@ -135,20 +135,20 @@ class ReedSolomonTest(absltest.TestCase):
         )
 
     def test_fri_fold_k_coset_path_matches_points_path(self) -> None:
-        # fri_fold_k's shared-twiddle INTT path (coset=) must be byte-identical
-        # to its general Lagrange path (points=) when the points are a subgroup
-        # coset s*<w> — the interpolant is unique. Batched over groups (fri.fold's
-        # prover path), each with its own coset shift; the shared root is order-k.
-        for k in (2, 4, 8):
+        # fri_fold_k's batched INTT path (coset=) must be byte-identical to its
+        # general Lagrange path (points=) when the points are a subgroup coset
+        # s*<w> — the interpolant is unique. Batched over groups (fri.fold's
+        # prover path), each with its own coset shift; generator=None selects
+        # the canonical order-k root the points are built from.
+        for k in (2, 4, 8, 16):
             subgroup = _domain(k, F)  # [w^0..w^{k-1}], canonical order-k root
-            omega_inv = fnp.ones((), F) / subgroup[1]
             shifts = rand_field(10 + k, (3,), F) + fnp.ones((), F)  # 3 nonzero shifts
             coset_inv = fnp.ones((3,), F) / shifts
             points = shifts[:, None] * subgroup[None, :]  # (3, k) coset points
             groups = rand_ext_field(20 + k, (3, k), F, EF)
             beta = rand_ext_field(30 + k, (), F, EF)
             want = frx.vmap(lambda g, p: fri_fold_k(g, beta, points=p))(groups, points)
-            got = fri_fold_k(groups, beta, coset=(coset_inv, omega_inv))
+            got = fri_fold_k(groups, beta, coset=(coset_inv, None))
             self.assertTrue(bool(fnp.all(got == want)), msg=f"k={k}")
 
     def test_fri_fold_k_requires_exactly_one_form(self) -> None:
