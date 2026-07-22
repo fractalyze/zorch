@@ -330,12 +330,25 @@ _BLOCK = 64  # SHA-256 block size in bytes
 @register_dataclass
 @dataclass(frozen=True)
 class Sha256State:
-    """Incremental SHA-256 state as a JAX pytree. Fixed shapes → scan-threadable."""
+    """Incremental SHA-256 state as a JAX pytree. Fixed shapes → scan-threadable.
+
+    The two byte counters share one `int32[2]` leaf rather than riding as two
+    scalar fields: every absorb updates both, and as separate output/carry
+    leaves each cost their own scalar kernel per state hand-off — measured as
+    two of the ~12 launches of a single transcript squeeze, and one per
+    iteration inside every FS `while_loop` carry."""
 
     h: Array  # uint32[8] — midstate over all complete 64-byte blocks so far
-    pending: Array  # uint8[64] — trailing partial block, valid prefix [:pending_len]
-    pending_len: Array  # int32 — 0..63
-    total_len: Array  # int32 — total bytes absorbed
+    pending: Array  # uint8[64] — trailing partial block, valid prefix [:counts[0]]
+    counts: Array  # int32[2] = [pending_len (0..63), total bytes absorbed]
+
+    @property
+    def pending_len(self) -> Array:
+        return self.counts[0]
+
+    @property
+    def total_len(self) -> Array:
+        return self.counts[1]
 
 
 def sha256_stream_init() -> Sha256State:
@@ -343,8 +356,7 @@ def sha256_stream_init() -> Sha256State:
     return Sha256State(
         h=INITIAL_STATE,
         pending=fnp.zeros(_BLOCK, dtype=fnp.uint8),
-        pending_len=fnp.int32(0),
-        total_len=fnp.int32(0),
+        counts=fnp.zeros(2, dtype=fnp.int32),
     )
 
 
@@ -398,7 +410,9 @@ def sha256_stream_absorb(state: Sha256State, data: Array) -> Sha256State:
     tail = frx.lax.dynamic_slice(combined, (active_blocks * _BLOCK,), (_BLOCK,))
     slot = fnp.arange(_BLOCK, dtype=fnp.int32)
     pending = fnp.where(slot < tail_len, tail, fnp.uint8(0))
-    return Sha256State(h_new, pending, tail_len, state.total_len + fnp.int32(length))
+    # One fused counter update: [pending_len', total_len'] = [tail_len, total+L].
+    counts = fnp.stack([tail_len, state.counts[1] + fnp.int32(length)])
+    return Sha256State(h_new, pending, counts)
 
 
 def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
