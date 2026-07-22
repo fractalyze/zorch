@@ -132,8 +132,8 @@ def eval_coeffs(coeffs: Array, point: Array, *, schedule: str | None = None) -> 
       (log-depth prefix product), then one batched dot. A *sequential* scan over
       the coefficient axis lowers to a ``while`` the GPU runtime launches
       host-side once per iteration, so an n-coefficient eval pays n launch
-      latencies — WHIR's out-of-domain eval at ``n = 2^13`` measured ~550 ms of
-      pure dispatch. The prefix product is O(log n) kernels instead, and each
+      latencies — prohibitive at WHIR-scale degrees. The prefix product is
+      O(log n) kernels instead, and each
       stage takes one array operand, so the degree never inflates the kernel's
       operand count (an unrolled power chain would, and overflow the GPU's 32 KB
       kernel-parameter space — ``ptxas: too much parameter space``)."""
