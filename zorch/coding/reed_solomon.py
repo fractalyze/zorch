@@ -556,24 +556,17 @@ def fri_fold_k(
     coset: tuple[Array, Array] | None = None,
 ) -> Array:
     """k-ary FRI fold: the degree-`(k-1)` interpolant through a group's `k`
-    points, evaluated at `beta`. The arbitrary-fold-factor generalization of the
-    `k=2` `fri_fold_values` butterfly (kept separate because its closed form is
-    cheaper than interpolating). Pass exactly one of:
+    points, evaluated at `beta`. Pass exactly one of:
 
-    - `points` (..., k): the group's evaluation coordinates in the caller's own
-      domain order (native `eval_domain`, or another root entirely) — a Lagrange
-      interpolation, O(k²) per group, carrying no domain convention. The
-      per-query verifier path; `vmap` over the group axis.
-    - `coset = (coset_inv, generator)`: when the points form a coset `s·⟨ω⟩` of
-      the order-`k` subgroup — a batched `lax.ntt` INTT then `eval_coeffs`,
-      O(k log k). The batched prover path. `coset_inv` is per-group `s⁻¹`
-      (broadcasts over the leading dims); `generator` selects the subgroup ω as
-      `generator^((p-1)/k)`, None for the dtype's canonical root. The coset
-      unshift folds into the evaluation point: `Σ aₘ·s⁻ᵐ·βᵐ = q(s⁻¹β)`.
+    - `points` (..., k): arbitrary coordinates in the caller's own domain order
+      — per-group Lagrange, no domain convention. The per-query verifier path.
+    - `coset = (coset_inv, generator)`: the points form a coset `s·⟨ω⟩` —
+      batched `lax.ntt` INTT, evaluated at `coset_inv·beta` (the unshift folds
+      into the point). `coset_inv` is per-group `s⁻¹`; `generator` selects ω as
+      `generator^((p-1)/k)`, None for the canonical root. The prover path.
 
-    The interpolant is unique, so the two paths are byte-identical wherever both
-    apply. `group` and the coordinates may be extension-field; dtypes follow
-    `compute_lagrange_basis` / `lax.ntt`."""
+    Byte-identical wherever both apply (the interpolant is unique); values and
+    coordinates may be extension-field."""
     if (points is None) == (coset is None):
         raise ValueError("fri_fold_k needs exactly one of `points` or `coset`")
     if coset is not None:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 import frx
@@ -95,20 +96,13 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
 
 
 def _default_horner_max(dtype: Any) -> int:
-    """Measured per-field crossover (data in PR #456's schedule commit): base
-    and binary fields lose the unroll immediately (the scan's reduction is
-    cheap on slim elements), 16-byte prime extensions flip at 8, wider AoS
-    extensions (goldilocksx3, 24B) at 16. Covers koalabear/babybear/goldilocks
-    and their extensions plus binary towers through the two branches below; do
-    not change without re-measuring both batch regimes."""
+    """Measured crossover per field (data in the schedule commit): re-measure
+    both batch regimes before changing either branch."""
     try:
         zk_dtypes.efinfo(dtype)
     except ValueError:
-        return 0  # base or binary field: prefix-product scan everywhere
+        return 0  # base or binary field: scan everywhere
     return 8 if fnp.dtype(dtype).itemsize <= 16 else 16
-
-
-from functools import partial
 
 
 @partial(frx.jit, static_argnames=("schedule",))
@@ -116,27 +110,13 @@ def eval_coeffs(coeffs: Array, point: Array, *, schedule: str | None = None) -> 
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
-    Two schedules, byte-identical (field mul/add are exact and associative, so
-    any re-parenthesization is the same element), dispatched on the static
-    coefficient count:
-
-    ``schedule`` selects it explicitly: ``None`` (or ``"auto"``) runs the
-    measured per-field optimum (``_default_horner_max``); ``"horner"`` forces
-    the unroll (caller beware past a few dozen coefficients — the graph is
-    O(n) deep); ``"scan"`` forces the prefix product.
-
-    - Horner: an unrolled chain — O(n) multiply-adds
-      consuming ``coeffs`` one slice at a time, so it needs no power vector and
-      no reduction, and fuses through a producer's pending expression stack.
-    - larger ``n``: the power vector ``point**i`` as a ``lax.associative_scan``
-      (log-depth prefix product), then one batched dot. A *sequential* scan over
-      the coefficient axis lowers to a ``while`` the GPU runtime launches
-      host-side once per iteration, so an n-coefficient eval pays n launch
-      latencies — prohibitive at WHIR-scale degrees. The prefix product is
-      O(log n) kernels instead, and each
-      stage takes one array operand, so the degree never inflates the kernel's
-      operand count (an unrolled power chain would, and overflow the GPU's 32 KB
-      kernel-parameter space — ``ptxas: too much parameter space``)."""
+    ``schedule``: ``None``/``"auto"`` picks the measured per-field optimum;
+    ``"horner"`` forces the unrolled chain (O(n)-deep graph — small ``n`` only);
+    ``"scan"`` forces the log-depth prefix product. Byte-identical either way
+    (exact field arithmetic). Horner fuses through a producer's pending
+    expression stack; the scan keeps large degrees off both cliffs — a
+    sequential scan's per-coefficient host launches and an unrolled power
+    chain's kernel-parameter-space overflow."""
     if schedule not in (None, "auto", "horner", "scan"):
         raise ValueError(
             f"schedule must be None, 'auto', 'horner', or 'scan', got {schedule!r}"
