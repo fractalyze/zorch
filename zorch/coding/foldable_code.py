@@ -81,7 +81,7 @@ class KFoldableCode(LinearCode, Protocol):
     (ReedSolomon does). The binary pair seam is left untouched so the k=2 path
     stays byte- and XLA-identical, while this k-group seam serves arbitrary-factor
     consumers. The two do not collapse into one: the single-group fold is Lagrange
-    interpolation (`reed_solomon.fri_fold_k_values`), which at k=2 is the conjugate
+    interpolation (`reed_solomon.fri_fold_k`), which at k=2 is the conjugate
     butterfly's strictly costlier twin, so they coexist by design (zorch#252 F1).
     Every method here is the k-ary mirror of a `FoldableCode` pair method, named
     `*group*` to sit alongside it."""

@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 import frx
 import frx.numpy as fnp
+import zk_dtypes
 from frx import Array
 
 from zorch.utils.field import base_field, naturals
@@ -93,23 +95,43 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
     return fnp.stack(columns, axis=1)
 
 
-@frx.jit
-def eval_coeffs(coeffs: Array, point: Array) -> Array:
+def _default_horner_max(dtype: Any) -> int:
+    """Measured crossover per field (data in the schedule commit): re-measure
+    both batch regimes before changing either branch."""
+    try:
+        zk_dtypes.efinfo(dtype)
+    except ValueError:
+        return 0  # base or binary field: scan everywhere
+    return 8 if fnp.dtype(dtype).itemsize <= 16 else 16
+
+
+@partial(frx.jit, static_argnames=("schedule",))
+def eval_coeffs(coeffs: Array, point: Array, *, schedule: str | None = None) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
-    The power vector ``point**i`` is a ``lax.associative_scan`` (log-depth prefix
-    product), then one batched dot with the coefficients. A *sequential* scan over
-    the coefficient axis lowers to a ``while`` the GPU runtime launches host-side
-    once per iteration, so an n-coefficient eval pays n launch latencies — WHIR's
-    out-of-domain eval at ``n = 2^13`` measured ~550 ms of pure dispatch. The
-    prefix product is O(log n) kernels instead, and each stage takes one array
-    operand, so the degree never inflates the kernel's operand count (an unrolled
-    power chain would, and overflow the GPU's 32 KB kernel-parameter space —
-    ``ptxas: too much parameter space``). Field mul/add are exact and associative,
-    so the tree-grouped prefix product and the batched sum are byte-identical to a
-    sequential power-sum."""
+    ``schedule``: ``None``/``"auto"`` picks the measured per-field optimum;
+    ``"horner"`` forces the unrolled chain (O(n)-deep graph — small ``n`` only);
+    ``"scan"`` forces the log-depth prefix product. Byte-identical either way
+    (exact field arithmetic). Horner fuses through a producer's pending
+    expression stack; the scan keeps large degrees off both cliffs — a
+    sequential scan's per-coefficient host launches and an unrolled power
+    chain's kernel-parameter-space overflow."""
+    if schedule not in (None, "auto", "horner", "scan"):
+        raise ValueError(
+            f"schedule must be None, 'auto', 'horner', or 'scan', got {schedule!r}"
+        )
     n = coeffs.shape[-1]
+    use_horner = (
+        n <= _default_horner_max(coeffs.dtype)
+        if schedule in (None, "auto")
+        else schedule == "horner"
+    )
+    if use_horner:
+        folded = coeffs[..., -1]
+        for m in range(n - 2, -1, -1):
+            folded = folded * point + coeffs[..., m]
+        return folded
     # ``point**i`` as the prefix product of ``[1, point, point, …]`` (n entries),
     # laid out on the last axis so it dots the coefficients' degree axis directly.
     seq = fnp.where(

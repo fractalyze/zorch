@@ -1,10 +1,12 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from typing import Any
+
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
-from frx import Array
+from frx import Array, lax
 
 from zorch.poly.univariate import (
     compute_inv_vandermonde,
@@ -13,8 +15,27 @@ from zorch.poly.univariate import (
     eval_univariate,
     powers,
 )
+from zorch.testkit.random_field import rand_ext_field
 
 KB = zk_dtypes.koalabear_mont
+EF = zk_dtypes.koalabearx4_mont
+
+
+def _domain(n: int, dtype: Any) -> Array:
+    """The order-n subgroup [w^0, ..., w^{n-1}] for `lax.ntt`'s canonical root,
+    recovered independently of any encoder: NTT(e_1)_j = w^j. The transforms
+    under test carry no root convention, so this is only a convenient source of
+    a genuine order-n root."""
+    e1 = fnp.zeros((n,), dtype).at[1].set(fnp.ones((), dtype))
+    return lax.ntt(e1, ntt_type="NTT", ntt_length=n)
+
+
+def _horner(coeffs: Array, points: Array) -> Array:
+    """Evaluate the polynomial with `coeffs` at every point in `points`."""
+    acc = points * fnp.zeros((), points.dtype)
+    for i in range(coeffs.shape[0] - 1, -1, -1):
+        acc = acc * points + coeffs[i]
+    return acc
 
 
 class PowersTest(absltest.TestCase):
@@ -77,8 +98,6 @@ class ComputeInvVandermondeTest(absltest.TestCase):
 
     def test_ef_evals_promote_at_multiply(self) -> None:
         # The matrix stays base-field; EF evaluations promote in the dot.
-        EF = zk_dtypes.koalabearx4_mont
-
         def p(x: Array) -> Array:
             return x * x + fnp.array(2, EF)
 
@@ -99,6 +118,26 @@ class EvalCoeffsTest(absltest.TestCase):
         coeffs = fnp.array([[1, 2, 3], [7, 0, 1]], KB)
         got = eval_coeffs(coeffs, fnp.array(2, KB))
         self.assertTrue(bool(fnp.all(got == fnp.array([17, 11], KB))))
+
+    def test_both_schedules_match_the_power_sum(self) -> None:
+        # eval_coeffs dispatches on the coefficient count (Horner unroll at or
+        # below _HORNER_MAX_COEFFS, prefix-product scan above); both must equal
+        # the literal power sum. n spans the threshold; EF batched over rows with
+        # a scalar EF point, the fold's shape.
+        for n in (1, 8, 9, 33):
+            coeffs = rand_ext_field(120 + n, (3, n), KB, EF)
+            point = rand_ext_field(130 + n, (), KB, EF)
+            want = coeffs[..., 0]
+            for i in range(1, n):
+                want = want + coeffs[..., i] * point**i
+            got = eval_coeffs(coeffs, point)
+            self.assertTrue(bool(fnp.all(got == want)), msg=f"n={n}")
+            # An explicit schedule pins it; both stay byte-identical to auto.
+            for sched in ("horner", "scan"):
+                forced = eval_coeffs(coeffs, point, schedule=sched)
+                self.assertTrue(bool(fnp.all(forced == want)), msg=f"n={n} {sched}")
+        with self.assertRaises(ValueError):
+            eval_coeffs(coeffs, point, schedule="fastest")
 
 
 if __name__ == "__main__":
