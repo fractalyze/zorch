@@ -132,6 +132,10 @@ class EvalCoeffsTest(absltest.TestCase):
                 want = want + coeffs[..., i] * point**i
             got = eval_coeffs(coeffs, point)
             self.assertTrue(bool(fnp.all(got == want)), msg=f"n={n}")
+            # horner_max pins the schedule; both extremes stay byte-identical.
+            for hm in (0, n):
+                forced = eval_coeffs(coeffs, point, horner_max=hm)
+                self.assertTrue(bool(fnp.all(forced == want)), msg=f"n={n} hm={hm}")
 
 
 if __name__ == "__main__":
