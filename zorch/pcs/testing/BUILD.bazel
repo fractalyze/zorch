@@ -77,3 +77,32 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "deep_test",
+    size = "small",
+    srcs = ["deep_test.py"],
+    deps = [
+        "//zorch/coding:reed_solomon",
+        "//zorch/pcs:deep",
+        "//zorch/poly",
+        "//zorch/testkit:random_field",
+        "//zorch/utils:field",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "ring_switch_memory_test",
+    size = "medium",
+    srcs = ["ring_switch_memory_test.py"],
+    tags = ["local_only"],
+    deps = [
+        "//zorch/pcs:ring_switch",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
