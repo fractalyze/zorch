@@ -98,6 +98,7 @@ def constraint_eval(
     delta: Array | None = None,
     fold_coeff: Array | int | None = None,
     column_weights: Array | None = None,
+    max_monomials: int | None = None,
     aux_operands: tuple[Array, ...] = (),
     name: str = CONSTRAINT_EVAL_MARKER,
 ) -> Array:
@@ -486,6 +487,16 @@ def constraint_eval(
         # The emitter recognizes it structurally (the rank-1 operand of the
         # body-root dot), so no operand-index attribute is needed.
         operands += (column_weights,)
+    if max_monomials is not None:
+        # Perf hint only: the recognizing emitter distributes each cone into up
+        # to this many monomials (a flatter, better-occupancy body, byte-
+        # identical to the cone body). The decomposition ignores it; an
+        # unrecognizing backend is unaffected. `<= 0` disables (keeps the cone
+        # body), matching the emitter's gate.
+        if not isinstance(max_monomials, int) or isinstance(max_monomials, bool):
+            got = type(max_monomials).__name__
+            raise ValueError(f"max_monomials must be a Python int, got {got}")
+        attrs["cone_program_max_monomials"] = max_monomials
     # Two emit sites, not one: the list-valued aux_operand_idxs can only be
     # passed as a named kwarg (a dict-typed attrs unpack would collide with
     # composite's typed `version` param under mypy), and a named kwarg cannot be
