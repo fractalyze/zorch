@@ -31,6 +31,8 @@ from zorch.logup_gkr.jagged_verifier import (
 from zorch.logup_gkr.prover import Carry, bind_output
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
+    caps_for,
+    host_counts,
     random_jagged_layer,
     virtual_planes,
 )
@@ -69,7 +71,10 @@ def _prove(
 ) -> tuple[Carry, list[JaggedLayerProof], LogUpGkrOutput]:
     output = extract_jagged_outputs(layers[-1])
     carry, transcript = bind_output(output, cheap_transcript(KB))
-    chain = ProveChain([JaggedGkrLayerRound(layer) for layer in reversed(layers[:-1])])
+    caps = caps_for(host_counts(layers[0]), len(layers) - 1)
+    chain = ProveChain(
+        [JaggedGkrLayerRound(layer, caps=caps) for layer in reversed(layers[:-1])]
+    )
     final, _, proofs = chain(carry, transcript)
     return final, proofs, output
 
@@ -128,7 +133,12 @@ class JaggedRoundtripTest(absltest.TestCase):
 
         carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
         chain = ProveChain(
-            [JaggedGkrLayerRound(layer, limbs) for layer in reversed(layers[:-1])]
+            [
+                JaggedGkrLayerRound(
+                    layer, limbs, caps=caps_for(ROW_COUNTS, len(layers) - 1)
+                )
+                for layer in reversed(layers[:-1])
+            ]
         )
         prover_final, _, proofs = chain(carry, transcript)
 

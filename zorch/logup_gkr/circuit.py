@@ -32,16 +32,14 @@ fingerprinting likewise stays in the consumer -- zorch stays scheme-agnostic.
 
 from __future__ import annotations
 
-import itertools
 from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import partial
+from functools import cache, partial
 
 import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.sumcheck.jagged.layout import _prepad_folded, _segment_gather_np
 from zorch.utils.bits import log2_strict_usize
 
 
@@ -174,28 +172,56 @@ def extract_outputs(layer: GkrLayer) -> LogUpGkrOutput:
     )
 
 
+@partial(
+    frx.tree_util.register_dataclass,
+    data_fields=[
+        "numerator_0",
+        "numerator_1",
+        "denominator_0",
+        "denominator_1",
+        "row_counts",
+    ],
+    meta_fields=[],
+)
 @dataclass(frozen=True)
 class JaggedGkrLayer:
-    """One jagged fractional-sum layer, stored batch-major.
+    """One jagged fractional-sum layer at a capacity width, stored batch-major.
 
-    The four MLEs are flat over `sum(row_counts)`: all rows of batch element 0,
-    then batch element 1, and so on, so each batch element carries its own row
-    count. The batch count must be a power of two (the consumer pads its
-    interaction list). Row counts are static Python ints, so the transition's
-    gather indices are built at trace time.
+    The four MLEs are flat over a static capacity `width >= sum(row_counts)`:
+    the live prefix holds all rows of batch element 0, then batch element 1,
+    and so on; every slot past `sum(row_counts)` is DEAD and laid zero. The
+    counts ride as one traced i32[num_batches] vector, so no per-input layout
+    value keys a compile — transitions derive their gathers in-trace and the
+    layer rounds take the schedule as traced operands, keying on the capacity
+    shapes alone. An exactly-sized layer (`width == sum(row_counts)`) is just
+    the zero-slack case; the batch count must be a power of two (the consumer
+    pads its interaction list).
+
+    The dead tail is never read: a transition resolves every non-live source
+    through its gather sentinel, and the layer rounds bound their reads by
+    the live-pair operand. Zero (not the neutral fraction) so a reduction
+    that sweeps a fixed-width buffer picks up nothing from the dead region.
+    Truncation-safety is likewise the consumer's obligation — a host guard
+    cannot read the traced counts, so a transition schedule must dominate
+    `ceil(rc / 2)` pointwise and its width must hold its count sum for every
+    input the consumer admits.
     """
 
     numerator_0: Array
     numerator_1: Array
     denominator_0: Array
     denominator_1: Array
-    row_counts: tuple[int, ...]
+    row_counts: Array
 
     def __post_init__(self) -> None:
-        if any(rc < 1 for rc in self.row_counts):
-            raise ValueError(f"row counts must be >= 1, got {self.row_counts}")
+        # Shape-only checks: `register_dataclass` reruns this on tracers
+        # during unflatten, so no value may be branched on here.
         log2_strict_usize(self.num_batches)
-        height = self.height
+        if self.row_counts.ndim != 1:
+            raise ValueError(
+                f"row_counts must be a flat vector, got {self.row_counts.shape}"
+            )
+        width = self.width
         for name in (
             "numerator_0",
             "numerator_1",
@@ -203,42 +229,33 @@ class JaggedGkrLayer:
             "denominator_1",
         ):
             shape = getattr(self, name).shape
-            if shape != (height,):
+            if shape != (width,):
                 raise ValueError(
-                    f"each MLE must be flat over sum(row_counts) == {height}; "
-                    f"{name} is {shape}"
+                    f"the four MLEs must share one capacity width; "
+                    f"{name} is {shape}, expected ({width},)"
                 )
 
     @property
     def num_batches(self) -> int:
-        return len(self.row_counts)
+        return self.row_counts.shape[0]
 
     @property
     def num_batch_variables(self) -> int:
         return log2_strict_usize(self.num_batches)
 
     @property
-    def height(self) -> int:
-        return sum(self.row_counts)
-
-    @property
-    def start_indices(self) -> tuple[int, ...]:
-        """Prefix sums of row_counts: segment i spans [start[i], start[i+1])."""
-        return (0, *itertools.accumulate(self.row_counts))
+    def width(self) -> int:
+        return self.numerator_0.shape[0]
 
 
-def _segment_gather(
-    src_counts: tuple[int, ...], dst_counts: tuple[int, ...]
-) -> Array | None:
-    """Gather indices remapping a jagged layout from src_counts to dst_counts.
-
-    Positions past a segment's source rows get the sentinel `sum(src_counts)`,
-    which `_gather_pad` resolves to the padding value. None when the layouts
-    already agree (no gather needed). fnp so the unrolled `_round_metadata`
-    schedule rides the frx round body byte-for-byte.
-    """
-    seg = _segment_gather_np(src_counts, dst_counts)
-    return None if seg is None else fnp.asarray(seg)
+@cache
+def _counts_operand(row_counts: tuple[int, ...]) -> Array:
+    """A host-known count tuple as its committed i32 device vector — one
+    `device_put` per distinct layout (the floor schedules re-commit per
+    prove otherwise). Concrete via `ensure_compile_time_eval` so the cached
+    value never escapes a trace as a tracer."""
+    with frx.ensure_compile_time_eval():
+        return frx.device_put(fnp.asarray(row_counts, fnp.int32))
 
 
 def _gather_pad(arr: Array, gather: Array, pad_val: int) -> Array:
@@ -268,146 +285,192 @@ def _pad_neutral(
     )
 
 
-@partial(frx.jit, static_argnames=("row_counts", "out_row_counts"))
+def _derive_transition_gathers(
+    row_counts: Array, out_row_counts: Array, out_width: int, sentinel: int
+) -> tuple[Array, Array, Array]:
+    """The transition's two `_segment_gather` hops and the stride-2 pairing
+    composed into per-output-slot (even, odd) source indices plus the
+    out-layout live mask, derived in-trace from the traced counts -- the
+    transition twin of the round side's `_derive_row_schedule`.
+
+    Output slot `q` lands in segment `s` (searchsorted over the out layout's
+    cumsum) at in-segment index `j`; a live `j < ceil(rc[s] / 2)` folds
+    prepadded elements `(2j, 2j+1)` at the segment's traced base offset. The
+    odd element of an odd segment's last pair and every in-layout slot past a
+    segment's folded count resolve to `sentinel`, which `_gather_pad` maps to
+    the neutral fraction -- the same values the host-built gathers bake in as
+    constants, so the fold multiplies identical operands either way. The
+    returned `live` marks slots inside `sum(out_row_counts)`; everything past
+    it is the dead region the core zeroes.
+    """
+    i32 = fnp.int32
+    rc = row_counts.astype(i32)
+    orc = out_row_counts.astype(i32)
+    folded = rc + i32(1) >> 1
+    base = fnp.concatenate([fnp.zeros((1,), i32), fnp.cumsum(rc)[:-1]])
+    cum_out = fnp.cumsum(orc)
+    q = fnp.arange(out_width, dtype=i32)
+    # scan_unrolled: the default scan method lowers to a while whose carry is
+    # the full index array, an every-trip device copy (the sp1-zorch#284
+    # lesson); unrolling the log2(num_batches) steps is byte-identical.
+    s = fnp.searchsorted(cum_out, q, side="right", method="scan_unrolled")
+    s = fnp.minimum(s.astype(i32), i32(row_counts.shape[0] - 1))
+    j = q - (cum_out[s] - orc[s])
+    live = q < cum_out[-1]
+    folds = live & (j < folded[s])
+    src_even = base[s] + j * i32(2)
+    sent = i32(sentinel)
+    gather_even = fnp.where(folds, src_even, sent)
+    gather_odd = fnp.where(
+        folds & (j * i32(2) + i32(1) < rc[s]), src_even + i32(1), sent
+    )
+    return gather_even, gather_odd, live
+
+
+@partial(frx.jit, static_argnames=("out_width",))
 def _jagged_transition_core(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
+    row_counts: Array,
+    out_row_counts: Array,
     *,
-    row_counts: tuple[int, ...],
-    out_row_counts: tuple[int, ...],
+    out_width: int,
 ) -> tuple[Array, Array, Array, Array]:
-    """The prepad/fold/postpad numeric core of `jagged_layer_transition`.
-
-    The transition's one `@jit` boundary: eager dispatch decomposes the
-    gather/pad/fold into op-by-op kernels, so the core needs exactly one
-    boundary around it (`docs/reference/conventions.md` per-island), never zero. A
-    consumer that builds the pyramid by iterating the transition per layer --
-    rather than the fused `build_jagged_pyramid` -- then pays one fused dispatch
-    per transition instead of N eager ops. The schedule is pure static ints, so
-    both segment gathers bake into the graph as constants and the static count
-    tuples key the compile cache by value: repeated calls at one transition shape
-    warm-reuse a single trace, but each DISTINCT shape compiles once -- so
-    per-layer iteration recompiles down a deep pyramid, where `build_jagged_pyramid`
-    unrolls into one trace regardless of depth.
-    """
-    prepad_counts, folded_counts = _prepad_folded(row_counts)
-    n0, n1, d0, d1 = _pad_neutral(
-        numerator_0,
-        numerator_1,
-        denominator_0,
-        denominator_1,
-        _segment_gather(row_counts, prepad_counts),
+    """The transition's one `@jit` boundary: derive the (even, odd) gathers
+    in-trace from the traced counts, apply `_fold_pairs`' algebra to the
+    gathered operands, and zero the dead region past the live out rows. The
+    compile keys on (input width, output width, batch count, dtypes) alone --
+    capacity constants, never one input's layout."""
+    gather_even, gather_odd, live = _derive_transition_gathers(
+        row_counts, out_row_counts, out_width, numerator_0.shape[0]
     )
-    rn0, rn1, rd0, rd1 = _fold_pairs(n0, n1, d0, d1)
-    return _pad_neutral(
-        rn0, rn1, rd0, rd1, _segment_gather(folded_counts, out_row_counts)
+    n0e = _gather_pad(numerator_0, gather_even, 0)
+    n1e = _gather_pad(numerator_1, gather_even, 0)
+    d0e = _gather_pad(denominator_0, gather_even, 1)
+    d1e = _gather_pad(denominator_1, gather_even, 1)
+    n0o = _gather_pad(numerator_0, gather_odd, 0)
+    n1o = _gather_pad(numerator_1, gather_odd, 0)
+    d0o = _gather_pad(denominator_0, gather_odd, 1)
+    d1o = _gather_pad(denominator_1, gather_odd, 1)
+
+    def dead_zeroed(val: Array) -> Array:
+        # The fold may promote a base-field numerator to the denominator's
+        # extension field, so the zero must take the FOLDED dtype.
+        return fnp.where(live, val, fnp.zeros((), dtype=val.dtype))
+
+    return (
+        dead_zeroed(n0e * d1e + n1e * d0e),
+        dead_zeroed(n0o * d1o + n1o * d0o),
+        dead_zeroed(d0e * d1e),
+        dead_zeroed(d0o * d1o),
     )
 
 
 def jagged_layer_transition(
-    layer: JaggedGkrLayer, out_row_counts: tuple[int, ...]
+    layer: JaggedGkrLayer,
+    out_row_counts: Array | Sequence[int],
+    out_width: int | None = None,
 ) -> JaggedGkrLayer:
-    """Fold one row variable per segment, then pad to the consumer's schedule.
+    """Fold one row variable per segment into a fresh `out_width` capacity.
 
-    Odd segments are pre-padded with the additive-identity fraction (n=0, d=1)
-    so the flat stride-2 fold never pairs across a batch boundary; the
-    folded segments are then padded out to `out_row_counts` with the same
-    neutral rows. The schedule is the consumer's policy; this block only
-    refuses to truncate, which would silently drop fractions from the sum.
+    Odd segments pre-pad with the additive-identity fraction (n=0, d=1) so
+    the stride-2 fold never pairs across a batch boundary; slots between a
+    segment's folded count and its out count are live neutral padding; the
+    dead region past `sum(out_row_counts)` lands zero.
 
-    Host-side validation stays out of the `@jit`; the numeric fold rides
-    `_jagged_transition_core`.
+    `out_row_counts` is the consumer's halving policy: a host sequence for a
+    statically-known schedule (`out_width` defaults to its sum — the
+    zero-slack layout), or the policy evaluated on ITS traced counts, with
+    `out_width` the static capacity holding it. A schedule that truncates a
+    segment's folded rows cannot be rejected host-side (the counts are
+    traced), so the consumer owns that guarantee — its policy must dominate
+    `ceil(rc / 2)` pointwise for every input it admits.
     """
-    if len(out_row_counts) != layer.num_batches:
+    if isinstance(out_row_counts, Array):
+        if out_width is None:
+            raise ValueError("a traced schedule needs an explicit out_width capacity")
+        counts = out_row_counts
+        num_out = counts.shape[0]
+    else:
+        host = tuple(int(rc) for rc in out_row_counts)
+        counts = _counts_operand(host)
+        num_out = len(host)
+        if out_width is None:
+            out_width = sum(host)
+    if num_out != layer.num_batches:
         raise ValueError(
-            f"schedule must cover all {layer.num_batches} batches, "
-            f"got {len(out_row_counts)} entries"
+            f"schedule must cover all {layer.num_batches} batches, got "
+            f"{num_out} entries"
         )
-    _, folded_counts = _prepad_folded(layer.row_counts)
-    for i, (folded, out) in enumerate(zip(folded_counts, out_row_counts)):
-        if out < folded:
-            raise ValueError(
-                f"schedule truncates batch element {i}: folded row count "
-                f"{folded} > target {out}"
-            )
-
     rn0, rn1, rd0, rd1 = _jagged_transition_core(
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
-        row_counts=layer.row_counts,
-        out_row_counts=out_row_counts,
+        layer.row_counts,
+        counts,
+        out_width=out_width,
     )
     return JaggedGkrLayer(
         numerator_0=rn0,
         numerator_1=rn1,
         denominator_0=rd0,
         denominator_1=rd1,
-        row_counts=out_row_counts,
+        row_counts=counts,
     )
+
+
+def build_jagged_pyramid(
+    first: JaggedGkrLayer,
+    schedules: Sequence[tuple[Array, int] | Sequence[int]],
+) -> list[JaggedGkrLayer]:
+    """Build the jagged pyramid `[first, ..., floor]`, folding one row
+    variable per transition. `schedules[k]` is transition `k`'s policy —
+    `(out_row_counts, out_width)` for a traced schedule, or a bare host
+    sequence at its zero-slack width — the same argument
+    `jagged_layer_transition` takes. Each transition is its own dispatch, so
+    the layers land as separate per-layer buffers. Peak residency is ~2*H --
+    every natural-width layer is a required GKR input, live until its
+    top-down sumcheck -- split across ~depth buffers a pooling allocator can
+    seat individually; a single contiguous 2*H alloc exceeds what BFC can
+    place on wide shards (#468). One compile per distinct
+    (in_width, out_width) pair, shared by every input of the capacity class.
+    """
+    layers = [first]
+    layer = first
+    for schedule in schedules:
+        if (
+            isinstance(schedule, tuple)
+            and len(schedule) == 2
+            and isinstance(schedule[0], Array)
+        ):
+            layer = jagged_layer_transition(layer, schedule[0], schedule[1])
+        else:
+            layer = jagged_layer_transition(layer, schedule)
+        layers.append(layer)
+    return layers
 
 
 def extract_jagged_outputs(layer: JaggedGkrLayer) -> LogUpGkrOutput:
     """Interleave the floor layer's children into the output MLEs.
 
-    The floor is row counts all 1 -- one fraction pair per batch element -- the
-    jagged dual of `extract_outputs`'s `num_row_variables == 0` precondition.
-    A schedule that stops higher folds the rest down with
-    `jagged_layer_transition` first; how far to fold is the consumer's call.
+    The floor is row counts all 1 -- one fraction pair per batch element --
+    the jagged dual of `extract_outputs`'s `num_row_variables == 0`
+    precondition. Row counts are traced, so the gate is the static dual the
+    layout implies: a fully-live all-ones layer is exactly `width ==
+    num_batches` (any live count above 1 would need more width; a dead slot
+    would mean a count of 0, which no saturating fold produces). A schedule
+    that stops higher folds the rest down with `jagged_layer_transition`
+    first; how far to fold is the consumer's call.
     """
-    if any(rc != 1 for rc in layer.row_counts):
+    if layer.width != layer.num_batches:
         raise ValueError(
-            f"extract_jagged_outputs expects the batch floor (row "
-            f"counts all 1), got {layer.row_counts}"
+            f"extract_jagged_outputs expects the batch floor (width == "
+            f"num_batches == {layer.num_batches}), got width {layer.width}"
         )
     return LogUpGkrOutput(
         numerator=_interleave(layer.numerator_0, layer.numerator_1),
         denominator=_interleave(layer.denominator_0, layer.denominator_1),
     )
-
-
-def build_jagged_pyramid(
-    first: JaggedGkrLayer, schedules: Sequence[tuple[int, ...]]
-) -> list[JaggedGkrLayer]:
-    """Build the jagged pyramid `[first, ..., floor]`, folding one row variable
-    per transition. `schedules[k]` is transition `k`'s `out_row_counts` (the
-    caller's halving policy, the same argument `jagged_layer_transition` takes).
-    Each transition is its own dispatch, so the layers land as separate per-layer
-    buffers. Peak residency is ~2*H -- every natural-width layer is a required GKR
-    input, live until its top-down sumcheck -- split across ~depth buffers a
-    pooling allocator can seat individually; a single contiguous 2*H alloc exceeds
-    what BFC can place on wide shards (#468). Costs one compile per distinct
-    transition shape; warm reuse is per-shape."""
-    schedules = list(schedules)
-    if not schedules:
-        return [first]
-
-    # Mirror `jagged_layer_transition`'s guards down the chain: a schedule that
-    # changes a batch count or truncates a batch element's folded rows would
-    # silently drop fractions from the sum (the gather copies only `min(src, dst)`
-    # rows), so refuse it loudly here rather than mis-sum.
-    cur = first.row_counts
-    for out_row_counts in schedules:
-        if len(out_row_counts) != len(cur):
-            raise ValueError(
-                f"schedule must cover all {len(cur)} batches, got "
-                f"{len(out_row_counts)} entries"
-            )
-        _, folded = _prepad_folded(cur)
-        for i, (folded_rc, out_rc) in enumerate(zip(folded, out_row_counts)):
-            if out_rc < folded_rc:
-                raise ValueError(
-                    f"schedule truncates batch element {i}: folded row count "
-                    f"{folded_rc} > target {out_rc}"
-                )
-        cur = out_row_counts
-
-    layers = [first]
-    layer = first
-    for out_row_counts in schedules:
-        layer = jagged_layer_transition(layer, out_row_counts)
-        layers.append(layer)
-    return layers

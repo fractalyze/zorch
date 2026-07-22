@@ -23,6 +23,7 @@ from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
 from zorch.logup_gkr.verifier import GkrLayerRound as _VerifierLayer
 from zorch.round import ProveChain, VerifyChain
+from zorch.sumcheck.jagged.types import RoundWidthCaps
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
@@ -31,17 +32,41 @@ _KB = zk_dtypes.koalabear_mont
 _EF = zk_dtypes.koalabearx4_mont
 
 
+def host_counts(layer: JaggedGkrLayer) -> tuple[int, ...]:
+    """The layer's traced counts read back as host ints — the testkit oracle
+    seam (an eager device read, so never for production code)."""
+    return tuple(int(rc) for rc in layer.row_counts)
+
+
 def random_jagged_layer(
     seed: int, row_counts: tuple[int, ...], dtype: Any = _KB
 ) -> JaggedGkrLayer:
-    """A random jagged GKR layer over `row_counts` (flat, interaction-major)."""
+    """A random jagged GKR layer over `row_counts` (flat, interaction-major),
+    at the zero-slack width."""
     height = sum(row_counts)
     return JaggedGkrLayer(
         numerator_0=rand_field(seed, (height,), dtype),
         numerator_1=rand_field(seed + 1, (height,), dtype),
         denominator_0=rand_field(seed + 2, (height,), dtype),
         denominator_1=rand_field(seed + 3, (height,), dtype),
-        row_counts=row_counts,
+        row_counts=fnp.asarray(row_counts, fnp.int32),
+    )
+
+
+def widen_jagged_layer(layer: JaggedGkrLayer, width: int) -> JaggedGkrLayer:
+    """The same layer at a wider capacity: live prefix copied, dead tail
+    zero. Same counts, so downstream byte-equality across widths is exactly
+    the capacity contract."""
+
+    def lay(a: Array) -> Array:
+        return fnp.concatenate([a, fnp.zeros((width - a.shape[0],), dtype=a.dtype)])
+
+    return JaggedGkrLayer(
+        numerator_0=lay(layer.numerator_0),
+        numerator_1=lay(layer.numerator_1),
+        denominator_0=lay(layer.denominator_0),
+        denominator_1=lay(layer.denominator_1),
+        row_counts=layer.row_counts,
     )
 
 
@@ -57,7 +82,7 @@ def mixed_field_jagged_layer(
         numerator_1=rand_field(seed + 1, (height,), base),
         denominator_0=rand_ext_field(seed + 2, (height,), base, ext),
         denominator_1=rand_ext_field(seed + 3, (height,), base, ext),
-        row_counts=row_counts,
+        row_counts=fnp.asarray(row_counts, fnp.int32),
     )
 
 
@@ -68,7 +93,10 @@ def virtual_planes(
     variables -- each segment zero/one-extended to `2^num_row_variables` rows
     with the fold-neutral fraction (n=0, d=1). The brute-force oracle the
     jagged prover's closed-form corrections are checked against."""
-    starts = layer.start_indices
+    counts = host_counts(layer)
+    starts = [0]
+    for rc in counts:
+        starts.append(starts[-1] + rc)
     rows = 1 << num_row_variables
     planes = []
     for arr, neutral in (
@@ -78,7 +106,7 @@ def virtual_planes(
         (layer.denominator_1, 1),
     ):
         parts = []
-        for i, rc in enumerate(layer.row_counts):
+        for i, rc in enumerate(counts):
             pad = (
                 fnp.zeros((rows - rc,), arr.dtype)
                 if neutral == 0
@@ -94,11 +122,23 @@ def build_jagged_pyramid(first: JaggedGkrLayer) -> list[JaggedGkrLayer]:
     to even counts -- saturated segments stay at one row so the floor is
     reachable while the padding paths stay exercised."""
     layers = [first]
-    while max(layers[-1].row_counts) > 1:
-        folded = tuple((rc + 1) // 2 for rc in layers[-1].row_counts)
+    while max(host_counts(layers[-1])) > 1:
+        folded = tuple((rc + 1) // 2 for rc in host_counts(layers[-1]))
         schedule = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
         layers.append(jagged_layer_transition(layers[-1], schedule))
     return layers
+
+
+def caps_for(row_counts: tuple[int, ...], num_row_variables: int) -> RoundWidthCaps:
+    """Tight width caps for a test layout: the layer's own widths rounded up
+    only where the ABI demands (elements to a multiple of 4, interaction to
+    >= 4). Rounds are caps-mandatory, so every test chain needs one."""
+    width = sum(rc + rc % 2 for rc in row_counts)
+    return RoundWidthCaps(
+        elements=width + (-width % 4),
+        eq_row=1 << num_row_variables,
+        interaction=max(4, len(row_counts)),
+    )
 
 
 def random_first_layer(

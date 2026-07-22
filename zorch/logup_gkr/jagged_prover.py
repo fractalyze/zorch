@@ -20,7 +20,7 @@ would need a third materialized evaluation per round.
 Variables bind LSB-first (consecutive-pair fold): a jagged layer is
 batch-major, so the row LSB is the in-segment pair dimension and the
 stride-2 fold never crosses a segment boundary once odd segments are
-re-padded (the same `_segment_gather` machinery as the circuit transition).
+re-padded (the same in-trace gather derivation as the circuit transition).
 Row variables fold first while their eq factor rides as the materialized
 `eq_row` lookup; once rows are exhausted the accumulated row-eq residual
 becomes the scalar `eq_adj` and the batch variables fold densely. The
@@ -64,11 +64,8 @@ from zorch.sumcheck.jagged.buffers import (
 from zorch.sumcheck.jagged.fs import _fs_reduce
 from zorch.sumcheck.jagged.rounds import _expand_eq_slice
 from zorch.sumcheck.jagged.schedule import (
-    _check_row_space,
     _dense_live_operand,
-    _round_live_meta,
-    _round_out_pairs,
-    _row_counts_operand,
+    _derive_live_meta,
 )
 from zorch.sumcheck.jagged.types import (
     RoundWidthCaps,
@@ -146,20 +143,31 @@ def prove_jagged_layer(
     virtual positions' values. Returns the bound point (MSB-first, i.e. the
     challenges reversed), the advanced transcript, and the proof.
 
-    `caps` selects the fixed-width round layout (xla#179 size-invariance):
-    every round then runs at one static operand shape per phase, live prefix
-    tracked by the rounds' `live` operand, so one compiled round kernel serves
-    every round -- and every layer and shard proved under the same caps.
-    Byte-identical to the exact layout.
+    `caps` is the fixed-width round layout (xla#179 size-invariance), and is
+    mandatory: every round runs at one static operand shape per phase, live
+    prefix tracked by the rounds' `live` operand, so one compiled round
+    kernel serves every round -- and every layer and input proved under the
+    same caps. Row counts are traced, so an exact-layout fallback (static
+    per-round output widths) no longer exists; the zero-slack layout is the
+    capacity layout whose caps happen to be tight.
 
     The device-derived schedule (xla#179): the per-round re-pad schedule is a
     pure function of `row_counts` + the round index and derives inside the
     claimed kernels, so the loop carries only the tiny i32[nseg] `row_counts`
     operand plus per-round i32[3] live triples -- both ride as traced operands,
-    so `row_counts` never enters the jit key.
+    so `row_counts` never enters the jit key. The virtual-row-space fit
+    (`max(row_counts) <= 2^nrv`) is the consumer's capacity-class obligation
+    -- a host check cannot read the traced counts.
     """
+    if caps is None:
+        raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
     niv = layer.num_batch_variables
-    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    nrv = eval_point.shape[0] - niv
+    if nrv < 1:
+        raise ValueError(
+            f"eval_point must carry at least one row variable: got "
+            f"{eval_point.shape[0]} coordinates for {niv} batch variables"
+        )
     planes = _Planes(
         layer.numerator_0,
         layer.numerator_1,
@@ -169,9 +177,9 @@ def prove_jagged_layer(
     return _prove_jagged_layer_from_ops(
         planes,
         niv,
-        _row_counts_operand(layer.row_counts),
-        _round_live_meta(layer.row_counts, nrv),
-        None if caps is not None else _round_out_pairs(layer.row_counts, nrv),
+        layer.row_counts,
+        _derive_live_meta(layer.row_counts, nrv),
+        None,
         lam,
         claim,
         eval_point,
@@ -529,14 +537,15 @@ def _prove_jagged_layer_round(
     return (num_eval, den_eval, eval_point), transcript, proof
 
 
-# Shared by every `JaggedGkrLayerRound(jit=True)`. The schedule operands
-# (`row_counts` + the per-round live triples) ride as TRACED operands, not
-# static args, so `row_counts` values leave the jit key: it keys only on the
-# operand SHAPES plus the static `niv` / `challenge_limbs` / `caps` /
-# `out_pairs` (`nrv` is read from `eval_point`'s length inside; `out_pairs` is
-# None under caps, so the capped pyramid shares one key). The derived schedule shrank
-# these operands from the hundreds-of-MB per-round gather arrays to KBs — the
-# schedule now derives in-kernel — but the operand-not-closure rule stands:
+# Shared by every `JaggedGkrLayerRound(jit=True)`. The schedule operand
+# (`row_counts`) rides TRACED, not static, so its values leave the jit key:
+# the zone keys only on the operand SHAPES plus the static `niv` /
+# `challenge_limbs` / `caps` / `out_pairs` (`nrv` is read from `eval_point`'s
+# length inside; `out_pairs` is None under caps, so the capped pyramid shares
+# one key). The derived schedule shrank the schedule state from the
+# hundreds-of-MB per-round gather arrays to the one KB-scale counts vector —
+# gathers and live triples now derive in-kernel — but the operand-not-closure
+# rule stands:
 # baking per-layer values into the trace would recompile per shard. Two layers
 # still recompile when their shape sequence differs, but each compile is cheap
 # and persistent-cached -- and under `caps` every layer shares ONE shape
@@ -545,14 +554,13 @@ def _prove_jagged_layer_round(
 # so a consumer rebuilding the chain each warm iteration (the generator
 # keeping lazy one-live-layer release) re-traces at most per distinct shape
 # sequence, not per iter.
-@partial(frx.jit, static_argnums=(6, 7, 8, 9))
+@partial(frx.jit, static_argnums=(5, 6, 7, 8))
 def _jagged_round_zone(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
     denominator_1: Array,
     row_counts: Array,
-    live: list[Array],
     niv: int,
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
@@ -561,6 +569,13 @@ def _jagged_round_zone(
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
     planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
+    # Live triples derive INSIDE the zone: as a separate per-layer jit they
+    # were one warm dispatch per layer (~21 launches per prove, pure
+    # overhead); in here they join the whole-layer program for free. nrv is
+    # a shape (the carry's eval_point length minus niv), so the derivation
+    # stays a static unroll.
+    nrv = carry[2].shape[0] - niv
+    live = _derive_live_meta(row_counts, nrv)
     return _prove_jagged_layer_round(
         planes,
         niv,
@@ -582,59 +597,55 @@ def _jagged_round_via_zone(
     carry: Carry,
     transcript: Transcript,
 ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-    """Build the schedule operands host-side and dispatch through
-    `_jagged_round_zone` with the planes + `row_counts` + live triples as
-    traced operands. Splitting them out of the trace (rather than closing over
-    the layer's static `row_counts`) is what keeps the whole-layer compile
-    shard-independent."""
+    """Dispatch through `_jagged_round_zone` with the planes + `row_counts`
+    as traced operands -- the live triples derive from the traced counts
+    inside the zone, so no host code reads a layout value and the
+    whole-layer compile keys on the capacity shapes alone.
+
+    `caps` is mandatory: row counts are traced, so no static per-round
+    output widths exist to size an uncapped layout. The virtual-row-space
+    fit (`max(row_counts) <= 2^nrv`) is likewise the consumer's
+    capacity-class obligation -- a host check cannot see the counts.
+    """
+    if caps is None:
+        raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
     niv = layer.num_batch_variables
     eval_point = carry[2]
-    nrv = _check_row_space(layer.row_counts, eval_point.shape[0], niv)
+    nrv = eval_point.shape[0] - niv
+    if nrv < 1:
+        raise ValueError(
+            f"eval_point must carry at least one row variable: got "
+            f"{eval_point.shape[0]} coordinates for {niv} batch variables"
+        )
     planes = (
         layer.numerator_0,
         layer.numerator_1,
         layer.denominator_0,
         layer.denominator_1,
     )
-    # Under caps, lay the planes into the pooled cap-width buffers BEFORE the
-    # zone: the whole-layer program then keys on the cap shape -- one compile
-    # per nrv class, reused across every layer, pass, AND shard -- instead of
-    # on the exact per-layer/per-shard plane widths. The in-trace
-    # `_pad_to_width` no-ops on an already-cap-width operand, so the zone body
-    # is unchanged. Concrete path only: a tracer means an outer trace owns the
-    # layout (and pooling would donate a traced value).
-    if caps is not None:
-        if caps.elements < planes[0].shape[0]:
-            raise ValueError(
-                f"elements cap {caps.elements} cannot hold the layer's "
-                f"row-phase plane width ({planes[0].shape[0]}); widen the cap "
-                "(or its ladder class) so the fixed-width pad is non-negative"
+    if caps.elements < planes[0].shape[0]:
+        raise ValueError(
+            f"elements cap {caps.elements} cannot hold the layer's "
+            f"row-phase plane width ({planes[0].shape[0]}); widen the cap "
+            "(or its ladder class) so the fixed-width pad is non-negative"
+        )
+    if layer_bufs is not None and not isinstance(planes[0], frx.core.Tracer):
+        planes = tuple(
+            _pool_lay_batch(
+                [
+                    (role, a, caps.elements)
+                    for role, a in zip(("n0", "n1", "d0", "d1"), planes, strict=True)
+                ],
+                layer_bufs,
             )
-        # Concrete path only: a tracer means an outer trace owns the layout
-        # (and pooling would donate a traced value). With no holder the
-        # in-trace `_pad_to_width` below materializes the cap buffer fresh
-        # (correct, tail-write cost back) -- perf callers thread one
-        # `LayerBuffers` per chain.
-        if layer_bufs is not None and not isinstance(planes[0], frx.core.Tracer):
-            planes = tuple(
-                _pool_lay_batch(
-                    [
-                        (role, a, caps.elements)
-                        for role, a in zip(
-                            ("n0", "n1", "d0", "d1"), planes, strict=True
-                        )
-                    ],
-                    layer_bufs,
-                )
-            )
+        )
     return _jagged_round_zone(
         *planes,
-        _row_counts_operand(layer.row_counts),
-        _round_live_meta(layer.row_counts, nrv),
+        layer.row_counts,
         niv,
         challenge_limbs,
         caps,
-        None if caps is not None else _round_out_pairs(layer.row_counts, nrv),
+        None,
         carry,
         transcript,
     )
