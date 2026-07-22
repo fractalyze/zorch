@@ -13,6 +13,7 @@ from zorch.utils.binary_field import (
     _to_limbs,
     bit_select_xor_reduce,
     byte_select_xor_reduce,
+    byte_slice_xor_reduce,
     field_bit_width,
     pack,
     unpack,
@@ -116,6 +117,43 @@ class BinaryFieldReprTest(parameterized.TestCase):
                 if unpacked[i, bit]:
                     want[i] ^= value_limbs[bit]
         np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
+
+    @parameterized.parameters(
+        (dtype, n, cols) for dtype in _DTYPES for n, cols in ((1, 1), (37, 5), (289, 3))
+    )
+    def test_byte_slice_xor_reduce_matches_reference(
+        self, dtype: Any, n: int, cols: int
+    ) -> None:
+        rng = np.random.default_rng(11)
+        selectors = rng.integers(0, 256, size=(n, cols), dtype=np.uint8)
+        values = _rand_field(dtype, n, 12)
+        got = byte_slice_xor_reduce(fnp.asarray(selectors), values)
+
+        value_limbs = np.asarray(_to_limbs(values))
+        want = np.zeros((cols, 8, value_limbs.shape[1]), np.uint32)
+        for i in range(n):
+            for c in range(cols):
+                for bit in range(8):
+                    if (selectors[i, c] >> bit) & 1:
+                        want[c, bit] ^= value_limbs[i]
+        self.assertEqual(got.shape, (cols, 8))
+        np.testing.assert_array_equal(
+            np.asarray(_to_limbs(got)).reshape(cols, 8, -1), want
+        )
+
+    def test_byte_slice_xor_reduce_validates(self) -> None:
+        sel = fnp.asarray(np.zeros((4, 2), np.uint8))
+        vals = _rand_field(fnp.binary_field_ghash, 4, 13)
+        with self.assertRaises(ValueError):
+            byte_slice_xor_reduce(sel[:, 0], vals)  # 1D selectors
+        with self.assertRaises(ValueError):
+            byte_slice_xor_reduce(sel.astype(fnp.int32), vals)  # non-u8
+        with self.assertRaises(ValueError):
+            byte_slice_xor_reduce(sel, vals[:3])  # length mismatch
+        with self.assertRaises(ValueError):
+            byte_slice_xor_reduce(sel[:0], vals[:0])  # empty
+        with self.assertRaises(ValueError):
+            byte_slice_xor_reduce(sel, fnp.asarray(np.zeros(4, np.uint32)))  # non-field
 
     def test_bit_width_rejects_sub_lane_tower(self) -> None:
         narrow = [

@@ -309,6 +309,105 @@ def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
     return _from_limbs(out_l, values.dtype)
 
 
+# Rows per (BLOCK, C, 8, L) tile. 8 keeps the tile at the same register footprint
+# as the elements kernel's (32, W, L) despite the extra column axis, and stays
+# far below the 256-row carry bound of `_xor_reduce_rows`.
+_BYTE_SLICE_BLOCK = 8
+_BYTE_SLICE_TARGET_PROGRAMS = 8192
+
+
+def _byte_slice_reduce_pallas(selectors: Array, values_l: Array, limbs: int) -> Array:
+    """Pallas lowering for `(n, C) x (n,) -> (C, 8, L)` limb output, parallel
+    over n with per-program partial XOR accumulators (the elements-reduction
+    grid of `_bit_select_reduce_elements_pallas`)."""
+    n, cols = selectors.shape
+    block = _BYTE_SLICE_BLOCK
+    iters = max(1, -(-n // (block * _BYTE_SLICE_TARGET_PROGRAMS)))
+    rows_per_program = block * iters
+    programs = -(-n // rows_per_program)
+    padded_n = programs * rows_per_program
+    # Triton requires power-of-2 array extents; zero-padded columns contribute
+    # all-zero bit slices and are cut off the result.
+    padded_cols = 1 << (cols - 1).bit_length() if cols > 1 else 1
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, padded_cols - cols)))
+    values_l = fnp.pad(values_l, ((0, padded_n - n), (0, 0)))
+
+    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
+        program = pl.program_id(0)
+        shifts = fnp.arange(8, dtype=_LIMB)
+
+        def body(step: Array, acc: Array) -> Array:
+            rows = (
+                program * rows_per_program
+                + step * block
+                + fnp.arange(block, dtype=fnp.int32)
+            )
+            sel = selector_ref[rows, :].astype(_LIMB)
+            val = value_ref[rows, :]
+            bits = (sel[:, :, None] >> shifts) & 1
+            return acc ^ _xor_reduce_rows(bits[:, :, :, None] * val[:, None, None, :])
+
+        out_ref[program] = lax.fori_loop(
+            0, iters, body, fnp.zeros((padded_cols, 8, limbs), _LIMB)
+        )
+
+    partials = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((programs, padded_cols, 8, limbs), _LIMB),
+        grid=(programs,),
+        compiler_params=plgpu.CompilerParams(),
+        name="byte_slice_xor_reduce",
+    )(selectors, values_l)
+    return lax.reduce_xor(partials, (0,))[:cols]
+
+
+@frx.jit
+def byte_slice_xor_reduce(selectors: Array, values: Array) -> Array:
+    """XOR-reduce values into per-(column, bit) slices selected by bytes.
+
+    `selectors` is a `uint8` matrix `(n, C)`; `values` a binary-field vector
+    `(n,)`. The result `(C, 8)` XORs `values[i]` into entry `(c, t)` wherever
+    bit `t` of `selectors[i, c]` is set — the reduce-over-rows dual of
+    `byte_select_xor_reduce` (which combines per row).
+
+    This is the streaming half of an F2-linear table-embedding sum: a weighted
+    `Σ_i values[i] · T[selectors[i, c]]` with `T` linear over selector bits
+    (`T[v] = ⊕_t bit_t(v)·T[2^t]`) becomes `⊕_t T[2^t] · out[c, t]`, moving the
+    per-element field multiply and table gather out of the O(n·C) hot loop into
+    an O(8·C) combine. On GPU one pass over selectors and values (grid over n,
+    partial XOR accumulators — XOR is associative, so the result is
+    bit-identical to a serial reduction); CPU keeps the compact source-level
+    expression as the portable oracle.
+    """
+    if selectors.ndim != 2 or values.ndim != 1:
+        raise ValueError("byte-slice reduction expects 2D selectors and 1D values")
+    if fnp.dtype(selectors.dtype) != fnp.dtype(fnp.uint8):
+        raise ValueError(
+            f"byte-slice selectors must have dtype uint8, got {selectors.dtype}"
+        )
+    n, cols = selectors.shape
+    if n == 0 or cols == 0:
+        raise ValueError("byte-slice reduction requires a non-empty matrix")
+    if values.shape != (n,):
+        raise ValueError(
+            f"values must have shape ({n},) to match the selector rows, got "
+            f"{values.shape}"
+        )
+    values_dtype = fnp.dtype(values.dtype)
+    if not values_dtype.name.startswith("binary_field"):
+        raise ValueError("byte-slice reduction values must use a binary field")
+
+    limbs = field_bit_width(values.dtype) // _LIMB_BITS
+    values_l = _to_limbs(values)
+    if frx.default_backend() == "gpu":
+        out_l = _byte_slice_reduce_pallas(selectors, values_l, limbs)
+    else:
+        shifts = fnp.arange(8, dtype=fnp.uint8)
+        bits = ((selectors[:, :, None] >> shifts) & 1).astype(_LIMB)
+        out_l = lax.reduce_xor(bits[:, :, :, None] * values_l[:, None, None, :], (0,))
+    return _from_limbs(out_l, values.dtype)
+
+
 @partial(frx.jit, static_argnames="reduce")
 def bit_select_xor_reduce(
     selectors: Array,
