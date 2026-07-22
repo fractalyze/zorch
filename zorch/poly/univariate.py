@@ -94,9 +94,9 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
     return fnp.stack(columns, axis=1)
 
 
-# Schedule crossover for `eval_coeffs`, measured on an RTX 5090 (batch = N/n
-# groups, N = 2^20 and 2^23): the Horner unroll wins at every n <= 8 (1.8-6.8x),
-# n = 16 splits by batch size, the scan wins from 32. Production FRI folds n = 8.
+# `eval_coeffs` schedule threshold: Horner unroll at or below, prefix-product
+# scan above. n = 16 already splits by batch size, so do not raise this without
+# re-measuring both regimes (crossover table in PR #456).
 _HORNER_MAX_COEFFS = 8
 
 
@@ -157,10 +157,12 @@ def ntt_with_root(groups: Array, omega: Array, coset: Array | None = None) -> Ar
     the trade the name states: you supply the root, in your own domain order,
     where ``lax.ntt`` derives a canonical one from a generator and length.
 
-    Same regime as ``intt_with_root`` and the same reason: many small transforms
-    batched over the leading dims, unrolled over a compile-time ``k``. For a
-    single long transform use ``lax.ntt`` (what ``ReedSolomon.encode`` does);
-    this one would unroll ``k`` stages into the graph.
+    Same regime as ``intt_with_root`` and the same reason: the unrolled stages
+    are plain elementwise ops, so adjacent work (a coset shift, an evaluation at
+    a point) fuses into one kernel, where ``lax.ntt`` is an opaque kernel
+    boundary — measured 3.2x on the k=8 fold (PR #456). For a long transform use
+    ``lax.ntt`` (what ``ReedSolomon.encode`` does); this one would unroll ``k``
+    stages into the graph.
     """
     k = groups.shape[-1]
     if not is_power_of_two(k):
@@ -221,19 +223,20 @@ def intt_with_root(
     exact and the summation order a butterfly vs a matmul takes is irrelevant.
 
     Carries no root convention (like ``compute_lagrange_basis``): the caller
-    supplies ``ω⁻¹`` and per-group ``coset_inv`` in its own domain order, where
-    ``lax.ntt`` derives a canonical root from a generator and the length. Two
-    primitive roots ``ω`` and ``ωᵗ`` give the same values under the relabelling
-    ``j ↦ t·j mod k``, so mixing the conventions costs a gather (cf. the zk↔pil2
-    reindex in ZisK's ``trace_commit``); taking the root as an argument is how
-    this path avoids one. ``ω⁻¹`` must have order exactly ``k`` — the butterfly
+    supplies ``ω⁻¹`` and per-group ``coset_inv`` as runtime values in its own
+    domain order, where ``lax.ntt`` selects its root through a static integer
+    ``generator`` (as ``g^((p-1)/n)``). Two primitive roots ``ω`` and ``ωᵗ``
+    give the same values under the relabelling ``j ↦ t·j mod k``, so mixing the
+    conventions costs a gather (cf. the zk↔pil2 reindex in ZisK's
+    ``trace_commit``). ``ω⁻¹`` must have order exactly ``k`` — the butterfly
     rests on ``ω^(k/2) = −1``, and a wrong-order root is silently wrong rather
     than an error, unverifiable here without a host sync on a traced value.
 
     The butterfly is hand-unrolled over the static ``k`` over a large *batch*
-    axis, so it lowers to a handful of fused elementwise kernels coalesced over
-    the groups — the native ``lax.ntt``'s single-long-axis form is the wrong tool
-    here."""
+    axis, so it lowers to fused elementwise kernels the per-group shift and a
+    downstream evaluation join — ``lax.ntt`` computes the same bytes (verified)
+    but as an opaque kernel boundary: the fold through it measures 3.2x slower
+    at 2^23/k=8 (PR #456)."""
     k = groups.shape[-1]
     if not is_power_of_two(k):
         raise ValueError(f"intt_with_root needs a power-of-two factor k, got {k}")
