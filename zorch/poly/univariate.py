@@ -94,23 +94,40 @@ def compute_inv_vandermonde(degree: int, dtype: Any) -> Array:
     return fnp.stack(columns, axis=1)
 
 
+# Schedule crossover for `eval_coeffs`, measured on an RTX 5090 (batch = N/n
+# groups, N = 2^20 and 2^23): the Horner unroll wins at every n <= 8 (1.8-6.8x),
+# n = 16 splits by batch size, the scan wins from 32. Production FRI folds n = 8.
+_HORNER_MAX_COEFFS = 8
+
+
 @frx.jit
 def eval_coeffs(coeffs: Array, point: Array) -> Array:
     """``p(point) = sum_i coeffs[..., i] * point**i`` — the coefficient-form
     dual of ``eval_univariate``.
 
-    The power vector ``point**i`` is a ``lax.associative_scan`` (log-depth prefix
-    product), then one batched dot with the coefficients. A *sequential* scan over
-    the coefficient axis lowers to a ``while`` the GPU runtime launches host-side
-    once per iteration, so an n-coefficient eval pays n launch latencies — WHIR's
-    out-of-domain eval at ``n = 2^13`` measured ~550 ms of pure dispatch. The
-    prefix product is O(log n) kernels instead, and each stage takes one array
-    operand, so the degree never inflates the kernel's operand count (an unrolled
-    power chain would, and overflow the GPU's 32 KB kernel-parameter space —
-    ``ptxas: too much parameter space``). Field mul/add are exact and associative,
-    so the tree-grouped prefix product and the batched sum are byte-identical to a
-    sequential power-sum."""
+    Two schedules, byte-identical (field mul/add are exact and associative, so
+    any re-parenthesization is the same element), dispatched on the static
+    coefficient count:
+
+    - ``n <= _HORNER_MAX_COEFFS``: an unrolled Horner chain — O(n) multiply-adds
+      consuming ``coeffs`` one slice at a time, so it needs no power vector and
+      no reduction, and fuses through a producer's pending expression stack
+      (e.g. ``intt_with_root``'s in ``fri_fold_k``).
+    - larger ``n``: the power vector ``point**i`` as a ``lax.associative_scan``
+      (log-depth prefix product), then one batched dot. A *sequential* scan over
+      the coefficient axis lowers to a ``while`` the GPU runtime launches
+      host-side once per iteration, so an n-coefficient eval pays n launch
+      latencies — WHIR's out-of-domain eval at ``n = 2^13`` measured ~550 ms of
+      pure dispatch. The prefix product is O(log n) kernels instead, and each
+      stage takes one array operand, so the degree never inflates the kernel's
+      operand count (an unrolled power chain would, and overflow the GPU's 32 KB
+      kernel-parameter space — ``ptxas: too much parameter space``)."""
     n = coeffs.shape[-1]
+    if n <= _HORNER_MAX_COEFFS:
+        folded = coeffs[..., -1]
+        for m in range(n - 2, -1, -1):
+            folded = folded * point + coeffs[..., m]
+        return folded
     # ``point**i`` as the prefix product of ``[1, point, point, …]`` (n entries),
     # laid out on the last axis so it dots the coefficients' degree axis directly.
     seq = fnp.where(

@@ -30,7 +30,12 @@ import numpy as np
 import zk_dtypes
 from frx import Array, lax
 
-from zorch.poly.univariate import compute_lagrange_basis, intt_with_root, powers
+from zorch.poly.univariate import (
+    compute_lagrange_basis,
+    eval_coeffs,
+    intt_with_root,
+    powers,
+)
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
 from zorch.utils.field import is_binary_field
 
@@ -565,9 +570,10 @@ def fri_fold_k(
       interpolation, O(k²) per group, carrying no domain convention. The
       per-query verifier path; `vmap` over the group axis.
     - `coset = (coset_inv, omega_inv)`: when the points form a coset `s·⟨ω⟩` of
-      the order-`k` subgroup — a shared-twiddle INTT (`intt_with_root`) then an
-      unrolled Horner, O(k log k) with one twiddle set across the whole batch and
-      only the per-group shift varying. The batched prover path. `coset_inv` is
+      the order-`k` subgroup — a shared-twiddle INTT (`intt_with_root`) then
+      `eval_coeffs` at `beta`, O(k log k) with one twiddle set across the whole
+      batch and only the per-group shift varying. The batched prover path.
+      `coset_inv` is
       per-group `s⁻¹` (broadcasts over the leading dims), `omega_inv` the shared
       `ω⁻¹`.
 
@@ -578,18 +584,9 @@ def fri_fold_k(
         raise ValueError("fri_fold_k needs exactly one of `points` or `coset`")
     if coset is not None:
         coset_inv, omega_inv = coset
-        coeffs = intt_with_root(group, omega_inv, coset_inv)
-        # Horner at beta, unrolled over the static k, rather than `eval_coeffs`.
-        # Byte-identical either way; the unroll fuses through `intt_with_root`'s
-        # stack, where `eval_coeffs` materialises the coefficients first. It wins
-        # only while k stays small: the unroll is O(k) deep against
-        # `eval_coeffs`'s O(log k) prefix product, so on an RTX 5090 at k=8 it is
-        # 2.1x faster at 2^20 and 1.2x at 2^23, but by k=16 it has lost — 1.34 ms
-        # against 0.94 ms at 2^23. Revisit this if the fold factor grows past 8.
-        folded = coeffs[..., -1]
-        for m in range(coeffs.shape[-1] - 2, -1, -1):
-            folded = folded * beta + coeffs[..., m]
-        return folded
+        # `eval_coeffs` picks the schedule by k: at fold factors it unrolls
+        # Horner, which fuses through `intt_with_root`'s pending stack.
+        return eval_coeffs(intt_with_root(group, omega_inv, coset_inv), beta)
     # Lagrange path: unroll the linear combination over the static factor k
     # rather than `fnp.dot` — a reduction is a kInput/gather fusion boundary on
     # GPU, so the fold would not lower to one fused kernel (CLAUDE.md "Fusion by

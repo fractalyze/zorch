@@ -122,6 +122,20 @@ class EvalCoeffsTest(absltest.TestCase):
         got = eval_coeffs(coeffs, fnp.array(2, KB))
         self.assertTrue(bool(fnp.all(got == fnp.array([17, 11], KB))))
 
+    def test_both_schedules_match_the_power_sum(self) -> None:
+        # eval_coeffs dispatches on the coefficient count (Horner unroll at or
+        # below _HORNER_MAX_COEFFS, prefix-product scan above); both must equal
+        # the literal power sum. n spans the threshold; EF batched over rows with
+        # a scalar EF point, the fold's shape.
+        for n in (1, 8, 9, 33):
+            coeffs = rand_ext_field(120 + n, (3, n), KB, EF)
+            point = rand_ext_field(130 + n, (), KB, EF)
+            want = coeffs[..., 0]
+            for i in range(1, n):
+                want = want + coeffs[..., i] * point**i
+            got = eval_coeffs(coeffs, point)
+            self.assertTrue(bool(fnp.all(got == want)), msg=f"n={n}")
+
 
 class InttWithRootTest(absltest.TestCase):
     def test_recovers_coefficients(self) -> None:
