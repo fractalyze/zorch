@@ -93,53 +93,76 @@ def _f2(v: int) -> Array:
     return fnp.asarray(fnp.array([v], _BIT)[0])
 
 
-def _xor_reduce_registers(x: Array) -> Array:
-    """XOR-reduce up to 255 `uint32` registers with eight integer sums.
+def _xor_reduce_rows(x: Array) -> Array:
+    """XOR-reduce `x` over axis 0 (length < 256) with eight integer sums.
 
-    Each sum counts one bit position independently in all four bytes. The block
-    stays below 256 elements so those byte counters cannot carry into each
-    other; their low bits are exactly the four requested parities.
+    Each sum counts one bit position independently in all four bytes of every
+    lane; with fewer than 256 rows the byte counters cannot carry into each
+    other, so their low bits are exactly the requested parities. `reduce_xor` is
+    not lowerable inside a Pallas GPU kernel, so the reduction rides on `sum`.
     """
     result = _LIMB(0)
     byte_lsbs = _LIMB(0x01010101)
     for bit in range(8):
-        parity = fnp.sum((x >> bit) & byte_lsbs, dtype=_LIMB) & byte_lsbs
-        result |= parity << bit
+        parity = fnp.sum((x >> bit) & byte_lsbs, axis=0, dtype=_LIMB) & byte_lsbs
+        result = result | (parity << bit)
     return result
+
+
+# The elements reduction sums over all `n` selectors into a tiny `(W, L)` output.
+# Gridding on that output gives only `W*L` programs, each serial over `n` — at
+# flock m=28 that is 512 programs looping 16384 blocks, ~18x slower than the
+# sibling `bits` kernel purely from under-parallelization. Instead grid over `n`:
+# each program XOR-folds `iters` sub-blocks of `_ELEMENTS_BLOCK` rows into one
+# `(W, L)` accumulator — reading every selector/value once, not `W` times — and
+# the per-program partials are XOR-combined. XOR is associative, so the result is
+# bit-identical to a serial reduction. `_ELEMENTS_TARGET_PROGRAMS` bounds the
+# partials array so the large-`m` shapes #504 cared about stay in memory.
+# rows per materialized (BLOCK, W, L) tile; < 256 so _xor_reduce_rows cannot carry
+_ELEMENTS_BLOCK = 32
+_ELEMENTS_TARGET_PROGRAMS = 8192
 
 
 def _bit_select_reduce_elements_pallas(
     selectors: Array, values: Array, width: int, limbs: int
 ) -> Array:
-    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output."""
+    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output, parallel over n."""
     n = selectors.shape[0]
-    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    block = _ELEMENTS_BLOCK
+    iters = max(1, -(-n // (block * _ELEMENTS_TARGET_PROGRAMS)))
+    rows_per_program = block * iters
+    programs = -(-n // rows_per_program)
+    padded_n = programs * rows_per_program
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
     values = fnp.pad(values, ((0, padded_n - n), (0, 0)))
 
     def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
-        bit = pl.program_id(0)
-        limb = pl.program_id(1)
-        selector_limb = bit // _LIMB_BITS
-        shift = bit % _LIMB_BITS
+        program = pl.program_id(0)
+        shifts = fnp.arange(_LIMB_BITS, dtype=_LIMB)
 
-        def body(block: Array, acc: Array) -> Array:
-            rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
-            packed = selector_ref[rows, selector_limb]
-            value = value_ref[rows, limb]
-            selected = fnp.where(((packed >> shift) & 1) != 0, value, 0)
-            return acc ^ _xor_reduce_registers(selected)
+        def body(step: Array, acc: Array) -> Array:
+            rows = (
+                program * rows_per_program
+                + step * block
+                + fnp.arange(block, dtype=fnp.int32)
+            )
+            sel = selector_ref[rows, :]
+            val = value_ref[rows, :]
+            bits = ((sel[:, :, None] >> shifts) & 1).reshape(block, width)
+            return acc ^ _xor_reduce_rows(bits[:, :, None] * val[:, None, :])
 
-        blocks = padded_n // _SELECT_BLOCK
-        out_ref[bit, limb] = lax.fori_loop(0, blocks, body, _LIMB(0))
+        out_ref[program] = lax.fori_loop(
+            0, iters, body, fnp.zeros((width, limbs), _LIMB)
+        )
 
-    return pl.pallas_call(
+    partials = pl.pallas_call(
         kernel,
-        out_shape=frx.ShapeDtypeStruct((width, limbs), _LIMB),
-        grid=(width, limbs),
+        out_shape=frx.ShapeDtypeStruct((programs, width, limbs), _LIMB),
+        grid=(programs,),
         compiler_params=plgpu.CompilerParams(),
         name="bit_select_xor_reduce_elements",
     )(selectors, values)
+    return lax.reduce_xor(partials, (0,))
 
 
 def _bit_select_reduce_bits_pallas(
