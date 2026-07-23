@@ -13,6 +13,7 @@ from frx import Array, lax  # noqa: E402
 
 from zorch.utils.field import (
     base_field,
+    embed_base,
     is_binary_field,
     join_coeffs,
     naturals,
@@ -67,6 +68,36 @@ def _gh(n: int, seed: int = 0) -> Array:
 def _u64(a: Array) -> np.ndarray:
     """The packed 128-bit representation as `(..., 2)` uint64 lanes."""
     return np.asarray(lax.bitcast_convert_type(a, fnp.uint64))
+
+
+class EmbedBaseTest(absltest.TestCase):
+    def test_embeds_as_leading_coefficient(self) -> None:
+        # base b -> (b, 0, 0, 0): coeff 0 is b, higher coeffs zero.
+        base = fnp.array(np.array([3, 7, 11], dtype=np.uint32), dtype=KB)
+        emb = embed_base(base, KX)
+        self.assertEqual(emb.dtype, KX)
+        coeffs = split_coeffs(emb)  # (3, 4)
+        self.assertTrue(fnp.array_equal(coeffs[:, 0], base))
+        self.assertTrue(bool(fnp.all(coeffs[:, 1:] == fnp.zeros((3, 3), KB))))
+
+    def test_base_times_embedded_is_scalar_scaling(self) -> None:
+        # A base scalar embedded then multiplied scales an extension exactly.
+        b = embed_base(fnp.array(np.array([5], dtype=np.uint32), dtype=KB), KX)[0]
+        x = join_coeffs(
+            fnp.array(np.array([[1, 2, 3, 4]], dtype=np.uint32), dtype=KB), KX
+        )[0]
+        got = split_coeffs(b * x)
+        want = split_coeffs(x) * fnp.array(5, KB)
+        self.assertTrue(fnp.array_equal(got, want))
+
+    def test_prime_dtype_is_unchanged(self) -> None:
+        base = fnp.array(np.array([1, 2], dtype=np.uint32), dtype=KB)
+        self.assertTrue(fnp.array_equal(embed_base(base, KB), base))
+
+    def test_wrong_base_field_raises(self) -> None:
+        wrong = fnp.array(np.array([1], dtype=np.uint32), dtype=zk_dtypes.babybear_mont)
+        with self.assertRaises(ValueError):
+            embed_base(wrong, KX)
 
 
 class LimbViewTest(absltest.TestCase):

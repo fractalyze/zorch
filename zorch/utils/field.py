@@ -41,6 +41,27 @@ def is_binary_field(dtype: Any) -> bool:
     return fnp.dtype(dtype).name.startswith("binary_field")
 
 
+def embed_base(values: Array, dtype: Any) -> Array:
+    """Embed a base-field array into `dtype` as elements `(b, 0, …, 0)`:
+    `(..., N)` base -> `(..., N)` of `dtype`, higher coefficients zero.
+
+    The scheme-agnostic base->extension lift: a base operand `b` becomes the
+    extension element `b + 0·X + … + 0·X^(d-1)`, so a subsequent base×extension
+    multiply stays exact scalar scaling. It is the field dtype's own value
+    conversion (`astype`), named here so consumers do not restate the embed.
+
+    Requires `values` to be in `dtype`'s base field; a `dtype` that is already
+    prime returns the input unchanged (its own base field)."""
+    if base_field(dtype) == dtype:
+        return values.astype(dtype)
+    if values.dtype != base_field(dtype):
+        raise ValueError(
+            f"values dtype {fnp.dtype(values.dtype).name} must be the base field "
+            f"{fnp.dtype(base_field(dtype)).name} of {fnp.dtype(dtype).name}"
+        )
+    return values.astype(dtype)
+
+
 def split_coeffs(values: Array) -> Array:
     """Split each extension element into its base-field coefficients:
     `(..., N)` extension -> `(..., N, degree)` base.
