@@ -50,14 +50,14 @@ def embed_base(values: Array, dtype: Any) -> Array:
     multiply stays exact scalar scaling. It is the field dtype's own value
     conversion (`astype`), named here so consumers do not restate the embed.
 
-    Requires `values` to be in `dtype`'s base field; a `dtype` that is already
-    prime returns the input unchanged (its own base field)."""
-    if base_field(dtype) == dtype:
-        return values.astype(dtype)
-    if values.dtype != base_field(dtype):
+    Requires `values` to be in `dtype`'s base field; a prime `dtype` is its own
+    base field, so it requires `values` to already be that field (the embed is
+    then the identity). A foreign field is a caller error, not a silent cast."""
+    base = base_field(dtype)
+    if values.dtype != base:
         raise ValueError(
             f"values dtype {fnp.dtype(values.dtype).name} must be the base field "
-            f"{fnp.dtype(base_field(dtype)).name} of {fnp.dtype(dtype).name}"
+            f"{fnp.dtype(base).name} of {fnp.dtype(dtype).name}"
         )
     return values.astype(dtype)
 

@@ -97,7 +97,9 @@ class EmbedBaseTest(absltest.TestCase):
     def test_wrong_base_field_raises(self) -> None:
         wrong = fnp.array(np.array([1], dtype=np.uint32), dtype=zk_dtypes.babybear_mont)
         with self.assertRaises(ValueError):
-            embed_base(wrong, KX)
+            embed_base(wrong, KX)  # extension destination
+        with self.assertRaises(ValueError):
+            embed_base(wrong, KB)  # prime destination — must also reject foreign
 
 
 class LimbViewTest(absltest.TestCase):
