@@ -82,27 +82,21 @@ def _u32_le_bytes(values: Array) -> Array:
 
 
 # ============================================================================
-# Squeeze-hop fusion marker. `zorch.sha256` marks the COMPRESSION; this marks the
-# whole squeeze around it — the same layering `zorch.duplex_fs` adds on top of
-# `zorch.poseidon2`, and the reason it is needed here is identical.
+# Squeeze-hop fusion marker. `zorch.sha256` marks the COMPRESSION; this marks
+# the whole squeeze around it — the same layering `zorch.duplex_fs` adds over
+# `zorch.poseidon2`, for the same reason.
 #
 # A squeeze is `absorb(framing) -> counter-squeeze -> re-absorb`. The streaming
-# state is branchless, so each absorb computes its compression speculatively and
-# selects (whether the 64-byte pending block fills is data-dependent), and
-# finalize emits both the 1- and 2-block padding candidates. That is FOUR
-# `zorch.sha256` regions per squeeze, and — because each is a fusion barrier —
-# the streaming bookkeeping between them cannot merge either: ~10 further
-# kernels, several of them a single scalar add or subtract. Measured on GPU, one
-# `sample_scalar` is 14 launches / 18.6 us, of which ~8.1 us is that glue; cost
-# tracks launch count (~2.2 us each), not arithmetic.
+# state is branchless, so each absorb compresses speculatively and selects and
+# finalize emits both padding candidates: four `zorch.sha256` regions, each a
+# fusion barrier, so the scalar bookkeeping between them cannot merge either.
+# That is ~14 GPU launches per `sample_scalar`, and on a latency-bound prove the
+# cost is the launch count, not the arithmetic (measurements in fractalyze/zorch#501).
 #
-# The decomposition is the plain `_squeeze_hop`, so a marker no vendor emits
+# The decomposition is the plain `_squeeze_hop`, so with no emitter the marker
 # inlines byte-identically. `pending_len` / `total_len` ride as runtime OPERANDS
-# (the state's packed `counts` leaf), never attrs: they are scalars shared by
-# every thread, so the block-filling and padding tests are uniform branches — no
-# warp divergence — and one kernel serves every stream position. Only `nbytes` (the
-# squeeze width) is static, so the binary is recompile-free per stream offset,
-# matching the duplex marker's contract.
+# (the packed `counts` leaf), not attrs, so the data-dependent tests are uniform
+# across the single thread and one recompile-free kernel serves every position.
 # ============================================================================
 SHA256_SQUEEZE_MARKER = "zorch.sha256_squeeze"
 SHA256_SQUEEZE_MARKER_VERSION = 1
