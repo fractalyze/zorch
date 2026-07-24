@@ -103,6 +103,29 @@ class DeepCompositionTest(absltest.TestCase):
 
 
 class OpenColumnsTest(absltest.TestCase):
+    def test_matches_per_column_dot(self) -> None:
+        # The coefficient-wise reduction against its definition: each opening
+        # is the plain Σ_k weights[k, pos_m]·col_m[k] extension dot, with mixed
+        # opening runs, a subsampling stride, and blocks wide enough to split
+        # into runs both ways.
+        n, b, c, stride = 1 << _N_BITS, 5, 4, 2
+        base_cols = fnp.stack(
+            [rand_field(20 + i, (n * stride,), KB) for i in range(b)], axis=1
+        )
+        ext_cols = fnp.stack(
+            [rand_ext_field(40 + j, (n * stride,), KB, EF) for j in range(c)],
+            axis=1,
+        )
+        weights = fnp.stack(
+            [rand_ext_field(60 + k, (n,), KB, EF) for k in range(2)], axis=1
+        )
+        pos = [0, 0, 1, 1, 1, 1, 0, 0, 1]  # base runs 0,1; ext runs 1,0,1
+        got = open_columns(base_cols, ext_cols, weights, pos, stride=stride)
+        for m in range(b + c):
+            column = base_cols[::stride, m] if m < b else ext_cols[::stride, m - b]
+            want = fnp.sum(weights[:, pos[m]] * column)
+            self.assertEqual(_coeffs(got[m]), _coeffs(want), f"column {m}")
+
     def test_recovers_direct_eval(self) -> None:
         # Barycentric round trip: Σ_i L_i(z)·p(domain[i]) == p(z), one base + one
         # extension column, split as the composition consumes them.
