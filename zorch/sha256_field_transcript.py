@@ -132,7 +132,6 @@ def _sha256_squeeze_region(
     framing: Array,
     *,
     nbytes: int,
-    **_attrs: object,
 ) -> tuple[Array, Array, Array, Array]:
     """The `zorch.sha256_squeeze` decomposition, entered at the runtime stream
     position carried in the state leaves. `nbytes` rides as an attr (the
