@@ -174,11 +174,13 @@ class MerkleTree:
     # dedicated marker lowers identically batched (one shared decomposition), so
     # `vmap(single)` IS the batched kernel — a hand-written batched twin would
     # buy nothing.
+    @partial(frx.jit, static_argnums=0)
     def _hash_leaves(self, matrix: Array) -> Array:
         return frx.vmap(self._leaf_hasher.hash, in_axes=1 if self._column_major else 0)(
             matrix
         )
 
+    @partial(frx.jit, static_argnums=0)
     def _compress_groups(self, groups: Array) -> Array:
         return frx.vmap(self._compressor.compress)(groups)
 
