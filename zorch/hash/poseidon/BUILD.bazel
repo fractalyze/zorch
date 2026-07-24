@@ -8,6 +8,7 @@ py_library(
         "linear.py",
         "params.py",
         "poseidon.py",
+        "sparse.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
