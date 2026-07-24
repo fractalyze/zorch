@@ -39,7 +39,7 @@ from typing import Any
 
 import frx.numpy as fnp
 import numpy as np
-from frx import Array, lax
+from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
 
 from zorch.byte_transcript import (
@@ -52,6 +52,7 @@ from zorch.byte_transcript import (
     OP_SQUEEZE,
     _validate_pow_bits,
 )
+from zorch.fusion import fused_region
 from zorch.grind import GRIND_WINDOW, grind_search
 from zorch.hash.sha256 import (
     Sha256State,
@@ -80,6 +81,81 @@ def _u32_le_bytes(values: Array) -> Array:
     return lax.bitcast_convert_type(values, fnp.uint8)
 
 
+# ============================================================================
+# Squeeze-hop fusion marker. `zorch.sha256` marks the COMPRESSION; this marks
+# the whole squeeze around it — the same layering `zorch.duplex_fs` adds over
+# `zorch.poseidon2`, for the same reason.
+#
+# A squeeze is `absorb(framing) -> counter-squeeze -> re-absorb`. The streaming
+# state is branchless, so each absorb compresses speculatively and selects and
+# finalize emits both padding candidates: four `zorch.sha256` regions, each a
+# fusion barrier, so the scalar bookkeeping between them cannot merge either.
+# That is ~14 GPU launches per `sample_scalar`, and on a latency-bound prove the
+# cost is the launch count, not the arithmetic (measurements in fractalyze/zorch#501).
+#
+# The decomposition is the plain `_squeeze_hop`, so with no emitter the marker
+# inlines byte-identically. `pending_len` / `total_len` ride as runtime OPERANDS
+# (the packed `counts` leaf), not attrs, so the data-dependent tests are uniform
+# across the single thread and one recompile-free kernel serves every position.
+# ============================================================================
+SHA256_SQUEEZE_MARKER = "zorch.sha256_squeeze"
+SHA256_SQUEEZE_MARKER_VERSION = 1
+
+
+def _squeeze_hop(
+    state: Sha256State, framing: Array, nbytes: int
+) -> tuple[Sha256State, Array]:
+    """The plain squeeze hop: absorb `framing`, counter-squeeze `nbytes` bytes
+    from the resulting state (`SHA256(buffer ‖ ctr)` for ctr=0,1,… as one batched
+    finalize), then re-absorb them. Returns the advanced state and the raw
+    squeezed bytes; reinterpreting those to field elements stays with the caller,
+    so the region carries no dtype."""
+    absorbed = sha256_stream_absorb(state, framing)
+    nblocks = (nbytes + _DIGEST_BYTES - 1) // _DIGEST_BYTES
+    extras = _const_u8(b"".join(_len8(ctr) for ctr in range(nblocks))).reshape(
+        nblocks, 8
+    )
+    squeezed = sha256_stream_finalize(absorbed, extras).reshape(-1)[:nbytes]
+    return sha256_stream_absorb(absorbed, squeezed), squeezed
+
+
+def _sha256_squeeze_region(
+    h: Array,
+    pending: Array,
+    counts: Array,
+    framing: Array,
+    *,
+    nbytes: int,
+) -> tuple[Array, Array, Array, Array]:
+    """The `zorch.sha256_squeeze` decomposition, entered at the runtime stream
+    position carried in the state leaves. `nbytes` rides as an attr (the
+    emitter's static squeeze width); the state stays in operands so one kernel
+    serves any `pending_len`."""
+    state, squeezed = _squeeze_hop(Sha256State(h, pending, counts), framing, nbytes)
+    return (state.h, state.pending, state.counts, squeezed)
+
+
+@partial(jit, static_argnames=("nbytes",), inline=True)
+def _sha256_squeeze_zone(
+    state: Sha256State, framing: Array, nbytes: int
+) -> tuple[Sha256State, Array]:
+    """The marked hop as one compiled dispatch carrying the
+    `zorch.sha256_squeeze` composite, so an eager caller fires a single fused FS
+    kernel. `inline=True` keeps a call site already inside an outer jit
+    byte-identical (mirrors `transcript._duplex_fs_zone`)."""
+    h, pending, counts, squeezed = fused_region(
+        _sha256_squeeze_region,
+        state.h,
+        state.pending,
+        state.counts,
+        framing,
+        name=SHA256_SQUEEZE_MARKER,
+        version=SHA256_SQUEEZE_MARKER_VERSION,
+        nbytes=nbytes,
+    )
+    return Sha256State(h, pending, counts), squeezed
+
+
 def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
     """Whether each digest (uint8 `[B, 32]`) has >= `bits` leading zero bits,
     big-endian (digest[..., 0] most significant). Traceable; byte-identical to
@@ -104,7 +180,9 @@ class Sha256FieldTranscript:
 
     @property
     def has_dedicated_fusion(self) -> bool:
-        # The SHA-256 chain lowers to a GPU kernel via the zorch.sha256 marker.
+        # The COMPRESSION lowers to a GPU kernel via the zorch.sha256 marker.
+        # Says nothing about the hop above it: a squeeze also carries the
+        # zorch.sha256_squeeze marker, which only fuses where a vendor emits it.
         return True
 
     @classmethod
@@ -117,16 +195,6 @@ class Sha256FieldTranscript:
 
     def _absorb(self, payload: Array) -> Sha256FieldTranscript:
         return replace(self, state=sha256_stream_absorb(self.state, payload))
-
-    def _squeeze_bytes(self, nbytes: int) -> Array:
-        """`nbytes` counter-squeeze bytes from the CURRENT state (no mutation) —
-        `SHA256(buffer ‖ ctr)` for ctr=0,1,…, one batched finalize."""
-        nblocks = (nbytes + 31) // 32
-        extras = _const_u8(b"".join(_len8(ctr) for ctr in range(nblocks))).reshape(
-            nblocks, 8
-        )
-        digs = sha256_stream_finalize(self.state, extras)  # [nblocks, 32]
-        return digs.reshape(-1)[:nbytes]
 
     def observe(self, values: Array) -> Sha256FieldTranscript:
         """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
@@ -171,20 +239,20 @@ class Sha256FieldTranscript:
         """Squeeze `n` challenge elements: absorb `[OP_SQUEEZE, KIND_SLICE] ||
         len8(n)`, counter-squeeze `n * itemsize` bytes, re-absorb them, and
         reinterpret to `n` elements of `dtype`."""
-        t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(n)))
-        squeezed = t._squeeze_bytes(n * self._item_bytes())
-        t = t._absorb(squeezed)
-        return t, self._u8_to_elems(squeezed, n)
+        framing = _const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(n))
+        state, squeezed = _sha256_squeeze_zone(
+            self.state, framing, n * self._item_bytes()
+        )
+        return replace(self, state=state), self._u8_to_elems(squeezed, n)
 
     def sample_scalar(self) -> tuple[Sha256FieldTranscript, Array]:
         """Squeeze one challenge under scalar framing: absorb `[OP_SQUEEZE,
         KIND_SCALAR]`, counter-squeeze `itemsize` bytes, re-absorb, reinterpret
         to one `dtype` element (0-D). Byte-identical to the byte transcript's
         `sample_scalar`; distinct from `sample(1)` (the KIND tag differs)."""
-        t = self._absorb(_const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])))
-        squeezed = t._squeeze_bytes(self._item_bytes())
-        t = t._absorb(squeezed)
-        return t, self._u8_to_elems(squeezed, 1)[0]
+        framing = _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))
+        state, squeezed = _sha256_squeeze_zone(self.state, framing, self._item_bytes())
+        return replace(self, state=state), self._u8_to_elems(squeezed, 1)[0]
 
     def observe_and_sample(
         self, values: Array, n: int = 1
