@@ -40,6 +40,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
@@ -188,7 +189,11 @@ def fold_carry(
     return num_eval, den_eval, fnp.concatenate([point, fnp.atleast_1d(r)])
 
 
-@partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
+@partial(
+    frx.tree_util.register_dataclass,
+    data_fields=["lam"],
+    meta_fields=["challenges"],
+)
 @dataclass(frozen=True)
 class LogupSumcheckRound(Round):
     """Per-variable sumcheck round for the LogUp combine (sibling of the product
@@ -196,6 +201,7 @@ class LogupSumcheckRound(Round):
 
     # Batching challenge; fixed across a layer's variable-rounds.
     lam: Array
+    challenges: ChallengePolicy = ChallengePolicy()
 
     @property
     def _summand(self) -> LogupSummand:
@@ -241,8 +247,10 @@ class LogupSumcheckRound(Round):
         self, folded: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, RoundMsg]:
         msg = self._round_poly(folded)
-        transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold(folded, r[0]), transcript, RoundMsg(msg, r[0])
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, msg, folded.dtype
+        )
+        return fold(folded, r), transcript, RoundMsg(msg, r)
 
 
 @dataclass(frozen=True)
@@ -268,7 +276,9 @@ Carry = tuple[Array, Array, Array]  # (num_eval, den_eval, eval_point)
 
 
 def bind_output(
-    output: LogUpGkrOutput, transcript: Transcript
+    output: LogUpGkrOutput,
+    transcript: Transcript,
+    challenges: ChallengePolicy | None = None,
 ) -> tuple[Carry, Transcript]:
     """Commit the circuit output and draw the initial evaluation claim.
 
@@ -277,9 +287,12 @@ def bind_output(
     `(num_eval, den_eval, eval_point)` and the advanced transcript.
     """
     num_vars = log2_strict_usize(output.numerator.shape[0])
+    challenges = challenges or ChallengePolicy()
     transcript = transcript.observe(output.numerator)
     transcript = transcript.observe(output.denominator)
-    transcript, eval_point = transcript.sample(num_vars)
+    transcript, eval_point = challenges.sample_many(
+        transcript, num_vars, output.numerator.dtype
+    )
     num_eval = eval_mle(output.numerator, eval_point)
     den_eval = eval_mle(output.denominator, eval_point)
     return (num_eval, den_eval, eval_point), transcript
@@ -288,15 +301,17 @@ def bind_output(
 class GkrLayerRound(Round):
     """Prove one GKR layer; the chain of these (floor outward) is the GKR prover."""
 
-    def __init__(self, layer: GkrLayer) -> None:
+    def __init__(
+        self, layer: GkrLayer, challenges: ChallengePolicy | None = None
+    ) -> None:
         self.layer = layer
+        self.challenges = challenges or ChallengePolicy()
 
     def __call__(
         self, carry: Carry, transcript: Transcript, _incoming: None
     ) -> tuple[Carry, Transcript, LayerProof]:
         num_eval, den_eval, eval_point = carry
-        transcript, lam = transcript.sample(1)
-        lam = lam[0]
+        transcript, lam = self.challenges.sample(transcript, num_eval.dtype)
         one = fnp.ones((), eval_point.dtype)
         # State order is LogupSumcheckRound's: [eq, n0, d1, n1, d0], stacked (5, N).
         state = fnp.stack(
@@ -310,14 +325,15 @@ class GkrLayerRound(Round):
         )
         rounds = log2_strict_usize(state.shape[-1])
         final_state, transcript, msgs = fold_rounds(
-            LogupSumcheckRound(lam), state, transcript, rounds
+            LogupSumcheckRound(lam, self.challenges), state, transcript, rounds
         )
         round_polys = fnp.stack([m.round_poly for m in msgs])
         point = fnp.stack([m.challenge for m in msgs])
 
         _, n0, d1, n1, d0 = final_state[:, 0]
-        transcript, r = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), 1)
-        r = r[0]
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, fnp.stack([n0, n1, d0, d1]), num_eval.dtype
+        )
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
 
         proof = LayerProof(round_polys, point, n0, n1, d0, d1)

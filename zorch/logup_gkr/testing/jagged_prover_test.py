@@ -19,6 +19,7 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     _interleave,
@@ -174,7 +175,7 @@ class ProveJaggedLayerTest(absltest.TestCase):
             claim,
             z,
             cheap_transcript(KB),
-            challenge_limbs=4,
+            challenges=ChallengePolicy(limbs=4),
             caps=caps_for(self.ROW_COUNTS, self.NRV),
         )
         self.assertEqual(point.dtype, EF)
@@ -260,10 +261,22 @@ class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
 
         caps = caps_for(self.ROW_COUNTS, self.NRV)
         gp, gt, gproof = prove_jagged_layer(
-            mixed, lam, claim, z, cheap_transcript(KB), challenge_limbs=4, caps=caps
+            mixed,
+            lam,
+            claim,
+            z,
+            cheap_transcript(KB),
+            challenges=ChallengePolicy(limbs=4),
+            caps=caps,
         )
         wp, wt, wproof = prove_jagged_layer(
-            all_ef, lam, claim, z, cheap_transcript(KB), challenge_limbs=4, caps=caps
+            all_ef,
+            lam,
+            claim,
+            z,
+            cheap_transcript(KB),
+            challenges=ChallengePolicy(limbs=4),
+            caps=caps,
         )
 
         self.assertTrue(bool(fnp.all(gp == wp)))  # bound point
@@ -590,13 +603,13 @@ class CapacityRoundTest(absltest.TestCase):
             rand_ext_field(441, (), KB, EF),
             rand_ext_field(442, (self.NRV + 2,), KB, EF),
         )
-        want = JaggedGkrLayerRound(layer, challenge_limbs=4, caps=self.CAPS)(
-            carry, cheap_transcript(KB), None
-        )
+        want = JaggedGkrLayerRound(
+            layer, challenges=ChallengePolicy(limbs=4), caps=self.CAPS
+        )(carry, cheap_transcript(KB), None)
         wide = widen_jagged_layer(layer, layer.width + 3)
-        got = JaggedGkrLayerRound(wide, challenge_limbs=4, caps=self.CAPS)(
-            carry, cheap_transcript(KB), None
-        )
+        got = JaggedGkrLayerRound(
+            wide, challenges=ChallengePolicy(limbs=4), caps=self.CAPS
+        )(carry, cheap_transcript(KB), None)
         self._assert_stream_equal(got, want)
 
     def test_requires_caps(self) -> None:

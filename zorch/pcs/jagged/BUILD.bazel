@@ -86,6 +86,7 @@ py_library(
     srcs = ["verifier.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:challenge",
         "//zorch:transcript",
         "//zorch:verify",
         "//zorch/coding:reed_solomon",

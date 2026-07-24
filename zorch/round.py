@@ -4,7 +4,8 @@
 A round is one directional step of a repeated protocol recurrence. The generic
 contract treats data entering and leaving the step uniformly: prover rounds
 receive ``None`` and emit proof messages; verifier rounds receive those messages
-and emit validity flags. Stages pair the two executions at protocol boundaries.
+and emit their next recurrence data. Stages pair the two executions at protocol
+boundaries.
 """
 
 from __future__ import annotations
@@ -57,7 +58,7 @@ def verify_rounds(
     msgs: Sequence[Any],
     transcript: Transcript,
 ) -> tuple[Any, Transcript, Array]:
-    """Replay verifier rounds and aggregate their outgoing verdicts."""
+    """Replay verifier rounds whose outgoing values are consistency verdicts."""
     materialized = list(rounds)
     if len(msgs) != len(materialized):
         raise ValueError(

@@ -2,20 +2,28 @@
 
 > **SNARK = Σ IOP Round**
 
-FRX-native building blocks for Modern SNARKs. `zorch` sits between **FRX** —
+This is an implementation-layer mnemonic: repeated IOP rounds are the core
+interactive computation. A full non-interactive argument also includes its
+relation/compiler, transcript transform, and commitment machinery (when the
+scheme uses them).
+
+FRX-native building blocks for proof systems. `zorch` sits between **FRX** —
 Fractalyze's fork of [JAX](https://github.com/jax-ml/jax) — and the proof systems
 that consume it: FRX provides tracing and codegen, lowered through **Fractalyze
 XLA**, its fork of stock [XLA](https://github.com/openxla/xla) that adds native
 field and elliptic-curve types. `zorch` provides the reusable pieces a proof
 system is assembled from.
 
-A Modern SNARK is **IOP + PCS**. zorch separates repeated protocol rounds
-from coarse proof stages and explicit proof-system pipelines.
+A polynomial-IOP SNARK commonly combines an IOP, polynomial commitments, and a
+Fiat–Shamir transform. Folding and other families reuse many of the same
+components without fitting that equation literally. zorch separates repeated
+protocol rounds from paired proof stages and explicit proof-system pipelines.
 
 ## Design Philosophy
 
-- **Proving-scheme-agnostic.** The blocks capture *every* proving scheme, not a
-  single one. `Round` / Fiat-Shamir / `Polynomial` / `PCS` / fold / zero-check
+- **Proving-scheme-agnostic.** The blocks are reusable across proving schemes,
+  rather than encoding a single one. `Round` / Fiat-Shamir / `Polynomial` /
+  `PCS` / fold / zero-check
   compose into FRI, sumcheck, GKR, STARK, Basefold, WHIR, …; pairing-based
   schemes plug in by swapping the `PCS` block (e.g. a KZG-style commitment).
 - **Implementation-agnostic.** `zorch` targets the proving scheme, not any one
@@ -47,7 +55,8 @@ Every executable round implements one generic transition:
 ```
 
 The prover specializes it as `incoming=None`, `outgoing=message`; the verifier
-consumes that same message as `incoming` and emits `ok` as `outgoing`.
+consumes that message as `incoming` and emits whatever the recurrence needs
+next. A sumcheck verifier round, for example, emits `(challenge, consistency)`.
 `ProverRound` and `VerifierRound` are readable type aliases for those uses of
 `Round`, not separate interfaces. The `incoming` position is required on every
 call: `None` is the prover role’s explicit unit input, not an omitted argument.
@@ -62,37 +71,43 @@ Setup, a special first interaction, a repeated sumcheck, and terminal claim
 derivation have different contracts. Their owning stage should spell out that
 orchestration directly.
 
-### Stage: pair one protocol component
+### Stage: reduce one claim
 
-A **`Stage`** is a complete reusable protocol component with matched `prove`
-and `verify` methods:
+A **`Stage`** is a paired reusable proof reduction:
 
 ```python
-prove(prover_input, transcript) -> ProveResult[prover_output, proof]
-verify(verifier_input, proof, transcript) -> VerifyResult[verifier_output]
+prove(claim, witness, transcript) -> ProveResult[reduced_claim, reduction_proof]
+verify(claim, reduction_proof, transcript) -> VerifyResult[reduced_claim]
 ```
 
-A stage owns one proof section, its transcript schedule, the typed values it
-exports, and the pairing between prover and verifier behavior. Prover and
-verifier inputs intentionally need not have the same type: a prover may consume
-a witness while the verifier consumes only a public claim.
+The claim is the public assertion entering the stage; the witness is the
+prover's private evidence. Both roles derive the same reduced claim. The stage's
+proof establishes the source claim conditional on that reduced claim:
+
+```text
+reduced claim is true  =>  source claim is true
+```
+
+A later stage proves the reduced claim, and a terminal stage closes the final
+claim. The reduced claim in `ProveResult` is an execution value for continuing
+the prover, not separately serialized proof data. The verifier reconstructs it
+from the source claim, reduction proof, and transcript.
 
 A stage may run a recurrence of rounds, perform a PCS operation, or contain
-other stages. `SumcheckStage`, for example, is an ordinary stage whose internal
-round kernels eliminate variables. Compilation boundaries are a separate
-performance choice; one stage may contain several compiled regions.
+other stages. `SumcheckStage`, for example, reduces a sum claim to an evaluation
+claim through internal per-variable rounds. Compilation boundaries are a
+separate performance choice; one stage may contain several compiled regions.
 
 ### Example: a composite proof-system stage
 
 `Spartan` is a composite stage. Its execution order is linear, but its dataflow
-is not a simple `output → next input` chain. The prover opening needs the PCS
-state and inner point; the verifier must derive the terminal opening claim from
-the statement, outer result, batching challenge, and inner result. The opening
-edges below combine those prover (`P`) and verifier (`V`) dependencies.
+is not a simple `reduced claim → next claim` chain. The terminal opening claim
+depends on the root claim, commitment, outer reduced claim, batching challenge,
+and inner reduced claim. Prover-only PCS data follows a private skip edge.
 
 ```mermaid
 flowchart LR
-    input["statement / witness"]
+    input["SpartanClaim<br/>+ SpartanWitness (P)"]
     commit["commit witness"]
     outer["OuterStage<br/>zerocheck<br/>SumcheckStage → Round × n"]
     batch["batch_claims()<br/>named transcript operation"]
@@ -102,83 +117,106 @@ flowchart LR
     input --> commit
     input --> outer
     commit -->|absorbed commitment| outer
-    outer -->|claims| batch
+    outer -->|row-evaluation claim| batch
     input -->|instance + assignment P| inner
-    outer -->|outer result| inner
+    outer -->|row-evaluation claim| inner
     batch --> inner
-    commit -->|PCS data P / commitment V| opening
-    input -->|instance + public inputs V| opening
-    outer -->|outer result V| opening
-    batch -->|batched claim V| opening
-    inner -->|point P / reduced claim V| opening
+    commit -->|commitment + PCS data P| opening
+    input -->|instance + public inputs| opening
+    outer -->|row-evaluation claim| opening
+    batch -->|batched value| opening
+    inner -->|column-evaluation claim| opening
 ```
 
 The composite writes this dataflow with ordinary Python, like a PyTorch module
-with a custom `forward`. Its two paths intentionally construct different inputs
-for the paired opening stage:
+with a custom `forward`. Prover and verifier construct the same child claims;
+only the prover supplies witnesses:
 
 ```python
 # prove()
-outer = self.outer.prove(outer_polynomials, transcript)
-batch, transcript = batch_claims(outer.output.claims, outer.transcript)
-inner = self.inner.prove(
-    LincheckWitness(instance, assignment, outer.output, batch),
+outer_claim = ZerocheckClaim(instance.s_x)
+outer = self.outer.prove(
+    outer_claim,
+    ZerocheckWitness(az, bz, cz),
     transcript,
 )
+batch, transcript = batch_claims(outer.reduced_claim.values, outer.transcript)
+inner_claim = LincheckClaim(instance, outer.reduced_claim, batch)
+inner = self.inner.prove(
+    inner_claim,
+    LincheckWitness(assignment),
+    transcript,
+)
+opening_claim = witness_opening_claim(
+    commitment,
+    instance,
+    root_claim.public_inputs,
+    outer.reduced_claim,
+    batch,
+    inner.reduced_claim,
+)
 opening = self.witness_open.prove(
-    WitnessOpenData(pcs, prover_data, inner.output.point),
+    opening_claim,
+    WitnessOpeningWitness(prover_data),
     inner.transcript,
 )
 
 # verify()
-outer = self.outer.verify(None, proof.outer, transcript)
-batch, transcript = batch_claims(outer.output.claims, outer.transcript)
-inner = self.inner.verify(batch, proof.inner, transcript)
-claim = witness_opening_claim(
+outer_claim = ZerocheckClaim(instance.s_x)
+outer = self.outer.verify(outer_claim, proof.outer, transcript)
+batch, transcript = batch_claims(outer.reduced_claim.values, outer.transcript)
+inner_claim = LincheckClaim(instance, outer.reduced_claim, batch)
+inner = self.inner.verify(inner_claim, proof.inner, transcript)
+opening_claim = witness_opening_claim(
+    proof.commitment,
     instance,
-    public_inputs,
-    outer.output,
+    root_claim.public_inputs,
+    outer.reduced_claim,
     batch,
-    inner.output,
+    inner.reduced_claim,
 )
 opening = self.witness_open.verify(
-    WitnessOpeningStatement(pcs, proof.commitment, claim),
+    opening_claim,
     proof.witness_open,
     inner.transcript,
 )
 ```
 
-The prover does not need to recompute a claim it already knows is implied by its
-witness; it opens the committed polynomial at the final point. The verifier has
-no witness, so its opening statement packages the claim derived from almost the
-entire preceding pipeline. This explicit parent orchestration preserves fan-out,
-skip-level dependencies, and different prover/verifier knowledge without a
+The opening claim is derived from almost the entire preceding pipeline on both
+sides. The prover additionally supplies the PCS opening witness. This explicit
+parent orchestration preserves fan-out and skip-level dependencies without a
 universal context object or adapter stage.
 
-| | **`Round`** | **`Stage`** | **Named transcript operation** |
+| | **`Round`** | **`Stage`** | **Named protocol operation** |
 | --- | --- | --- | --- |
-| **Represents** | one step of a repeated recurrence | one complete paired protocol component | schedule-only Fiat-Shamir work |
-| **Owns** | recurrence carry and incoming/outgoing contract | typed inputs/outputs and one proof section | no proof section |
-| **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, PCS opening, Spartan | domain separation, grinding, claim batching |
-| **Composed by** | a recurrence driver inside a stage | an explicit parent `Stage` | the stage whose security schedule requires it |
+| **Represents** | one step of a repeated recurrence | one conditional claim reduction | shared framing, reduction, or security-amplification step without its own proof section |
+| **Owns** | recurrence carry and incoming/outgoing contract | source/reduced claims and one reduction-proof section | no proof section |
+| **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a stage wrapping a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
+| **Composed by** | a recurrence driver inside a stage | an explicit parent `Stage` | the parent whose transcript and soundness accounting require it |
 
 There is deliberately no separate “bridge” component. A domain separator,
 grind, framed observation, or sampled batching challenge does not prove or
-verify an independently reusable claim. It is a named function called at the
-same point by the owning prover and verifier.
+verify an independently reusable claim, even when it changes soundness. It is a
+named function called at the same point by the owning prover and verifier, with
+its preconditions and security contribution documented there.
 
 ### Where the classic pieces fit
 
 - **Fiat-Shamir, `Polynomial`, folds, codes, hashing, and commitments** are
   reusable materials used by rounds and stages.
-- **Sumcheck** is a `Stage` because it is a complete paired reduction; its
+- **Sumcheck** is a `Stage` because it is a paired reduction; its
   per-variable steps are rounds.
+- **Univariate-skip sumcheck** is also an ordinary stage, but exports a distinct
+  prism-point reduction. A parent expecting an ordinary multilinear evaluation
+  point cannot accidentally substitute it.
 - **Zerocheck and lincheck** are stages that configure sumcheck and add their
   protocol-specific setup, terminal checks, and exported claims.
-- **A PCS opening** is a stage. Its implementation may drive internal rounds
-  (Basefold does) or use another recurrence shape; those mechanics do not change
-  the paired proof boundary.
-- **A complete proof system** can itself be a composite stage, so it can be
+- **LogUp-GKR** reduces a public output-and-layer-count claim to an input-layer
+  evaluation claim for a consumer's PCS opening.
+- **A stage can wrap a PCS opening.** `WitnessOpenStage` pairs the injected
+  `PcsProver` and `PcsVerifier` operations at a proof boundary; PCS
+  implementations do not themselves implement `Stage`.
+- **A full proof system** can itself be a composite stage, so it can be
   tested, nested, or reused through the same paired interface.
 
 The full contracts, ownership rules, and reuse guidance live in

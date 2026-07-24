@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.prover import Carry, LayerProof, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import Round
@@ -38,17 +39,22 @@ _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 class GkrLayerRound(Round):
     """Verify one GKR layer; the chain of these is the GKR verifier."""
 
+    def __init__(self, challenges: ChallengePolicy | None = None) -> None:
+        self.challenges = challenges or ChallengePolicy()
+
     def __call__(
         self, carry: Carry, transcript: Transcript, layer_proof: LayerProof
     ) -> tuple[Carry, Transcript, Array]:
         num_eval, den_eval, eval_point = carry
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1
         d0, d1 = layer_proof.denominator_0, layer_proof.denominator_1
-        transcript, lam = transcript.sample(1)
-        lam = lam[0]
+        transcript, lam = self.challenges.sample(transcript, num_eval.dtype)
         claim = lam * num_eval + den_eval
         point, final_claim, transcript, ok_sc = verify(
-            SumcheckVerifierRound(_DEGREE), claim, layer_proof.round_polys, transcript
+            SumcheckVerifierRound(_DEGREE, self.challenges),
+            claim,
+            layer_proof.round_polys,
+            transcript,
         )
         # The carry's eval_point must have one coordinate per sumcheck round, or
         # `eval_eq` reads the wrong eq weight (a degenerate length-1 carry would
@@ -64,8 +70,9 @@ class GkrLayerRound(Round):
         combined = logup_combine(lam, eq_eval, n0, d1, n1, d0)
         ok = ok_sc & (combined == final_claim)
 
-        transcript, r = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), 1)
-        r = r[0]
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, fnp.stack([n0, n1, d0, d1]), num_eval.dtype
+        )
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok
 

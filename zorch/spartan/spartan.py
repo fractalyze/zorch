@@ -1,64 +1,65 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Spartan as a composite stage with explicit DAG-shaped orchestration.
-
-Outer claims feed both the inner phase and witness opening. The commitment and
-PCS prover data flow directly to the witness-opening phase.
-"""
+"""Spartan as an explicit composition of conditional claim reductions."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
+import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.pcs.protocol import PcsProver, PcsVerifier
-from zorch.spartan.engine import StageSumcheck
 from zorch.spartan.lincheck import (
     InnerProof,
     InnerStage,
+    LincheckClaim,
     LincheckWitness,
     batch_claims,
 )
 from zorch.spartan.pcs_glue import (
-    WitnessOpenData,
-    WitnessOpeningStatement,
+    WitnessOpeningWitness,
     WitnessOpenProof,
     WitnessOpenStage,
     witness_opening_claim,
 )
 from zorch.spartan.r1cs import R1CS
 from zorch.spartan.zerocheck import (
-    OuterPolynomials,
     OuterProof,
     OuterStage,
+    ZerocheckClaim,
+    ZerocheckWitness,
 )
 from zorch.stage import ProveResult, Stage, VerifyResult
 from zorch.transcript import Transcript
 
 
 @dataclass(frozen=True)
-class SpartanWitness:
-    """Private assignment, public statement, and PCS prover for Spartan."""
+class SpartanClaim:
+    """Public R1CS satisfiability claim."""
 
     instance: R1CS
-    assignment: Array
     public_inputs: Array
-    pcs: PcsProver[Any, Any, Any]
+
+    def __post_init__(self) -> None:
+        if self.public_inputs.shape != (self.instance.num_io,):
+            raise ValueError(
+                f"expected {self.instance.num_io} public inputs, "
+                f"got shape {self.public_inputs.shape}"
+            )
 
 
 @dataclass(frozen=True)
-class SpartanStatement:
-    """Public R1CS statement and PCS verifier for Spartan."""
+class SpartanWitness:
+    """Private assignment witnessing a ``SpartanClaim``."""
 
-    instance: R1CS
-    public_inputs: Array
-    pcs: PcsVerifier[Any, Any]
+    assignment: Array
 
 
 @dataclass(frozen=True)
 class SpartanProof:
-    """One named proof section per coarse protocol phase."""
+    """One named reduction-proof section per coarse protocol phase."""
 
     commitment: Array
     outer: OuterProof
@@ -66,81 +67,140 @@ class SpartanProof:
     witness_open: WitnessOpenProof
 
 
-class Spartan(Stage[SpartanWitness, None, SpartanStatement, None, SpartanProof]):
-    """The composite Spartan protocol stage."""
-
-    name = "spartan"
+class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
+    """Close a Spartan satisfiability claim through three child reductions."""
 
     def __init__(
         self,
+        pcs_prover: PcsProver[Any, Any, Any],
+        pcs_verifier: PcsVerifier[Any, Any],
         *,
-        outer: StageSumcheck | None = None,
-        inner: StageSumcheck | None = None,
+        outer: OuterStage | None = None,
+        inner: InnerStage | None = None,
+        witness_open: WitnessOpenStage | None = None,
+        challenges: ChallengePolicy | None = None,
     ) -> None:
-        self.outer = OuterStage(sumcheck=outer)
-        self.inner = InnerStage(sumcheck=inner)
-        self.witness_open = WitnessOpenStage()
+        self.challenges = challenges or ChallengePolicy()
+        self.pcs_prover = pcs_prover
+        self.outer = outer or OuterStage(challenges=self.challenges)
+        self.inner = inner or InnerStage(challenges=self.challenges)
+        self.witness_open = witness_open or WitnessOpenStage(pcs_prover, pcs_verifier)
 
     @staticmethod
-    def _absorb_statement(
-        transcript: Transcript, commitment: Array, public_inputs: Array
-    ) -> Transcript:
-        transcript = transcript.observe(commitment)
-        if public_inputs.shape[0] > 0:
-            transcript = transcript.observe(public_inputs)
+    def _observe_framed(transcript: Transcript, tag: int, values: Array) -> Transcript:
+        header = fnp.array([tag, values.ndim, *values.shape], values.dtype)
+        transcript = transcript.observe(header)
+        if values.size > 0:
+            transcript = transcript.observe(fnp.reshape(values, (-1,)))
         return transcript
 
-    def prove(
-        self, inputs: SpartanWitness, transcript: Transcript
-    ) -> ProveResult[None, SpartanProof]:
-        instance = inputs.instance
-        assignment = inputs.assignment
-        witness = assignment[: instance.num_vars_padded]
-        commitment, prover_data = inputs.pcs.commit([witness])
-        transcript = self._absorb_statement(
-            transcript, commitment, inputs.public_inputs
+    @classmethod
+    def _absorb_claim(
+        cls,
+        transcript: Transcript,
+        claim: SpartanClaim,
+        commitment: Array,
+    ) -> Transcript:
+        # The dense matrices are the index in this prototype. An indexed Spartan
+        # replaces these three frames with the verifier-key digest, preserving the
+        # same binding contract without absorbing the full matrices per proof.
+        instance = claim.instance
+        transcript = cls._observe_framed(transcript, 1, instance.a)
+        transcript = cls._observe_framed(transcript, 2, instance.b)
+        transcript = cls._observe_framed(transcript, 3, instance.c)
+        transcript = cls._observe_framed(
+            transcript,
+            4,
+            fnp.array([instance.num_io], instance.a.dtype),
         )
+        transcript = cls._observe_framed(transcript, 5, commitment)
+        return cls._observe_framed(transcript, 6, claim.public_inputs)
+
+    def prove(
+        self,
+        claim: SpartanClaim,
+        witness: SpartanWitness,
+        transcript: Transcript,
+    ) -> ProveResult[None, SpartanProof]:
+        instance = claim.instance
+        assignment = witness.assignment
+        if assignment.shape != (instance.num_cols,):
+            raise ValueError(
+                f"expected assignment shape {(instance.num_cols,)}, "
+                f"got {assignment.shape}"
+            )
+        witness_poly = assignment[: instance.num_vars_padded]
+        commitment, prover_data = self.pcs_prover.commit([witness_poly])
+        transcript = self._absorb_claim(transcript, claim, commitment)
 
         az, bz, cz = instance.matvecs(assignment)
-        outer = self.outer.prove(OuterPolynomials(az, bz, cz), transcript)
-        batch, transcript = batch_claims(outer.output.claims, outer.transcript)
+        outer = self.outer.prove(
+            ZerocheckClaim(instance.s_x),
+            ZerocheckWitness(az, bz, cz),
+            transcript,
+        )
+        batch, transcript = batch_claims(
+            outer.reduced_claim.values, outer.transcript, self.challenges
+        )
+        lincheck_claim = LincheckClaim(instance, outer.reduced_claim, batch)
         inner = self.inner.prove(
-            LincheckWitness(instance, assignment, outer.output, batch), transcript
+            lincheck_claim,
+            LincheckWitness(assignment),
+            transcript,
+        )
+        opening_claim = witness_opening_claim(
+            commitment,
+            instance,
+            claim.public_inputs,
+            outer.reduced_claim,
+            batch,
+            inner.reduced_claim,
         )
         opening = self.witness_open.prove(
-            WitnessOpenData(inputs.pcs, prover_data, inner.output.point),
+            opening_claim,
+            WitnessOpeningWitness(prover_data),
             inner.transcript,
         )
-        proof = SpartanProof(
+        reduction_proof = SpartanProof(
             commitment,
-            outer.proof,
-            inner.proof,
-            opening.proof,
+            outer.reduction_proof,
+            inner.reduction_proof,
+            opening.reduction_proof,
         )
-        return ProveResult(None, proof, opening.transcript)
+        return ProveResult(None, reduction_proof, opening.transcript)
 
     def verify(
         self,
-        inputs: SpartanStatement,
-        proof: SpartanProof,
+        claim: SpartanClaim,
+        reduction_proof: SpartanProof,
         transcript: Transcript,
     ) -> VerifyResult[None]:
-        transcript = self._absorb_statement(
-            transcript, proof.commitment, inputs.public_inputs
+        transcript = self._absorb_claim(transcript, claim, reduction_proof.commitment)
+        outer = self.outer.verify(
+            ZerocheckClaim(claim.instance.s_x),
+            reduction_proof.outer,
+            transcript,
         )
-        outer = self.outer.verify(None, proof.outer, transcript)
-        batch, transcript = batch_claims(outer.output.claims, outer.transcript)
-        inner = self.inner.verify(batch, proof.inner, transcript)
-        claim = witness_opening_claim(
-            inputs.instance,
-            inputs.public_inputs,
-            outer.output,
+        batch, transcript = batch_claims(
+            outer.reduced_claim.values, outer.transcript, self.challenges
+        )
+        lincheck_claim = LincheckClaim(claim.instance, outer.reduced_claim, batch)
+        inner = self.inner.verify(
+            lincheck_claim,
+            reduction_proof.inner,
+            transcript,
+        )
+        opening_claim = witness_opening_claim(
+            reduction_proof.commitment,
+            claim.instance,
+            claim.public_inputs,
+            outer.reduced_claim,
             batch,
-            inner.output,
+            inner.reduced_claim,
         )
         opening = self.witness_open.verify(
-            WitnessOpeningStatement(inputs.pcs, proof.commitment, claim),
-            proof.witness_open,
+            opening_claim,
+            reduction_proof.witness_open,
             inner.transcript,
         )
         ok = outer.ok & inner.ok & opening.ok

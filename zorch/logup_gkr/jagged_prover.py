@@ -43,6 +43,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
@@ -128,7 +129,7 @@ def prove_jagged_layer(
     eval_point: Array,
     transcript: Transcript,
     *,
-    challenge_limbs: int = 1,
+    challenges: ChallengePolicy | None = None,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """Prove one jagged GKR layer's materialized sumcheck from an explicit
@@ -161,6 +162,8 @@ def prove_jagged_layer(
     """
     if caps is None:
         raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
+    challenges = challenges or ChallengePolicy()
+    challenge_limbs = challenges.limbs_for(eval_point.dtype)
     niv = layer.num_batch_variables
     nrv = eval_point.shape[0] - niv
     if nrv < 1:
@@ -654,13 +657,9 @@ def _jagged_round_via_zone(
 class JaggedGkrLayerRound(Round):
     """Prove one jagged GKR layer; the chain of these (floor outward) is the
     jagged GKR prover, threading the same `(num_eval, den_eval, eval_point)`
-    carry as the dense chain. `challenge_limbs` rides on the round because
-    every challenge in the layer -- lam, the per-variable folds, and the
-    child-selector r -- must come from the same squeeze rule.
-
-    The shared head `prover.bind_output` works unchanged for a jagged output
-    when `challenge_limbs == 1`; a consumer squeezing multi-limb challenges
-    owns its binding glue.
+    carry as the dense chain. One `ChallengePolicy` configures lam, every
+    per-variable fold, and the child selector; `prover.bind_output` consumes
+    that same policy at the chain head.
 
     The per-layer prove dispatches through the module-level `_jagged_round_zone`
     (one executable per layer): the schedule rides as a traced operand and the
@@ -676,7 +675,7 @@ class JaggedGkrLayerRound(Round):
     def __init__(
         self,
         layer: JaggedGkrLayer,
-        challenge_limbs: int = 1,
+        challenges: ChallengePolicy | None = None,
         *,
         caps: RoundWidthCaps | None = None,
         layer_bufs: LayerBuffers | None = None,
@@ -684,6 +683,8 @@ class JaggedGkrLayerRound(Round):
         # `partial` closes over the args, not `self`, so the chain frees the
         # round -- and its layer -- the moment it builds the next. Pass ONE
         # `layer_bufs` per chain (None materializes the cap pad fresh).
+        policy = challenges or ChallengePolicy()
+        challenge_limbs = policy.limbs_for(layer.denominator_0.dtype)
         self._call = partial(
             _jagged_round_via_zone, layer, challenge_limbs, caps, layer_bufs
         )

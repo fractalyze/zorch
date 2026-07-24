@@ -8,12 +8,14 @@ py_library(
     name = "testing",
     srcs = [
         "__init__.py",
+        "dense_pcs.py",
         "reference.py",
         "toy.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
+        "//zorch/poly",
         "//zorch/spartan",
         "//zorch/testkit:random_field",
         requirement("frx"),
@@ -52,13 +54,14 @@ py_test(
 )
 
 py_test(
-    name = "engine_test",
+    name = "sumcheck_stage_test",
     size = "small",
-    srcs = ["engine_test.py"],
+    srcs = ["sumcheck_stage_test.py"],
     deps = [
         "//zorch/spartan",
         "//zorch/spartan/testing",
         "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("frx"),
@@ -71,10 +74,12 @@ py_test(
     size = "small",
     srcs = ["zerocheck_test.py"],
     deps = [
+        "//zorch:challenge",
         "//zorch/poly",
         "//zorch/spartan",
         "//zorch/spartan/testing",
         "//zorch/sumcheck",
+        "//zorch/sumcheck/eq",
         "//zorch/testkit:fusion",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
@@ -120,6 +125,7 @@ py_test(
     size = "small",
     srcs = ["spartan_test.py"],
     deps = [
+        "//zorch:challenge",
         "//zorch/spartan",
         "//zorch/spartan/testing",
         "//zorch/testkit:transcript",
@@ -155,6 +161,7 @@ py_test(
         "//zorch/spartan",
         "//zorch/spartan/testing",
         "//zorch/sumcheck",
+        "//zorch/sumcheck/eq",
         "//zorch/testkit:fusion",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",

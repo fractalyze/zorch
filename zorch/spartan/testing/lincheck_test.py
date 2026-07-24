@@ -14,13 +14,14 @@ from frx import Array
 from zorch.spartan.lincheck import (
     BatchedClaims,
     InnerStage,
+    LincheckClaim,
     LincheckWitness,
     _joint_claim,
     batch_claims,
 )
 from zorch.spartan.r1cs import R1CS
 from zorch.spartan.testing.toy import toy_r1cs
-from zorch.spartan.zerocheck import OuterOutput
+from zorch.spartan.zerocheck import RowEvaluationClaim
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 
@@ -52,7 +53,7 @@ class RlcOperationTest(parameterized.TestCase):
 class InnerStageTest(parameterized.TestCase):
     def _setup(
         self, seed: int, dtype: Any
-    ) -> tuple[R1CS, Array, OuterOutput, BatchedClaims]:
+    ) -> tuple[R1CS, Array, RowEvaluationClaim, BatchedClaims]:
         inst, z, _, _ = toy_r1cs(seed, s_x=3, num_vars_padded=4, num_io=2, dtype=dtype)
         point = rand_field(seed + 10, (inst.s_x,), dtype)
         r = fnp.asarray(rand_field(seed + 11, (1,), dtype)[0])
@@ -60,29 +61,36 @@ class InnerStageTest(parameterized.TestCase):
         return (
             inst,
             z,
-            OuterOutput(point, rand_field(seed + 12, (3,), dtype)),
+            RowEvaluationClaim(point, rand_field(seed + 12, (3,), dtype)),
             BatchedClaims(r, joint),
         )
 
     @parameterized.named_parameters(*FIELDS)
     def test_roundtrip_accepts(self, dtype: Any) -> None:
         inst, z, outer, batch = self._setup(20, dtype)
-        proved = InnerStage().prove(
-            LincheckWitness(inst, z, outer, batch), cheap_transcript(dtype)
+        claim = LincheckClaim(inst, outer, batch)
+        proved = InnerStage().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
+        verified = InnerStage().verify(
+            claim, proved.reduction_proof, cheap_transcript(dtype)
         )
-        verified = InnerStage().verify(batch, proved.proof, cheap_transcript(dtype))
         self.assertTrue(bool(verified.ok))
-        self.assertTrue(bool(fnp.all(proved.output.point == verified.output.point)))
-        self.assertTrue(bool(proved.output.final_claim == verified.output.final_claim))
+        self.assertTrue(
+            bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.value == verified.reduced_claim.value)
+        )
 
     @parameterized.named_parameters(*FIELDS)
     def test_wrong_joint_claim_rejected(self, dtype: Any) -> None:
         inst, z, outer, batch = self._setup(21, dtype)
-        proved = InnerStage().prove(
-            LincheckWitness(inst, z, outer, batch), cheap_transcript(dtype)
+        claim = LincheckClaim(inst, outer, batch)
+        proved = InnerStage().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
+        bad_batch = replace(batch, joint=batch.joint + fnp.ones((), dtype))
+        bad_claim = replace(claim, batch=bad_batch)
+        verified = InnerStage().verify(
+            bad_claim, proved.reduction_proof, cheap_transcript(dtype)
         )
-        bad = replace(batch, joint=batch.joint + fnp.ones((), dtype))
-        verified = InnerStage().verify(bad, proved.proof, cheap_transcript(dtype))
         self.assertFalse(bool(verified.ok))
 
 

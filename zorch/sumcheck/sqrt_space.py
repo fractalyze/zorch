@@ -21,22 +21,16 @@ combine(*slopes)); a finite domain lifts that restriction for any summand.
 
 from __future__ import annotations
 
-from typing import Any
-
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
 from zorch.sumcheck.domain import EvalDomain, summand_evals, uhat_domain
-from zorch.sumcheck.prover import (
-    ProductSummand,
-    StandardRound,
-    SumcheckSummand,
-    challenge_limbs,
-)
-from zorch.transcript import Transcript, sample_challenge
+from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
+from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
 # (P_stacked, eq_evals): the factors (d, 2ˡ), untouched through phase 1, and the
@@ -59,21 +53,19 @@ class SqrtSpaceRound(Round):
     the sampling domain, and extend the eq table by the sampled challenge (the
     factors stay put). Bound to a SumcheckSummand and an EvalDomain.
 
-    `ext_dtype` chooses the challenge field exactly as `StandardRound` does — None
-    keeps the byte-identical base-field squeeze, an extension squeezes its limbs — so a
-    √-space run composes as the tail of an extension-field sumcheck (the univariate
-    skip)."""
+    `challenges` is shared with `StandardRound`, so both phases use one
+    challenge-field and squeeze policy. This lets a √-space run serve as the tail
+    of an extension-field sumcheck without a second configuration spelling."""
 
     def __init__(
         self,
         summand: SumcheckSummand,
         domain: EvalDomain,
-        ext_dtype: Any | None = None,
+        challenges: ChallengePolicy | None = None,
     ) -> None:
         self.summand = summand
         self.domain = domain
-        self.ext_dtype = ext_dtype
-        self.limbs = 1 if ext_dtype is None else challenge_limbs(ext_dtype)
+        self.challenges = challenges or ChallengePolicy()
 
     def _round_poly(self, state: SqrtSpaceState) -> Array:
         return summand_evals(
@@ -85,12 +77,9 @@ class SqrtSpaceRound(Round):
     ) -> tuple[SqrtSpaceState, Transcript, Array]:
         p_stacked, eq_evals = state
         msg = self._round_poly(state)
-        if self.ext_dtype is None:
-            transcript, r = transcript.observe_and_sample(msg, 1)
-            r = r[0]
-        else:
-            transcript = transcript.observe(msg)
-            transcript, r = sample_challenge(transcript, self.ext_dtype, self.limbs)
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, msg, p_stacked.dtype
+        )
         return (p_stacked, expand_hypercube_step(eq_evals, r)), transcript, msg
 
 
@@ -99,13 +88,13 @@ def prove_sqrt_space(
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
-    ext_dtype: Any | None = None,
+    challenges: ChallengePolicy | None = None,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck: √-space first phase, standard second phase. `summand`
     defaults to the product over the factors (ProductSummand) and `domain` to the
     compressed Û_degree; pass a homogeneous SumcheckSummand and/or another EvalDomain
-    to retarget the engine. `ext_dtype` chooses the challenge field (None = base, the
-    byte-identical original; an extension makes this a drop-in tail for the univariate
+    to retarget the engine. `challenges` configures both phases (the default is
+    transcript-native; an extension policy makes this a drop-in tail for univariate
     skip). Returns the final folded factors (d, 1), the transcript, and all l
     messages."""
     summand = summand or ProductSummand(degree=p_initial.shape[0])
@@ -115,14 +104,14 @@ def prove_sqrt_space(
 
     state: SqrtSpaceState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
     state, transcript, phase1 = fold_rounds(
-        SqrtSpaceRound(summand, domain, ext_dtype), state, transcript, l_half
+        SqrtSpaceRound(summand, domain, challenges), state, transcript, l_half
     )
 
     # Boundary: materialize the deferred state — fold the whole bound prefix down at
     # once — then run standard sumcheck rounds over the explicit evaluations.
     folded = compute_folded_evaluations(*state)
     folded, transcript, phase2 = fold_rounds(
-        StandardRound(summand, domain, ext_dtype=ext_dtype),
+        StandardRound(summand, domain, challenges=challenges),
         folded,
         transcript,
         l - l_half,

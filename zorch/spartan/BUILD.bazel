@@ -7,7 +7,6 @@ py_library(
     name = "spartan",
     srcs = [
         "__init__.py",
-        "engine.py",
         "lincheck.py",
         "pcs_glue.py",
         "r1cs.py",
@@ -17,6 +16,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:challenge",
         "//zorch:prove",
         "//zorch:round",
         "//zorch:stage",
@@ -25,6 +25,7 @@ py_library(
         "//zorch/pcs:protocol",
         "//zorch/poly",
         "//zorch/sumcheck",
+        "//zorch/sumcheck/eq",
         "//zorch/utils:bits",
         requirement("frx"),
     ],

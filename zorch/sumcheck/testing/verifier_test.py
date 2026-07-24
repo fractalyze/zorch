@@ -9,6 +9,7 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.prove import fold_rounds
 from zorch.sumcheck import prover, verifier
 from zorch.sumcheck.testing import eval_mle_oracle, product
@@ -219,9 +220,9 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
         EF = zk_dtypes.koalabearx4_mont
         coeffs = fnp.array([3, 5, 2, 7], KB).astype(EF)
         claim = coeffs[0] + fnp.sum(coeffs)
-        next_claim, _, (r, ok) = verifier.CoeffsSumcheckRound(3, challenge_limbs=4)(
-            claim, cheap_transcript(KB), coeffs
-        )
+        next_claim, _, (r, ok) = verifier.CoeffsSumcheckRound(
+            3, challenges=ChallengePolicy(limbs=4)
+        )(claim, cheap_transcript(KB), coeffs)
         self.assertTrue(bool(ok))
         self.assertEqual(r.dtype, EF)
         self.assertEqual(next_claim.dtype, EF)
@@ -236,7 +237,7 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             verifier.CoeffsSumcheckRound(0)
         with self.assertRaises(ValueError):
-            verifier.CoeffsSumcheckRound(3, challenge_limbs=0)
+            verifier.CoeffsSumcheckRound(3, challenges=ChallengePolicy(limbs=0))
 
 
 class CompressedCoeffsRoundtripTest(absltest.TestCase):

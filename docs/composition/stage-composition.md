@@ -5,7 +5,7 @@ ZK protocols compose at two different scales:
 - a **round** repeats one recurrence, such as eliminating a sumcheck variable or
   reducing one GKR layer;
 - a **stage** is one paired prover/verifier component, such as zerocheck,
-  lincheck, a PCS opening, or a complete proof system.
+  lincheck, LogUp-GKR, a wrapper around a PCS opening, or a full proof system.
 
 Keeping those scales separate makes it clear which code repeats an algorithm,
 which code owns a proof boundary, and where proof-system dataflow belongs.
@@ -15,7 +15,8 @@ which code owns a proof boundary, and where proof-system dataflow belongs.
 Every round has one generic transition contract:
 `(carry, transcript, incoming)` maps to `(carry, transcript, outgoing)`.
 A prover round receives `None` and emits its proof message; the verifier round
-receives that message and emits its `ok` verdict. `ProverRound` and
+receives that message and emits the recurrence's next data. A sumcheck verifier
+round emits `(challenge, consistency)`. `ProverRound` and
 `VerifierRound` are type aliases specializing this one `Round` protocol. The
 `incoming` position remains required: `None` is an explicit unit input for the
 prover role, while a verifier must supply the corresponding proof message.
@@ -35,27 +36,38 @@ that orchestration explicitly inside the owning stage.
 Rounds are normally implementation details of a stage. A stage chooses its
 prover and verifier recurrences and packages their messages into its proof type.
 
-## Stage: pair one protocol component
+## Stage: reduce one claim
 
-`Stage` is the common base class for complete paired protocol components. Every
-stage implements both methods:
+`Stage` is the common base class for paired proof reductions:
 
 ```python
-prove(prover_input, transcript) -> ProveResult[prover_output, proof]
-verify(verifier_input, proof, transcript) -> VerifyResult[verifier_output]
+prove(claim, witness, transcript) -> ProveResult[reduced_claim, reduction_proof]
+verify(claim, reduction_proof, transcript) -> VerifyResult[reduced_claim]
 ```
 
-Each side accepts one semantic domain value. For example, Spartan's inner stage
-accepts `LincheckWitness` while its verifier accepts `BatchedClaims`; `None` is
-used when a side needs no input beyond the proof and transcript. Prover and
-verifier inputs and outputs are intentionally different types because the two
-sides have different knowledge.
+A **claim** is the public assertion entering the stage. A **witness** is the
+private evidence used by the prover. Both sides derive the same **reduced
+claim**. The reduction proof does not normally establish that reduced claim;
+it establishes the source claim *conditional on* the reduced claim:
+
+```text
+reduced claim is true  =>  source claim is true
+```
+
+up to the reduction's soundness error. A later stage proves the reduced claim,
+and a terminal stage closes the final claim. “Statement” is useful prose for a
+proof system's root claim, but is not a separate code concept. “Reduction”
+names the operation performed by a stage, not a generic result object.
+
+`ProveResult.reduced_claim` is an execution result used to continue the prover;
+it is not serialized separately. The verifier independently reconstructs the
+same value from the source claim, reduction proof, and transcript.
 
 A stage owns:
 
 - the pairing between its prover and verifier;
 - one proof type;
-- typed values exported to its parent protocol;
+- one source-claim and reduced-claim contract shared by both roles;
 - reusable static configuration;
 - an independently testable protocol boundary.
 
@@ -70,49 +82,78 @@ A composite stage owns child stages and writes their dataflow in ordinary
 `prove` and `verify` methods, like a PyTorch module with a custom `forward`:
 
 ```text
-                         +---- outer ---- batch ---- inner ----+
-statement / witness ----+                                      +---- opening
-                         +---- commitment / PCS data -----------+
+claim + witness --------+---- outer ---- batch ---- inner ----+
+                        +---- commitment / PCS data -----------+---- opening
 ```
 
 This is the default composition model, not an exceptional DAG escape hatch.
 Execution order is often linear while dataflow is not: commitments survive to a
-later opening, claims feed more than one consumer, and original statement or
-witness data remains live across several phases.
+later opening, claims feed more than one consumer, and root-claim or witness
+data remains live across several phases.
 
-The parent constructs each child's semantic input from named values:
+The parent constructs each child's claim and witness from named values:
 
 ```python
-outer = self.outer.prove(outer_witness, transcript)
-batch, transcript = batch_claims(outer.output.claims, outer.transcript)
+outer = self.outer.prove(outer_claim, outer_witness, transcript)
+batch, transcript = batch_claims(outer.reduced_claim.values, outer.transcript)
+inner_claim = LincheckClaim(instance, outer.reduced_claim, batch)
 inner = self.inner.prove(
-    LincheckWitness(instance, assignment, outer.output, batch),
+    inner_claim,
+    LincheckWitness(assignment),
     transcript,
 )
 ```
 
-A child output therefore does not need to equal the next child's complete input.
-The parent can combine it with statement data, witness data, or another earlier
-result without an adapter stage or accumulating context object.
+A child reduced claim therefore need not be the next child's complete source
+claim. The parent can combine it with root-claim data or another earlier claim.
+Private skip-level values remain explicit parent locals and can contribute to a
+later witness without entering the public claim.
 
-`Spartan` is the reference composite stage. Its outer result feeds both the
+`Spartan` is the reference composite stage. Its outer claim feeds both the
 inner stage and the terminal opening claim, while the witness commitment and
-PCS prover data skip directly to the opening stage. Its proof is a frozen
-dataclass with named child proof fields.
+PCS prover data skip directly to the opening stage. `LogUpGkrStage` is the
+second production reduction: its source claim owns the public output and layer
+count, while its reduced claim is the input-layer claim for a consumer's PCS
+opening. Both proofs use frozen dataclasses with named sections.
 
 ## State and ownership rules
 
 - The transcript is explicit in every round call and stage result.
 - Static configuration belongs on reusable round or stage instances.
-- Per-proof statements and witnesses are semantic input dataclasses.
-- Stage outputs contain only values the parent protocol consumes.
+- Per-proof claims and witnesses are separate semantic input dataclasses.
+- Prover and verifier produce the same reduced-claim type.
+- Reduction proofs are conditional proofs of their source claims; they do not
+  establish their reduced claims.
 - Prover-only state and transmitted proof data remain distinct.
 - Skip-level values remain named locals in a composite stage.
 - Transcript-only schedule operations are shared named functions called by both
   prover and verifier paths.
+- Stages do not derive transcript domain separators from class or display
+  names. The owning protocol specifies stable tags and framing as part of its
+  wire format; reusable framing belongs upstream only once that encoding is
+  shared by more than one protocol.
 - Proof serialization is separate from execution and follows the named proof
   structure.
 - There is no shared bridge or universal protocol context to populate over time.
+
+“No bridge” does not mean these operations are security-neutral. Claim batching
+is a randomized reduction and grinding amplifies security; both belong in the
+parent's soundness accounting. They are functions rather than stages because
+they do not own an independently reusable paired proof section.
+
+## Verification failures
+
+Verification distinguishes structure from cryptographic validity:
+
+- malformed inputs whose static proof shape cannot represent the configured
+  protocol raise `ValueError`;
+- well-formed proofs that fail an algebraic, transcript, or opening check return
+  `VerifyResult(ok=False)`.
+
+Wire-facing callers must validate/decode untrusted bytes into the expected
+static proof shape and translate structural exceptions into their external
+rejection response. Stage methods operate on typed in-memory proofs rather than
+serving as a non-throwing byte parser.
 
 ## Reuse boundaries
 
@@ -126,20 +167,36 @@ which sibling runs before it or carry unrelated values merely because another
 component needs them later. Consumer-specific schedules remain in consumer
 composite stages; reusable protocol components remain in zorch.
 
+Univariate skip illustrates why the reduced claim is part of that contract.
+It is an ordinary sumcheck stage, but its first reduced coordinate binds a
+subgroup interpolation of several Boolean variables. It therefore exports a
+prism-evaluation claim, not an ordinary multilinear evaluation claim. A parent
+expecting an ordinary MLE claim cannot silently substitute it.
+
+A stage can also be applied recurrently. A folding parent threads its
+accumulator through repeated calls to one fold stage, and the stage's semantic
+input can contain a k-ary batch of instances. Recurrence is a use of the paired
+component, not a second inheritance relationship.
+
 ## Testing the pairing
 
 Tests should pin the properties the abstractions cannot enforce themselves:
 
 - prover and verifier transcripts agree at every component boundary;
+- prover and verifier derive the same reduced claim at every boundary;
 - honest proofs verify;
 - mutating each named proof section rejects;
 - alternate injected round or PCS implementations preserve the stage contract;
 - compile count, runtime, and peak memory do not regress.
 
+The parent prover and verifier remain two explicit programs; one is not derived
+from the other. This keeps their knowledge boundaries honest, while making
+transcript-boundary and structural-proof tests mandatory.
+
 ## Consumer boundary
 
 zorch supplies reusable stages, round drivers, transcripts, PCS protocols, and
-mathematical blocks. A consumer owns its concrete protocol schedule, statement
+mathematical blocks. A consumer owns its concrete protocol schedule, root-claim
 layout, transcript framing, and proof serialization. A component belongs in
 zorch when another proof system can reuse it without inheriting one consumer's
 private orchestration.

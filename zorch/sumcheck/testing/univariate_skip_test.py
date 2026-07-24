@@ -8,12 +8,15 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.prover import LogupSummand, logup_combine
 from zorch.prove import fold_rounds
 from zorch.sumcheck.domain import natural_domain, subgroup_sum
 from zorch.sumcheck.prover import ProductSummand, StandardRound
 from zorch.sumcheck.sqrt_space import prove_sqrt_space
+from zorch.sumcheck.stage import SumcheckWitness, SumClaim
 from zorch.sumcheck.univariate_skip import (
+    UnivariateSkipStage,
     prove_univariate_skip,
     round0_message,
     skip_round0,
@@ -52,6 +55,37 @@ class Round0Test(parameterized.TestCase):
 
 
 class SkipRoundTripTest(parameterized.TestCase):
+    def test_stage_round_trip_and_transcript_agreement(self) -> None:
+        total = 5
+        state = rand_field(200, (2, 1 << total), KB)
+        claim = _claim(state)
+        stage = UnivariateSkipStage(
+            2, ProductSummand(2), challenges=ChallengePolicy(KBx4)
+        )
+        source_claim = SumClaim(claim, total)
+        proved = stage.prove(source_claim, SumcheckWitness(state), cheap_transcript(KB))
+        verified = stage.verify(
+            source_claim,
+            proved.reduction_proof,
+            cheap_transcript(KB),
+        )
+        self.assertTrue(bool(verified.ok))
+        self.assertEqual(proved.reduced_claim.prism_point.shape, (1 + total - 2,))
+        self.assertTrue(
+            bool(
+                fnp.all(
+                    proved.reduced_claim.prism_point
+                    == verified.reduced_claim.prism_point
+                )
+            )
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.value == verified.reduced_claim.value)
+        )
+        _, prover_next = proved.transcript.sample(1)
+        _, verifier_next = verified.transcript.sample(1)
+        self.assertTrue(bool(fnp.all(prover_next == verifier_next)))
+
     @parameterized.parameters((1, 1), (2, 1), (1, 2), (2, 2))
     def test_base_field_round_trip(self, skip: int, m: int) -> None:
         total = 5
@@ -73,10 +107,16 @@ class SkipRoundTripTest(parameterized.TestCase):
         p = rand_field(50 + skip + m, (m, 1 << total), KB)
         summand = ProductSummand(degree=m)
         final, _, msgs = prove_univariate_skip(
-            p, skip, cheap_transcript(KB), summand, ext_dtype=KBx4
+            p, skip, cheap_transcript(KB), summand, challenges=ChallengePolicy(KBx4)
         )
         reduced, _, _, ok = verify_univariate_skip(
-            _claim(p), msgs, skip, total, cheap_transcript(KB), degree=m, ext_dtype=KBx4
+            _claim(p),
+            msgs,
+            skip,
+            total,
+            cheap_transcript(KB),
+            degree=m,
+            challenges=ChallengePolicy(KBx4),
         )
         # Extension arithmetic entered at round 1: the folded state is extension-field.
         self.assertEqual(final.dtype, KBx4)
@@ -119,7 +159,11 @@ class SkipSoundnessTest(absltest.TestCase):
         m, total = 2, 4
         p = rand_field(11, (m, 1 << total), KB)
         _, _, msgs = prove_univariate_skip(
-            p, 2, cheap_transcript(KB), ProductSummand(degree=m), ext_dtype=KBx4
+            p,
+            2,
+            cheap_transcript(KB),
+            ProductSummand(degree=m),
+            challenges=ChallengePolicy(KBx4),
         )
         return p, total, m, msgs
 
@@ -128,7 +172,13 @@ class SkipSoundnessTest(absltest.TestCase):
         bad = list(msgs)
         bad[0] = bad[0].at[0].add(fnp.ones((), KB))
         _, _, _, ok = verify_univariate_skip(
-            _claim(p), bad, 2, total, cheap_transcript(KB), degree=m, ext_dtype=KBx4
+            _claim(p),
+            bad,
+            2,
+            total,
+            cheap_transcript(KB),
+            degree=m,
+            challenges=ChallengePolicy(KBx4),
         )
         self.assertFalse(bool(ok))
 
@@ -141,7 +191,7 @@ class SkipSoundnessTest(absltest.TestCase):
             total,
             cheap_transcript(KB),
             degree=m,
-            ext_dtype=KBx4,
+            challenges=ChallengePolicy(KBx4),
         )
         self.assertFalse(bool(ok))
 
@@ -159,19 +209,19 @@ class ComposedTailTest(parameterized.TestCase):
 
         # Reference: skip round 0 + plain StandardRound tail.
         _, _, ref_msgs = prove_univariate_skip(
-            p, skip, cheap_transcript(KB), summand, ext_dtype=KBx4
+            p, skip, cheap_transcript(KB), summand, challenges=ChallengePolicy(KBx4)
         )
 
         # Composed: same round 0, then the √-space tail over the bound extension state.
         state, transcript, msg0 = skip_round0(
-            p, skip, cheap_transcript(KB), summand, KBx4
+            p, skip, cheap_transcript(KB), summand, ChallengePolicy(KBx4)
         )
         final, transcript, tail = prove_sqrt_space(
             state,
             transcript,
             summand,
             domain=natural_domain(m, KBx4),
-            ext_dtype=KBx4,
+            challenges=ChallengePolicy(KBx4),
         )
         composed = [msg0] + tail
 
@@ -179,7 +229,13 @@ class ComposedTailTest(parameterized.TestCase):
         for a, b in zip(composed, ref_msgs, strict=True):
             self.assertTrue(bool(fnp.array_equal(a, b)))
         reduced, _, _, ok = verify_univariate_skip(
-            c, composed, skip, total, cheap_transcript(KB), degree=m, ext_dtype=KBx4
+            c,
+            composed,
+            skip,
+            total,
+            cheap_transcript(KB),
+            degree=m,
+            challenges=ChallengePolicy(KBx4),
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(reduced == fnp.prod(final[:, 0])))
@@ -197,10 +253,20 @@ class SummandGenericTest(parameterized.TestCase):
         summand = LogupSummand(lam)
         c = fnp.sum(logup_combine(lam, *p))
         pf, _, msgs = prove_univariate_skip(
-            p, skip_rounds, cheap_transcript(KB), summand, ext_dtype=KBx4
+            p,
+            skip_rounds,
+            cheap_transcript(KB),
+            summand,
+            challenges=ChallengePolicy(KBx4),
         )
         reduced, _, point, ok = verify_univariate_skip(
-            c, msgs, skip_rounds, total, cheap_transcript(KB), degree=3, ext_dtype=KBx4
+            c,
+            msgs,
+            skip_rounds,
+            total,
+            cheap_transcript(KB),
+            degree=3,
+            challenges=ChallengePolicy(KBx4),
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(reduced == logup_combine(lam, *pf[:, 0])))

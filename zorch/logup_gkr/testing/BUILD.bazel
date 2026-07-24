@@ -42,6 +42,7 @@ py_test(
     srcs = ["jagged_prover_test.py"],
     deps = [
         ":testing",
+        "//zorch:challenge",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
@@ -97,6 +98,7 @@ py_test(
     srcs = ["jagged_verifier_test.py"],
     deps = [
         ":testing",
+        "//zorch:challenge",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/logup_gkr",

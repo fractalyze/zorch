@@ -17,50 +17,49 @@ from frx import Array
 
 from zorch.transcript import Transcript
 
-ProverInput = TypeVar("ProverInput")
-ProverOutput = TypeVar("ProverOutput")
-VerifierInput = TypeVar("VerifierInput")
-VerifierOutput = TypeVar("VerifierOutput")
-Proof = TypeVar("Proof")
+Claim = TypeVar("Claim")
+Witness = TypeVar("Witness")
+ReducedClaim = TypeVar("ReducedClaim")
+ReductionProof = TypeVar("ReductionProof")
 
 
 @dataclass(frozen=True)
-class ProveResult(Generic[ProverOutput, Proof]):
-    """One stage's typed output, proof section, and advanced transcript."""
+class ProveResult(Generic[ReducedClaim, ReductionProof]):
+    """A reduced claim, its conditional reduction proof, and the transcript."""
 
-    output: ProverOutput
-    proof: Proof
+    reduced_claim: ReducedClaim
+    reduction_proof: ReductionProof
     transcript: Transcript
 
 
 @dataclass(frozen=True)
-class VerifyResult(Generic[VerifierOutput]):
-    """One stage dual's typed output, advanced transcript, and verdict."""
+class VerifyResult(Generic[ReducedClaim]):
+    """The verifier-derived reduced claim, advanced transcript, and verdict."""
 
-    output: VerifierOutput
+    reduced_claim: ReducedClaim
     transcript: Transcript
     ok: Array
 
 
 class Stage(
     ABC,
-    Generic[ProverInput, ProverOutput, VerifierInput, VerifierOutput, Proof],
+    Generic[Claim, Witness, ReducedClaim, ReductionProof],
 ):
-    """A paired prover/verifier protocol component.
+    """A paired proof reduction.
 
-    Each method accepts one semantic domain value. Prover and verifier inputs
-    and outputs may differ because they carry different knowledge. Use `None`
-    when a side needs no input beyond its proof and transcript.
+    The reduction proof establishes the source claim conditional on the reduced
+    claim. It does not normally establish the reduced claim itself.
     """
-
-    name: str
 
     @abstractmethod
     def prove(
-        self, inputs: ProverInput, transcript: Transcript
-    ) -> ProveResult[ProverOutput, Proof]: ...
+        self, claim: Claim, witness: Witness, transcript: Transcript
+    ) -> ProveResult[ReducedClaim, ReductionProof]: ...
 
     @abstractmethod
     def verify(
-        self, inputs: VerifierInput, proof: Proof, transcript: Transcript
-    ) -> VerifyResult[VerifierOutput]: ...
+        self,
+        claim: Claim,
+        reduction_proof: ReductionProof,
+        transcript: Transcript,
+    ) -> VerifyResult[ReducedClaim]: ...

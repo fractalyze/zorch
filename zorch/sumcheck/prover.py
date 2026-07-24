@@ -32,13 +32,13 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 import frx
 import frx.numpy as fnp
 from frx import Array
-from zk_dtypes import efinfo
 
+from zorch.challenge import ChallengePolicy
 from zorch.round import Round
 from zorch.sumcheck.domain import (
     EvalDomain,
@@ -46,20 +46,10 @@ from zorch.sumcheck.domain import (
     natural_domain,
     summand_evals,
 )
-from zorch.transcript import Transcript, sample_challenge
+from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
-
-
-def challenge_limbs(ext_dtype: Any) -> int:
-    """Transcript squeezes for one challenge in `ext_dtype`: `degree(ext_dtype)` for an
-    extension, 1 for a base (prime) field. A round binding r ∈ F_ext takes that many
-    squeezes reinterpreted as the element (`transcript.sample_challenge`)."""
-    try:
-        return efinfo(ext_dtype).degree
-    except ValueError:
-        return 1
 
 
 @dataclass(frozen=True)
@@ -99,22 +89,20 @@ class StandardRound(Round):
     {0..degree} evals when None). This is the linear-time reference the √-space /
     eq engines specialize; driven by `fold_rounds`.
 
-    `ext_dtype` chooses the challenge field: None (the default) samples the
-    transcript's own field in one squeeze — the byte-identical original — while an
-    extension `ext_dtype` squeezes `degree(ext_dtype)` limbs, so a tail whose earlier
-    round bound r ∈ F_ext (the univariate skip) folds in the extension. The round poly
-    and fold are unchanged; only the challenge squeeze differs."""
+    `challenges` selects the challenge field and squeeze width. The default
+    `ChallengePolicy` preserves the transcript-native one-squeeze schedule; an
+    explicit extension policy lets a tail whose earlier round bound in that
+    extension continue folding in the same field."""
 
     def __init__(
         self,
         summand: SumcheckSummand,
         domain: EvalDomain | None = None,
-        ext_dtype: Any | None = None,
+        challenges: ChallengePolicy | None = None,
     ) -> None:
         self.summand = summand
         self.domain = domain
-        self.ext_dtype = ext_dtype
-        self.limbs = 1 if ext_dtype is None else challenge_limbs(ext_dtype)
+        self.challenges = challenges or ChallengePolicy()
 
     def _round_poly(self, folded: Array) -> Array:
         """s sampled at `domain` (the natural {0..degree} evals by default), shape
@@ -127,13 +115,9 @@ class StandardRound(Round):
         self, folded: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
-        if self.ext_dtype is None:
-            # Base-field challenge: the fused absorb+squeeze hop, unchanged.
-            transcript, r = transcript.observe_and_sample(msg, 1)
-            r = r[0]
-        else:
-            transcript = transcript.observe(msg)
-            transcript, r = sample_challenge(transcript, self.ext_dtype, self.limbs)
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, msg, folded.dtype
+        )
         return fold(folded, r), transcript, msg
 
 
@@ -148,6 +132,9 @@ class CompressedProductRound(Round):
     without touching the fold. `c_2 = Σ (P1_f - P0_f)·(P1_b - P0_b)` is the honest
     leading coefficient in any characteristic; over char 2 it coincides with the
     `(P0 + P1)` products some wire specs write it as."""
+
+    def __init__(self, challenges: ChallengePolicy | None = None) -> None:
+        self.challenges = challenges or ChallengePolicy()
 
     def _round_poly(self, folded: Array) -> Array:
         """`[c_0, c_2]` of `s(X) = Σ_x' f(X, x')·b(X, x')`, shape (2, *batch):
@@ -165,8 +152,10 @@ class CompressedProductRound(Round):
         self, folded: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
-        transcript, r = transcript.observe_and_sample(msg, 1)
-        return fold(folded, r[0]), transcript, msg
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, msg, folded.dtype
+        )
+        return fold(folded, r), transcript, msg
 
 
 @partial(

@@ -11,7 +11,7 @@ from absl.testing import absltest
 
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.ligerito.config import LigeritoConfig
-from zorch.spartan.spartan import Spartan, SpartanStatement, SpartanWitness
+from zorch.spartan.spartan import Spartan, SpartanClaim, SpartanWitness
 from zorch.spartan.testing.ligerito_pcs import (
     LigeritoSpartanProver,
     LigeritoSpartanVerifier,
@@ -30,25 +30,17 @@ def _transcript() -> DuplexTranscript:
 class SpartanLigeritoTest(absltest.TestCase):
     def test_roundtrip_accepts(self) -> None:
         instance, z, _, io = toy_r1cs(1, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        protocol = Spartan()
-        proved = protocol.prove(
-            SpartanWitness(instance, z, io, LigeritoSpartanProver(_CFG)),
-            _transcript(),
-        )
-        verified = protocol.verify(
-            SpartanStatement(instance, io, LigeritoSpartanVerifier(_CFG)),
-            proved.proof,
-            _transcript(),
-        )
+        protocol = Spartan(LigeritoSpartanProver(_CFG), LigeritoSpartanVerifier(_CFG))
+        claim = SpartanClaim(instance, io)
+        proved = protocol.prove(claim, SpartanWitness(z), _transcript())
+        verified = protocol.verify(claim, proved.reduction_proof, _transcript())
         self.assertTrue(bool(verified.ok))
 
     def test_tampered_witness_opening_rejected(self) -> None:
         instance, z, _, io = toy_r1cs(2, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        protocol = Spartan()
-        proof = protocol.prove(
-            SpartanWitness(instance, z, io, LigeritoSpartanProver(_CFG)),
-            _transcript(),
-        ).proof
+        protocol = Spartan(LigeritoSpartanProver(_CFG), LigeritoSpartanVerifier(_CFG))
+        claim = SpartanClaim(instance, io)
+        proof = protocol.prove(claim, SpartanWitness(z), _transcript()).reduction_proof
         bad = replace(
             proof,
             witness_open=replace(
@@ -56,30 +48,19 @@ class SpartanLigeritoTest(absltest.TestCase):
                 values=proof.witness_open.values.at[0].add(fnp.ones((), KB)),
             ),
         )
-        verified = protocol.verify(
-            SpartanStatement(instance, io, LigeritoSpartanVerifier(_CFG)),
-            bad,
-            _transcript(),
-        )
+        verified = protocol.verify(claim, bad, _transcript())
         self.assertFalse(bool(verified.ok))
 
     def test_unsatisfying_witness_rejected(self) -> None:
         instance, z, _, io = toy_r1cs(3, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        protocol = Spartan()
+        protocol = Spartan(LigeritoSpartanProver(_CFG), LigeritoSpartanVerifier(_CFG))
+        claim = SpartanClaim(instance, io)
         proof = protocol.prove(
-            SpartanWitness(
-                instance,
-                z.at[0].add(fnp.ones((), KB)),
-                io,
-                LigeritoSpartanProver(_CFG),
-            ),
+            claim,
+            SpartanWitness(z.at[0].add(fnp.ones((), KB))),
             _transcript(),
-        ).proof
-        verified = protocol.verify(
-            SpartanStatement(instance, io, LigeritoSpartanVerifier(_CFG)),
-            proof,
-            _transcript(),
-        )
+        ).reduction_proof
+        verified = protocol.verify(claim, proof, _transcript())
         self.assertFalse(bool(verified.ok))
 
 

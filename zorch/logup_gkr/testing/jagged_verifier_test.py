@@ -11,13 +11,13 @@ production.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     LogUpGkrOutput,
@@ -39,31 +39,11 @@ from zorch.logup_gkr.testing import (
 from zorch.poly.multilinear import eval_mle
 from zorch.round import prove_rounds, verify_rounds
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import Transcript, sample_challenge
-from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
 
 ROW_COUNTS = (3, 1, 5, 2)
-
-
-def _bind_multi_limb(
-    output: LogUpGkrOutput, transcript: Transcript, dtype: Any, limbs: int
-) -> tuple[Carry, Transcript]:
-    """`bind_output` with the multi-limb squeeze rule -- the binding glue a
-    consumer whose claims extend the transcript's field owns."""
-    num_vars = log2_strict_usize(output.numerator.shape[0])
-    transcript = transcript.observe(output.numerator)
-    transcript = transcript.observe(output.denominator)
-    coords = []
-    for _ in range(num_vars):
-        transcript, c = sample_challenge(transcript, dtype, limbs)
-        coords.append(c)
-    point = fnp.stack(coords)
-    num_eval = eval_mle(output.numerator, point)
-    den_eval = eval_mle(output.denominator, point)
-    return (num_eval, den_eval, point), transcript
 
 
 def _prove(
@@ -130,14 +110,15 @@ class JaggedRoundtripTest(absltest.TestCase):
         # Extension-field claims over a base-field transcript: both sides
         # bind and squeeze through the same multi-limb rule.
         limbs = 4
+        challenges = ChallengePolicy(EF)
         layers = build_jagged_pyramid(random_jagged_layer(37, ROW_COUNTS))
         output = extract_jagged_outputs(layers[-1])
 
-        carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges)
         prover_final, _, proofs = prove_rounds(
             [
                 JaggedGkrLayerRound(
-                    layer, limbs, caps=caps_for(ROW_COUNTS, len(layers) - 1)
+                    layer, challenges, caps=caps_for(ROW_COUNTS, len(layers) - 1)
                 )
                 for layer in reversed(layers[:-1])
             ],
@@ -145,9 +126,9 @@ class JaggedRoundtripTest(absltest.TestCase):
             transcript,
         )
 
-        carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges)
         verifier_final, _, ok = verify_rounds(
-            [JaggedVerifierLayerRound(limbs) for _ in proofs],
+            [JaggedVerifierLayerRound(challenges) for _ in proofs],
             carry,
             proofs,
             transcript,

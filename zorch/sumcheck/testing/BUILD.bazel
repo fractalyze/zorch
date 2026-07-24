@@ -15,6 +15,7 @@ py_test(
     size = "small",
     srcs = ["sqrt_space_test.py"],
     deps = [
+        "//zorch:challenge",
         "//zorch:transcript",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",
@@ -45,6 +46,7 @@ py_test(
     size = "medium",
     srcs = ["univariate_skip_test.py"],
     deps = [
+        "//zorch:challenge",
         "//zorch:prove",
         "//zorch/logup_gkr",
         "//zorch/sumcheck",
@@ -91,6 +93,7 @@ py_test(
     srcs = ["verifier_test.py"],
     deps = [
         ":testing",
+        "//zorch:challenge",
         "//zorch:verify",
         "//zorch/sumcheck",
         "//zorch/testkit:random_field",
