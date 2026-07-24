@@ -689,7 +689,7 @@ class JaggedGkrLayerRound(Round):
         )
 
     def __call__(
-        self, carry: Carry, transcript: Transcript
+        self, carry: Carry, transcript: Transcript, _incoming: None
     ) -> tuple[Carry, Transcript, JaggedLayerProof]:
         return self._call(carry, transcript)
 

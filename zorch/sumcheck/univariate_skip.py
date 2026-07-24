@@ -168,7 +168,8 @@ def verify_univariate_skip(
         point: list[Array] = []
         ok = fnp.bool_(True)
         for msg in msgs:
-            claim, transcript, r, ok_r = rnd(claim, msg, transcript)
+            claim, transcript, outgoing = rnd(claim, transcript, msg)
+            r, ok_r = outgoing
             point.append(r)
             ok = ok & ok_r
         return claim, transcript, point, ok
@@ -180,12 +181,13 @@ def verify_univariate_skip(
         raise ValueError(f"need {1 + n} messages, got {len(msgs)}")
 
     # Round 0: the subgroup-sum check + s₀(r₀) reduction.
-    claim, transcript, r0, ok = UnivariateSkipRound(
+    claim, transcript, outgoing = UnivariateSkipRound(
         skip_rounds=skip_rounds,
         degree=degree,
         ext_dtype=ext_dtype,
         challenge_limbs=limbs,
-    )(claim, msgs[0], transcript)
+    )(claim, transcript, msgs[0])
+    r0, ok = outgoing
     point = [r0]
 
     # Rounds 1..n: the eval-form tail. Reuse SumcheckRound's identity math

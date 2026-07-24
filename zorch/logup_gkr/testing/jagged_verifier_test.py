@@ -37,7 +37,7 @@ from zorch.logup_gkr.testing import (
     virtual_planes,
 )
 from zorch.poly.multilinear import eval_mle
-from zorch.round import ProveChain, VerifyChain
+from zorch.round import prove_rounds, verify_rounds
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
@@ -72,10 +72,11 @@ def _prove(
     output = extract_jagged_outputs(layers[-1])
     carry, transcript = bind_output(output, cheap_transcript(KB))
     caps = caps_for(host_counts(layers[0]), len(layers) - 1)
-    chain = ProveChain(
-        [JaggedGkrLayerRound(layer, caps=caps) for layer in reversed(layers[:-1])]
+    final, _, proofs = prove_rounds(
+        [JaggedGkrLayerRound(layer, caps=caps) for layer in reversed(layers[:-1])],
+        carry,
+        transcript,
     )
-    final, _, proofs = chain(carry, transcript)
     return final, proofs, output
 
 
@@ -83,8 +84,9 @@ def _verify(
     output: LogUpGkrOutput, proofs: list[JaggedLayerProof]
 ) -> tuple[Carry, Array]:
     carry, transcript = bind_output(output, cheap_transcript(KB))
-    chain = VerifyChain([JaggedVerifierLayerRound() for _ in proofs])
-    final, _, ok = chain(carry, proofs, transcript)
+    final, _, ok = verify_rounds(
+        [JaggedVerifierLayerRound() for _ in proofs], carry, proofs, transcript
+    )
     return final, ok
 
 
@@ -132,19 +134,24 @@ class JaggedRoundtripTest(absltest.TestCase):
         output = extract_jagged_outputs(layers[-1])
 
         carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
-        chain = ProveChain(
+        prover_final, _, proofs = prove_rounds(
             [
                 JaggedGkrLayerRound(
                     layer, limbs, caps=caps_for(ROW_COUNTS, len(layers) - 1)
                 )
                 for layer in reversed(layers[:-1])
-            ]
+            ],
+            carry,
+            transcript,
         )
-        prover_final, _, proofs = chain(carry, transcript)
 
         carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
-        vchain = VerifyChain([JaggedVerifierLayerRound(limbs) for _ in proofs])
-        verifier_final, _, ok = vchain(carry, proofs, transcript)
+        verifier_final, _, ok = verify_rounds(
+            [JaggedVerifierLayerRound(limbs) for _ in proofs],
+            carry,
+            proofs,
+            transcript,
+        )
         self.assertTrue(bool(ok))
         self.assertEqual(verifier_final[0].dtype, EF)
         for got, want in zip(verifier_final, prover_final, strict=True):

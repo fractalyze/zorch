@@ -50,7 +50,7 @@ class JaggedGkrLayerRound(Round):
         self.challenge_limbs = challenge_limbs
 
     def __call__(
-        self, carry: Carry, layer_proof: JaggedLayerProof, transcript: Transcript
+        self, carry: Carry, transcript: Transcript, layer_proof: JaggedLayerProof
     ) -> tuple[Carry, Transcript, Array]:
         num_eval, den_eval, eval_point = carry
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1

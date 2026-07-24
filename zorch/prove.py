@@ -29,6 +29,6 @@ def fold_rounds(
     """Run `rnd` exactly `rounds` times; return (state, transcript, list[msg])."""
     msgs: list[Any] = []
     for _ in range(rounds):
-        state, transcript, msg = rnd(state, transcript)
+        state, transcript, msg = rnd(state, transcript, None)
         msgs.append(msg)
     return state, transcript, msgs

@@ -1,16 +1,9 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Outer sumcheck (zerocheck) stage: `0 = Σ_x eq(τ,x)·(Az(x)·Bz(x) − Cz(x))`.
-
-Samples `τ`, runs a degree-3 sumcheck over `(E=eq(τ,·), Az, Bz, Cz)`, and hands
-`r_x` plus the claimed evals `(Az, Bz, Cz)(r_x)` down the chain. The per-variable
-sumcheck engine is injected (`StageSumcheck`, default `zerocheck_engine`), so a
-caller can swap the algorithm / domain / wire form; this stage adds only the `τ`
-sample and the terminal identity check.
-"""
+"""Outer Spartan zerocheck as one paired, typed stage."""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass
 
 import frx.numpy as fnp
 from frx import Array
@@ -18,81 +11,80 @@ from frx import Array
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
-from zorch.round import Stage
-from zorch.spartan.carry import SpartanCarry
 from zorch.spartan.engine import StageSumcheck, zerocheck_engine
+from zorch.stage import ProveResult, Stage, VerifyResult
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 from zorch.verify import verify
 
 
-class OuterProver(Stage):
-    """Prover for the zerocheck stage; holds the matvecs `Az, Bz, Cz` as
-    stage-local witness. Inject `sumcheck` to swap the per-variable engine."""
+@dataclass(frozen=True)
+class OuterPolynomials:
+    """The three multilinear polynomials constrained by zerocheck."""
 
-    def __init__(
-        self,
-        az: Array,
-        bz: Array,
-        cz: Array,
-        *,
-        sumcheck: StageSumcheck | None = None,
-    ) -> None:
-        self.az = az
-        self.bz = bz
-        self.cz = cz
-        self.s_x = log2_strict_usize(az.shape[0])
-        self.sumcheck = sumcheck or zerocheck_engine()
-
-    def __call__(
-        self, carry: SpartanCarry, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, tuple[Array, Array]]:
-        transcript, tau = transcript.sample(self.s_x)
-        pre = transcript
-        one = fnp.ones((), self.az.dtype)
-        e = expand_eq_to_hypercube(tau, one)
-        state = fnp.stack([e, self.az, self.bz, self.cz])
-        _, transcript, msgs = fold_rounds(
-            self.sumcheck.prover_round, state, pre, self.s_x
-        )
-        round_polys = fnp.stack(msgs)
-        # Recover r_x by replaying the injected verifier round — wire-agnostic, so
-        # the claim value (0) does not affect the sampled point.
-        zero = fnp.zeros((), self.az.dtype)
-        r_x, _, _, _ = verify(self.sumcheck.verifier_round, zero, round_polys, pre)
-        # Claimed evals straight from the MLEs — independent of the engine's fold
-        # representation.
-        claims = fnp.stack(
-            [eval_mle(self.az, r_x), eval_mle(self.bz, r_x), eval_mle(self.cz, r_x)]
-        )
-        transcript = transcript.observe(claims)
-        carry = replace(carry, r_x=r_x, claims_outer=claims)
-        return carry, transcript, (round_polys, claims)
+    az: Array
+    bz: Array
+    cz: Array
 
 
-class OuterVerifier(Stage):
-    """Verifier for the zerocheck stage: replay the sumcheck, then check the
-    terminal identity `eq(τ,r_x)·(vA·vB − vC) == reduced_claim`."""
+@dataclass(frozen=True)
+class OuterOutput:
+    """Claims produced for the later lincheck and witness-opening stages."""
+
+    point: Array
+    claims: Array
+
+
+@dataclass(frozen=True)
+class OuterProof:
+    """The outer sumcheck messages and terminal `(Az, Bz, Cz)` evaluations."""
+
+    round_polys: Array
+    claims: Array
+
+
+class OuterStage(Stage[OuterPolynomials, OuterOutput, None, OuterOutput, OuterProof]):
+    """The paired prover/verifier zerocheck phase."""
+
+    name = "outer"
 
     def __init__(self, *, sumcheck: StageSumcheck | None = None) -> None:
         self.sumcheck = sumcheck or zerocheck_engine()
 
-    def __call__(
-        self,
-        carry: SpartanCarry,
-        msg: tuple[Array, Array],
-        transcript: Transcript,
-    ) -> tuple[SpartanCarry, Transcript, Array]:
-        round_polys, claims = msg
-        s_x = round_polys.shape[0]
+    def prove(
+        self, inputs: OuterPolynomials, transcript: Transcript
+    ) -> ProveResult[OuterOutput, OuterProof]:
+        az, bz, cz = inputs.az, inputs.bz, inputs.cz
+        s_x = log2_strict_usize(az.shape[0])
         transcript, tau = transcript.sample(s_x)
-        zero = fnp.zeros((), claims.dtype)
-        r_x, final_claim, transcript, ok = verify(
-            self.sumcheck.verifier_round, zero, round_polys, transcript
+        pre = transcript
+        one = fnp.ones((), az.dtype)
+        state = fnp.stack([expand_eq_to_hypercube(tau, one), az, bz, cz])
+        _, transcript, msgs = fold_rounds(self.sumcheck.prover_round, state, pre, s_x)
+        round_polys = fnp.stack(msgs)
+        zero = fnp.zeros((), az.dtype)
+        point, _, _, _ = verify(self.sumcheck.verifier_round, zero, round_polys, pre)
+        claims = fnp.stack(
+            [eval_mle(az, point), eval_mle(bz, point), eval_mle(cz, point)]
         )
         transcript = transcript.observe(claims)
-        va, vb, vc = claims[0], claims[1], claims[2]
-        expected = eval_eq(tau, r_x) * (va * vb - vc)
-        ok = ok & (final_claim == expected)
-        carry = replace(carry, r_x=r_x, claims_outer=claims)
-        return carry, transcript, ok
+        output = OuterOutput(point, claims)
+        return ProveResult(output, OuterProof(round_polys, claims), transcript)
+
+    def verify(
+        self,
+        inputs: None,
+        proof: OuterProof,
+        transcript: Transcript,
+    ) -> VerifyResult[OuterOutput]:
+        del inputs
+        s_x = proof.round_polys.shape[0]
+        transcript, tau = transcript.sample(s_x)
+        zero = fnp.zeros((), proof.claims.dtype)
+        point, final_claim, transcript, ok = verify(
+            self.sumcheck.verifier_round, zero, proof.round_polys, transcript
+        )
+        transcript = transcript.observe(proof.claims)
+        va, vb, vc = proof.claims[0], proof.claims[1], proof.claims[2]
+        ok = ok & (final_claim == eval_eq(tau, point) * (va * vb - vc))
+        return VerifyResult(OuterOutput(point, proof.claims), transcript, ok)

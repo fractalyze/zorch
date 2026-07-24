@@ -59,11 +59,11 @@ class SumcheckRound(Round):
         return eval_univariate(msg, r), ok
 
     def __call__(
-        self, claim: Array, msg: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array, Array]:
+        self, claim: Array, transcript: Transcript, msg: Array
+    ) -> tuple[Array, Transcript, tuple[Array, Array]]:
         transcript, r = transcript.observe_and_sample(msg, 1)
         reduced, ok = self.check_reduce(claim, msg, r[0])
-        return reduced, transcript, r[0], ok
+        return reduced, transcript, (r[0], ok)
 
 
 @partial(
@@ -87,8 +87,8 @@ class CoeffsSumcheckRound(Round):
             raise ValueError("challenge_limbs must be >= 1")
 
     def __call__(
-        self, claim: Array, msg: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array, Array]:
+        self, claim: Array, transcript: Transcript, msg: Array
+    ) -> tuple[Array, Transcript, tuple[Array, Array]]:
         if msg.shape[0] != self.degree + 1:
             raise ValueError(
                 f"round message must have degree+1={self.degree + 1} "
@@ -97,7 +97,7 @@ class CoeffsSumcheckRound(Round):
         ok = claim == msg[0] + fnp.sum(msg)
         transcript = transcript.observe(msg)
         transcript, r = sample_challenge(transcript, claim.dtype, self.challenge_limbs)
-        return eval_coeffs(msg, r), transcript, r, ok
+        return eval_coeffs(msg, r), transcript, (r, ok)
 
 
 @partial(frx.tree_util.register_dataclass, data_fields=[], meta_fields=[])
@@ -127,11 +127,11 @@ class CompressedCoeffsSumcheckRound(Round):
         return eval_coeffs(fnp.stack([c0, c1, c2]), r), fnp.bool_(True)
 
     def __call__(
-        self, claim: Array, msg: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array, Array]:
+        self, claim: Array, transcript: Transcript, msg: Array
+    ) -> tuple[Array, Transcript, tuple[Array, Array]]:
         transcript, r = transcript.observe_and_sample(msg, 1)
         reduced, ok = self.check_reduce(claim, msg, r[0])
-        return reduced, transcript, r[0], ok
+        return reduced, transcript, (r[0], ok)
 
 
 @partial(
@@ -169,8 +169,8 @@ class UnivariateSkipRound(Round):
             raise ValueError("challenge_limbs must be >= 1")
 
     def __call__(
-        self, claim: Array, msg: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array, Array]:
+        self, claim: Array, transcript: Transcript, msg: Array
+    ) -> tuple[Array, Transcript, tuple[Array, Array]]:
         d0 = self.degree * ((1 << self.skip_rounds) - 1)
         if msg.shape[0] != d0 + 1:
             raise ValueError(
@@ -182,7 +182,7 @@ class UnivariateSkipRound(Round):
         transcript, r = sample_challenge(
             transcript, self.ext_dtype, self.challenge_limbs
         )
-        return eval_coeffs(msg, r), transcript, r, ok
+        return eval_coeffs(msg, r), transcript, (r, ok)
 
 
 if TYPE_CHECKING:

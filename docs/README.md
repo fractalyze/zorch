@@ -34,7 +34,7 @@ ______________________________________________________________________
 
 | Question                                                                                                                                     | Where                                                      |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Stage composition & the consumer boundary — the seam contract between stages, what zorch owns vs the consumer, the injection points, bridges | [`stage-composition.md`](composition/stage-composition.md) |
+| Stage composition — typed phase duals, explicit pipelines, round boundaries, and the consumer split | [`stage-composition.md`](composition/stage-composition.md) |
 
 ## `reference/` — conventions, environment, learning
 

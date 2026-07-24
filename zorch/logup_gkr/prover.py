@@ -13,7 +13,7 @@ messages, so the evaluation point is the stacked challenges.
 `GkrLayerRound` is one GKR layer: it runs the layer's per-variable LogUp sumcheck
 (`fold_rounds` over `LogupSumcheckRound`), then reduces the numerator and
 denominator claims across the child selector. The whole GKR
-prover is `ProveChain([GkrLayerRound(l) for l in reversed(layers[:-1])])` -- the
+prover is `prove_rounds([GkrLayerRound(l) for l in reversed(layers[:-1])])` -- the
 interaction floor outward to the input, one bound variable per layer.
 
 The carry threaded through the chain is `(num_eval, den_eval, eval_point)`. The
@@ -238,7 +238,7 @@ class LogupSumcheckRound(Round):
         )
 
     def __call__(
-        self, folded: Array, transcript: Transcript
+        self, folded: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, RoundMsg]:
         msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)
@@ -292,7 +292,7 @@ class GkrLayerRound(Round):
         self.layer = layer
 
     def __call__(
-        self, carry: Carry, transcript: Transcript
+        self, carry: Carry, transcript: Transcript, _incoming: None
     ) -> tuple[Carry, Transcript, LayerProof]:
         num_eval, den_eval, eval_point = carry
         transcript, lam = transcript.sample(1)

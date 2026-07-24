@@ -15,7 +15,7 @@ KB = zk_dtypes.koalabear_mont
 class _CollectRound(Round):
     """Halves a 1-element-per-factor carry; emits a heterogeneous dict message."""
 
-    def __call__(self, state: Any, transcript: Any) -> Any:
+    def __call__(self, state: Any, transcript: Any, _incoming: None) -> Any:
         (xs,) = state
         half = xs.shape[-1] // 2
         msg = {"first": xs[0], "len": xs.shape[-1]}  # non-stackable on purpose

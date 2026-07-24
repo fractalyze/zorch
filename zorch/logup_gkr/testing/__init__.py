@@ -22,7 +22,7 @@ from zorch.logup_gkr.circuit import (
 from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
 from zorch.logup_gkr.verifier import GkrLayerRound as _VerifierLayer
-from zorch.round import ProveChain, VerifyChain
+from zorch.round import prove_rounds, verify_rounds
 from zorch.sumcheck.jagged.types import RoundWidthCaps
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -169,8 +169,9 @@ def prove_gkr_with_transcript(
     layers = build_pyramid(first)
     output = extract_outputs(layers[-1])
     carry, transcript = bind_output(output, transcript)
-    chain = ProveChain([_ProverLayer(layer) for layer in reversed(layers[:-1])])
-    final, _, proofs = chain(carry, transcript)
+    final, _, proofs = prove_rounds(
+        [_ProverLayer(layer) for layer in reversed(layers[:-1])], carry, transcript
+    )
     return layers, output, proofs, final
 
 
@@ -213,8 +214,9 @@ def verify_gkr_with_transcript(
     """Run the GKR verifier chain, re-deriving challenges from `transcript` (the
     dual of `prove_gkr_with_transcript`). Returns (final_carry, ok)."""
     carry, transcript = bind_output(output, transcript)
-    chain = VerifyChain([_VerifierLayer() for _ in proofs])
-    final, _, ok = chain(carry, proofs, transcript)
+    final, _, ok = verify_rounds(
+        [_VerifierLayer() for _ in proofs], carry, proofs, transcript
+    )
     return final, ok
 
 

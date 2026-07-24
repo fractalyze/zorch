@@ -178,7 +178,7 @@ class DomainTest(absltest.TestCase):
         for _ in range(l):
             coeffs = product_round_coeffs(state)
             self.assertEqual(coeffs.shape, (m + 1,))
-            claim, transcript, r, ok = verifier(claim, coeffs, transcript)
+            claim, transcript, (r, ok) = verifier(claim, transcript, coeffs)
             self.assertTrue(bool(ok))
             state = fold(state, r)
             point.append(r)

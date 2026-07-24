@@ -1,20 +1,10 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Witness-opening glue: the sumcheck-claim → PCS-opening combinator.
-
-The piece `zorch.verify` leaves to the consumer ("the verifier reduces; the PCS
-closes"). It closes the lincheck's `inner_final == eval_ABC · z̃(r_y)`:
-`WitnessOpenProver` opens `W` (the low half of `z`) at `r_y[1:]`;
-`WitnessOpenVerifier` verifies that, reconstructs `z̃(r_y)` from the opened
-`eval_W` and the verifier-evaluated public half, and checks the identity.
-
-The glue touches only the `zorch.pcs.protocol` seam, so the PCS is injected —
-`DensePcs` is a transparent reference instance for tests; a real `basefold` /
-`whir` / `kzg` pair drops in unchanged.
-"""
+"""The paired witness-opening stage and transparent test PCS."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from typing import Any
 
 import frx.numpy as fnp
@@ -22,74 +12,109 @@ from frx import Array
 
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.poly.multilinear import eval_mle
-from zorch.round import Stage
-from zorch.spartan.carry import SpartanCarry, _require
+from zorch.spartan.lincheck import BatchedClaims, InnerOutput
 from zorch.spartan.r1cs import R1CS, eval_public_half, recombine_z_eval
+from zorch.spartan.zerocheck import OuterOutput
+from zorch.stage import ProveResult, Stage, VerifyResult
 from zorch.transcript import Transcript
 
 
-class WitnessOpenProver(Stage):
-    """Open the committed witness at `r_y[1:]` via the injected `PcsProver`."""
+@dataclass(frozen=True)
+class WitnessOpenData:
+    """Private PCS state and evaluation point used to open the witness."""
 
-    def __init__(self, pcs: PcsProver[Any, Any, Any], prover_data: Any) -> None:
-        self.pcs = pcs
-        self.prover_data = prover_data
+    pcs: PcsProver[Any, Any, Any]
+    prover_data: Any
+    point: Array
 
-    def __call__(
-        self, carry: SpartanCarry, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, tuple[Array, object]]:
-        r_y = _require(carry.r_y, "r_y", "inner")
-        values, proof, transcript = self.pcs.open(
-            self.prover_data, [r_y[1:]], transcript
+
+@dataclass(frozen=True)
+class WitnessOpeningClaim:
+    """The terminal identity closed by opening the committed witness."""
+
+    point: Array
+    final_claim: Array
+    matrix_eval: Array
+    public_eval: Array
+
+
+@dataclass(frozen=True)
+class WitnessOpeningStatement:
+    """Public commitment and terminal claim checked by the opening verifier."""
+
+    pcs: PcsVerifier[Any, Any]
+    commitment: Array
+    claim: WitnessOpeningClaim
+
+
+@dataclass(frozen=True)
+class WitnessOpenProof:
+    values: Array
+    pcs_proof: Any
+
+
+def witness_opening_claim(
+    instance: R1CS,
+    public_inputs: Array,
+    outer: OuterOutput,
+    batch: BatchedClaims,
+    inner: InnerOutput,
+) -> WitnessOpeningClaim:
+    """Derive the terminal opening claim from the pipeline's typed outputs."""
+    public_eval = eval_public_half(
+        public_inputs, inner.point[1:], instance.num_vars_padded
+    )
+    matrix_eval = instance.eval_combined_matrix(
+        outer.point, inner.point, batch.challenge
+    )
+    return WitnessOpeningClaim(inner.point, inner.final_claim, matrix_eval, public_eval)
+
+
+class WitnessOpenStage(
+    Stage[
+        WitnessOpenData,
+        None,
+        WitnessOpeningStatement,
+        None,
+        WitnessOpenProof,
+    ]
+):
+    """Open the committed witness and close the lincheck's terminal identity."""
+
+    name = "witness_open"
+
+    def prove(
+        self, inputs: WitnessOpenData, transcript: Transcript
+    ) -> ProveResult[None, WitnessOpenProof]:
+        values, proof, transcript = inputs.pcs.open(
+            inputs.prover_data, [inputs.point[1:]], transcript
         )
-        return carry, transcript, (values, proof)
+        return ProveResult(None, WitnessOpenProof(values, proof), transcript)
 
-
-class WitnessOpenVerifier(Stage):
-    """Verify the witness opening and close the lincheck identity."""
-
-    def __init__(
+    def verify(
         self,
-        pcs: PcsVerifier[Any, Any],
-        commitment: Array,
-        instance: R1CS,
-        io: Array,
-    ) -> None:
-        self.pcs = pcs
-        self.commitment = commitment
-        self.instance = instance
-        self.io = io
-
-    def __call__(
-        self, carry: SpartanCarry, msg: tuple[Array, object], transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, Array]:
-        values, proof = msg
-        r_x = _require(carry.r_x, "r_x", "outer")
-        r = _require(carry.r_batch, "r_batch", "RLC")
-        r_y = _require(carry.r_y, "r_y", "inner")
-        inner_final = _require(carry.inner_final, "inner_final", "inner")
-
-        ok_open, transcript = self.pcs.verify(
-            self.commitment, [r_y[1:]], values, proof, transcript
+        inputs: WitnessOpeningStatement,
+        proof: WitnessOpenProof,
+        transcript: Transcript,
+    ) -> VerifyResult[None]:
+        claim = inputs.claim
+        ok_open, transcript = inputs.pcs.verify(
+            inputs.commitment,
+            [claim.point[1:]],
+            proof.values,
+            proof.pcs_proof,
+            transcript,
         )
-        eval_w = values[0]
-        eval_pub = eval_public_half(self.io, r_y[1:], self.instance.num_vars_padded)
-        z_eval = recombine_z_eval(eval_w, eval_pub, r_y[0])
-        eval_abc = self.instance.eval_combined_matrix(r_x, r_y, r)
-        ok_final = inner_final == eval_abc * z_eval
-        return carry, transcript, ok_open & ok_final
+        eval_w = proof.values[0]
+        z_eval = recombine_z_eval(eval_w, claim.public_eval, claim.point[0])
+        ok_final = claim.final_claim == claim.matrix_eval * z_eval
+        return VerifyResult(None, transcript, ok_open & ok_final)
 
 
 class DensePcs:
-    """A transparent multilinear "PCS" for tests: the commitment IS the evals.
-
-    Satisfies `PcsProver` and `PcsVerifier` — `open` evaluates the MLE, `verify`
-    recomputes it from the commitment. Neither hiding nor succinct; it exists only
-    to exercise the glue against the seam without a FRI backend.
-    """
+    """A transparent multilinear "PCS" for tests: the commitment IS the evals."""
 
     def commit(self, polys: Sequence[Array]) -> tuple[Array, tuple[Array, ...]]:
-        # One committed poly in Spartan (the witness); the commitment is its evals.
         return polys[0], tuple(polys)
 
     def open(

@@ -27,7 +27,7 @@ from zorch.logup_gkr.prover import (
 from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
 from zorch.prove import fold_rounds
-from zorch.round import ProveChain
+from zorch.round import prove_rounds
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -84,7 +84,9 @@ class LogupSumcheckRoundTest(absltest.TestCase):
 
     def test_call_returns_round_msg_with_challenge(self) -> None:
         st = _state(50, 8)
-        state, _, msg = LogupSumcheckRound(fnp.array(2, KB))(st, cheap_transcript(KB))
+        state, _, msg = LogupSumcheckRound(fnp.array(2, KB))(
+            st, cheap_transcript(KB), None
+        )
         self.assertEqual(msg.round_poly.shape, (4,))
         self.assertEqual(len(state), 5)
         self.assertEqual(state[0].shape, (4,))  # width halved — one round consumed
@@ -104,7 +106,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         state = st
         t: Transcript = cheap_transcript(KB)
         for _ in range(n):
-            state, t, msg = rnd(state, t)
+            state, t, msg = rnd(state, t, None)
             self.assertTrue(bool(msg.round_poly[0] + msg.round_poly[1] == claim))
             claim = eval_univariate(msg.round_poly, msg.challenge)
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
@@ -217,8 +219,11 @@ class GkrProverTest(absltest.TestCase):
         # is non-destructive (sample returns a fresh transcript, leaving this one).
         _, lam = transcript.sample(1)
         claim = lam[0] * carry[0] + carry[1]
-        chain = ProveChain([GkrLayerRound(layer) for layer in reversed(layers[:-1])])
-        _, _, proofs = chain(carry, transcript)
+        _, _, proofs = prove_rounds(
+            [GkrLayerRound(layer) for layer in reversed(layers[:-1])],
+            carry,
+            transcript,
+        )
         first_round = proofs[0].round_polys[0]
         self.assertTrue(bool(first_round[0] + first_round[1] == claim))
 
@@ -230,7 +235,7 @@ class GkrProverTest(absltest.TestCase):
         layers = build_pyramid(first)
         output = extract_outputs(layers[-1])
         carry, transcript = bind_output(output, cheap_transcript(KB))
-        (_, _, new_point), _, proof = GkrLayerRound(layers[-2])(carry, transcript)
+        (_, _, new_point), _, proof = GkrLayerRound(layers[-2])(carry, transcript, None)
         self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
         self.assertTrue(bool(fnp.all(proof.point == new_point[:-1])))
 

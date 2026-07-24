@@ -81,7 +81,7 @@ class SqrtSpaceRound(Round):
         )
 
     def __call__(
-        self, state: SqrtSpaceState, transcript: Transcript
+        self, state: SqrtSpaceState, transcript: Transcript, _incoming: None
     ) -> tuple[SqrtSpaceState, Transcript, Array]:
         p_stacked, eq_evals = state
         msg = self._round_poly(state)

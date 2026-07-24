@@ -12,9 +12,9 @@ from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
-from zorch.spartan import spartan
 from zorch.spartan.pcs_glue import DensePcs
 from zorch.spartan.r1cs import R1CS
+from zorch.spartan.spartan import Spartan, SpartanProof, SpartanWitness
 from zorch.spartan.summand import ZerocheckSummand
 from zorch.spartan.testing.reference import naive_round_polys, replay_challenges
 from zorch.spartan.testing.toy import toy_r1cs
@@ -28,18 +28,22 @@ KB = zk_dtypes.koalabear_mont
 
 def _prove(
     seed: int, s_x: int, nvp: int, num_io: int
-) -> tuple[R1CS, Array, Array, spartan.SpartanProof, dict[str, Array]]:
+) -> tuple[R1CS, Array, Array, SpartanProof, dict[str, Array]]:
     inst, z, _, io = toy_r1cs(
         seed, s_x=s_x, num_vars_padded=nvp, num_io=num_io, dtype=KB
     )
-    proof, _ = spartan.prove(inst, z, io, DensePcs(), cheap_transcript(KB))
+    proof = (
+        Spartan()
+        .prove(SpartanWitness(inst, z, io, DensePcs()), cheap_transcript(KB))
+        .proof
+    )
     ch = replay_challenges(
         cheap_transcript(KB),
         proof.commitment,
         io,
-        proof.messages[0][0],
-        proof.messages[0][1],
-        proof.messages[2],
+        proof.outer.round_polys,
+        proof.outer.claims,
+        proof.inner.round_polys,
         inst.s_x,
     )
     return inst, z, io, proof, ch
@@ -49,8 +53,8 @@ class StructuralCrossCheckTest(absltest.TestCase):
     def test_round_poly_degrees(self) -> None:
         # Hard invariant: outer degree 3 (4 evals), inner degree 2 (3 evals).
         inst, _, _, proof, _ = _prove(1, s_x=3, nvp=4, num_io=2)
-        outer_polys = proof.messages[0][0]
-        inner_polys = proof.messages[2]
+        outer_polys = proof.outer.round_polys
+        inner_polys = proof.inner.round_polys
         self.assertEqual(outer_polys.shape, (inst.s_x, 4))
         self.assertEqual(inner_polys.shape, (inst.s_y, 3))
 
@@ -61,11 +65,11 @@ class StructuralCrossCheckTest(absltest.TestCase):
         ref_polys, final = naive_round_polys(
             [e, az, bz, cz], lambda e, a, b, c: e * (a * b - c), 3, list(ch["r_x"])
         )
-        got = proof.messages[0][0]
+        got = proof.outer.round_polys
         for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
             self.assertTrue(bool(fnp.all(g == ref)), f"outer round {j}")
         # final claimed evals == (Az,Bz,Cz)(r_x).
-        claims = proof.messages[0][1]
+        claims = proof.outer.claims
         self.assertTrue(
             bool(fnp.all(claims == fnp.stack([final[1][0], final[2][0], final[3][0]])))
         )
@@ -75,7 +79,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         from zorch.poly.univariate import eval_univariate
 
         inst, _, _, proof, ch = _prove(3, s_x=3, nvp=4, num_io=2)
-        polys = proof.messages[0][0]
+        polys = proof.outer.round_polys
         claim = fnp.zeros((), KB)
         for j in range(inst.s_x):
             s = polys[j]
@@ -85,7 +89,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
     def test_batching_is_powers_of_r(self) -> None:
         # joint_claim == vA + r·vB + r²·vC (powers of one challenge).
         inst, z, _, proof, ch = _prove(4, s_x=3, nvp=4, num_io=2)
-        va, vb, vc = proof.messages[0][1]
+        va, vb, vc = proof.outer.claims
         r = ch["r_batch"]
         want = va + r * vb + r * r * vc
         # recompute joint via the reference: the inner sumcheck's claim_0.
@@ -97,7 +101,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         inst, z, _, proof, ch = _prove(5, s_x=3, nvp=4, num_io=2)
         m = inst.combined_row_mle(ch["r_x"], ch["r_batch"])
         ref_polys, _ = naive_round_polys([m, z], lambda a, b: a * b, 2, list(ch["r_y"]))
-        got = proof.messages[2]
+        got = proof.inner.round_polys
         for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
             self.assertTrue(bool(fnp.all(g == ref)), f"inner round {j}")
 
@@ -107,7 +111,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
 
         inst, z, _, proof, ch = _prove(6, s_x=3, nvp=4, num_io=2)
         # inner_final = last inner round poly at r_y[-1].
-        inner_polys = proof.messages[2]
+        inner_polys = proof.inner.round_polys
         claim = fnp.sum(inst.combined_row_mle(ch["r_x"], ch["r_batch"]) * z)
         for j in range(inst.s_y):
             claim = eval_univariate(inner_polys[j], ch["r_y"][j])

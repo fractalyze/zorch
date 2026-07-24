@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """End-to-end self-verification of dense LogUp-GKR via the chained Rounds.
 
-Prove with a ProveChain of layer rounds, verify with a VerifyChain of layer
+Prove with a prove_rounds of layer rounds, verify with a verify_rounds of layer
 rounds over the same transcript, and confirm: the proof self-verifies, the prover
 and verifier thread the same reduction, the claim reduces onto the input leaf MLE
 (GKR completeness), and a tampered round polynomial is rejected.

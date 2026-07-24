@@ -115,7 +115,7 @@ class _SumcheckPairFoldRound(Round):
     kernel: SumcheckKernel
 
     def __call__(
-        self, carry: _OpenCarry, transcript: Transcript
+        self, carry: _OpenCarry, transcript: Transcript, _incoming: None
     ) -> tuple[_OpenCarry, Transcript, _RoundMsg]:
         cw, state, level = carry
         chor = self.choreography

@@ -92,7 +92,7 @@ class EqPolyTest(absltest.TestCase):
         for _ in range(l):
             coeffs, cache = rnd._round_coeffs(state)
             self.assertEqual(coeffs.shape, (d + 2,))
-            claim, transcript, r, ok = verifier(claim, coeffs, transcript)
+            claim, transcript, (r, ok) = verifier(claim, transcript, coeffs)
             self.assertTrue(bool(ok))
             state = rnd._fold(cache, state[1], r)
             point.append(r)

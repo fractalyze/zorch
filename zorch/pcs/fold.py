@@ -90,7 +90,7 @@ class PreFoldPairCommitRound(Round):
     tree: MerkleTree
 
     def __call__(
-        self, cw: Array, transcript: Transcript
+        self, cw: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, PairCommittedLayer]:
         leaves = to_base_field(self.code.pair_leaves(cw))
         root, digest_layers = self.tree.commit(leaves)
@@ -128,7 +128,7 @@ class PreFoldKGroupCommitRound(Round):
     tree: MerkleTree
 
     def __call__(
-        self, cw: Array, transcript: Transcript
+        self, cw: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, KGroupCommittedLayer]:
         leaves = to_base_field(self.code.group_leaves(cw))
         root, digest_layers = self.tree.commit(leaves)

@@ -5,7 +5,7 @@ A `GkrLayerRound` replays one layer's per-variable sumcheck (the agnostic
 `zorch.verify` driver over `zorch.sumcheck.verifier.SumcheckRound`), checks the
 LogUp oracle at the bound point via the shared `logup_combine`, then reduces the
 claim across the child selector. The whole GKR verifier is
-`VerifyChain([GkrLayerRound() for _ in layer_proofs])`, threading the same
+`verify_rounds([GkrLayerRound() for _ in layer_proofs])`, threading the same
 `(num_eval, den_eval, eval_point)` carry the prover does and ANDing every layer's
 check. The eq factor of the oracle is evaluated with the O(n) `eval_eq`, so
 verification stays succinct (no 2**n weight vector).
@@ -39,7 +39,7 @@ class GkrLayerRound(Round):
     """Verify one GKR layer; the chain of these is the GKR verifier."""
 
     def __call__(
-        self, carry: Carry, layer_proof: LayerProof, transcript: Transcript
+        self, carry: Carry, transcript: Transcript, layer_proof: LayerProof
     ) -> tuple[Carry, Transcript, Array]:
         num_eval, den_eval, eval_point = carry
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1

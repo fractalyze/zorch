@@ -110,6 +110,16 @@ py_library(
 )
 
 py_library(
+    name = "stage",
+    srcs = ["stage.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":transcript",
+        requirement("frx"),
+    ],
+)
+
+py_library(
     name = "prove",
     srcs = ["prove.py"],
     visibility = ["//visibility:public"],

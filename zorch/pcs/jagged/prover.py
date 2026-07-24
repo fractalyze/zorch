@@ -1,10 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""SP1-schedule jagged evaluation-proof sumcheck as a composable ``Round``.
+"""SP1-schedule jagged evaluation-proof sumcheck as one recurrence step.
 
-``JaggedEvalRound`` is the stage-5 evaluation proof in zorch's IOP-``Round`` form,
-so it sequences with the other stages —
-``ProveChain([Commit(), LogUpGkr(), ZeroCheck(), JaggedEval()])``. It reproves
-SP1's jagged PCS opening sumchecks byte-identically: the OUTER Hadamard sumcheck
+``JaggedEvalRound`` packages the sumcheck half of SP1's jagged evaluation phase
+behind the prover-round contract. It can participate in a recurrence whose carry
+is ``JaggedEvalInputs``; a coarse PCS stage may drive it internally alongside its
+verifier dual and the remaining opening work. It reproves SP1's jagged PCS
+opening sumchecks byte-identically: the OUTER Hadamard sumcheck
 ``Σ_i D(i)·J̃(i)`` over the committed dense buffer (round polys + ``dense_eval``)
 whose folded point feeds the INNER branching-program sumcheck reproving
 ``J̃(z_row, z_col, z_final)``. The stacked BaseFold open of ``D`` at ``z_final``
@@ -404,10 +405,10 @@ def _eval_inputs(
 
 
 class JaggedEvalRound(Round):
-    """The jagged PCS evaluation-proof sumcheck as a composable IOP ``Round``.
+    """One prover recurrence step for the jagged PCS evaluation sumchecks.
 
-    ``__call__`` maps ``(JaggedEvalInputs, transcript) -> (inputs, transcript,
-    JaggedEvalMsg)`` so it sequences in ``ProveChain``. Runs the full sumcheck
+    ``__call__`` maps ``(JaggedEvalInputs, transcript)`` to the unchanged carry,
+    advanced transcript, and ``JaggedEvalMsg``. It runs the full sumcheck
     half: the outer Hadamard sumcheck ``Σ D·J̃`` over the committed dense buffer
     (round polys + ``dense_eval``), whose folded point ``z_final`` then feeds the
     inner branching-program sumcheck reproving ``J̃(z_row, z_col, z_final)``. See
@@ -420,7 +421,7 @@ class JaggedEvalRound(Round):
         self._dtype = dtype
 
     def __call__(
-        self, carry: JaggedEvalInputs, transcript: Transcript
+        self, carry: JaggedEvalInputs, transcript: Transcript, _incoming: None
     ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
         offsets, merged, weights = _eval_inputs(
             carry.col_heights, carry.z_col, self._dtype

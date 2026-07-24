@@ -9,8 +9,8 @@ XLA**, its fork of stock [XLA](https://github.com/openxla/xla) that adds native
 field and elliptic-curve types. `zorch` provides the reusable pieces a proof
 system is assembled from.
 
-A Modern SNARK is **IOP + PCS**. The way deep learning stacks `Layer`s, `zorch`
-stacks **`Round`s** — the one composable unit the rest is threaded through.
+A Modern SNARK is **IOP + PCS**. zorch separates repeated protocol rounds
+from coarse proof stages and explicit proof-system pipelines.
 
 ## Design Philosophy
 
@@ -30,77 +30,159 @@ stacks **`Round`s** — the one composable unit the rest is threaded through.
 
 ## Building blocks
 
-**The one unit is the `Round` — a prover↔verifier interaction of an IOP**: a
-message observed into the Fiat-Shamir transcript, a challenge sampled back
-(`observe`→`sample`, via `__call__`). `Round`s **nest** — a single per-variable
-step is a `Round`, and a whole sumcheck (its per-variable `Round`s bundled) is
-itself a `Round`. This is what **`SNARK = Σ IOP Round`** says literally: a
-Fiat-Shamir-compiled IOP is a tree of these rounds, `Σ` flattening it to the leaf
-interactions.
+zorch composes protocols at two different scales: repeated **rounds** inside a
+protocol component, and paired prover/verifier **stages** at proof boundaries.
+Keeping the two scales separate makes it clear which state is one recurrence's
+carry and which values are the semantic outputs consumed by the rest of the
+proof system.
 
-Grouping `Round`s gives either a bigger `Round` (a sumcheck, from its
-per-variable rounds) or — when the group is a top-level phase — a `Stage`. Two
-roles organize the composition; both are `Round`s, since a chain is itself one:
+### Round: repeat one recurrence
 
-- A **`Stage`** is a `Round` that is one phase of the scheme's `prove_chain` —
-  the sequence of Stages the scheme *is* (trace-commit, logup-gkr, zero-check, a
-  PCS opening).
-- A **`Bridge`** is a transcript-only `Round` for soundness or security work — a
-  grind (buys security bits), a framed observe or domain separator (closes a
-  Fiat-Shamir soundness gap), a sampled-and-discarded challenge (matches the
-  reference's schedule). It usually sits *inside* a Stage; a scheme may also
-  place one directly in the `prove_chain` between two stages (an RLC batching
-  their claims).
-
-So the shape is recursive — the `prove_chain` is `Stage`s (with the occasional
-`Bridge` between them); a `Stage` chains `Round`s and `Bridge`s; a `Round` may
-itself chain `Round`s, down to the leaf interaction:
+A **`Round`** is one step of a homogeneous recurrence, such as eliminating one
+sumcheck variable, folding one polynomial dimension, or reducing one GKR layer.
+Every executable round implements one generic transition:
 
 ```text
-prove()  —  the prove_chain is Stages; a Stage holds Rounds and Bridges
-──────────────────────────────────────────────────────────────────────
-
-  Stage   trace-commit          commit the witness columns
-  Stage   logup-gkr             the interaction argument:
-    Bridge  grind                 a PoW inside the stage (buys security bits)
-    Round   layer L                one layer — itself a Round of Rounds:
-      Round   bind x₀                a leaf: one observe → sample
-      Round   bind x₁
-    Round   layer L-1
-  Stage   zero-check            the constraint sumcheck:
-    Bridge  observe(framing)      bind the transcript first (soundness)
-    Round   bind x₀                a leaf: one observe → sample
-    Round   bind x₁
-  Stage   jagged-evals          the PCS opening
+(carry, transcript, incoming) → (carry, transcript, outgoing)
 ```
 
-|             | **`Round`**                           | **`Stage`**                                            | **`Bridge`**                                  |
-| ----------- | ------------------------------------- | ------------------------------------------------------ | --------------------------------------------- |
-| **Is**      | a prover↔verifier interaction; nests  | a sequence of `Round`s that is one `prove_chain` phase | a transcript-only connective `Round`          |
-| **Does**    | `observe`→`sample` at the leaf        | witness + real compute (an inner sumcheck, an open)    | a transcript op soundness/security needs      |
-| **Example** | a sumcheck round, or a whole sumcheck | trace-commit, logup-gkr, zero-check, jagged-evals      | a grind, a framed observe, a discarded sample |
+The prover specializes it as `incoming=None`, `outgoing=message`; the verifier
+consumes that same message as `incoming` and emits `ok` as `outgoing`.
+`ProverRound` and `VerifierRound` are readable type aliases for those uses of
+`Round`, not separate interfaces. The `incoming` position is required on every
+call: `None` is the prover role’s explicit unit input, not an omitted argument.
 
-`Stage` and `Bridge` are the same `Round` interface — that is how chains nest and
-how the verifier mirrors the prover *round-for-round* — but the roles are what a
-reader navigates by.
+Use `prove_rounds()` and `verify_rounds()` when every step has the same meaning
+for its carry and message. The concrete round objects and message shapes may
+vary; the invariant is the recurrence contract. Specialized drivers such as
+sumcheck folding can impose stronger shape or fusion rules.
 
-**Where the boundaries fall.** A leaf `Round` is each prover↔verifier interaction
-(`observe`→`sample`); Rounds bundle into a bigger `Round` or, at a `prove_chain`
-phase, a `Stage`; a `Bridge` sits wherever the reference's soundness argument
-needs a transcript op — inside a stage, or between two in the `prove_chain`. The
-full carry-and-seam contract is
+A sequence is not a round recurrence merely because it executes in order.
+Setup, a special first interaction, a repeated sumcheck, and terminal claim
+derivation have different contracts. Their owning stage should spell out that
+orchestration directly.
+
+### Stage: pair one protocol component
+
+A **`Stage`** is a complete reusable protocol component with matched `prove`
+and `verify` methods:
+
+```python
+prove(prover_input, transcript) -> ProveResult[prover_output, proof]
+verify(verifier_input, proof, transcript) -> VerifyResult[verifier_output]
+```
+
+A stage owns one proof section, its transcript schedule, the typed values it
+exports, and the pairing between prover and verifier behavior. Prover and
+verifier inputs intentionally need not have the same type: a prover may consume
+a witness while the verifier consumes only a public claim.
+
+A stage may run a recurrence of rounds, perform a PCS operation, or contain
+other stages. `SumcheckStage`, for example, is an ordinary stage whose internal
+round kernels eliminate variables. Compilation boundaries are a separate
+performance choice; one stage may contain several compiled regions.
+
+### Example: a composite proof-system stage
+
+`Spartan` is a composite stage. Its execution order is linear, but its dataflow
+is not a simple `output → next input` chain. The prover opening needs the PCS
+state and inner point; the verifier must derive the terminal opening claim from
+the statement, outer result, batching challenge, and inner result. The opening
+edges below combine those prover (`P`) and verifier (`V`) dependencies.
+
+```mermaid
+flowchart LR
+    input["statement / witness"]
+    commit["commit witness"]
+    outer["OuterStage<br/>zerocheck<br/>SumcheckStage → Round × n"]
+    batch["batch_claims()<br/>named transcript operation"]
+    inner["InnerStage<br/>lincheck<br/>SumcheckStage → Round × m"]
+    opening["WitnessOpenStage"]
+
+    input --> commit
+    input --> outer
+    commit -->|absorbed commitment| outer
+    outer -->|claims| batch
+    input -->|instance + assignment P| inner
+    outer -->|outer result| inner
+    batch --> inner
+    commit -->|PCS data P / commitment V| opening
+    input -->|instance + public inputs V| opening
+    outer -->|outer result V| opening
+    batch -->|batched claim V| opening
+    inner -->|point P / reduced claim V| opening
+```
+
+The composite writes this dataflow with ordinary Python, like a PyTorch module
+with a custom `forward`. Its two paths intentionally construct different inputs
+for the paired opening stage:
+
+```python
+# prove()
+outer = self.outer.prove(outer_polynomials, transcript)
+batch, transcript = batch_claims(outer.output.claims, outer.transcript)
+inner = self.inner.prove(
+    LincheckWitness(instance, assignment, outer.output, batch),
+    transcript,
+)
+opening = self.witness_open.prove(
+    WitnessOpenData(pcs, prover_data, inner.output.point),
+    inner.transcript,
+)
+
+# verify()
+outer = self.outer.verify(None, proof.outer, transcript)
+batch, transcript = batch_claims(outer.output.claims, outer.transcript)
+inner = self.inner.verify(batch, proof.inner, transcript)
+claim = witness_opening_claim(
+    instance,
+    public_inputs,
+    outer.output,
+    batch,
+    inner.output,
+)
+opening = self.witness_open.verify(
+    WitnessOpeningStatement(pcs, proof.commitment, claim),
+    proof.witness_open,
+    inner.transcript,
+)
+```
+
+The prover does not need to recompute a claim it already knows is implied by its
+witness; it opens the committed polynomial at the final point. The verifier has
+no witness, so its opening statement packages the claim derived from almost the
+entire preceding pipeline. This explicit parent orchestration preserves fan-out,
+skip-level dependencies, and different prover/verifier knowledge without a
+universal context object or adapter stage.
+
+| | **`Round`** | **`Stage`** | **Named transcript operation** |
+| --- | --- | --- | --- |
+| **Represents** | one step of a repeated recurrence | one complete paired protocol component | schedule-only Fiat-Shamir work |
+| **Owns** | recurrence carry and incoming/outgoing contract | typed inputs/outputs and one proof section | no proof section |
+| **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, PCS opening, Spartan | domain separation, grinding, claim batching |
+| **Composed by** | a recurrence driver inside a stage | an explicit parent `Stage` | the stage whose security schedule requires it |
+
+There is deliberately no separate “bridge” component. A domain separator,
+grind, framed observation, or sampled batching challenge does not prove or
+verify an independently reusable claim. It is a named function called at the
+same point by the owning prover and verifier.
+
+### Where the classic pieces fit
+
+- **Fiat-Shamir, `Polynomial`, folds, codes, hashing, and commitments** are
+  reusable materials used by rounds and stages.
+- **Sumcheck** is a `Stage` because it is a complete paired reduction; its
+  per-variable steps are rounds.
+- **Zerocheck and lincheck** are stages that configure sumcheck and add their
+  protocol-specific setup, terminal checks, and exported claims.
+- **A PCS opening** is a stage. Its implementation may drive internal rounds
+  (Basefold does) or use another recurrence shape; those mechanics do not change
+  the paired proof boundary.
+- **A complete proof system** can itself be a composite stage, so it can be
+  tested, nested, or reused through the same paired interface.
+
+The full contracts, ownership rules, and reuse guidance live in
 [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
-
-**Where the classic pieces fit.** A ZK reader expects Fiat-Shamir, `Polynomial`,
-`PCS`, and sumcheck as top-level "blocks." In this picture they are not peers of
-the `Round`:
-
-- **Fiat-Shamir, `Polynomial`, and fold** are the *materials* a `Round` body
-  computes with — the transcript it threads, the polynomials it evaluates, the
-  fold (2-to-1 reduction, one challenge per round) it applies each step.
-- **A `PCS` opening and a zero-check are `Stage`s** — each a distinct phase: a
-  zero-check reduces to a sumcheck, while a `PCS` opening runs its
-  commitment-opening and evaluation checks (the *jagged-evals* stage above).
 
 ## Development
 

@@ -12,8 +12,8 @@ extension-field challenge domain.
 The two rounds must be duals: they observe the round message and sample the
 challenge identically, or prover and verifier desync. The prover stage also
 recovers its bound point by *replaying the verifier round* over the proof
-(`zorch.verify`), so a consistent pair is what keeps the point wire-agnostic —
-there is no separate assumption about the message form baked into the stage.
+(`zorch.verify`), so a consistent pair keeps the point wire-agnostic.
+The verifier round defines how the stage interprets the message form.
 
 The default engines reproduce the shipped behavior: value-form `StandardRound`
 over the degree-3 zerocheck summand `eq·(â◦b̂−ĉ)` (natural domain) for the outer

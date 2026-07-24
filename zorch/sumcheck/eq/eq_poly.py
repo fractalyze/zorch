@@ -166,7 +166,7 @@ class EqPolyRound(Round):
         return diffs * r + p0s, eq_w_prev * eq_factor(r, w_i)
 
     def __call__(
-        self, state: EqPolyState, transcript: Transcript
+        self, state: EqPolyState, transcript: Transcript, _incoming: None
     ) -> tuple[EqPolyState, Transcript, Array]:
         msg, cache = self._round_poly(state)
         transcript, r = transcript.observe_and_sample(msg, 1)

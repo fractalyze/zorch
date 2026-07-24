@@ -39,7 +39,8 @@ def verify(
         carry: tuple[Array, Transcript], msg: Array
     ) -> tuple[tuple[Array, Transcript], tuple[Array, Array]]:
         claim, transcript = carry
-        claim, transcript, r, ok = verifier(claim, msg, transcript)
+        claim, transcript, outgoing = verifier(claim, transcript, msg)
+        r, ok = outgoing
         return (claim, transcript), (r, ok)
 
     (claim, transcript), (point, oks) = lax.scan(step, (claim, transcript), proof)

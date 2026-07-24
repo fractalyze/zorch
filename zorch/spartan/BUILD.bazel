@@ -7,7 +7,6 @@ py_library(
     name = "spartan",
     srcs = [
         "__init__.py",
-        "carry.py",
         "engine.py",
         "lincheck.py",
         "pcs_glue.py",
@@ -20,6 +19,7 @@ py_library(
     deps = [
         "//zorch:prove",
         "//zorch:round",
+        "//zorch:stage",
         "//zorch:transcript",
         "//zorch:verify",
         "//zorch/pcs:protocol",

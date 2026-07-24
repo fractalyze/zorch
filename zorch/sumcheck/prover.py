@@ -124,7 +124,7 @@ class StandardRound(Round):
         return summand_evals(folded, self.summand._combine, domain)
 
     def __call__(
-        self, folded: Array, transcript: Transcript
+        self, folded: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         if self.ext_dtype is None:
@@ -162,7 +162,7 @@ class CompressedProductRound(Round):
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
-        self, folded: Array, transcript: Transcript
+        self, folded: Array, transcript: Transcript, _incoming: None
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         transcript, r = transcript.observe_and_sample(msg, 1)

@@ -73,7 +73,7 @@ class SmallValueRound(Round):
         return sumcheck_poly_from_t(t_evals, l_evals, self.domain)
 
     def __call__(
-        self, state: SmallValueState, transcript: Transcript
+        self, state: SmallValueState, transcript: Transcript, _incoming: None
     ) -> tuple[SmallValueState, Transcript, Array]:
         r_tensor, eq_w_prev, eq_evals = state
         i = log2_strict_usize(eq_evals.shape[0])
@@ -102,7 +102,7 @@ class TransitionRound(Round):
         self.domain = uhat_domain(d, dtype)
 
     def __call__(
-        self, state: tuple[Array, Array], transcript: Transcript
+        self, state: tuple[Array, Array], transcript: Transcript, _incoming: None
     ) -> tuple[tuple[Array, Array], Transcript, Array]:
         folded, eq_w_prev = state
         msg = summand_evals(folded, self.summand._combine, self.domain)
@@ -165,7 +165,7 @@ def prove_eq_poly_small_value(
     folded = compute_folded_evaluations(p_with_weights, eq_evals)
     (folded, eq_w_prev), transcript, msg_t = TransitionRound(
         d, w[l_0], p_initial.dtype
-    )((folded, eq_w_prev), transcript)
+    )((folded, eq_w_prev), transcript, None)
     folded_p = folded[:d]
 
     # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute

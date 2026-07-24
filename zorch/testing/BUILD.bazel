@@ -109,6 +109,20 @@ py_test(
 )
 
 py_test(
+    name = "stage_test",
+    size = "small",
+    srcs = ["stage_test.py"],
+    deps = [
+        "//zorch:stage",
+        "//zorch:transcript",
+        "//zorch/testkit:transcript",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "scan_test",
     size = "small",
     srcs = ["scan_test.py"],

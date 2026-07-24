@@ -1,14 +1,24 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Generic Spartan R1CS combinators, assembled from zorch blocks.
+"""The Spartan composite stage and its R1CS data model.
 
-Field- and PCS-agnostic R1CS-proving combinators — a zerocheck (outer sumcheck),
-a random-linear-combination batcher, a lincheck (inner sumcheck), and a
-sumcheck-claim→PCS-opening glue — plus a thin `prove` / `verify` assembly wiring
-them into the Spartan PIOP. The combinators carry no scheme assumption; the
-assembly is the reference schedule. See `docs/schemes/spartan.md`.
+`Spartan` owns the outer zerocheck, inner lincheck, and witness-opening stages.
+Call its paired `prove` and `verify` methods with `SpartanWitness` and
+`SpartanStatement`; the object makes their non-linear dataflow explicit.
 """
 
 from zorch.spartan.r1cs import R1CS, assignment
-from zorch.spartan.spartan import SpartanProof, prove, verify
+from zorch.spartan.spartan import (
+    Spartan,
+    SpartanProof,
+    SpartanStatement,
+    SpartanWitness,
+)
 
-__all__ = ["R1CS", "assignment", "SpartanProof", "prove", "verify"]
+__all__ = [
+    "R1CS",
+    "Spartan",
+    "SpartanProof",
+    "SpartanStatement",
+    "SpartanWitness",
+    "assignment",
+]
