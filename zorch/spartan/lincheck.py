@@ -9,7 +9,7 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.spartan.r1cs import R1CS
 from zorch.spartan.zerocheck import RowEvaluationClaim
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
@@ -41,7 +41,7 @@ def _joint_claim(claims: Array, challenge: Array) -> Array:
 def batch_claims(
     claims: Array,
     transcript: Transcript,
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    challenges: ChallengePolicy,
 ) -> tuple[BatchedClaims, Transcript]:
     """Sample the batching challenge and derive the joint value."""
     transcript, challenge = challenges.sample(transcript)
@@ -90,7 +90,7 @@ class InnerProver(
         sumcheck: (
             ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Any] | None
         ) = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.sumcheck = sumcheck or SumcheckProver(
             StandardRound(ProductSummand(2), challenges=challenges),
@@ -126,7 +126,7 @@ class InnerVerifier(VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerPro
         self,
         *,
         sumcheck: VerifierStage[SumClaim, EvaluationClaim, Any] | None = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.sumcheck = sumcheck or SumcheckVerifier(SumcheckRound(2, challenges))
 

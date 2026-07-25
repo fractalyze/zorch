@@ -25,7 +25,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import VerifierRound
 from zorch.sumcheck.domain import subgroup_sum
@@ -43,7 +43,7 @@ class SumcheckRound(VerifierRound):
     """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`."""
 
     degree: int
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES
+    challenges: ChallengePolicy
 
     def __post_init__(self) -> None:
         if self.degree < 1:
@@ -65,9 +65,7 @@ class SumcheckRound(VerifierRound):
     def __call__(
         self, claim: RunningClaim, transcript: Transcript, msg: Array
     ) -> tuple[RunningClaim, Transcript, Array]:
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, claim.value.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         reduced, ok = self.check_reduce(claim.value, msg, r)
         return claim.bind(reduced, r), transcript, ok
 
@@ -84,7 +82,7 @@ class CoeffsSumcheckRound(VerifierRound):
     coefficients directly."""
 
     degree: int
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES
+    challenges: ChallengePolicy
 
     def __post_init__(self) -> None:
         if self.degree < 1:
@@ -99,9 +97,7 @@ class CoeffsSumcheckRound(VerifierRound):
                 f"coefficients, got {msg.shape[0]}"
             )
         ok = claim.value == msg[0] + fnp.sum(msg)
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, claim.value.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         return claim.bind(eval_coeffs(msg, r), r), transcript, ok
 
 
@@ -121,7 +117,7 @@ class CompressedCoeffsSumcheckRound(VerifierRound):
     check (`ok` is constant true); binding rests on the terminal claim check,
     the trade the compressed form makes for wire size."""
 
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES
+    challenges: ChallengePolicy
 
     def check_reduce(self, claim: Array, msg: Array, r: Array) -> tuple[Array, Array]:
         """Reconstruct `c_1` from the claim and reduce, for an externally
@@ -140,9 +136,7 @@ class CompressedCoeffsSumcheckRound(VerifierRound):
     def __call__(
         self, claim: RunningClaim, transcript: Transcript, msg: Array
     ) -> tuple[RunningClaim, Transcript, Array]:
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, claim.value.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         reduced, ok = self.check_reduce(claim.value, msg, r)
         return claim.bind(reduced, r), transcript, ok
 
@@ -168,7 +162,7 @@ class UnivariateSkipRound(VerifierRound):
 
     skip_rounds: int
     degree: int
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES
+    challenges: ChallengePolicy
 
     def __post_init__(self) -> None:
         if self.skip_rounds < 1:
@@ -188,9 +182,7 @@ class UnivariateSkipRound(VerifierRound):
                 f"got {msg.shape[0]}"
             )
         ok = claim.value == subgroup_sum(msg, self.skip_rounds)
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, claim.value.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         return claim.bind(eval_coeffs(msg, r), r), transcript, ok
 
 

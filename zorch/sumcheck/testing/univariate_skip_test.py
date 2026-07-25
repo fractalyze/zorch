@@ -28,6 +28,10 @@ from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 KBx4 = zk_dtypes.koalabearx4_mont
 
 
@@ -94,9 +98,11 @@ class SkipRoundTripTest(parameterized.TestCase):
         total = 5
         p = rand_field(7 + skip + m, (m, 1 << total), KB)
         summand = ProductSummand(degree=m)
-        final, _, msgs = prove_univariate_skip(p, skip, cheap_transcript(KB), summand)
+        final, _, msgs = prove_univariate_skip(
+            p, skip, cheap_transcript(KB), summand, challenges=_CH
+        )
         reduced, _, point, ok = verify_univariate_skip(
-            _claim(p), msgs, skip, total, cheap_transcript(KB), degree=m
+            _claim(p), msgs, skip, total, cheap_transcript(KB), degree=m, challenges=_CH
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(reduced == fnp.prod(final[:, 0])))
@@ -134,9 +140,11 @@ class SkipZeroTest(absltest.TestCase):
         m, total = 2, 4
         p = rand_field(3, (m, 1 << total), KB)
         summand = ProductSummand(degree=m)
-        f0, _, msgs0 = prove_univariate_skip(p, 0, cheap_transcript(KB), summand)
+        f0, _, msgs0 = prove_univariate_skip(
+            p, 0, cheap_transcript(KB), summand, challenges=_CH
+        )
         f_ref, _, msgs_ref = fold_rounds(
-            StandardRound(summand), p, cheap_transcript(KB), total
+            StandardRound(summand, challenges=_CH), p, cheap_transcript(KB), total
         )
         self.assertLen(msgs0, total)
         for a, b in zip(msgs0, msgs_ref, strict=True):
@@ -147,10 +155,10 @@ class SkipZeroTest(absltest.TestCase):
         m, total = 2, 4
         p = rand_field(4, (m, 1 << total), KB)
         f0, _, msgs0 = prove_univariate_skip(
-            p, 0, cheap_transcript(KB), ProductSummand(degree=m)
+            p, 0, cheap_transcript(KB), ProductSummand(degree=m), challenges=_CH
         )
         reduced, _, point, ok = verify_univariate_skip(
-            _claim(p), msgs0, 0, total, cheap_transcript(KB), degree=m
+            _claim(p), msgs0, 0, total, cheap_transcript(KB), degree=m, challenges=_CH
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(reduced == fnp.prod(f0[:, 0])))
@@ -217,7 +225,7 @@ class ComposedTailTest(parameterized.TestCase):
 
         # Composed: same round 0, then the √-space tail over the bound extension state.
         state, transcript, msg0 = skip_round0(
-            p, skip, cheap_transcript(KB), summand, ChallengePolicy(KBx4)
+            p, skip, cheap_transcript(KB), summand, challenges=ChallengePolicy(KBx4)
         )
         final, transcript, tail = prove_sqrt_space(
             state,

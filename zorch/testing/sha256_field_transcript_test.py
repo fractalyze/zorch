@@ -193,12 +193,15 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # uint32 ring stands in for a scalar challenge field (flock's F128 rides
         # the GHASH dtype seam); the point here is the transcript
         # threading, not the sumcheck math.
+        from zorch.challenge import ChallengePolicy
         from zorch.prove import fold_rounds
         from zorch.sumcheck.prover import ProductSummand, StandardRound
 
         a = fnp.arange(8, dtype=fnp.uint32) + 1
         b = fnp.arange(8, dtype=fnp.uint32) + 2
-        rnd = StandardRound(ProductSummand(degree=2))
+        rnd = StandardRound(
+            ProductSummand(degree=2), challenges=ChallengePolicy(fnp.uint32)
+        )
         tr = Sha256FieldTranscript.new(b"sc", np.uint32)
 
         def run(x: fnp.ndarray, y: fnp.ndarray) -> tuple[fnp.ndarray, fnp.ndarray]:

@@ -43,7 +43,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
@@ -129,7 +129,7 @@ def prove_jagged_layer(
     eval_point: Array,
     transcript: Transcript,
     *,
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    challenges: ChallengePolicy,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """Prove one jagged GKR layer's materialized sumcheck from an explicit
@@ -162,7 +162,7 @@ def prove_jagged_layer(
     """
     if caps is None:
         raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
-    challenge_limbs = challenges.limbs_for(eval_point.dtype)
+    challenge_limbs = challenges.limbs_over(transcript.field)
     niv = layer.num_batch_variables
     nrv = eval_point.shape[0] - niv
     if nrv < 1:
@@ -674,7 +674,7 @@ class JaggedGkrLayerRound(ProverRound):
     def __init__(
         self,
         layer: JaggedGkrLayer,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
         *,
         caps: RoundWidthCaps | None = None,
         layer_bufs: LayerBuffers | None = None,
@@ -683,7 +683,7 @@ class JaggedGkrLayerRound(ProverRound):
         # round -- and its layer -- the moment it builds the next. Pass ONE
         # `layer_bufs` per chain (None materializes the cap pad fresh).
         policy = challenges
-        challenge_limbs = policy.limbs_for(layer.denominator_0.dtype)
+        challenge_limbs = policy.base_limbs
         self._call = partial(
             _jagged_round_via_zone, layer, challenge_limbs, caps, layer_bufs
         )

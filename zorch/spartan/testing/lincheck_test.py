@@ -11,6 +11,7 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.spartan.lincheck import (
     BatchedClaims,
     InnerProver,
@@ -45,8 +46,12 @@ class RlcOperationTest(parameterized.TestCase):
     @parameterized.named_parameters(*FIELDS)
     def test_same_operation_replays_for_prover_and_verifier(self, dtype: Any) -> None:
         claims = rand_field(3, (3,), dtype)
-        prover, _ = batch_claims(claims, cheap_transcript(dtype))
-        verifier, _ = batch_claims(claims, cheap_transcript(dtype))
+        prover, _ = batch_claims(
+            claims, cheap_transcript(dtype), challenges=ChallengePolicy(dtype)
+        )
+        verifier, _ = batch_claims(
+            claims, cheap_transcript(dtype), challenges=ChallengePolicy(dtype)
+        )
         self.assertTrue(bool(prover.challenge == verifier.challenge))
         self.assertTrue(bool(prover.joint == verifier.joint))
 
@@ -70,8 +75,10 @@ class InnerRoleTest(parameterized.TestCase):
     def test_roundtrip_accepts(self, dtype: Any) -> None:
         inst, z, outer, batch = self._setup(20, dtype)
         claim = LincheckClaim(inst, outer, batch)
-        proved = InnerProver().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
-        verified = InnerVerifier().verify(
+        proved = InnerProver(challenges=ChallengePolicy(dtype)).prove(
+            claim, LincheckWitness(z), cheap_transcript(dtype)
+        )
+        verified = InnerVerifier(challenges=ChallengePolicy(dtype)).verify(
             claim, proved.reduction_proof, cheap_transcript(dtype)
         )
         self.assertTrue(bool(verified.ok))
@@ -86,10 +93,12 @@ class InnerRoleTest(parameterized.TestCase):
     def test_wrong_joint_claim_rejected(self, dtype: Any) -> None:
         inst, z, outer, batch = self._setup(21, dtype)
         claim = LincheckClaim(inst, outer, batch)
-        proved = InnerProver().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
+        proved = InnerProver(challenges=ChallengePolicy(dtype)).prove(
+            claim, LincheckWitness(z), cheap_transcript(dtype)
+        )
         bad_batch = replace(batch, joint=batch.joint + fnp.ones((), dtype))
         bad_claim = replace(claim, batch=bad_batch)
-        verified = InnerVerifier().verify(
+        verified = InnerVerifier(challenges=ChallengePolicy(dtype)).verify(
             bad_claim, proved.reduction_proof, cheap_transcript(dtype)
         )
         self.assertFalse(bool(verified.ok))

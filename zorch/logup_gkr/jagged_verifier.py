@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
 from zorch.logup_gkr.prover import LayerClaim, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
@@ -44,7 +44,7 @@ class JaggedGkrLayerRound(VerifierRound):
     verifier. Its `ChallengePolicy` must match the prover's because every
     challenge in the layer follows that one schedule."""
 
-    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+    def __init__(self, challenges: ChallengePolicy) -> None:
         self.challenges = challenges
 
     def __call__(
@@ -53,7 +53,7 @@ class JaggedGkrLayerRound(VerifierRound):
         num_eval, den_eval, eval_point = claim
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1
         d0, d1 = layer_proof.denominator_0, layer_proof.denominator_1
-        transcript, lam = self.challenges.sample(transcript, num_eval.dtype)
+        transcript, lam = self.challenges.sample(transcript)
         claim = lam * num_eval + den_eval
         point, final_claim, transcript, ok_sc = verify(
             CoeffsSumcheckRound(_DEGREE, self.challenges),
@@ -79,7 +79,7 @@ class JaggedGkrLayerRound(VerifierRound):
         ok = ok_sc & (combined == final_claim)
 
         transcript, r = self.challenges.observe_and_sample(
-            transcript, fnp.stack([n0, n1, d0, d1]), num_eval.dtype
+            transcript, fnp.stack([n0, n1, d0, d1])
         )
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok

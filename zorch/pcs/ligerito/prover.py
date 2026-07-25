@@ -43,13 +43,14 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from functools import partial
-from typing import TYPE_CHECKING
+from functools import cache, partial
+from typing import TYPE_CHECKING, Any
 
 import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
@@ -76,10 +77,19 @@ if TYPE_CHECKING:
 # de-risk instantiation, additive-NTT is #11/#27.
 MakeCode = Callable[[int, int], TensorCode]
 
-# The degree-2 product round (`W·B`) drives every sumcheck round; one instance,
-# reused. The claim reduces through `eval_univariate` (value-form message).
-_ROUND = StandardRound(ProductSummand(degree=2))
-_COMPRESSED_ROUND = CompressedProductRound()
+
+# The degree-2 product round (`W·B`) drives every sumcheck round. Cached per
+# challenge field so there is still ONE instance per field -- the rounds ride
+# jit closures as identity-stable keys, so a fresh object per call would retrace.
+# The claim reduces through `eval_univariate` (value-form message).
+@cache
+def _round(dtype: Any) -> StandardRound:
+    return StandardRound(ProductSummand(degree=2), challenges=ChallengePolicy(dtype))
+
+
+@cache
+def _compressed_round(dtype: Any) -> CompressedProductRound:
+    return CompressedProductRound(challenges=ChallengePolicy(dtype))
 
 
 # Jitted commit body, keyed on code + tree + interleave by value (#214): commit
@@ -227,7 +237,9 @@ def _open_jit(
     chor = prover.choreography
     dtype = B.dtype
     one = fnp.ones((), dtype)
-    round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
+    round_ = (
+        _compressed_round(dtype) if cfg.compressed_sumcheck_messages else _round(dtype)
+    )
     basis = select_commit_basis(cfg.monomial_commit)
 
     # The continuous sumcheck state: witness W (folds) and basis B (glued +

@@ -10,6 +10,7 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.spartan.r1cs import R1CS
@@ -32,6 +33,10 @@ from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
+
 
 def _prove(
     seed: int, s_x: int, nvp: int, num_io: int
@@ -41,7 +46,7 @@ def _prove(
     )
     pcs = DensePcs()
     proof = (
-        SpartanProver(pcs)
+        SpartanProver(pcs, challenges=_CH)
         .prove(SpartanClaim(inst, io), SpartanWitness(z), cheap_transcript(KB))
         .reduction_proof
     )
@@ -133,7 +138,9 @@ class StageFusionTest(absltest.TestCase):
     def test_outer_round_body_fuses(self) -> None:
         stacked = fnp.stack([rand_field(70 + i, (8,), KB) for i in range(3)])
         tau = rand_field(74, (3,), KB)
-        round_ = EqPolyRound(ZerocheckSummand(), tau, natural_domain(3, KB))
+        round_ = EqPolyRound(
+            ZerocheckSummand(), tau, natural_domain(3, KB), challenges=_CH
+        )
         state = (stacked, fnp.ones(1, KB))
         assert_fusion_ready(
             lambda value: round_._round_poly(value)[0], state, reduces=1
@@ -142,7 +149,9 @@ class StageFusionTest(absltest.TestCase):
     def test_inner_round_body_fuses(self) -> None:
         stacked = fnp.stack([rand_field(80 + i, (8,), KB) for i in range(2)])
         assert_fusion_ready(
-            StandardRound(ProductSummand(2))._round_poly, stacked, reduces=1
+            StandardRound(ProductSummand(2), challenges=_CH)._round_poly,
+            stacked,
+            reduces=1,
         )
 
 

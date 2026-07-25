@@ -6,6 +6,7 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array, lax, tree_util
 
+from zorch.challenge import ChallengePolicy
 from zorch.sumcheck import prover, verifier
 from zorch.sumcheck.domain import fold, split_halves, split_pairs
 from zorch.testkit.fusion import assert_fusion_ready
@@ -14,9 +15,13 @@ from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
+
 
 def _product_round(degree: int) -> prover.StandardRound:
-    return prover.StandardRound(prover.ProductSummand(degree=degree))
+    return prover.StandardRound(prover.ProductSummand(degree=degree), challenges=_CH)
 
 
 class StandardRoundTest(absltest.TestCase):
@@ -65,7 +70,9 @@ class CompressedProductRoundTest(absltest.TestCase):
         b = rand_field(31, (8,), KB)
         stacked = fnp.stack([a, b])
         evals = _product_round(2)._round_poly(stacked)  # s(0..2)
-        comp = prover.CompressedProductRound()._round_poly(stacked)  # [c0, c2]
+        comp = prover.CompressedProductRound(challenges=_CH)._round_poly(
+            stacked
+        )  # [c0, c2]
         self.assertEqual(comp.shape, (2,))
         self.assertTrue(bool(comp[0] == evals[0]))
         c1 = evals[1] - comp[0] - comp[1]
@@ -77,7 +84,7 @@ class CompressedProductRoundTest(absltest.TestCase):
     def test_call_threads_state_transcript_msg(self) -> None:
         a = rand_field(32, (8,), KB)
         b = rand_field(33, (8,), KB)
-        state, _, msg = prover.CompressedProductRound()(
+        state, _, msg = prover.CompressedProductRound(challenges=_CH)(
             fnp.stack([a, b]), cheap_transcript(KB)
         )
         self.assertEqual(msg.shape, (2,))
@@ -87,13 +94,15 @@ class CompressedProductRoundTest(absltest.TestCase):
         a = rand_field(34, (8,), KB)
         b = rand_field(35, (8,), KB)
         assert_fusion_ready(
-            prover.CompressedProductRound()._round_poly, fnp.stack([a, b]), reduces=1
+            prover.CompressedProductRound(challenges=_CH)._round_poly,
+            fnp.stack([a, b]),
+            reduces=1,
         )
 
     def test_rejects_wrong_factor_count(self) -> None:
         f = rand_field(36, (8,), KB)
         with self.assertRaises(ValueError):
-            prover.CompressedProductRound()._round_poly(f[None])
+            prover.CompressedProductRound(challenges=_CH)._round_poly(f[None])
 
 
 class FoldTest(absltest.TestCase):
@@ -140,7 +149,9 @@ class SumcheckRoundPytreeTest(absltest.TestCase):
         # not data: zero array leaves, threading through the scan as a static pytree.
         # (The prover round runs under the fold_rounds host loop, never a jit arg, so
         # it is a plain class — no pytree registration.)
-        leaves, _ = tree_util.tree_flatten(verifier.SumcheckRound(degree=2))
+        leaves, _ = tree_util.tree_flatten(
+            verifier.SumcheckRound(degree=2, challenges=_CH)
+        )
         self.assertEqual(leaves, [])
 
     def test_round_msg_survives_scan_as_output(self) -> None:

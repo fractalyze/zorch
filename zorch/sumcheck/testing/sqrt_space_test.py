@@ -20,6 +20,10 @@ from zorch.transcript import Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 KBx4 = zk_dtypes.koalabearx4_mont
 
 
@@ -47,7 +51,7 @@ class SqrtSpaceTest(absltest.TestCase):
         for d, l in [(2, 4), (3, 4), (2, 5), (2, 6)]:
             p = _stacked(d, l)
             ref = _prove_product(p, cheap_transcript(KB))
-            _, _, got = prove_sqrt_space(p, cheap_transcript(KB))
+            _, _, got = prove_sqrt_space(p, cheap_transcript(KB), challenges=_CH)
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
@@ -55,7 +59,9 @@ class SqrtSpaceTest(absltest.TestCase):
                 )
 
     def test_prove_folds_to_scalar(self) -> None:
-        p_final, _, msgs = prove_sqrt_space(_stacked(3, 4), cheap_transcript(KB))
+        p_final, _, msgs = prove_sqrt_space(
+            _stacked(3, 4), cheap_transcript(KB), challenges=_CH
+        )
         self.assertEqual(p_final.shape, (3, 1))
         self.assertLen(msgs, 4)
 

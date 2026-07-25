@@ -7,6 +7,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.spartan.lincheck import InnerProver, InnerVerifier
 from zorch.spartan.spartan import (
     SpartanClaim,
@@ -33,13 +34,17 @@ from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
+
 
 def _compressed_inner() -> tuple[SumcheckProver, SumcheckVerifier]:
     """Matching roles for the compressed `[c_0, c_2]` coefficient wire."""
-    verifier_round = CompressedCoeffsSumcheckRound()
+    verifier_round = CompressedCoeffsSumcheckRound(challenges=_CH)
     return (
-        SumcheckProver(CompressedProductRound(), verifier_round),
-        SumcheckVerifier(CompressedCoeffsSumcheckRound()),
+        SumcheckProver(CompressedProductRound(challenges=_CH), verifier_round),
+        SumcheckVerifier(CompressedCoeffsSumcheckRound(challenges=_CH)),
     )
 
 
@@ -47,8 +52,11 @@ class ChildStageTest(absltest.TestCase):
     def test_prove_returns_the_verifier_replayed_transcript(self) -> None:
         state = rand_field(20, (2, 8), KB)
         claim = fnp.sum(state[0] * state[1])
-        prover = SumcheckProver(StandardRound(ProductSummand(2)), SumcheckRound(2))
-        verifier = SumcheckVerifier(SumcheckRound(2))
+        prover = SumcheckProver(
+            StandardRound(ProductSummand(2), challenges=_CH),
+            SumcheckRound(2, challenges=_CH),
+        )
+        verifier = SumcheckVerifier(SumcheckRound(2, challenges=_CH))
         source_claim = SumClaim(claim, 3)
         proved = prover.prove(
             source_claim, SumcheckWitness(state), cheap_transcript(KB)
@@ -64,8 +72,16 @@ class ChildStageTest(absltest.TestCase):
         inst, z, _, io = toy_r1cs(1, s_x=3, num_vars_padded=4, num_io=2, dtype=KB)
         sumcheck_prover, sumcheck_verifier = _compressed_inner()
         pcs = DensePcs()
-        prover = SpartanProver(pcs, inner=InnerProver(sumcheck=sumcheck_prover))
-        verifier = SpartanVerifier(pcs, inner=InnerVerifier(sumcheck=sumcheck_verifier))
+        prover = SpartanProver(
+            pcs,
+            inner=InnerProver(sumcheck=sumcheck_prover, challenges=_CH),
+            challenges=_CH,
+        )
+        verifier = SpartanVerifier(
+            pcs,
+            inner=InnerVerifier(sumcheck=sumcheck_verifier, challenges=_CH),
+            challenges=_CH,
+        )
         claim = SpartanClaim(inst, io)
         proved = prover.prove(claim, SpartanWitness(z), cheap_transcript(KB))
         proof = proved.reduction_proof
@@ -78,7 +94,7 @@ class ChildStageTest(absltest.TestCase):
     def test_default_inner_wire_is_three_evals(self) -> None:
         inst, z, _, io = toy_r1cs(2, s_x=3, num_vars_padded=4, num_io=2, dtype=KB)
         pcs = DensePcs()
-        proved = SpartanProver(pcs).prove(
+        proved = SpartanProver(pcs, challenges=_CH).prove(
             SpartanClaim(inst, io), SpartanWitness(z), cheap_transcript(KB)
         )
         proof = proved.reduction_proof
@@ -91,12 +107,16 @@ class ChildStageTest(absltest.TestCase):
         pcs = DensePcs()
         sumcheck_prover, _ = _compressed_inner()
         proof = (
-            SpartanProver(pcs, inner=InnerProver(sumcheck=sumcheck_prover))
+            SpartanProver(
+                pcs,
+                inner=InnerProver(sumcheck=sumcheck_prover, challenges=_CH),
+                challenges=_CH,
+            )
             .prove(SpartanClaim(inst, io), SpartanWitness(z), cheap_transcript(KB))
             .reduction_proof
         )
         with self.assertRaises(ValueError):
-            SpartanVerifier(pcs).verify(
+            SpartanVerifier(pcs, challenges=_CH).verify(
                 SpartanClaim(inst, io), proof, cheap_transcript(KB)
             )
 

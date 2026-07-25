@@ -38,7 +38,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.round import ProverRound
 from zorch.sumcheck.domain import (
     EvalDomain,
@@ -89,16 +89,17 @@ class StandardRound(ProverRound):
     {0..degree} evals when None). This is the linear-time reference the √-space /
     eq engines specialize; driven by `fold_rounds`.
 
-    `challenges` selects the challenge field and squeeze width. The default
-    `ChallengePolicy` preserves the transcript-native one-squeeze schedule; an
-    explicit extension policy lets a tail whose earlier round bound in that
-    extension continue folding in the same field."""
+    `challenges` names the field challenges are drawn in. Naming the
+    transcript's own field is the one-squeeze schedule; an extension policy lets
+    a tail whose earlier round bound in that extension continue folding in the
+    same field."""
 
     def __init__(
         self,
         summand: SumcheckSummand,
         domain: EvalDomain | None = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        *,
+        challenges: ChallengePolicy,
     ) -> None:
         self.summand = summand
         self.domain = domain
@@ -115,9 +116,7 @@ class StandardRound(ProverRound):
         self, folded: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, folded.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         return fold(folded, r), transcript, msg
 
 
@@ -133,7 +132,7 @@ class CompressedProductRound(ProverRound):
     leading coefficient in any characteristic; over char 2 it coincides with the
     `(P0 + P1)` products some wire specs write it as."""
 
-    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+    def __init__(self, challenges: ChallengePolicy) -> None:
         self.challenges = challenges
 
     def _round_poly(self, folded: Array) -> Array:
@@ -152,9 +151,7 @@ class CompressedProductRound(ProverRound):
         self, folded: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, folded.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         return fold(folded, r), transcript, msg
 
 

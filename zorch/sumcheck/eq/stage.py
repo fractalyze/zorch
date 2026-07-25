@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.prove import fold_rounds
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.domain import natural_domain
@@ -51,7 +51,7 @@ class EqPolyProver(ProverStage[EqSumClaim, EqPolyWitness, EvaluationClaim, Array
         self,
         summand: SumcheckSummand,
         *,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.summand = summand
         self.challenges = challenges
@@ -92,7 +92,7 @@ class EqPolyVerifier(VerifierStage[EqSumClaim, EvaluationClaim, Array]):
         self,
         summand: SumcheckSummand,
         *,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.verifier_round = SumcheckRound(summand.degree + 1, challenges)
 

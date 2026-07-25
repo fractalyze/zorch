@@ -21,6 +21,7 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_step
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
@@ -137,7 +138,12 @@ def _precompute(p_initial: Array, w: Array, l_0: int) -> tuple[list[Array], Arra
 
 
 def prove_eq_poly_small_value(
-    p_initial: Array, w: Array, l_0: int, transcript: Transcript
+    p_initial: Array,
+    w: Array,
+    l_0: int,
+    transcript: Transcript,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the eq-weighted sumcheck with l₀ small-value rounds. Returns the final
     folded factors (d, 1), the transcript, and all l round messages (each over Û_d)."""
@@ -172,7 +178,7 @@ def prove_eq_poly_small_value(
     # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
     # unlike EqPolyRound / SqrtSpaceRound, it does not take a general summand.
     (p_final, _), transcript, tail = fold_rounds(
-        EqPolyRound(ProductSummand(degree=d), w),
+        EqPolyRound(ProductSummand(degree=d), w, challenges=challenges),
         (folded_p, eq_w_prev),
         transcript,
         l - l_0 - 1,

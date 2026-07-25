@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import JaggedGkrLayer, build_jagged_pyramid
 from zorch.logup_gkr.jagged_prover import JaggedGkrLayerRound as ProverLayerRound
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
@@ -62,7 +62,7 @@ class JaggedLogUpGkrProver(
     def __init__(
         self,
         caps: RoundWidthCaps,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.caps = caps
         self.challenges = challenges
@@ -115,7 +115,7 @@ class JaggedLogUpGkrVerifier(
     hypercube, so nothing here reads a row count.
     """
 
-    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+    def __init__(self, challenges: ChallengePolicy) -> None:
         self.challenges = challenges
 
     def verify(

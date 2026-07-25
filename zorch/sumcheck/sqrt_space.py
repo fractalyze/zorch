@@ -24,7 +24,7 @@ from __future__ import annotations
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound
@@ -61,7 +61,7 @@ class SqrtSpaceRound(ProverRound):
         self,
         summand: SumcheckSummand,
         domain: EvalDomain,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.summand = summand
         self.domain = domain
@@ -77,9 +77,7 @@ class SqrtSpaceRound(ProverRound):
     ) -> tuple[SqrtSpaceState, Transcript, Array]:
         p_stacked, eq_evals = state
         msg = self._round_poly(state)
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, p_stacked.dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         return (p_stacked, expand_hypercube_step(eq_evals, r)), transcript, msg
 
 
@@ -88,15 +86,15 @@ def prove_sqrt_space(
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck: √-space first phase, standard second phase. `summand`
     defaults to the product over the factors (ProductSummand) and `domain` to the
     compressed Û_degree; pass a homogeneous SumcheckSummand and/or another EvalDomain
-    to retarget the engine. `challenges` configures both phases (the default is
-    transcript-native; an extension policy makes this a drop-in tail for univariate
-    skip). Returns the final folded factors (d, 1), the transcript, and all l
-    messages."""
+    to retarget the engine. `challenges` configures both phases; an extension
+    policy makes this a drop-in tail for univariate skip. Returns the final
+    folded factors (d, 1), the transcript, and all l messages."""
     summand = summand or ProductSummand(degree=p_initial.shape[0])
     domain = domain or uhat_domain(summand.degree, p_initial.dtype)
     l = log2_strict_usize(p_initial.shape[1])

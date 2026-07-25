@@ -9,7 +9,7 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eval_eq
 from zorch.poly.multilinear import eval_mle
 from zorch.spartan.summand import ZerocheckSummand
@@ -57,16 +57,6 @@ class OuterProof:
     claims: Array
 
 
-def _require_static_field(challenges: ChallengePolicy) -> ChallengePolicy:
-    """Reject a policy whose field would come from a value tau precedes."""
-    if challenges.needs_value_dtype:
-        raise ValueError(
-            "zerocheck needs a challenge policy with an explicit dtype: tau is "
-            "sampled before any value it could inherit a field from"
-        )
-    return challenges
-
-
 def _sample_tau(
     rounds: int, transcript: Transcript, challenges: ChallengePolicy
 ) -> tuple[Array, Transcript]:
@@ -88,9 +78,9 @@ class OuterProver(
         sumcheck: (
             ProverStage[EqSumClaim, EqPolyWitness, EvaluationClaim, Any] | None
         ) = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
-        self.challenges = _require_static_field(challenges)
+        self.challenges = challenges
         self.sumcheck = sumcheck or EqPolyProver(
             ZerocheckSummand(), challenges=challenges
         )
@@ -134,9 +124,9 @@ class OuterVerifier(VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof
         self,
         *,
         sumcheck: VerifierStage[EqSumClaim, EvaluationClaim, Any] | None = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
-        self.challenges = _require_static_field(challenges)
+        self.challenges = challenges
         self.sumcheck = sumcheck or EqPolyVerifier(
             ZerocheckSummand(), challenges=challenges
         )

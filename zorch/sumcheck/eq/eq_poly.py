@@ -22,7 +22,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound
@@ -108,7 +108,8 @@ class EqPolyRound(ProverRound):
         summand: SumcheckSummand,
         w: Array,
         domain: EvalDomain | None = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        *,
+        challenges: ChallengePolicy,
     ) -> None:
         self.summand = summand
         self.w = w
@@ -175,9 +176,7 @@ class EqPolyRound(ProverRound):
         self, state: EqPolyState, transcript: Transcript
     ) -> tuple[EqPolyState, Transcript, Array]:
         msg, cache = self._round_poly(state)
-        transcript, r = self.challenges.observe_and_sample(
-            transcript, msg, state[0].dtype
-        )
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
         return self._fold(cache, state[1], r), transcript, msg
 
 
@@ -187,6 +186,8 @@ def prove_eq_poly(
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Fold all l variables; return the final factors (d, 1), the advanced
     transcript, and the per-round messages (each sᵢ over Û_d).
@@ -200,7 +201,12 @@ def prove_eq_poly(
         raise ValueError(
             f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
         )
-    rnd = EqPolyRound(summand or ProductSummand(degree=p_initial.shape[0]), w, domain)
+    rnd = EqPolyRound(
+        summand or ProductSummand(degree=p_initial.shape[0]),
+        w,
+        domain,
+        challenges=challenges,
+    )
     state: EqPolyState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
     (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
     return p_final, transcript, msgs

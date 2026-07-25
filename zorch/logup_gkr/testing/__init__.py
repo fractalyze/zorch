@@ -11,6 +11,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import (
     GkrLayer,
     JaggedGkrLayer,
@@ -29,6 +30,10 @@ from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
 _KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field -- what these fixtures sampled in before the
+# policy required an explicit one.
+_DEFAULT_CH = ChallengePolicy(_KB)
 _EF = zk_dtypes.koalabearx4_mont
 
 
@@ -168,7 +173,9 @@ def random_first_layer(
 
 
 def prove_gkr_with_transcript(
-    first: GkrLayer, transcript: Transcript
+    first: GkrLayer,
+    transcript: Transcript,
+    challenges: ChallengePolicy = _DEFAULT_CH,
 ) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], LayerClaim]:
     """Run the GKR prover chain over `first`'s pyramid, drawing Fiat-Shamir
     challenges from `transcript` (a cheap test `DuplexTranscript` or the
@@ -178,9 +185,11 @@ def prove_gkr_with_transcript(
     """
     layers = build_pyramid(first)
     output = extract_outputs(layers[-1])
-    carry, transcript = bind_output(output, transcript)
+    carry, transcript = bind_output(output, transcript, challenges)
     final, _, proofs = prove_rounds(
-        [_ProverLayer(layer) for layer in reversed(layers[:-1])], carry, transcript
+        [_ProverLayer(layer, challenges) for layer in reversed(layers[:-1])],
+        carry,
+        transcript,
     )
     return layers, output, proofs, final
 
@@ -219,13 +228,16 @@ def prove_gkr_jitted(
 
 
 def verify_gkr_with_transcript(
-    output: LogUpGkrOutput, proofs: list[LayerProof], transcript: Transcript
+    output: LogUpGkrOutput,
+    proofs: list[LayerProof],
+    transcript: Transcript,
+    challenges: ChallengePolicy = _DEFAULT_CH,
 ) -> tuple[LayerClaim, Array]:
     """Run the GKR verifier chain, re-deriving challenges from `transcript` (the
     dual of `prove_gkr_with_transcript`). Returns (final_carry, ok)."""
-    carry, transcript = bind_output(output, transcript)
+    carry, transcript = bind_output(output, transcript, challenges)
     final, _, ok = verify_rounds(
-        [_VerifierLayer() for _ in proofs], carry, proofs, transcript
+        [_VerifierLayer(challenges) for _ in proofs], carry, proofs, transcript
     )
     return final, ok
 

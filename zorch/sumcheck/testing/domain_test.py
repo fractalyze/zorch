@@ -5,6 +5,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.sumcheck.domain import (
     EvalDomain,
     compressed_domain,
@@ -22,6 +23,10 @@ from zorch.transcript import Transcript
 from zorch.verify import RunningClaim
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 
 
 class DomainTest(absltest.TestCase):
@@ -173,7 +178,7 @@ class DomainTest(absltest.TestCase):
         P = fnp.arange(1, m * (1 << l) + 1, dtype=KB).reshape(m, 1 << l)
         claim = fnp.sum(fnp.prod(P, axis=0))
         state = P
-        verifier = CoeffsSumcheckRound(degree=m)
+        verifier = CoeffsSumcheckRound(degree=m, challenges=_CH)
         transcript: Transcript = cheap_transcript(KB)
         running = RunningClaim(claim, fnp.zeros((l,), claim.dtype), fnp.int32(0))
         for i in range(l):

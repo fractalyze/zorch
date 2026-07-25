@@ -9,6 +9,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.ligerito.config import LigeritoConfig
 from zorch.spartan.spartan import (
@@ -25,6 +26,10 @@ from zorch.spartan.testing.toy import toy_r1cs
 from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule this test pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 _CFG = LigeritoConfig(num_vars=4, fold_ks=(1, 1), log_inv_rates=(1, 1), queries=(4, 4))
 
 
@@ -35,8 +40,8 @@ def _transcript() -> DuplexTranscript:
 class SpartanLigeritoTest(absltest.TestCase):
     def test_roundtrip_accepts(self) -> None:
         instance, z, _, io = toy_r1cs(1, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        prover = SpartanProver(LigeritoSpartanProver(_CFG))
-        verifier = SpartanVerifier(LigeritoSpartanVerifier(_CFG))
+        prover = SpartanProver(LigeritoSpartanProver(_CFG), challenges=_CH)
+        verifier = SpartanVerifier(LigeritoSpartanVerifier(_CFG), challenges=_CH)
         claim = SpartanClaim(instance, io)
         proved = prover.prove(claim, SpartanWitness(z), _transcript())
         verified = verifier.verify(claim, proved.reduction_proof, _transcript())
@@ -44,8 +49,8 @@ class SpartanLigeritoTest(absltest.TestCase):
 
     def test_tampered_witness_opening_rejected(self) -> None:
         instance, z, _, io = toy_r1cs(2, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        prover = SpartanProver(LigeritoSpartanProver(_CFG))
-        verifier = SpartanVerifier(LigeritoSpartanVerifier(_CFG))
+        prover = SpartanProver(LigeritoSpartanProver(_CFG), challenges=_CH)
+        verifier = SpartanVerifier(LigeritoSpartanVerifier(_CFG), challenges=_CH)
         claim = SpartanClaim(instance, io)
         proof = prover.prove(claim, SpartanWitness(z), _transcript()).reduction_proof
         bad = replace(
@@ -60,8 +65,8 @@ class SpartanLigeritoTest(absltest.TestCase):
 
     def test_unsatisfying_witness_rejected(self) -> None:
         instance, z, _, io = toy_r1cs(3, s_x=3, num_vars_padded=16, num_io=2, dtype=KB)
-        prover = SpartanProver(LigeritoSpartanProver(_CFG))
-        verifier = SpartanVerifier(LigeritoSpartanVerifier(_CFG))
+        prover = SpartanProver(LigeritoSpartanProver(_CFG), challenges=_CH)
+        verifier = SpartanVerifier(LigeritoSpartanVerifier(_CFG), challenges=_CH)
         claim = SpartanClaim(instance, io)
         proof = prover.prove(
             claim,

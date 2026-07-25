@@ -9,7 +9,7 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.spartan.lincheck import (
     ColumnEvaluationClaim,
@@ -135,7 +135,7 @@ class SpartanProver(
             ]
             | None
         ) = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.challenges = challenges
         self.pcs_prover = pcs_prover
@@ -215,7 +215,7 @@ class SpartanVerifier(VerifierStage[SpartanClaim, TrivialClaim, SpartanProof]):
         witness_open: (
             VerifierStage[WitnessOpeningClaim, TrivialClaim, WitnessOpenProof] | None
         ) = None,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         self.challenges = challenges
         self.outer = outer or OuterVerifier(challenges=challenges)

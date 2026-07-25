@@ -16,11 +16,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from functools import cache
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
@@ -38,12 +40,31 @@ from zorch.transcript import Transcript
 if TYPE_CHECKING:
     from zorch.pcs.protocol import PcsVerifier
 
-_ROUND = SumcheckRound(degree=2)
-_COMPRESSED_ROUND = CompressedCoeffsSumcheckRound()
+
+# Cached per challenge field: one instance per field, identity-stable for the
+# jit closures these ride in.
+@cache
+def _round(dtype: Any) -> SumcheckRound:
+    return SumcheckRound(degree=2, challenges=ChallengePolicy(dtype))
+
+
+@cache
+def _compressed_round(dtype: Any) -> CompressedCoeffsSumcheckRound:
+    return CompressedCoeffsSumcheckRound(challenges=ChallengePolicy(dtype))
+
+
 # Prover-round duals, for the eager policy's terminal pin: the last emitted
 # message is the residual state's round poly, recomputable in the clear.
-_P_ROUND = sc_prover.StandardRound(sc_prover.ProductSummand(degree=2))
-_P_COMPRESSED_ROUND = sc_prover.CompressedProductRound()
+@cache
+def _p_round(dtype: Any) -> sc_prover.StandardRound:
+    return sc_prover.StandardRound(
+        sc_prover.ProductSummand(degree=2), challenges=ChallengePolicy(dtype)
+    )
+
+
+@cache
+def _p_compressed_round(dtype: Any) -> sc_prover.CompressedProductRound:
+    return sc_prover.CompressedProductRound(challenges=ChallengePolicy(dtype))
 
 
 @dataclass(frozen=True)
@@ -153,7 +174,9 @@ def _verify(
     chor = verifier.choreography
     dtype = B.dtype
     one = fnp.ones((), dtype)
-    round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
+    round_ = (
+        _compressed_round(dtype) if cfg.compressed_sumcheck_messages else _round(dtype)
+    )
     basis = select_commit_basis(cfg.monomial_commit)
 
     claim = value
@@ -257,9 +280,9 @@ def _verify(
                 # The eager wire's terminal emission is the residual state's
                 # round poly — recompute it in the clear and pin it exactly.
                 p_round = (
-                    _P_COMPRESSED_ROUND
+                    _p_compressed_round(dtype)
                     if cfg.compressed_sumcheck_messages
-                    else _P_ROUND
+                    else _p_round(dtype)
                 )
                 ok = ok & fnp.all(cur == p_round._round_poly(fnp.stack([residual, B])))
             break

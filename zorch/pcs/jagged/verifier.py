@@ -111,7 +111,7 @@ def verify_jagged_eval_msg(
     ok = fnp.array_equal(claim, msg.outer_sumcheck_claim)
 
     point, outer_final, transcript, ok_rounds = verify(
-        CoeffsSumcheckRound(_DEGREE, ChallengePolicy(limbs=ef_limbs)),
+        CoeffsSumcheckRound(_DEGREE, ChallengePolicy(dtype)),
         claim,
         msg.outer_sumcheck_polys,
         transcript,
@@ -123,7 +123,7 @@ def verify_jagged_eval_msg(
     # , then replays them with the same rule.
     transcript = transcript.observe(msg.inner_claimed_sum)
     ipoint, inner_final, transcript, ok_inner = verify(
-        CoeffsSumcheckRound(_DEGREE, ChallengePolicy(limbs=ef_limbs)),
+        CoeffsSumcheckRound(_DEGREE, ChallengePolicy(dtype)),
         msg.inner_claimed_sum,
         msg.inner_sumcheck_polys,
         transcript,

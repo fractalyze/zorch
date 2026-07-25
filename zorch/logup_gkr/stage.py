@@ -13,7 +13,7 @@ from typing import Generic, TypeVar
 
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput, build_pyramid
 from zorch.logup_gkr.prover import GkrLayerRound as ProverLayerRound
 from zorch.logup_gkr.prover import LayerClaim, LayerProof, bind_output
@@ -63,7 +63,7 @@ class LogUpGkrProver(
 ):
     """Prove an output claim conditional on an input-layer claim."""
 
-    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+    def __init__(self, challenges: ChallengePolicy) -> None:
         self.challenges = challenges
 
     def prove(
@@ -104,7 +104,7 @@ class LogUpGkrVerifier(
 ):
     """Verify an output-to-input-layer LogUp-GKR reduction."""
 
-    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+    def __init__(self, challenges: ChallengePolicy) -> None:
         self.challenges = challenges
 
     def verify(

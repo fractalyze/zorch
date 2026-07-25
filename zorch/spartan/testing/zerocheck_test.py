@@ -63,7 +63,7 @@ class OuterRoleTest(parameterized.TestCase):
     ) -> tuple[R1CS, Array, ProveResult[RowEvaluationClaim, OuterProof]]:
         inst, z, _, _ = toy_r1cs(seed, s_x=3, num_vars_padded=4, num_io=2, dtype=dtype)
         az, bz, cz = inst.matvecs(z)
-        result = OuterProver().prove(
+        result = OuterProver(challenges=ChallengePolicy(dtype)).prove(
             ZerocheckClaim(inst.s_x),
             ZerocheckWitness(az, bz, cz),
             cheap_transcript(dtype),
@@ -73,7 +73,7 @@ class OuterRoleTest(parameterized.TestCase):
     @parameterized.named_parameters(*FIELDS)
     def test_roundtrip_accepts(self, dtype: Any) -> None:
         inst, _, proved = self._prove(1, dtype)
-        verified = OuterVerifier().verify(
+        verified = OuterVerifier(challenges=ChallengePolicy(dtype)).verify(
             ZerocheckClaim(inst.s_x), proved.reduction_proof, cheap_transcript(dtype)
         )
         self.assertTrue(bool(verified.ok))
@@ -104,7 +104,7 @@ class OuterRoleTest(parameterized.TestCase):
             proved.reduction_proof,
             claims=proved.reduction_proof.claims.at[0].add(fnp.ones((), dtype)),
         )
-        verified = OuterVerifier().verify(
+        verified = OuterVerifier(challenges=ChallengePolicy(dtype)).verify(
             ZerocheckClaim(inst.s_x), bad, cheap_transcript(dtype)
         )
         self.assertFalse(bool(verified.ok))
@@ -116,7 +116,7 @@ class OuterRoleTest(parameterized.TestCase):
             proved.reduction_proof,
             sumcheck=proved.reduction_proof.sumcheck.at[0, 0].add(fnp.ones((), dtype)),
         )
-        verified = OuterVerifier().verify(
+        verified = OuterVerifier(challenges=ChallengePolicy(dtype)).verify(
             ZerocheckClaim(inst.s_x), bad, cheap_transcript(dtype)
         )
         self.assertFalse(bool(verified.ok))
@@ -138,23 +138,16 @@ class OuterRoleTest(parameterized.TestCase):
     def test_summand_round_poly_is_fusion_ready(self) -> None:
         stacked = fnp.stack([rand_field(60 + i, (8,), KB) for i in range(3)])
         tau = rand_field(64, (3,), KB)
-        round_ = EqPolyRound(ZerocheckSummand(), tau, natural_domain(3, KB))
+        round_ = EqPolyRound(
+            ZerocheckSummand(),
+            tau,
+            natural_domain(3, KB),
+            challenges=ChallengePolicy(KB),
+        )
         state = (stacked, fnp.ones(1, KB))
         assert_fusion_ready(
             lambda value: round_._round_poly(value)[0], state, reduces=1
         )
-
-
-class ChallengePolicyRejectionTest(absltest.TestCase):
-    def test_limb_only_policy_is_rejected_at_construction(self) -> None:
-        # Tau precedes every value it could inherit a field from, so a policy
-        # that resolves its field from a running claim cannot serve zerocheck;
-        # the failure belongs at construction, not part-way through a proof.
-        policy = ChallengePolicy(limbs=4)
-        with self.assertRaises(ValueError):
-            OuterProver(challenges=policy)
-        with self.assertRaises(ValueError):
-            OuterVerifier(challenges=policy)
 
 
 if __name__ == "__main__":

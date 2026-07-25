@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.prover import LayerClaim, LayerProof, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import VerifierRound
@@ -36,7 +36,7 @@ _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 class GkrLayerRound(VerifierRound):
     """Verify one GKR layer; the chain of these is the GKR verifier."""
 
-    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+    def __init__(self, challenges: ChallengePolicy) -> None:
         self.challenges = challenges
 
     def __call__(
@@ -45,7 +45,7 @@ class GkrLayerRound(VerifierRound):
         num_eval, den_eval, eval_point = claim
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1
         d0, d1 = layer_proof.denominator_0, layer_proof.denominator_1
-        transcript, lam = self.challenges.sample(transcript, num_eval.dtype)
+        transcript, lam = self.challenges.sample(transcript)
         claim = lam * num_eval + den_eval
         point, final_claim, transcript, ok_sc = verify(
             SumcheckVerifierRound(_DEGREE, self.challenges),
@@ -68,7 +68,7 @@ class GkrLayerRound(VerifierRound):
         ok = ok_sc & (combined == final_claim)
 
         transcript, r = self.challenges.observe_and_sample(
-            transcript, fnp.stack([n0, n1, d0, d1]), num_eval.dtype
+            transcript, fnp.stack([n0, n1, d0, d1])
         )
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok

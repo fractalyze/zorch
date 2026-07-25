@@ -7,7 +7,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy, challenge_limbs
+from zorch.challenge import ChallengePolicy, challenge_limbs
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
@@ -24,15 +24,22 @@ class ChallengeLimbsTest(absltest.TestCase):
 
 
 class ChallengeStreamTest(absltest.TestCase):
-    def test_naming_the_transcript_field_matches_the_native_default(self) -> None:
-        # An explicit base-field target reinterprets one squeeze as itself, so it
-        # must not consume a different number of squeezes than the default.
-        native, a = DEFAULT_CHALLENGES.sample_many(cheap_transcript(KB), 3)
-        explicit, b = ChallengePolicy(KB).sample_many(cheap_transcript(KB), 3)
+    def test_transcript_field_policy_is_the_raw_squeeze_stream(self) -> None:
+        # Naming the transcript's own field reinterprets one squeeze as itself,
+        # so it must consume exactly the squeezes a bare `sample` would.
+        policy, a = ChallengePolicy(KB).sample_many(cheap_transcript(KB), 3)
+        raw, b = cheap_transcript(KB).sample(3)
         self.assertTrue(bool(fnp.all(a == b)))
-        _, after_native = native.sample(1)
-        _, after_explicit = explicit.sample(1)
-        self.assertTrue(bool(fnp.all(after_native == after_explicit)))
+        _, after_policy = policy.sample(1)
+        _, after_raw = raw.sample(1)
+        self.assertTrue(bool(fnp.all(after_policy == after_raw)))
+
+    def test_extension_policy_promotes_a_base_field_transcript(self) -> None:
+        # The reason the field is named rather than read off a running value:
+        # an extension policy draws extension challenges from a base-field
+        # transcript, which raises the soundness floor of a base-field claim.
+        _, value = ChallengePolicy(KBX4).sample(cheap_transcript(KB))
+        self.assertEqual(value.dtype, KBX4)
 
     def test_batched_sampling_matches_repeated_single_sampling(self) -> None:
         # `sample_many` squeezes every limb in one call; that must produce the
@@ -59,23 +66,6 @@ class ChallengeStreamTest(absltest.TestCase):
         _, after_fused = fused_t.sample(1)
         _, after_split = split_t.sample(1)
         self.assertTrue(bool(fnp.all(after_fused == after_split)))
-
-
-class LimbOnlyPolicyTest(absltest.TestCase):
-    def test_limb_only_policy_needs_a_value_dtype(self) -> None:
-        policy = ChallengePolicy(limbs=4)
-        self.assertTrue(policy.needs_value_dtype)
-        self.assertFalse(ChallengePolicy(KBX4).needs_value_dtype)
-        self.assertFalse(DEFAULT_CHALLENGES.needs_value_dtype)
-
-    def test_limb_only_policy_takes_the_supplied_value_field(self) -> None:
-        policy = ChallengePolicy(limbs=4)
-        _, value = policy.sample(cheap_transcript(KB), KBX4)
-        self.assertEqual(value.dtype, KBX4)
-
-    def test_limb_only_policy_without_a_value_dtype_is_rejected(self) -> None:
-        with self.assertRaises(ValueError):
-            ChallengePolicy(limbs=4).sample(cheap_transcript(KB))
 
 
 if __name__ == "__main__":

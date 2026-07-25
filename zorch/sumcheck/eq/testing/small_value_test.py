@@ -5,11 +5,16 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.sumcheck.eq.eq_poly import prove_eq_poly
 from zorch.sumcheck.eq.small_value import prove_eq_poly_small_value
 from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 
 # Boolean weight vectors per variable count.
 _W = {4: [1, 0, 1, 0], 6: [1, 0, 1, 1, 0, 1]}
@@ -23,8 +28,10 @@ class SmallValueTest(absltest.TestCase):
         for d, l, l_0 in [(2, 4, 1), (2, 6, 2), (3, 6, 2), (2, 6, 1), (2, 6, 3)]:
             p = fnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
             w = fnp.array(_W[l], dtype=KB)
-            _, _, ref = prove_eq_poly(p, w, cheap_transcript(KB))
-            _, _, got = prove_eq_poly_small_value(p, w, l_0, cheap_transcript(KB))
+            _, _, ref = prove_eq_poly(p, w, cheap_transcript(KB), challenges=_CH)
+            _, _, got = prove_eq_poly_small_value(
+                p, w, l_0, cheap_transcript(KB), challenges=_CH
+            )
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
@@ -34,7 +41,7 @@ class SmallValueTest(absltest.TestCase):
     def test_prove_folds_to_scalar(self) -> None:
         p = fnp.arange(1, 2 * 64 + 1, dtype=KB).reshape(2, 64)
         p_final, _, msgs = prove_eq_poly_small_value(
-            p, fnp.array(_W[6], dtype=KB), 2, cheap_transcript(KB)
+            p, fnp.array(_W[6], dtype=KB), 2, cheap_transcript(KB), challenges=_CH
         )
         self.assertEqual(p_final.shape, (2, 1))
         self.assertLen(msgs, 6)

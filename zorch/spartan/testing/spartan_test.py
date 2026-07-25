@@ -30,6 +30,10 @@ from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 KBX4 = zk_dtypes.koalabearx4_mont
 
 
@@ -52,8 +56,10 @@ def _prove_verify(
     pcs = DensePcs()
     verifier_pcs = _VerifierOnlyPcs(pcs)
     claim = SpartanClaim(instance, io)
-    proved = SpartanProver(pcs).prove(claim, SpartanWitness(z), cheap_transcript(KB))
-    verified = SpartanVerifier(verifier_pcs).verify(
+    proved = SpartanProver(pcs, challenges=_CH).prove(
+        claim, SpartanWitness(z), cheap_transcript(KB)
+    )
+    verified = SpartanVerifier(verifier_pcs, challenges=_CH).verify(
         claim, proved.reduction_proof, cheap_transcript(KB)
     )
     return instance, io, proved.reduction_proof, verifier_pcs, verified.ok
@@ -116,20 +122,21 @@ class SpartanE2ETest(absltest.TestCase):
     def test_composite_transcripts_agree_per_boundary(self) -> None:
         instance, z, _, io = toy_r1cs(2, s_x=2, num_vars_padded=4, num_io=2, dtype=KB)
         pcs = DensePcs()
-        outer_p = _RecordingProver(OuterProver())
-        outer_v = _RecordingVerifier(OuterVerifier())
-        inner_p = _RecordingProver(InnerProver())
-        inner_v = _RecordingVerifier(InnerVerifier())
+        outer_p = _RecordingProver(OuterProver(challenges=_CH))
+        outer_v = _RecordingVerifier(OuterVerifier(challenges=_CH))
+        inner_p = _RecordingProver(InnerProver(challenges=_CH))
+        inner_v = _RecordingVerifier(InnerVerifier(challenges=_CH))
         opening_p = _RecordingProver(WitnessOpenProver(pcs))
         opening_v = _RecordingVerifier(WitnessOpenVerifier(_VerifierOnlyPcs(pcs)))
         prover = SpartanProver(
-            pcs, outer=outer_p, inner=inner_p, witness_open=opening_p
+            pcs, outer=outer_p, inner=inner_p, witness_open=opening_p, challenges=_CH
         )
         verifier = SpartanVerifier(
             _VerifierOnlyPcs(pcs),
             outer=outer_v,
             inner=inner_v,
             witness_open=opening_v,
+            challenges=_CH,
         )
         claim = SpartanClaim(instance, io)
         proved = prover.prove(claim, SpartanWitness(z), cheap_transcript(KB))
@@ -164,7 +171,7 @@ class SpartanE2ETest(absltest.TestCase):
         )
         self.assertFalse(
             bool(
-                SpartanVerifier(pcs)
+                SpartanVerifier(pcs, challenges=_CH)
                 .verify(SpartanClaim(instance, io), bad, cheap_transcript(KB))
                 .ok
             )
@@ -181,7 +188,7 @@ class SpartanE2ETest(absltest.TestCase):
         )
         self.assertFalse(
             bool(
-                SpartanVerifier(pcs)
+                SpartanVerifier(pcs, challenges=_CH)
                 .verify(SpartanClaim(instance, io), bad, cheap_transcript(KB))
                 .ok
             )
@@ -192,7 +199,7 @@ class SpartanE2ETest(absltest.TestCase):
         bad = replace(proof, commitment=proof.commitment.at[0].add(fnp.ones((), KB)))
         self.assertFalse(
             bool(
-                SpartanVerifier(pcs)
+                SpartanVerifier(pcs, challenges=_CH)
                 .verify(SpartanClaim(instance, io), bad, cheap_transcript(KB))
                 .ok
             )
@@ -203,7 +210,7 @@ class SpartanE2ETest(absltest.TestCase):
         pcs = DensePcs()
         claim = SpartanClaim(instance, io)
         proof = (
-            SpartanProver(pcs)
+            SpartanProver(pcs, challenges=_CH)
             .prove(
                 claim,
                 SpartanWitness(z.at[0].add(fnp.ones((), KB))),
@@ -211,7 +218,7 @@ class SpartanE2ETest(absltest.TestCase):
             )
             .reduction_proof
         )
-        verified = SpartanVerifier(_VerifierOnlyPcs(pcs)).verify(
+        verified = SpartanVerifier(_VerifierOnlyPcs(pcs), challenges=_CH).verify(
             claim, proof, cheap_transcript(KB)
         )
         self.assertFalse(bool(verified.ok))
@@ -222,7 +229,7 @@ class SpartanE2ETest(absltest.TestCase):
             proof, outer=replace(proof.outer, sumcheck=proof.outer.sumcheck[:-1])
         )
         with self.assertRaises(ValueError):
-            SpartanVerifier(pcs).verify(
+            SpartanVerifier(pcs, challenges=_CH).verify(
                 SpartanClaim(instance, io), bad, cheap_transcript(KB)
             )
 
@@ -232,7 +239,7 @@ class SpartanE2ETest(absltest.TestCase):
             proof, inner=replace(proof.inner, sumcheck=proof.inner.sumcheck[:-1])
         )
         with self.assertRaises(ValueError):
-            SpartanVerifier(pcs).verify(
+            SpartanVerifier(pcs, challenges=_CH).verify(
                 SpartanClaim(instance, io), bad, cheap_transcript(KB)
             )
 

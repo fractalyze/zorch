@@ -94,6 +94,10 @@ class _ScriptedTranscript:
     def observe(self, values: Array) -> _ScriptedTranscript:
         return self
 
+    @property
+    def field(self) -> Any:
+        return self.stream.dtype
+
     def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
         out = frx.lax.dynamic_slice(self.stream, (self.pos,), (n,))
         return replace(self, pos=self.pos + n), out

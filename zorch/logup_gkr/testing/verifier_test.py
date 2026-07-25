@@ -16,6 +16,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr.circuit import (
     GkrLayer,
@@ -40,6 +41,10 @@ from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 
 # A poseidon2 permute is impractically slow to compile on the XLA CPU
 # backend, so
@@ -77,8 +82,8 @@ class GkrRoundtripTest(absltest.TestCase):
 
     def test_stage_roundtrips_and_transcripts_agree(self) -> None:
         first = random_first_layer(17, 1, 2)
-        prover = LogUpGkrProver()
-        verifier = LogUpGkrVerifier()
+        prover = LogUpGkrProver(challenges=_CH)
+        verifier = LogUpGkrVerifier(challenges=_CH)
         claim = LogUpOutputClaim(
             extract_outputs(build_pyramid(first)[-1]), first.num_row_variables
         )
@@ -100,8 +105,8 @@ class GkrRoundtripTest(absltest.TestCase):
 
     def test_stage_statement_owns_layer_count(self) -> None:
         first = random_first_layer(19, 1, 2)
-        prover = LogUpGkrProver()
-        verifier = LogUpGkrVerifier()
+        prover = LogUpGkrProver(challenges=_CH)
+        verifier = LogUpGkrVerifier(challenges=_CH)
         claim = LogUpOutputClaim(
             extract_outputs(build_pyramid(first)[-1]), first.num_row_variables
         )

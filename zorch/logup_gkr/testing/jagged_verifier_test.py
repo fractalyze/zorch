@@ -48,6 +48,10 @@ from zorch.round import prove_rounds, verify_rounds
 from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 EF = zk_dtypes.koalabearx4_mont
 
 ROW_COUNTS = (3, 1, 5, 2)
@@ -57,10 +61,13 @@ def _prove(
     layers: list[JaggedGkrLayer],
 ) -> tuple[LayerClaim, list[JaggedLayerProof], LogUpGkrOutput]:
     output = extract_jagged_outputs(layers[-1])
-    carry, transcript = bind_output(output, cheap_transcript(KB))
+    carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
     caps = caps_for(host_counts(layers[0]), len(layers) - 1)
     final, _, proofs = prove_rounds(
-        [JaggedGkrLayerRound(layer, caps=caps) for layer in reversed(layers[:-1])],
+        [
+            JaggedGkrLayerRound(layer, caps=caps, challenges=_CH)
+            for layer in reversed(layers[:-1])
+        ],
         carry,
         transcript,
     )
@@ -70,9 +77,9 @@ def _prove(
 def _verify(
     output: LogUpGkrOutput, proofs: list[JaggedLayerProof]
 ) -> tuple[LayerClaim, Array]:
-    carry, transcript = bind_output(output, cheap_transcript(KB))
+    carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
     final, _, ok = verify_rounds(
-        [JaggedVerifierLayerRound() for _ in proofs], carry, proofs, transcript
+        [JaggedVerifierLayerRound(_CH) for _ in proofs], carry, proofs, transcript
     )
     return final, ok
 
@@ -161,8 +168,10 @@ class JaggedStageTest(absltest.TestCase):
         layers = build_jagged_pyramid(first)
         claim = LogUpOutputClaim(extract_jagged_outputs(layers[-1]), len(schedules))
         return (
-            JaggedLogUpGkrProver(caps_for(host_counts(first), len(schedules))),
-            JaggedLogUpGkrVerifier(),
+            JaggedLogUpGkrProver(
+                caps_for(host_counts(first), len(schedules)), challenges=_CH
+            ),
+            JaggedLogUpGkrVerifier(challenges=_CH),
             claim,
             JaggedGkrWitness(first, schedules),
             layers,

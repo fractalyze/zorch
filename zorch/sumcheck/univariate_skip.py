@@ -35,7 +35,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
+from zorch.challenge import ChallengePolicy
 from zorch.poly.univariate import eval_coeffs
 from zorch.prove import fold_rounds
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
@@ -104,7 +104,7 @@ def skip_round0(
     (`sqrt_space.prove_sqrt_space`) — so the skip stacks with the other round-cost
     levers."""
     msg0, coeffs_z = round0_message(p_initial, skip_rounds, summand)
-    transcript, r0 = challenges.observe_and_sample(transcript, msg0, p_initial.dtype)
+    transcript, r0 = challenges.observe_and_sample(transcript, msg0)
     # Bind the prism at r₀: evaluate each factor's D-univariate there. Base coeffs ×
     # extension r₀ promote to the extension the tail runs in.
     return eval_coeffs(coeffs_z, r0), transcript, msg0
@@ -115,12 +115,13 @@ def prove_univariate_skip(
     skip_rounds: int,
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck with the first `skip_rounds` rounds collapsed into one
     univariate round over the order-2^skip_rounds subgroup. `summand` defaults to the
     product over the factors; `challenges` configures the subgroup round and every
-    tail round together (default transcript-native). Returns the final folded factors
+    tail round together. Returns the final folded factors
     (m, 1), the transcript, and all 1+n round messages (the round-0 coefficient message
     first).
 
@@ -157,7 +158,8 @@ def verify_univariate_skip(
     total: int,
     transcript: Transcript,
     degree: int,
-    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, Array, Array]:
     """Replay the skip prover: the subgroup round-0 check then the coefficient tail,
     threading the claim and ANDing every round's `ok`. Returns the reduced final claim
@@ -169,7 +171,7 @@ def verify_univariate_skip(
     # The point is bound in the challenge field, which the skip deliberately
     # keeps wider than the round-0 claim: round 0 is base-field work and the
     # extension only enters once r0 is sampled.
-    point_dtype = challenges.target_dtype(claim.dtype) or claim.dtype
+    point_dtype = challenges.dtype
     if skip_rounds == 0:
         rnd = SumcheckRound(degree=degree, challenges=challenges)
         state = RunningClaim(claim, fnp.zeros((len(msgs),), point_dtype), fnp.int32(0))
@@ -231,7 +233,7 @@ class UnivariateSkipProver(
         skip_rounds: int,
         summand: SumcheckSummand,
         *,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         if skip_rounds < 1:
             raise ValueError("univariate skip requires skip_rounds >= 1")
@@ -251,7 +253,7 @@ class UnivariateSkipProver(
             self.skip_rounds,
             transcript,
             self.summand,
-            self.challenges,
+            challenges=self.challenges,
         )
         value, replayed, point, _ = verify_univariate_skip(
             claim.value,
@@ -260,7 +262,7 @@ class UnivariateSkipProver(
             claim.rounds,
             pre,
             self.summand.degree,
-            self.challenges,
+            challenges=self.challenges,
         )
         reduction_proof = UnivariateSkipProof(messages[0], tuple(messages[1:]))
         return ProveResult(
@@ -280,7 +282,7 @@ class UnivariateSkipVerifier(
         skip_rounds: int,
         summand: SumcheckSummand,
         *,
-        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+        challenges: ChallengePolicy,
     ) -> None:
         if skip_rounds < 1:
             raise ValueError("univariate skip requires skip_rounds >= 1")
@@ -302,6 +304,6 @@ class UnivariateSkipVerifier(
             claim.rounds,
             transcript,
             self.summand.degree,
-            self.challenges,
+            challenges=self.challenges,
         )
         return VerifyResult(PrismEvaluationClaim(point, value), transcript, ok)

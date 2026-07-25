@@ -20,13 +20,17 @@ from zorch.utils.bits import log2_strict_usize
 from zorch.verify import RunningClaim, verify
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 _GPU_BACKEND = frx.default_backend() == "gpu"
 
 
-def _standard(degree: int) -> prover.StandardRound:
+def _standard(degree: int, challenges: ChallengePolicy = _CH) -> prover.StandardRound:
     """The product `StandardRound` at `degree`, the value-form dual of
     `verifier.SumcheckRound`."""
-    return prover.StandardRound(prover.ProductSummand(degree))
+    return prover.StandardRound(prover.ProductSummand(degree), challenges=challenges)
 
 
 def _prove(
@@ -67,7 +71,10 @@ class SumcheckRoundtripTest(absltest.TestCase):
         claimed = fnp.sum(product(list(factors)))
         _, proof = _prove(_standard(degree), factors, cheap_transcript(KB))
         point, final_claim, _, ok = verify(
-            verifier.SumcheckRound(degree), claimed, proof, cheap_transcript(KB)
+            verifier.SumcheckRound(degree, challenges=_CH),
+            claimed,
+            proof,
+            cheap_transcript(KB),
         )
         self.assertTrue(bool(ok))
         # Verifier rebinds the challenges from a fresh, identical sponge: its bound
@@ -94,9 +101,12 @@ class SumcheckRoundtripTest(absltest.TestCase):
         EF = zk_dtypes.koalabearx4_mont
         f = rand_field(52, (1 << 4,), KB).astype(EF)
         claimed = fnp.sum(f)
-        _, proof = _prove(_standard(1), [f], cheap_transcript(EF))
+        _, proof = _prove(_standard(1, ChallengePolicy(EF)), [f], cheap_transcript(EF))
         point, final_claim, _, ok = verify(
-            verifier.SumcheckRound(1), claimed, proof, cheap_transcript(EF)
+            verifier.SumcheckRound(1, challenges=ChallengePolicy(EF)),
+            claimed,
+            proof,
+            cheap_transcript(EF),
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(final_claim == eval_mle_oracle(f, point)))
@@ -107,7 +117,10 @@ class SumcheckRoundtripTest(absltest.TestCase):
         claimed = fnp.sum(a * b)
         final_state, proof = _prove(_standard(2), [a, b], cheap_transcript(KB))
         _, final_claim, _, ok = verify(
-            verifier.SumcheckRound(2), claimed, proof, cheap_transcript(KB)
+            verifier.SumcheckRound(2, challenges=_CH),
+            claimed,
+            proof,
+            cheap_transcript(KB),
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(final_claim == product([s[0] for s in final_state])))
@@ -118,7 +131,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
         # drive a fresh, identical sponge and observe the same message, so they
         # sample the same challenge.
         p_round = _standard(1)
-        v_round = verifier.SumcheckRound(1)
+        v_round = verifier.SumcheckRound(1, challenges=_CH)
         f = rand_field(56, (8,), KB)
         state, _, msg = p_round(f[None], cheap_transcript(KB))
         state_v, _, ok = v_round(_running(msg[0] + msg[1]), cheap_transcript(KB), msg)
@@ -130,7 +143,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
         # The FS-decoupled seam must be the same round math as the fused hop:
         # an external observe_and_sample + check_reduce reproduces __call__'s
         # (claim, challenge, ok) exactly.
-        v_round = verifier.SumcheckRound(1)
+        v_round = verifier.SumcheckRound(1, challenges=_CH)
         f = rand_field(57, (8,), KB)
         _, _, msg = _standard(1)(f[None], cheap_transcript(KB))
         claim = msg[0] + msg[1]
@@ -143,7 +156,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
         self.assertEqual(bool(split_ok), bool(fused_ok))
 
     def test_check_reduce_rejects_wrong_claim(self) -> None:
-        v_round = verifier.SumcheckRound(1)
+        v_round = verifier.SumcheckRound(1, challenges=_CH)
         f = rand_field(58, (8,), KB)
         _, _, msg = _standard(1)(f[None], cheap_transcript(KB))
         _, ok = v_round.check_reduce(
@@ -156,7 +169,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
         _, proof = _prove(_standard(1), [f], cheap_transcript(KB))
         bad = fnp.sum(f) + fnp.array(1, KB)
         _, _, _, ok = verify(
-            verifier.SumcheckRound(1), bad, proof, cheap_transcript(KB)
+            verifier.SumcheckRound(1, challenges=_CH), bad, proof, cheap_transcript(KB)
         )
         self.assertFalse(bool(ok))
 
@@ -168,14 +181,17 @@ class SumcheckRoundtripTest(absltest.TestCase):
         _, proof = _prove(_standard(1), [f], cheap_transcript(KB))
         proof = proof.at[2, 0].add(fnp.array(1, KB))
         _, _, _, ok = verify(
-            verifier.SumcheckRound(1), claimed, proof, cheap_transcript(KB)
+            verifier.SumcheckRound(1, challenges=_CH),
+            claimed,
+            proof,
+            cheap_transcript(KB),
         )
         self.assertFalse(bool(ok))
 
     def test_empty_proof_raises(self) -> None:
         with self.assertRaises(ValueError):
             verify(
-                verifier.SumcheckRound(1),
+                verifier.SumcheckRound(1, challenges=_CH),
                 fnp.zeros((), KB),
                 fnp.zeros((0, 2), KB),
                 cheap_transcript(KB),
@@ -184,7 +200,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
     def test_non_2d_proof_raises(self) -> None:
         with self.assertRaises(ValueError):
             verify(
-                verifier.SumcheckRound(1),
+                verifier.SumcheckRound(1, challenges=_CH),
                 fnp.zeros((), KB),
                 fnp.zeros((2,), KB),
                 cheap_transcript(KB),
@@ -196,18 +212,23 @@ class SumcheckRoundtripTest(absltest.TestCase):
         f = rand_field(54, (1 << 2,), KB)
         _, proof = _prove(_standard(1), [f], cheap_transcript(KB))
         with self.assertRaises(ValueError):
-            verify(verifier.SumcheckRound(2), fnp.sum(f), proof, cheap_transcript(KB))
+            verify(
+                verifier.SumcheckRound(2, challenges=_CH),
+                fnp.sum(f),
+                proof,
+                cheap_transcript(KB),
+            )
 
     def test_degree_must_be_positive(self) -> None:
         with self.assertRaises(ValueError):
-            verifier.SumcheckRound(0)
+            verifier.SumcheckRound(0, challenges=_CH)
 
 
 class CoeffsSumcheckRoundTest(absltest.TestCase):
     def test_accepts_consistent_claim_and_reduces(self) -> None:
         coeffs = fnp.array([3, 5, 2, 7], KB)  # s(0) = 3, s(1) = 17
         claim = coeffs[0] + fnp.sum(coeffs)
-        reduced, _, ok = verifier.CoeffsSumcheckRound(3)(
+        reduced, _, ok = verifier.CoeffsSumcheckRound(3, challenges=_CH)(
             _running(claim), cheap_transcript(KB), coeffs
         )
         next_claim, r = reduced.value, reduced.point[0]
@@ -219,7 +240,7 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
     def test_wrong_claim_rejected(self) -> None:
         coeffs = fnp.array([3, 5, 2, 7], KB)
         bad = coeffs[0] + fnp.sum(coeffs) + fnp.array(1, KB)
-        _, _, ok = verifier.CoeffsSumcheckRound(3)(
+        _, _, ok = verifier.CoeffsSumcheckRound(3, challenges=_CH)(
             _running(bad), cheap_transcript(KB), coeffs
         )
         self.assertFalse(bool(ok))
@@ -229,7 +250,7 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
         coeffs = fnp.array([3, 5, 2, 7], KB).astype(EF)
         claim = coeffs[0] + fnp.sum(coeffs)
         reduced, _, ok = verifier.CoeffsSumcheckRound(
-            3, challenges=ChallengePolicy(limbs=4)
+            3, challenges=ChallengePolicy(EF)
         )(_running(claim), cheap_transcript(KB), coeffs)
         next_claim, r = reduced.value, reduced.point[0]
         self.assertTrue(bool(ok))
@@ -238,15 +259,13 @@ class CoeffsSumcheckRoundTest(absltest.TestCase):
 
     def test_wrong_message_width_raises(self) -> None:
         with self.assertRaises(ValueError):
-            verifier.CoeffsSumcheckRound(3)(
+            verifier.CoeffsSumcheckRound(3, challenges=_CH)(
                 fnp.zeros((), KB), cheap_transcript(KB), fnp.zeros((3,), KB)
             )
 
-    def test_validates_degree_and_limbs(self) -> None:
+    def test_validates_degree(self) -> None:
         with self.assertRaises(ValueError):
-            verifier.CoeffsSumcheckRound(0)
-        with self.assertRaises(ValueError):
-            verifier.CoeffsSumcheckRound(3, challenges=ChallengePolicy(limbs=0))
+            verifier.CoeffsSumcheckRound(0, challenges=_CH)
 
 
 class CompressedCoeffsRoundtripTest(absltest.TestCase):
@@ -258,8 +277,8 @@ class CompressedCoeffsRoundtripTest(absltest.TestCase):
     def test_product_roundtrip(self) -> None:
         a = rand_field(60, (1 << 4,), KB)
         b = rand_field(61, (1 << 4,), KB)
-        p_round = prover.CompressedProductRound()
-        v_round = verifier.CompressedCoeffsSumcheckRound()
+        p_round = prover.CompressedProductRound(challenges=_CH)
+        v_round = verifier.CompressedCoeffsSumcheckRound(challenges=_CH)
 
         state = fnp.stack([a, b])
         tp: Transcript = cheap_transcript(KB)
@@ -289,8 +308,8 @@ class CompressedCoeffsRoundtripTest(absltest.TestCase):
         # (c1 reconstruction included) for the same external challenge.
         a = rand_field(66, (1 << 3,), KB)
         b = rand_field(67, (1 << 3,), KB)
-        v_round = verifier.CompressedCoeffsSumcheckRound()
-        _, _, msg = prover.CompressedProductRound()(
+        v_round = verifier.CompressedCoeffsSumcheckRound(challenges=_CH)
+        _, _, msg = prover.CompressedProductRound(challenges=_CH)(
             fnp.stack([a, b]), cheap_transcript(KB)
         )
         claim = fnp.sum(a * b)
@@ -307,8 +326,8 @@ class CompressedCoeffsRoundtripTest(absltest.TestCase):
         # claim), so a tamper surfaces at the terminal check, not mid-loop.
         a = rand_field(62, (1 << 3,), KB)
         b = rand_field(63, (1 << 3,), KB)
-        p_round = prover.CompressedProductRound()
-        v_round = verifier.CompressedCoeffsSumcheckRound()
+        p_round = prover.CompressedProductRound(challenges=_CH)
+        v_round = verifier.CompressedCoeffsSumcheckRound(challenges=_CH)
         state = fnp.stack([a, b])
         tp: Transcript = cheap_transcript(KB)
         msgs = []
@@ -326,7 +345,7 @@ class CompressedCoeffsRoundtripTest(absltest.TestCase):
 
     def test_wrong_message_width_raises(self) -> None:
         with self.assertRaises(ValueError):
-            verifier.CompressedCoeffsSumcheckRound()(
+            verifier.CompressedCoeffsSumcheckRound(challenges=_CH)(
                 _running(fnp.zeros((), KB)), cheap_transcript(KB), fnp.zeros((3,), KB)
             )
 

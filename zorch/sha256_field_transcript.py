@@ -179,6 +179,10 @@ class Sha256FieldTranscript:
     dtype: Any
 
     @property
+    def field(self) -> Any:
+        return self.dtype
+
+    @property
     def has_dedicated_fusion(self) -> bool:
         # The COMPRESSION lowers to a GPU kernel via the zorch.sha256 marker.
         # Says nothing about the hop above it: a squeeze also carries the

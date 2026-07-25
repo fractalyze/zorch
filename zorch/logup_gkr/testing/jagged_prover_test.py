@@ -53,6 +53,10 @@ from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, Transcript, sample_challenge
 
 KB = zk_dtypes.koalabear_mont
+
+# The transcript's own field: the schedule these tests pinned before the
+# policy required an explicit field.
+_CH = ChallengePolicy(KB)
 EF = zk_dtypes.koalabearx4_mont
 
 
@@ -93,6 +97,7 @@ class ProveJaggedLayerTest(absltest.TestCase):
             z,
             cheap_transcript(KB),
             caps=caps_for(self.ROW_COUNTS, self.NRV),
+            challenges=_CH,
         )
         return layer, lam, z, claim, point, proof
 
@@ -151,7 +156,13 @@ class ProveJaggedLayerTest(absltest.TestCase):
         z = rand_field(32, (5,), KB)
         claim = _virtual_claim(layer, 3, lam, z)
         point, _, proof = prove_jagged_layer(
-            layer, lam, claim, z, cheap_transcript(KB), caps=caps_for((1, 1, 1, 1), 3)
+            layer,
+            lam,
+            claim,
+            z,
+            cheap_transcript(KB),
+            caps=caps_for((1, 1, 1, 1), 3),
+            challenges=_CH,
         )
         p0 = proof.round_polys[0]
         zero = fnp.zeros((), KB)
@@ -175,7 +186,7 @@ class ProveJaggedLayerTest(absltest.TestCase):
             claim,
             z,
             cheap_transcript(KB),
-            challenges=ChallengePolicy(limbs=4),
+            challenges=ChallengePolicy(EF),
             caps=caps_for(self.ROW_COUNTS, self.NRV),
         )
         self.assertEqual(point.dtype, EF)
@@ -206,6 +217,7 @@ class ProveJaggedLayerTest(absltest.TestCase):
                 rand_field(62, (1,), KB),  # only the interaction variable
                 cheap_transcript(KB),
                 caps=caps_for((1, 1), 1),
+                challenges=_CH,
             )
 
     def test_rejects_missing_caps(self) -> None:
@@ -219,6 +231,7 @@ class ProveJaggedLayerTest(absltest.TestCase):
                 fnp.array(5, KB),
                 rand_field(72, (3,), KB),
                 cheap_transcript(KB),
+                challenges=_CH,
             )
 
 
@@ -266,7 +279,7 @@ class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
             claim,
             z,
             cheap_transcript(KB),
-            challenges=ChallengePolicy(limbs=4),
+            challenges=ChallengePolicy(EF),
             caps=caps,
         )
         wp, wt, wproof = prove_jagged_layer(
@@ -275,7 +288,7 @@ class BaseFieldNumeratorFirstLayerTest(absltest.TestCase):
             claim,
             z,
             cheap_transcript(KB),
-            challenges=ChallengePolicy(limbs=4),
+            challenges=ChallengePolicy(EF),
             caps=caps,
         )
 
@@ -320,7 +333,7 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         _, lam = sample_challenge(transcript, KB, 1)
 
         (num_eval, den_eval, new_point), _, proof = JaggedGkrLayerRound(
-            layer, caps=caps_for(row_counts, nrv)
+            layer, caps=caps_for(row_counts, nrv), challenges=_CH
         )(carry, transcript)
 
         p0 = proof.round_polys[0]
@@ -348,7 +361,7 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
             rand_field(133, (5,), KB),
         )
         (_, _, new_point), _, proof = JaggedGkrLayerRound(
-            layer, caps=caps_for((3, 1, 5, 2), 3)
+            layer, caps=caps_for((3, 1, 5, 2), 3), challenges=_CH
         )(carry, cheap_transcript(KB))
         self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
         self.assertTrue(bool(fnp.all(proof.point == new_point[:-1])))
@@ -368,9 +381,9 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         # on this one; the round re-derives it).
         _, lam = sample_challenge(transcript, KB, 1)
 
-        _, _, proof = JaggedGkrLayerRound(layer, caps=caps_for((3, 1, 5, 2), 3))(
-            carry, transcript
-        )
+        _, _, proof = JaggedGkrLayerRound(
+            layer, caps=caps_for((3, 1, 5, 2), 3), challenges=_CH
+        )(carry, transcript)
 
         self.assertTrue(bool(proof.lam == lam))
         self.assertTrue(bool(proof.claim == lam * carry[0] + carry[1]))
@@ -390,14 +403,14 @@ class ChainedJaggedProveTest(absltest.TestCase):
         caps = caps_for(self.ROW_COUNTS, len(layers) - 1)
         output = extract_jagged_outputs(layers[-1])
         (num_eval, den_eval, eval_point), transcript = bind_output(
-            output, cheap_transcript(KB)
+            output, cheap_transcript(KB), challenges=_CH
         )
         proofs = []
         for layer in reversed(layers[:-1]):
             transcript, lam = sample_challenge(transcript, num_eval.dtype, 1)
             claim = lam * num_eval + den_eval
             point, transcript, proof = prove_jagged_layer(
-                layer, lam, claim, eval_point, transcript, caps=caps
+                layer, lam, claim, eval_point, transcript, caps=caps, challenges=_CH
             )
             n0, n1 = proof.numerator_0, proof.numerator_1
             d0, d1 = proof.denominator_0, proof.denominator_1
@@ -414,11 +427,13 @@ class ChainedJaggedProveTest(absltest.TestCase):
         want_carry, want_t, want_proofs = self._hand_loop(layers)
 
         output = extract_jagged_outputs(layers[-1])
-        carry, transcript = bind_output(output, cheap_transcript(KB))
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
         got_carry, got_t, got_proofs = prove_rounds(
             (
                 JaggedGkrLayerRound(
-                    layer, caps=caps_for(self.ROW_COUNTS, len(layers) - 1)
+                    layer,
+                    caps=caps_for(self.ROW_COUNTS, len(layers) - 1),
+                    challenges=_CH,
                 )
                 for layer in reversed(layers[:-1])
             ),
@@ -448,10 +463,13 @@ class ChainedJaggedProveTest(absltest.TestCase):
         # every read past the live prefix.
         layers = build_jagged_pyramid(random_jagged_layer(7, self.ROW_COUNTS))
         output = extract_jagged_outputs(layers[-1])
-        carry, transcript = bind_output(output, cheap_transcript(KB))
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
         caps = RoundWidthCaps(elements=64, eq_row=64, interaction=8)
         want_carry, want_t, want_proofs = prove_rounds(
-            (JaggedGkrLayerRound(layer, caps=caps) for layer in reversed(layers[:-1])),
+            (
+                JaggedGkrLayerRound(layer, caps=caps, challenges=_CH)
+                for layer in reversed(layers[:-1])
+            ),
             carry,
             transcript,
         )
@@ -459,7 +477,7 @@ class ChainedJaggedProveTest(absltest.TestCase):
         bufs = LayerBuffers()
         got_carry, got_t, got_proofs = prove_rounds(
             (
-                JaggedGkrLayerRound(layer, caps=caps, layer_bufs=bufs)
+                JaggedGkrLayerRound(layer, caps=caps, layer_bufs=bufs, challenges=_CH)
                 for layer in reversed(layers[:-1])
             ),
             carry,
@@ -486,7 +504,7 @@ class ChainedJaggedProveTest(absltest.TestCase):
         layers = build_jagged_pyramid(random_jagged_layer(17, self.ROW_COUNTS))
         caps = caps_for(self.ROW_COUNTS, len(layers) - 1)
         output = extract_jagged_outputs(layers.pop())
-        carry, transcript = bind_output(output, cheap_transcript(KB))
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
 
         yielded: list[weakref.ref[JaggedGkrLayer]] = []
         live_log: list[int] = []
@@ -496,7 +514,7 @@ class ChainedJaggedProveTest(absltest.TestCase):
                 live_log.append(sum(ref() is not None for ref in yielded))
                 layer = layers.pop()
                 yielded.append(weakref.ref(layer))
-                yield JaggedGkrLayerRound(layer, caps=caps)
+                yield JaggedGkrLayerRound(layer, caps=caps, challenges=_CH)
 
         prove_rounds(rounds(), carry, transcript)
 
@@ -536,9 +554,9 @@ class JaggedGkrLayerRoundZoneTest(absltest.TestCase):
         def make_call(seed: int) -> Callable[[], None]:
             def _call() -> None:
                 layer = random_jagged_layer(seed, self.ROW_COUNTS)
-                JaggedGkrLayerRound(layer, caps=caps_for(self.ROW_COUNTS, self.NRV))(
-                    carry, cheap_transcript(KB)
-                )
+                JaggedGkrLayerRound(
+                    layer, caps=caps_for(self.ROW_COUNTS, self.NRV), challenges=_CH
+                )(carry, cheap_transcript(KB))
 
             return _call
 
@@ -587,9 +605,13 @@ class CapacityRoundTest(absltest.TestCase):
     def test_matches_static_capped_round(self) -> None:
         layer = random_jagged_layer(410, self.ROW_COUNTS)
         carry = self._carry(420)
-        want = JaggedGkrLayerRound(layer, caps=self.CAPS)(carry, cheap_transcript(KB))
+        want = JaggedGkrLayerRound(layer, caps=self.CAPS, challenges=_CH)(
+            carry, cheap_transcript(KB)
+        )
         wide = widen_jagged_layer(layer, layer.width + 3)
-        got = JaggedGkrLayerRound(wide, caps=self.CAPS)(carry, cheap_transcript(KB))
+        got = JaggedGkrLayerRound(wide, caps=self.CAPS, challenges=_CH)(
+            carry, cheap_transcript(KB)
+        )
         self._assert_stream_equal(got, want)
 
     def test_matches_static_on_mixed_field_first_layer(self) -> None:
@@ -600,18 +622,20 @@ class CapacityRoundTest(absltest.TestCase):
             rand_ext_field(442, (self.NRV + 2,), KB, EF),
         )
         want = JaggedGkrLayerRound(
-            layer, challenges=ChallengePolicy(limbs=4), caps=self.CAPS
+            layer, challenges=ChallengePolicy(EF), caps=self.CAPS
         )(carry, cheap_transcript(KB))
         wide = widen_jagged_layer(layer, layer.width + 3)
-        got = JaggedGkrLayerRound(
-            wide, challenges=ChallengePolicy(limbs=4), caps=self.CAPS
-        )(carry, cheap_transcript(KB))
+        got = JaggedGkrLayerRound(wide, challenges=ChallengePolicy(EF), caps=self.CAPS)(
+            carry, cheap_transcript(KB)
+        )
         self._assert_stream_equal(got, want)
 
     def test_requires_caps(self) -> None:
         layer = random_jagged_layer(450, self.ROW_COUNTS)
         with self.assertRaises(ValueError):
-            JaggedGkrLayerRound(layer)(self._carry(460), cheap_transcript(KB))
+            JaggedGkrLayerRound(layer, challenges=_CH)(
+                self._carry(460), cheap_transcript(KB)
+            )
 
     def test_widened_chain_matches_zero_slack_chain(self) -> None:
         # End to end through the pyramid: the zero-slack chain and the
@@ -621,12 +645,14 @@ class CapacityRoundTest(absltest.TestCase):
         # under the pooled cap buffers.
         static_layers = build_jagged_pyramid(random_jagged_layer(470, self.ROW_COUNTS))
         output = extract_jagged_outputs(static_layers[-1])
-        carry, transcript = bind_output(output, cheap_transcript(KB))
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
 
         want_bufs = LayerBuffers()
         want = prove_rounds(
             (
-                JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=want_bufs)
+                JaggedGkrLayerRound(
+                    layer, caps=self.CAPS, layer_bufs=want_bufs, challenges=_CH
+                )
                 for layer in reversed(static_layers[:-1])
             ),
             carry,
@@ -639,7 +665,9 @@ class CapacityRoundTest(absltest.TestCase):
         got_bufs = LayerBuffers()
         got = prove_rounds(
             (
-                JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=got_bufs)
+                JaggedGkrLayerRound(
+                    layer, caps=self.CAPS, layer_bufs=got_bufs, challenges=_CH
+                )
                 for layer in reversed(capped_layers)
             ),
             carry,
@@ -675,15 +703,15 @@ class CapacityRoundTest(absltest.TestCase):
         def capped_call(seed: int, rc: tuple[int, ...]) -> Callable[[], None]:
             def _call() -> None:
                 layer = widen_jagged_layer(random_jagged_layer(seed, rc), 14)
-                JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=bufs)(
-                    carry, cheap_transcript(KB)
-                )
+                JaggedGkrLayerRound(
+                    layer, caps=self.CAPS, layer_bufs=bufs, challenges=_CH
+                )(carry, cheap_transcript(KB))
 
             return _call
 
         def zero_slack_call() -> None:
             layer = random_jagged_layer(490, self.ROW_COUNTS)
-            JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=bufs)(
+            JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=bufs, challenges=_CH)(
                 carry, cheap_transcript(KB)
             )
 
