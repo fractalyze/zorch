@@ -113,6 +113,20 @@ pip install -r requirements.in \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
+Install the git hooks with both stages named. Plain `pre-commit install` wires
+only the `pre-commit` stage, which leaves the commit-message linter inactive —
+formatting hooks fire while a malformed commit message sails through to CI:
+
+```sh
+pre-commit install --install-hooks --hook-type pre-commit --hook-type commit-msg
+```
+
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org):
+a valid type, a lowercase summary with no trailing period, a header of at most
+80 characters, and a body on everything but `docs`. The same linter runs in CI
+over every commit in a pull request and over the PR title, which matters here
+because this repo squash-merges with the title as the subject.
+
 The dev loop — per-workspace venvs, developing against a local Fractalyze XLA
 build, the FRX compile-cache rule — lives in [`docs/reference/development.md`](docs/reference/development.md).
 

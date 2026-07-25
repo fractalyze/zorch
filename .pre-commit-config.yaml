@@ -1,4 +1,12 @@
 repos:
+    # Runs at the commit-msg stage, so `pre-commit install` alone does not wire
+    # it up — see README for the install command that covers both stages.
+-   repo: https://github.com/fractalyze/fractal-lint
+    # Match the version the Commit Lint CI job runs, so a message that passes
+    # locally also passes CI.
+    rev: v0.8.0
+    hooks:
+    -   id: fractal-commit-lint
 -   repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

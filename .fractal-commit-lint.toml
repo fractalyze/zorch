@@ -1,0 +1,69 @@
+# Commit-scope policy for zorch.
+#
+# A scope is the directory the change lives in, named with the `zorch/` root
+# stripped, and it must be the deepest directory containing every touched file:
+# a change confined to zorch/pcs/jagged is `pcs/jagged`, not `pcs`. Nesting is
+# expected rather than abbreviated, so no aliases exist for `jagged` or `whir`.
+#
+# A change spanning sibling packages has no honest scope and takes none —
+# `perf: ...` — which is why a scope is not required.
+
+roots = ["zorch"]
+require_scope = false
+
+# Cross-cutting files that would otherwise drag a scoped change up to nothing.
+# These are path prefixes, not basenames: zorch/BUILD.bazel is listed because it
+# sits above every package, while a nested zorch/<pkg>/BUILD.bazel already
+# derives to its own package and needs no exemption.
+exempt_paths = [
+  "docs",
+  "README.md",
+  "CLAUDE.md",
+  ".github",
+  ".claude",
+  ".gemini",
+  ".bazelrc",
+  ".bazelrc.ci",
+  ".bazelrc.rbe",
+  ".coderabbit.yaml",
+  ".python-version",
+  ".gitignore",
+  ".pre-commit-config.yaml",
+  "rbe",
+  "pyproject.toml",
+  "requirements.in",
+  "requirements-dev.in",
+  "requirements_lock_3_11.txt",
+  "MODULE.bazel",
+  "MODULE.bazel.lock",
+  "defs.bzl",
+  "zorch/BUILD.bazel",
+]
+
+[dictionary]
+# Tests share their subject's scope: zorch/coding/testing/x_test.py and
+# zorch/coding/x.py both derive to `coding`, so one commit can carry both.
+testing = ""
+
+[scopes]
+# The modules directly under zorch/ sit above any directory, so derivation
+# yields nothing for them. These name the concepts they implement; each also
+# covers the module's test in zorch/testing/.
+constraint_eval = [
+  "zorch/constraint_eval.py",
+  "zorch/testing/constraint_eval_test.py",
+]
+round = ["zorch/round.py", "zorch/testing/round_test.py"]
+prove = ["zorch/prove.py", "zorch/testing/prove_test.py"]
+verify = ["zorch/verify.py", "zorch/testing/verify_test.py"]
+fusion = ["zorch/fusion.py", "zorch/testing/fusion_test.py"]
+grind = ["zorch/grind.py", "zorch/testing/grind_test.py"]
+transcript = [
+  "zorch/transcript.py",
+  "zorch/byte_transcript.py",
+  "zorch/sha256_field_transcript.py",
+  "zorch/testing/transcript_test.py",
+  "zorch/testing/byte_transcript_test.py",
+  "zorch/testing/sha256_field_transcript_test.py",
+]
+release = ["zorch/__init__.py"]

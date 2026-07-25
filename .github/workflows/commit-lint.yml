@@ -1,0 +1,37 @@
+# Copyright 2026 Fractalyze Inc. All rights reserved.
+
+name: Commit Lint
+
+on:
+  pull_request_target:
+    types:
+      - opened
+      - edited
+      - synchronize
+
+jobs:
+  lint:
+    # The frx pin-bump PRs are authored by this account and their generated
+    # subjects are not written to the convention.
+    if: github.actor != 'fractalyze-dev'
+    # GitHub-hosted, never self-hosted: pull_request_target grants base-repo
+    # permissions and fires for forks, so fork-triggered jobs must not land on
+    # a self-hosted runner.
+    runs-on: ubuntu-latest
+    name: Commit Lint
+    permissions:
+      contents: read
+      # Both scopes are required; without contents:read the commits API returns
+      # 403 when the action lists a PR's changed files.
+      pull-requests: read
+    steps:
+      # Hybrid runs fractal-commit-lint — the same tool as the local
+      # pre-commit hook — over the PR title and every commit. With no
+      # .fractal-commit-lint.toml in the repo, scope is free-form and only the
+      # Conventional Commits format rules apply.
+      - name: Validate PR title and commit messages
+        uses: fractalyze/github-actions/commit-lint@v1.2.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          scope_mode: hybrid
+          fractal_lint_version: v0.8.0
