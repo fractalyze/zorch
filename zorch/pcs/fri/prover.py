@@ -30,7 +30,12 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.commit.merkle import MerkleTree
-from zorch.pcs.fold import PreFoldPairCommitRound, open_rows, sample_positions
+from zorch.pcs.fold import (
+    FoldState,
+    PreFoldPairCommitRound,
+    open_rows,
+    sample_positions,
+)
 from zorch.pcs.fri.config import DeepFoldableCode, FriCommitment, FriParams, FriProof
 from zorch.prove import fold_rounds
 from zorch.transcript import Transcript
@@ -139,10 +144,10 @@ def _open_one(
     quotient = (committed.codeword - v) / (domain - z)
 
     t = t.observe(committed.digest_layers[-1][0])  # bind the f commitment root
-    cw, t, layers = fold_rounds(
-        PreFoldPairCommitRound(code, tree), quotient, t, params.num_rounds
+    state, t, roots = fold_rounds(
+        PreFoldPairCommitRound(code, tree), FoldState(quotient), t, params.num_rounds
     )
-    final_layer = cw
+    final_layer = state.codeword
     t = t.observe(final_layer)
 
     n = code.block_len
@@ -151,11 +156,11 @@ def _open_one(
     f_opening = open_rows(tree, committed.leaves, committed.digest_layers, a[0])
     query_openings = [
         open_rows(tree, layer.leaves, layer.digest_layers, a[i])
-        for i, layer in enumerate(layers)
+        for i, layer in enumerate(state.layers)
     ]
     return t, FriProof(
         v,
-        [layer.root for layer in layers],
+        roots,
         final_layer,
         f_opening,
         query_openings,

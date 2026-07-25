@@ -63,17 +63,25 @@ def from_base_field(rows: Array, dtype: Any, group: int) -> Array:
 
 
 @dataclass(frozen=True)
-class PairCommittedLayer:
-    """One pre-fold pair-leaf commit round's retained artifacts: the fold
-    challenge β (a composing round folds its own state by it), the pair-leaf
-    commitment root (proof wire), and the committed `[n//2, 2]` pair-leaves +
-    digest layers (query phase). A plain dataclass — a prover-internal
-    `fold_rounds` message, not a proof leaf."""
+class CommittedLayer:
+    """One committed pre-fold layer, retained for the query phase.
 
-    beta: Array
-    root: Array
-    leaves: Array  # [n//2, 2] conjugate-pair leaves
+    In IOP terms this is the round's oracle: the prover holds it to answer
+    queries, and it never crosses the wire. `[n//k, k]` leaves — conjugate pairs
+    at k = 2, k-th-root cosets above — plus their digest layers.
+    """
+
+    leaves: Array
     digest_layers: list[Array]
+
+
+@dataclass(frozen=True)
+class FoldState:
+    """The commit-and-fold recurrence's carry: the codeword being folded and the
+    layers committed so far. Prover-side only."""
+
+    codeword: Array
+    layers: tuple[CommittedLayer, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -82,37 +90,26 @@ class PreFoldPairCommitRound(ProverRound):
     codeword's conjugate-pair leaves (`code.pair_leaves`, one leaf = one pair) →
     observe the root → sample β → fold. Committing *before* the fold binds the
     layer into the transcript that samples β — and a pair leaf lets one Merkle
-    path open both legs the fold consumes. A scheme with extra per-round state
-    (basefold's interleaved sumcheck) wraps this and folds that state by the
-    msg's β. Carry = the pre-fold codeword; msg = `PairCommittedLayer`."""
+    path open both legs the fold consumes.
+
+    The message is the root alone, since the root is all that crosses the wire.
+    The committed layer is the oracle it commits to and β is derived from the
+    transcript, so both ride the carry.
+    """
 
     code: FoldableCode
     tree: MerkleTree
 
     def __call__(
-        self, cw: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, PairCommittedLayer]:
-        leaves = to_base_field(self.code.pair_leaves(cw))
+        self, state: FoldState, transcript: Transcript
+    ) -> tuple[FoldState, Transcript, Array]:
+        leaves = to_base_field(self.code.pair_leaves(state.codeword))
         root, digest_layers = self.tree.commit(leaves)
         t = transcript.observe(root)
         t, beta = t.sample()
-        beta = beta.reshape(())
-        cw = self.code.fold(cw, beta)
-        return cw, t, PairCommittedLayer(beta, root, leaves, digest_layers)
-
-
-@dataclass(frozen=True)
-class KGroupCommittedLayer:
-    """The k-ary `PairCommittedLayer`: one pre-fold k-group commit round's
-    retained artifacts — the fold challenge β, the k-group-leaf commitment root
-    (proof wire), and the committed `[n//k, k]` group-leaves + digest layers
-    (query phase). `fold_factor` k generalizes the conjugate pair to the k-th-root
-    coset; everything else mirrors the binary round."""
-
-    beta: Array
-    root: Array
-    leaves: Array  # [n//k, k] k-group leaves
-    digest_layers: list[Array]
+        cw = self.code.fold(state.codeword, beta.reshape(()))
+        layer = CommittedLayer(leaves, digest_layers)
+        return FoldState(cw, state.layers + (layer,)), t, root
 
 
 @dataclass(frozen=True)
@@ -121,22 +118,22 @@ class PreFoldKGroupCommitRound(ProverRound):
     (`code.group_leaves`, one leaf = one k-th-root coset) → observe the root →
     sample β → fold by `fold_factor`. Committing before the fold binds the layer
     into the transcript that samples β, and a k-group leaf lets one Merkle path
-    open all k legs the fold consumes. Carry = the pre-fold codeword; msg =
-    `KGroupCommittedLayer`."""
+    open all k legs the fold consumes. Message and carry match the binary
+    round."""
 
     code: KFoldableCode
     tree: MerkleTree
 
     def __call__(
-        self, cw: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, KGroupCommittedLayer]:
-        leaves = to_base_field(self.code.group_leaves(cw))
+        self, state: FoldState, transcript: Transcript
+    ) -> tuple[FoldState, Transcript, Array]:
+        leaves = to_base_field(self.code.group_leaves(state.codeword))
         root, digest_layers = self.tree.commit(leaves)
         t = transcript.observe(root)
         t, beta = t.sample()
-        beta = beta.reshape(())
-        cw = self.code.fold_group(cw, beta)
-        return cw, t, KGroupCommittedLayer(beta, root, leaves, digest_layers)
+        cw = self.code.fold_group(state.codeword, beta.reshape(()))
+        layer = CommittedLayer(leaves, digest_layers)
+        return FoldState(cw, state.layers + (layer,)), t, root
 
 
 def open_rows(
