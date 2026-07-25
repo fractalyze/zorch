@@ -131,6 +131,15 @@ opening role. `LogUpGkrProver` and `LogUpGkrVerifier` are the second production
 pair: their source claim owns the public output and layer count, while their
 reduced claim is the input-layer claim for a consumer's PCS opening. Both proofs use frozen dataclasses with named sections.
 
+`JaggedLogUpGkrProver` and `JaggedLogUpGkrVerifier` reduce those same claim
+types over the jagged layout, so a consumer picks a layout by construction and
+the stage seam does not move. Only the witness and the layer proofs differ: the
+jagged witness carries the input layer plus the per-transition fold schedule
+(the layout is per-input), while the round width caps are a capacity class the
+prover role is configured with once. That split is the general rule for a
+layout-specific stage — per-input structure is witness, per-class structure is
+role configuration.
+
 ## State and ownership rules
 
 - The transcript is explicit in every round call and stage result.

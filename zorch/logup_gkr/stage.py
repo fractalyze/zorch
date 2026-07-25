@@ -1,9 +1,15 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Dense LogUp-GKR role implementations."""
+"""Dense LogUp-GKR role implementations.
+
+The claim types and the proof envelope are layout-independent, so the jagged
+roles (`jagged_stage`) reduce the same `LogUpOutputClaim` to the same
+`InputLayerClaim` and a consumer can swap one layout for the other.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Generic, TypeVar
 
 from frx import Array
 
@@ -15,6 +21,8 @@ from zorch.logup_gkr.verifier import GkrLayerRound as VerifierLayerRound
 from zorch.round import prove_rounds, verify_rounds
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
+
+LayerProofT = TypeVar("LayerProofT")
 
 
 @dataclass(frozen=True)
@@ -35,10 +43,14 @@ class InputLayerClaim:
 
 
 @dataclass(frozen=True)
-class GkrProof:
-    """One conditional reduction-proof section per GKR layer."""
+class GkrProof(Generic[LayerProofT]):
+    """One conditional reduction-proof section per GKR layer.
 
-    layers: tuple[LayerProof, ...]
+    Parameterized by the layer proof because the pyramid's shape is the
+    protocol and the layer's sumcheck transcript is the layout.
+    """
+
+    layers: tuple[LayerProofT, ...]
 
 
 def _input_claim(claim: LayerClaim) -> InputLayerClaim:
@@ -47,7 +59,7 @@ def _input_claim(claim: LayerClaim) -> InputLayerClaim:
 
 
 class LogUpGkrProver(
-    ProverStage[LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof]
+    ProverStage[LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof[LayerProof]]
 ):
     """Prove an output claim conditional on an input-layer claim."""
 
@@ -59,7 +71,7 @@ class LogUpGkrProver(
         claim: LogUpOutputClaim,
         witness: GkrLayer,
         transcript: Transcript,
-    ) -> ProveResult[InputLayerClaim, GkrProof]:
+    ) -> ProveResult[InputLayerClaim, GkrProof[LayerProof]]:
         if witness.num_row_variables != claim.layers:
             raise ValueError(
                 f"claim expects {claim.layers} GKR layers, "
@@ -87,7 +99,9 @@ class LogUpGkrProver(
         )
 
 
-class LogUpGkrVerifier(VerifierStage[LogUpOutputClaim, InputLayerClaim, GkrProof]):
+class LogUpGkrVerifier(
+    VerifierStage[LogUpOutputClaim, InputLayerClaim, GkrProof[LayerProof]]
+):
     """Verify an output-to-input-layer LogUp-GKR reduction."""
 
     def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
@@ -96,7 +110,7 @@ class LogUpGkrVerifier(VerifierStage[LogUpOutputClaim, InputLayerClaim, GkrProof
     def verify(
         self,
         claim: LogUpOutputClaim,
-        reduction_proof: GkrProof,
+        reduction_proof: GkrProof[LayerProof],
         transcript: Transcript,
     ) -> VerifyResult[InputLayerClaim]:
         if len(reduction_proof.layers) != claim.layers:

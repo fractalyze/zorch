@@ -117,14 +117,24 @@ def virtual_planes(
     return planes[0], planes[1], planes[2], planes[3]
 
 
+def jagged_fold_schedules(first: JaggedGkrLayer) -> tuple[tuple[int, ...], ...]:
+    """Per-transition fold schedules carrying `first` to the batch floor,
+    over-padding unsaturated segments to even counts -- saturated segments stay
+    at one row so the floor is reachable while the padding paths stay
+    exercised."""
+    schedules = []
+    counts = host_counts(first)
+    while max(counts) > 1:
+        folded = tuple((rc + 1) // 2 for rc in counts)
+        counts = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
+        schedules.append(counts)
+    return tuple(schedules)
+
+
 def build_jagged_pyramid(first: JaggedGkrLayer) -> list[JaggedGkrLayer]:
-    """Fold to the floor under a schedule that over-pads unsaturated segments
-    to even counts -- saturated segments stay at one row so the floor is
-    reachable while the padding paths stay exercised."""
+    """The layers `jagged_fold_schedules` folds `first` through, floor last."""
     layers = [first]
-    while max(host_counts(layers[-1])) > 1:
-        folded = tuple((rc + 1) // 2 for rc in host_counts(layers[-1]))
-        schedule = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
+    for schedule in jagged_fold_schedules(first):
         layers.append(jagged_layer_transition(layers[-1], schedule))
     return layers
 

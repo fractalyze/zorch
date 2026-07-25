@@ -78,6 +78,16 @@ read it cannot check: truncation-safety and the virtual-row-space fit are
 the consumer's capacity-class obligations, discharged against class bounds
 that dominate every admitted input.
 
+**One stage seam, two layouts.** `stage.py` and `jagged_stage.py` reduce the
+same `LogUpOutputClaim` to the same `InputLayerClaim`, so a consumer chooses a
+layout at construction and nothing downstream moves; only the witness and the
+layer proofs are layout-shaped. The jagged witness carries the input layer plus
+the per-transition fold schedule because that follows the row counts, while the
+round width caps configure the prover role once per capacity class. The stage
+owns what the chain owns: it builds the pyramid, hands each layer to its round
+and drops it, and scopes one `LayerBuffers` to the prove, so the cap-wide planes
+die with it rather than pinning a card.
+
 ## Fusion by construction
 
 Inverted from a single fused `Round`: the pyramid is folded and proved *eagerly*
