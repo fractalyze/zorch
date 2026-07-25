@@ -12,6 +12,13 @@ py_library(
 )
 
 py_library(
+    name = "linear",
+    srcs = ["linear.py"],
+    visibility = ["//visibility:public"],
+    deps = [requirement("frx")],
+)
+
+py_library(
     name = "compression",
     srcs = ["compression.py"],
     visibility = ["//visibility:public"],

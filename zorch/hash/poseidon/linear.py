@@ -3,29 +3,27 @@
 Every linear layer is a fixed, unrolled sum of column-scaled lanes so a round
 body stays straight-line element-wise and fuses to one kernel: `fnp.dot`/`fnp.sum`
 lower to a reduction (the `kInput` fusion boundary) and dynamic indexing to
-`gather`, either of which splits the kernel.
+`gather`, either of which splits the kernel. The summation primitive
+`unrolled_sum` and the field-array dense layer `apply_matrix` are shared with
+poseidon2 in `zorch.hash.linear`; this module adds the Poseidon-specific forms.
 
 Two matrix forms, by where the matrix rides:
 - `apply_dense_mds` takes the MDS as **integer literals** (canonical ints) — no
   field array is captured, required inside a name-routed `fused_region` where a
   closed-over array lifts to a leading operand and breaks the emitter's ABI.
-- `apply_matrix` / `apply_sparse_partial` take **field-array** matrices — for the
-  optimized-sparse variant, whose dense full-field entries exceed an int64 literal
-  and so cannot ride as ints; they stay field arrays, which the generic
-  `zorch.fused_region` marker lifts to operands harmlessly (no name-routed ABI).
+- `apply_matrix` (shared) / `apply_sparse_partial` take **field-array** matrices —
+  for the optimized-sparse variant, whose dense full-field entries exceed an
+  int64 literal and so cannot ride as ints; they stay field arrays, which the
+  generic `zorch.fused_region` marker lifts to operands harmlessly (no
+  name-routed ABI).
 """
 
 from __future__ import annotations
 
-import functools
-import operator
-
 import frx.numpy as fnp
 from frx import Array
 
-
-def _unrolled_sum(terms: list[Array]) -> Array:
-    return functools.reduce(operator.add, terms)
+from zorch.hash.linear import unrolled_sum
 
 
 def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Array:
@@ -37,31 +35,17 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
     the layer reduction-free (no `fnp.dot`/`fnp.sum`/gather), so the round body
     lowers to a single fused kernel.
     """
+    if state.ndim != 1:
+        raise ValueError(f"dense MDS needs a 1-D state, got shape {state.shape}")
     w = state.shape[0]
-    if state.ndim != 1 or w == 0 or len(mds_rows) != w:
+    if w == 0 or len(mds_rows) != w:
         raise ValueError(
             f"dense MDS needs a 1-D state matching a square matrix, got state "
             f"{state.shape}, matrix rows {len(mds_rows)}"
         )
     return fnp.stack(
-        [_unrolled_sum([mds_rows[i][j] * state[j] for j in range(w)]) for i in range(w)]
+        [unrolled_sum([mds_rows[i][j] * state[j] for j in range(w)]) for i in range(w)]
     )
-
-
-def apply_matrix(matrix: Array, state: Array) -> Array:
-    """Dense layer `matrix @ state`, as the sum of each column scaled by its lane.
-
-    The field-array sibling of `apply_dense_mds` — for a matrix whose entries are
-    full-field (an int64 literal would overflow), so it rides as a field array."""
-    if state.ndim != 1:
-        raise ValueError(f"state must be 1-D, got shape {state.shape}")
-    w = state.shape[0]
-    if matrix.shape != (w, w):
-        raise ValueError(
-            f"need a square matrix matching 1-D state, got matrix {matrix.shape}, "
-            f"state {state.shape}"
-        )
-    return _unrolled_sum([matrix[:, j] * state[j] for j in range(w)])
 
 
 def apply_sparse_partial(
@@ -92,7 +76,16 @@ def apply_sparse_partial(
         raise ValueError(
             f"col_vec must have width-1 entries, got {col_vec.shape[0]} for width {w}"
         )
-    out0 = _unrolled_sum(
+    if active.ndim != 0:
+        raise ValueError(
+            f"active (post-S-box lane 0) must be a scalar, got shape {active.shape}"
+        )
+    if tail.shape != (w - 1,):
+        raise ValueError(
+            f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
+            f"width {w}"
+        )
+    out0 = unrolled_sum(
         [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
     )
     out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])

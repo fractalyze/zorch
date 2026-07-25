@@ -19,6 +19,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
+from zk_dtypes import koalabear_mont as G  # a distinct field, for dtype-guard tests
 from zk_dtypes import pfinfo
 
 from zorch.fusion import FUSED_REGION_MARKER
@@ -52,26 +53,32 @@ def _to_canon(arr: fnp.ndarray) -> np.ndarray:
     return np.asarray(np.asarray(arr).astype(object), dtype=object)
 
 
-def _params() -> SparsePoseidonParams:
-    def fld(rows: object) -> fnp.ndarray:
-        return _to_field(np.array(rows, dtype=np.int64))
+def _fld(rows: object) -> fnp.ndarray:
+    return _to_field(np.array(rows, dtype=np.int64))
 
-    return SparsePoseidonParams(
+
+def _param_kwargs() -> dict:
+    """The valid width-4 param kwargs; validation tests override one field."""
+    return dict(
         width=_WIDTH,
         dtype=F,
         alpha=_ALPHA,
         half_full_rounds=_HALF,
         n_partial_rounds=_NPART,
-        initial_arc=fld(_INITIAL_ARC),
-        full_rc_pre=fld(_FULL_RC_PRE),
-        transition_rc=fld(_TRANSITION_RC),
-        partial_rc=fld(_PARTIAL_RC),
-        full_rc_post=fld(_FULL_RC_POST),
-        mds=fld(_MDS),
-        transition_matrix=fld(_TRANSITION_M),
-        partial_dot=fld(_PARTIAL_DOT),
-        partial_col=fld(_PARTIAL_COL),
+        initial_arc=_fld(_INITIAL_ARC),
+        full_rc_pre=_fld(_FULL_RC_PRE),
+        transition_rc=_fld(_TRANSITION_RC),
+        partial_rc=_fld(_PARTIAL_RC),
+        full_rc_post=_fld(_FULL_RC_POST),
+        mds=_fld(_MDS),
+        transition_matrix=_fld(_TRANSITION_M),
+        partial_dot=_fld(_PARTIAL_DOT),
+        partial_col=_fld(_PARTIAL_COL),
     )
+
+
+def _params() -> SparsePoseidonParams:
+    return SparsePoseidonParams(**_param_kwargs())
 
 
 def _reference_permute(state_canon: list[int]) -> list[int]:
@@ -153,6 +160,13 @@ class SparsePoseidonPermuteShapeTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             perm.permute(fnp.zeros((2, _WIDTH), dtype=F))
 
+    def test_permute_rejects_wrong_dtype(self) -> None:
+        # A right-shaped state in the wrong field must hit the TypeError branch,
+        # not silently permute in the other field.
+        perm = SparsePoseidon(_params())
+        with self.assertRaises(TypeError):
+            perm.permute(fnp.zeros((_WIDTH,), dtype=G))
+
 
 class SparsePoseidonParamsValidationTest(absltest.TestCase):
     def test_value_equality_and_hash(self) -> None:
@@ -160,26 +174,27 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
         self.assertEqual(hash(_params()), hash(_params()))
 
     def test_rejects_wrong_partial_col_shape(self) -> None:
-        def fld(rows: object) -> fnp.ndarray:
-            return _to_field(np.array(rows, dtype=np.int64))
-
         with self.assertRaises(ValueError):
             SparsePoseidonParams(
-                width=_WIDTH,
-                dtype=F,
-                alpha=_ALPHA,
-                half_full_rounds=_HALF,
-                n_partial_rounds=_NPART,
-                initial_arc=fld(_INITIAL_ARC),
-                full_rc_pre=fld(_FULL_RC_PRE),
-                transition_rc=fld(_TRANSITION_RC),
-                partial_rc=fld(_PARTIAL_RC),
-                full_rc_post=fld(_FULL_RC_POST),
-                mds=fld(_MDS),
-                transition_matrix=fld(_TRANSITION_M),
-                partial_dot=fld(_PARTIAL_DOT),
-                partial_col=fld(((2, 3, 5, 9), (1, 4, 2, 8))),  # width, not width-1
-            )
+                **{**_param_kwargs(), "partial_col": _fld(((2, 3, 5, 9), (1, 4, 2, 8)))}
+            )  # width, not width-1
+
+    def test_rejects_dtype_mismatch(self) -> None:
+        # An array in a different field than `dtype` must be rejected.
+        wrong = fnp.asarray(np.array(_INITIAL_ARC, dtype=np.int64).astype(G))
+        with self.assertRaises(ValueError):
+            SparsePoseidonParams(**{**_param_kwargs(), "initial_arc": wrong})
+
+    def test_rejects_bad_scalars(self) -> None:
+        # Each scalar guard fires independently.
+        for field, bad in (
+            ("alpha", 0),  # must be positive
+            ("width", 1),  # must be >= 2 (else partial_col is (npr, 0))
+            ("half_full_rounds", 0),  # must be positive
+            ("n_partial_rounds", -1),  # must be non-negative
+        ):
+            with self.assertRaises(ValueError, msg=field):
+                SparsePoseidonParams(**{**_param_kwargs(), field: bad})
 
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
@@ -194,6 +209,187 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
+
+
+# --- Self-contained equivalence: derive the sparse factorization from a RANDOM
+#     naive instance and byte-match SparsePoseidon against an independent naive
+#     schedule. Unlike `_reference_permute` (which transcribes the folded/sparse
+#     schedule and so can only catch a lowering typo), this tests the optimization
+#     itself: it runs a dense-MDS-every-round naive Poseidon, derives P / the
+#     per-round sparse pairs / the folded constants via the standard M = Sp·Mp
+#     recursion, and asserts the two agree. A wrong schedule fails here.
+#
+#     All derivation arithmetic is pure-Python int mod p — independent of the JAX
+#     lowering under test.
+
+_EQ_P = int(_P)
+
+
+def _minv(a: int) -> int:
+    return pow(a % _EQ_P, _EQ_P - 2, _EQ_P)
+
+
+def _mm(A: list, B: list) -> list:
+    n, k, m = len(A), len(B), len(B[0])
+    return [
+        [sum(A[i][t] * B[t][j] for t in range(k)) % _EQ_P for j in range(m)]
+        for i in range(n)
+    ]
+
+
+def _mv(A: list, v: list) -> list:
+    return [sum(A[i][j] * v[j] for j in range(len(v))) % _EQ_P for i in range(len(A))]
+
+
+def _matinv(A: list) -> list:
+    n = len(A)
+    aug = [
+        [A[i][j] % _EQ_P for j in range(n)] + [1 if i == j else 0 for j in range(n)]
+        for i in range(n)
+    ]
+    for col in range(n):
+        piv = next(r for r in range(col, n) if aug[r][col] % _EQ_P != 0)
+        aug[col], aug[piv] = aug[piv], aug[col]
+        ipiv = _minv(aug[col][col])
+        aug[col] = [(x * ipiv) % _EQ_P for x in aug[col]]
+        for r in range(n):
+            if r != col and aug[r][col] % _EQ_P != 0:
+                f = aug[r][col]
+                aug[r] = [(aug[r][k] - f * aug[col][k]) % _EQ_P for k in range(2 * n)]
+    return [row[n:] for row in aug]
+
+
+def _blockdiag1(N: list) -> list:
+    w = len(N) + 1
+    B = [[0] * w for _ in range(w)]
+    B[0][0] = 1
+    for i in range(len(N)):
+        for j in range(len(N)):
+            B[i + 1][j + 1] = N[i][j]
+    return B
+
+
+def _rand_invertible(w: int, rng: np.random.Generator) -> list:
+    while True:
+        M = [[int(rng.integers(0, _EQ_P)) for _ in range(w)] for _ in range(w)]
+        try:
+            _matinv(M)
+            _matinv([row[1:] for row in M[1:]])  # M-hat must be invertible too
+            return M
+        except StopIteration:
+            continue
+
+
+def _sbox(x: int) -> int:
+    return pow(x % _EQ_P, _ALPHA, _EQ_P)
+
+
+def _naive_permute(state: list, M: list, iarc: list, pre: list, trans_c: list,
+                   part_c: list, post: list) -> list:
+    """Naive Hades in SparsePoseidon's conventions: dense MDS EVERY round,
+    full-width constants, S-box on lane 0 in partial rounds, `S-box -> ARC ->
+    matrix` order, final round with no trailing constant. The transition round is
+    just another dense-MDS full round here (the optimized form is what turns its
+    matrix into P)."""
+    w = _WIDTH
+    s = [(state[i] + iarc[i]) % _EQ_P for i in range(w)]
+
+    def full(vec: list, rc: list) -> list:
+        return _mv(M, [(_sbox(vec[i]) + rc[i]) % _EQ_P for i in range(w)])
+
+    for k in range(_HALF - 1):
+        s = full(s, pre[k])
+    s = full(s, trans_c)  # transition round (dense M in the naive form)
+    for i in range(_NPART):
+        s = _mv(M, [(_sbox(s[0]) + part_c[i][0]) % _EQ_P]
+                + [(s[t] + part_c[i][t]) % _EQ_P for t in range(1, w)])
+    for k in range(_HALF - 1):
+        s = full(s, post[k])
+    return _mv(M, [_sbox(x) for x in s])  # final, no constant
+
+
+def _derive_sparse(M: list, trans_c: list, part_c: list):
+    """Factor the naive partial segment into (P, [Sp_i], [prc_i], folded trans).
+
+    Sp_i = B_{i+1}^{-1} M B_i with B_i = blockdiag(1, M-hat^{-(NP-i)}) is the
+    standard sparse factor; P = blockdiag(1, M-hat^{NP}) M is the leftover dense
+    factor pushed into the transition round. The per-round full-width constants
+    fold to one lane-0 scalar each, with the residual pushed back into the
+    transition constant."""
+    w, npr = _WIDTH, _NPART
+    Mhat_inv = _matinv([row[1:] for row in M[1:]])
+    N = [None] * (npr + 1)
+    N[npr] = [[1 if i == j else 0 for j in range(w - 1)] for i in range(w - 1)]
+    for i in range(npr - 1, -1, -1):
+        N[i] = _mm(Mhat_inv, N[i + 1])
+    B = [_blockdiag1(N[i]) for i in range(npr + 1)]
+    Binv = [_matinv(B[i]) for i in range(npr + 1)]
+    Sp = [_mm(_mm(Binv[i + 1], M), B[i]) for i in range(npr)]
+    Pmat = _mm(Binv[0], M)
+    Pinv = _matinv(Pmat)
+    r = [_mv(_mm(Binv[i + 1], M), part_c[i]) for i in range(npr)]
+    prc = [0] * npr
+    carry = [0] * w
+    for i in range(npr - 1, -1, -1):
+        need = [(r[i][j] + carry[j]) % _EQ_P for j in range(w)]
+        c0 = [Sp[i][t][0] for t in range(w)]  # Sp_i column 0
+        row0tail = Sp[i][0][1:]
+        rt_ct = sum(row0tail[t] * c0[t + 1] for t in range(w - 1)) % _EQ_P
+        rt_needt = sum(row0tail[t] * need[t + 1] for t in range(w - 1)) % _EQ_P
+        prc[i] = ((need[0] - rt_needt) * _minv((c0[0] - rt_ct) % _EQ_P)) % _EQ_P
+        carry = [0] + [(need[t + 1] - prc[i] * c0[t + 1]) % _EQ_P for t in range(w - 1)]
+    trans_folded = [(trans_c[j] + _mv(Pinv, carry)[j]) % _EQ_P for j in range(w)]
+    return Pmat, Sp, prc, trans_folded
+
+
+class SparsePoseidonEquivalenceTest(absltest.TestCase):
+    def test_sparse_matches_naive_dense(self) -> None:
+        rng = np.random.default_rng(20260725)
+        w = _WIDTH
+
+        def vec() -> list:
+            return [int(rng.integers(0, _EQ_P)) for _ in range(w)]
+
+        M = _rand_invertible(w, rng)
+        iarc = vec()
+        pre = [vec() for _ in range(_HALF - 1)]
+        trans_c = vec()
+        part_c = [vec() for _ in range(_NPART)]
+        post = [vec() for _ in range(_HALF - 1)]
+
+        Pmat, Sp, prc, trans_folded = _derive_sparse(M, trans_c, part_c)
+        # Sp_i must come out sparse: rows >= 1 are e_t + (col scale)·e_0.
+        for i in range(_NPART):
+            for t in range(1, w):
+                for j in range(1, w):
+                    self.assertEqual(Sp[i][t][j] % _EQ_P, 1 if t == j else 0)
+
+        params = SparsePoseidonParams(
+            width=w,
+            dtype=F,
+            alpha=_ALPHA,
+            half_full_rounds=_HALF,
+            n_partial_rounds=_NPART,
+            initial_arc=_fld(iarc),
+            full_rc_pre=_fld(pre),
+            transition_rc=_fld(trans_folded),
+            partial_rc=_fld([prc[i] for i in range(_NPART)]),
+            full_rc_post=_fld(post),
+            mds=_fld(M),
+            transition_matrix=_fld(Pmat),
+            partial_dot=_fld([Sp[i][0] for i in range(_NPART)]),
+            partial_col=_fld(
+                [[Sp[i][t][0] for t in range(1, w)] for i in range(_NPART)]
+            ),
+        )
+        perm = SparsePoseidon(params)
+        rng_in = np.random.default_rng(7)
+        for _ in range(8):
+            canon = rng_in.integers(0, _EQ_P, size=w, dtype=np.int64)
+            got = [int(x) for x in _to_canon(perm.permute(_to_field(canon)))]
+            want = _naive_permute([int(x) for x in canon], M, iarc, pre, trans_c,
+                                  part_c, post)
+            self.assertEqual(got, want)
 
 
 if __name__ == "__main__":

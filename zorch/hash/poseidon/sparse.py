@@ -1,11 +1,20 @@
-"""Optimized-sparse Poseidon permutation — the same classic Poseidon, faster.
+"""Optimized-sparse Poseidon permutation — a naive Hades Poseidon, faster.
 
-`SparsePoseidon` is `Poseidon` (classic) with the partial rounds re-factored: a
+`SparsePoseidon` re-factors the partial rounds of a naive Hades Poseidon: a
 transition matrix `P` after the last pre-partial round, then a rank-structured
 sparse update each partial round, instead of the dense MDS. It produces the same
-permutation a naive `Poseidon` would with the equivalent (unfolded) constants,
-but with fewer multiplications — so it consumes a reference's already-optimized
-constants directly rather than un-folding them into `PoseidonParams`.
+permutation that *naive* schedule would with the equivalent (unfolded) constants
+— dense MDS every round, full-width constants — but with fewer multiplications,
+so it consumes a reference's already-optimized constants directly rather than
+un-folding them.
+
+The naive schedule it matches is *not* this package's `Poseidon` class, which
+follows two different conventions: `Poseidon` S-boxes the last lane in a partial
+round and orders each round `ARC -> S-box -> MDS`, whereas `SparsePoseidon`
+S-boxes lane 0 and orders `S-box -> ARC(next) -> matrix` (the S-box precedes the
+constant; the initial ARC seeds the first). The equivalence is to a naive Hades
+with *those* conventions; `testing/sparse_test.py` pins it by deriving the sparse
+factorization from a random naive instance and byte-matching.
 
 Like `Poseidon`, the whole permute is one straight-line function (rounds
 unrolled, linear layers via the normal-form helpers, no reduce/dot/gather) so it
@@ -28,7 +37,8 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
-from zorch.hash.poseidon.linear import apply_matrix, apply_sparse_partial
+from zorch.hash.linear import apply_matrix
+from zorch.hash.poseidon.linear import apply_sparse_partial
 from zorch.hash.poseidon.params import SparsePoseidonParams
 
 if TYPE_CHECKING:

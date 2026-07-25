@@ -13,6 +13,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:fusion",
+        "//zorch/hash:linear",
         "//zorch/hash:permutation",
         "//zorch/hash:sponge",
         requirement("frx"),

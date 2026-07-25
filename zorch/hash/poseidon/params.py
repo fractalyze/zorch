@@ -1,4 +1,5 @@
-"""PoseidonParams — the classic-Poseidon parameter surface."""
+"""Poseidon parameter surfaces: `PoseidonParams` (classic/naive) and
+`SparsePoseidonParams` (optimized-sparse)."""
 
 from __future__ import annotations
 
@@ -127,13 +128,16 @@ class PoseidonParams:
 
 @dataclass(frozen=True)
 class SparsePoseidonParams:
-    """Optimized-sparse Poseidon parameter surface — the same classic-Poseidon
-    permutation as `PoseidonParams` but with the partial rounds re-factored for
-    speed: the partial round applies a cheap rank-structured update instead of the
-    dense MDS, a single transition matrix `P` follows the last pre-partial round,
-    and each partial round's `width` constants are folded into one lane-0 constant.
-    The folded constants cannot be re-expanded into `PoseidonParams`, so this is a
-    separate surface (and permutation), not a `PoseidonParams` variant.
+    """Optimized-sparse Poseidon parameter surface — a naive Hades Poseidon with
+    the partial rounds re-factored for speed: the partial round applies a cheap
+    rank-structured update instead of the dense MDS, a single transition matrix
+    `P` follows the last pre-partial round, and each partial round's `width`
+    constants are folded into one lane-0 constant. The folded constants cannot be
+    re-expanded into a per-round full-width surface, so this is a separate surface
+    (and permutation), not a `PoseidonParams` variant. It also follows different
+    conventions from this package's `PoseidonParams`/`Poseidon` (lane-0 partial
+    S-box and `S-box -> ARC -> matrix` order, not last-lane and `ARC -> S-box ->
+    MDS`), so the two are not directly interchangeable — see `sparse.py`.
 
     The core treats `dtype` as opaque and names no field/scheme/zkVM. The S-box
     precedes the round constant (the constant seeds the next round's S-box); the
@@ -186,12 +190,17 @@ class SparsePoseidonParams:
             raise ValueError(
                 f"half_full_rounds must be positive, got {self.half_full_rounds}"
             )
+        # n_partial_rounds == 0 is admitted and runs: the transition round applies
+        # P with no partial rounds after it (a degenerate but well-defined
+        # schedule). The sparse partial layer needs a lane-t tail, so width < 2
+        # has no valid `partial_col` (it would be `(npr, 0)`) and is rejected here
+        # rather than failing deep in the layer on an empty `stack`.
         if self.n_partial_rounds < 0:
             raise ValueError(
                 f"n_partial_rounds must be non-negative, got {self.n_partial_rounds}"
             )
-        if self.width < 1:
-            raise ValueError(f"width must be positive, got {self.width}")
+        if self.width < 2:
+            raise ValueError(f"width must be at least 2, got {self.width}")
         w = self.width
         h = self.half_full_rounds
         npr = self.n_partial_rounds
