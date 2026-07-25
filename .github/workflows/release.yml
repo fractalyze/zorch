@@ -1,0 +1,305 @@
+# Copyright 2026 The Zorch Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Official releases of zorch (pure Python, one `python -m build`).
+#
+# Two entry points, one pipeline:
+#   * Publishing a GitHub Release (non-prerelease) — builds the tagged commit,
+#     checks the tag against the packaged version, attaches the artifacts to the
+#     Release, and publishes to PyPI.
+#   * workflow_dispatch — the same pipeline aimed at TestPyPI or at nothing at
+#     all (build-only), for rehearsing a release or debugging the build.
+#
+# This file owns the official channel only. Timestamped nightly wheels are
+# dev-release.yml's job: it cuts a GitHub *prerelease* per green main and never
+# touches PyPI. Keeping the two channels in two files is what lets the event
+# filter below do the gating, instead of an if-guard someone can forget.
+#
+# The PyPI *distribution* name is `pyzorch` (set in pyproject.toml) because the
+# `zorch` name is taken on PyPI; the *import* package stays `zorch`
+# (`import zorch`, `[tool.setuptools.packages.find]`). Users therefore
+# `pip install pyzorch` but `import zorch`.
+#
+# The frx (Field, Ring Accelerated) stack (frx / frxlib / frx-cuda12-* /
+# zk-dtypes) is intentionally NOT a declared dependency of the wheel (see the
+# comment in pyproject.toml): it is a GPU-correctness-sensitive, continuously
+# bumped build that the *consuming* workspace pins exactly. Consequently the
+# awesome-zorch install docs must instruct users to install the frx stack
+# separately alongside `pip install pyzorch`.
+#
+# Upload uses OIDC trusted publishing, which needs a one-time registration in
+# the PyPI web UI (there is no API for it). A trusted publisher is the tuple
+# (project, owner, repo, workflow filename, environment) — the filename is part
+# of the identity, so renaming publish.yml to release.yml invalidated the old
+# registration. Until a publisher naming `release.yml` exists for project
+# `pyzorch` on BOTH test.pypi.org and pypi.org (environments `testpypi` and
+# `pypi` respectively), every upload here fails with 403 invalid-publisher.
+
+name: Release
+
+on:
+  # `released` rather than `published`: `published` also fires for prereleases,
+  # and dev-release.yml cuts a prerelease on every green main — under
+  # `published` those nightly wheels would land on PyPI, where uploads are
+  # immutable and cannot be withdrawn. `released` fires only for
+  # non-prereleases, so the nightly and official channels are separated at the
+  # event level and no if-guard can be forgotten.
+  release:
+    types: [released]
+  workflow_dispatch:
+    inputs:
+      # `pypi` is deliberately not offered. The tag-versus-packaged-version
+      # check below can only run against a release's tag, so a dispatch reaches
+      # the upload with nothing validated — from any branch, at any version,
+      # already published or not. Since PyPI uploads are irreversible, the
+      # release event is the only route to it; a dispatch rehearses on TestPyPI
+      # or stops at the build. Retrying a failed production upload is
+      # "Re-run failed jobs" on the release-triggered run.
+      target:
+        description: "Publish target"
+        type: choice
+        options:
+          - testpypi
+          - build-only
+        default: testpypi
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Least privilege: most jobs only read source and pass an artifact along. The
+# jobs that need more widen it themselves (attach: contents: write, publish:
+# id-token: write for OIDC).
+permissions:
+  contents: read
+
+jobs:
+  validate-tag:
+    name: Resolve target and validate tag
+    runs-on: ubuntu-latest
+    # Exposed as job outputs, not workflow-level `env`: a downstream job's `if:`
+    # and `environment:` are evaluated before that job starts and cannot read
+    # the `env` context, so the resolved target has to travel as an output.
+    outputs:
+      target: ${{ steps.resolve.outputs.target }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      # Check out the tagged commit, not the branch head: a Release can be cut
+      # from an older tag long after main has moved on, and the version check
+      # below has to read that tag's files.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      # Pinned rather than ambient: this job decides whether an irreversible
+      # upload may proceed. The gate happens to work on today's ubuntu-latest,
+      # but a gate that depends on the runner image is a gate that can disappear
+      # under one.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Resolve target
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TARGET: ${{ inputs.target }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          # A release has exactly one destination, so there is no choice to
+          # offer; only a manual dispatch picks one.
+          if [ "$EVENT_NAME" = "release" ]; then
+            target=pypi
+          else
+            target="$INPUT_TARGET"
+          fi
+          echo "target=$target" >>"$GITHUB_OUTPUT"
+          echo "tag=$RELEASE_TAG" >>"$GITHUB_OUTPUT"
+
+      # PyPI uploads are immutable: a version published against the wrong tag
+      # can never be replaced, only yanked. So a tag that disagrees with the
+      # packaged version must stop the run before anything is built or shipped.
+      # Only meaningful for releases — a dispatch has no tag to compare.
+      - name: Check tag matches packaged version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+
+          tag = os.environ["RELEASE_TAG"]
+          tag_version = tag[1:] if tag.startswith("v") else tag
+
+          # One comparison, not two — no check was dropped relative to the
+          # sibling repos that compare a pyproject.toml literal as well. Here
+          # pyproject.toml carries `version = { attr = "zorch.__version__" }`,
+          # so it holds no version of its own and derives the one below; reading
+          # it back would only compare this string to itself.
+          with open("zorch/__init__.py", encoding="utf-8") as fp:
+              match = re.search(
+                  r'^__version__\s*=\s*["\']([^"\']+)["\']', fp.read(), re.MULTILINE
+              )
+          init_version = match.group(1) if match else None
+
+          if tag_version != init_version:
+              sys.exit(
+                  "version mismatch — refusing to release:\n"
+                  f"  tag                {tag} (-> {tag_version})\n"
+                  f"  zorch/__init__.py  {init_version}\n"
+                  "Bump __version__ to the tag, then re-cut the release."
+              )
+
+          # `types: [released]` keeps prereleases out, but that flag is a
+          # checkbox on the Release form, independent of the version string:
+          # cutting v0.2.0rc1 without ticking it fires `released` and the
+          # comparison above is satisfied. Assert the shape of the version too,
+          # so the only thing standing between an rc and immutable PyPI is not a
+          # human remembering a checkbox.
+          if not re.fullmatch(r"\d+(\.\d+)*", tag_version):
+              sys.exit(
+                  f"{tag_version} is not a final release version — refusing to "
+                  "release. Pre-release, post-release and dev versions belong "
+                  "on a prerelease (which does not fire this workflow) or on "
+                  "TestPyPI via workflow_dispatch."
+              )
+
+          print(f"tag {tag} matches packaged final version {tag_version}")
+          PY
+
+  build:
+    name: Build sdist + wheel
+    needs: [validate-tag]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: Upload distributions
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 3
+
+  # Attaching to the Release as well as PyPI, because a PyPI file can be yanked
+  # or deleted and then nothing ties a tag to the bytes that shipped for it —
+  # and consumers behind a proxy that cannot reach PyPI still need a download.
+  attach:
+    name: Attach distributions to the release
+    if: github.event_name == 'release'
+    needs: [validate-tag, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: Attach sdist + wheel
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ needs.validate-tag.outputs.tag }}
+        # --clobber so re-running the workflow on the same release replaces the
+        # assets instead of failing on the names already there. That is not in
+        # tension with the publish job refusing an existing version: a Release
+        # asset is mutable and can be corrected in place, a PyPI file never can,
+        # so re-runnability is free here and unsafe there. --repo because this
+        # job never checks out, so gh has no remote to infer from.
+        run: |
+          gh release upload "$RELEASE_TAG" dist/* \
+            --clobber --repo "$GITHUB_REPOSITORY"
+
+  publish:
+    name: Publish
+    # Ordered after `attach`, not alongside it: attaching an asset is reversible
+    # and re-runnable, a PyPI upload is neither. Running the reversible step
+    # first means a GitHub API hiccup costs a re-run, rather than leaving a
+    # version published on PyPI that no Release accounts for.
+    #
+    # `attach` is skipped on a dispatch, and a skipped `needs` entry would
+    # cascade into skipping this job, so the guard names the results it accepts
+    # instead of relying on the default.
+    needs: [validate-tag, build, attach]
+    if: >-
+      !cancelled()
+      && needs.build.result == 'success'
+      && (needs.attach.result == 'success' || needs.attach.result == 'skipped')
+      && needs.validate-tag.outputs.target != 'build-only'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    environment: ${{ needs.validate-tag.outputs.target }}
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      # Neither step tolerates a version that is already on the index: PyPI
+      # uploads are immutable, so an existing version can never be corrected.
+      # Silently accepting it would turn a forgotten version bump into a green
+      # run that shipped nothing and left consumers on the stale wheel, so the
+      # upload is left to fail loudly instead.
+      - name: Publish to TestPyPI
+        if: needs.validate-tag.outputs.target == 'testpypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+      - name: Publish to PyPI
+        if: needs.validate-tag.outputs.target == 'pypi'
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Its own job rather than a closing step of `attach`, because `publish` gates
+  # on attach's result and this is the one call that leaves the repository: it
+  # needs PYPI_REPO_TOKEN to still be granted to this repo and unexpired, and
+  # fractalyze/pypi to still exist under that name. As a step it would let an
+  # expired token skip an otherwise valid PyPI release.
+  #
+  # After `attach` because fractalyze/pypi mirrors GitHub Release *assets*, not
+  # PyPI files — there is nothing new to enumerate until they are attached.
+  index-rebuild:
+    name: Rebuild the Fractalyze index
+    if: github.event_name == 'release'
+    needs: [attach]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger PyPI index rebuild
+        # PYPI_REPO_TOKEN is an org secret with dispatch access to
+        # fractalyze/pypi (the same token dev-release.yml uses).
+        env:
+          GH_TOKEN: ${{ secrets.PYPI_REPO_TOKEN }}
+        run: |
+          gh api repos/fractalyze/pypi/dispatches \
+            -f event_type=rebuild-index
