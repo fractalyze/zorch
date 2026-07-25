@@ -263,10 +263,11 @@ Vocabulary:
   opaque, so `dtype: Any` is the honest type, not a placeholder.
 
 `ProverRound[Carry, Message]` maps `(carry, transcript)` to
-`(carry, transcript, message)`. `VerifierRound[Carry, Message, Outgoing]` maps
-`(carry, transcript, message)` to `(carry, transcript, outgoing, ok)`, splitting
-the data a driver accumulates from the verdict it ANDs. Concrete rounds give the
-precise carry, message, and outgoing types.
+`(carry, transcript, message)`. `VerifierRound[Carry, Message]` maps
+`(carry, transcript, message)` to `(carry, transcript, ok)`. Only the message
+crosses between the roles; a challenge both sides derive rides the carry.
+`Carry` is the protocol's type variable — a concrete carry is named for what it
+holds (`RunningClaim`, `LayerClaim`, `FoldState`), never `Carry`.
 
 mypy can't see through FRX (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value

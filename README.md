@@ -52,16 +52,20 @@ The two roles have different shapes, so they are separate protocols:
 
 ```text
 ProverRound:    (carry, transcript)          → (carry, transcript, message)
-VerifierRound:  (carry, transcript, message) → (carry, transcript, outgoing, ok)
+VerifierRound:  (carry, transcript, message) → (carry, transcript, ok)
 ```
 
-`outgoing` is protocol data the driver accumulates — a sumcheck round's
-challenge, which becomes a coordinate of the reduced claim's point. It is `None`
-for a round that folds its own challenge into the carry and exports nothing per
-step, as a GKR layer does. `ok` is the round's consistency verdict, ANDed across
-the recurrence. Separating the two is what lets one verifier protocol serve both
-a verdict-only driver and a point-collecting one, rather than each recurrence
-shape needing its own round type.
+Only the message crosses between the roles, so only the message gets a position
+of its own. Anything a round derives rather than receives — a sumcheck round's
+challenge, a fold challenge — belongs in the carry: both sides squeeze it from
+the transcript, so it never needs to be sent. A sumcheck round records its
+challenge into the point it is building; a GKR layer folds its own into the
+running claim. Both then report the same thing, a verdict, which is why one
+verifier protocol serves every recurrence shape.
+
+The carry is named for what it holds, never `carry` — `RunningClaim` for
+sumcheck's replay, `LayerClaim` for a GKR layer, `FoldState` for a commit-and-
+fold recurrence.
 
 Use `prove_rounds()` and `verify_rounds()` when every step has the same meaning
 for its carry and message. The concrete round objects and message shapes may
