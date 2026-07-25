@@ -31,18 +31,15 @@ from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
 from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
-from zorch.round import Round
+from zorch.round import VerifierRound
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.transcript import Transcript
 from zorch.verify import verify
 
-if TYPE_CHECKING:
-    from zorch.round import VerifierRound
-
 _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 
 
-class JaggedGkrLayerRound(Round):
+class JaggedGkrLayerRound(VerifierRound):
     """Verify one jagged GKR layer; the chain of these is the jagged GKR
     verifier. Its `ChallengePolicy` must match the prover's because every
     challenge in the layer follows that one schedule."""

@@ -24,7 +24,7 @@ from frx import Array
 from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_step
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import fold, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
@@ -50,7 +50,7 @@ def _lagrange_over_round_domain(r: Array, d: int) -> Array:
     )
 
 
-class SmallValueRound(Round):
+class SmallValueRound(ProverRound):
     """The accumulator round: sᵢ = lᵢ · (Rᵢ · Aᵢ), then grow R by the round's Lagrange
     tensor and advance the eq mass + table. One object drives all l₀ rounds under
     fold_rounds — it reads the round index off the eq table (which doubles each round)
@@ -73,7 +73,7 @@ class SmallValueRound(Round):
         return sumcheck_poly_from_t(t_evals, l_evals, self.domain)
 
     def __call__(
-        self, state: SmallValueState, transcript: Transcript, _incoming: None
+        self, state: SmallValueState, transcript: Transcript
     ) -> tuple[SmallValueState, Transcript, Array]:
         r_tensor, eq_w_prev, eq_evals = state
         i = log2_strict_usize(eq_evals.shape[0])
@@ -90,7 +90,7 @@ class SmallValueRound(Round):
         return new_state, transcript, msg
 
 
-class TransitionRound(Round):
+class TransitionRound(ProverRound):
     """The √-space→eq-poly handoff (round l₀+1): one product round over the d+1 factors
     [P₁..P_d, eq(w,·)] at Û_d, binding the variable and advancing the eq mass for the
     tail. Runs on the materialized factors — the boundary compute_folded_evaluations
@@ -102,7 +102,7 @@ class TransitionRound(Round):
         self.domain = uhat_domain(d, dtype)
 
     def __call__(
-        self, state: tuple[Array, Array], transcript: Transcript, _incoming: None
+        self, state: tuple[Array, Array], transcript: Transcript
     ) -> tuple[tuple[Array, Array], Transcript, Array]:
         folded, eq_w_prev = state
         msg = summand_evals(folded, self.summand._combine, self.domain)
@@ -165,7 +165,7 @@ def prove_eq_poly_small_value(
     folded = compute_folded_evaluations(p_with_weights, eq_evals)
     (folded, eq_w_prev), transcript, msg_t = TransitionRound(
         d, w[l_0], p_initial.dtype
-    )((folded, eq_w_prev), transcript, None)
+    )((folded, eq_w_prev), transcript)
     folded_p = folded[:d]
 
     # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute

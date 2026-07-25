@@ -51,7 +51,7 @@ from zorch.pcs.jagged.poly import (
 )
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_coeffs
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.transcript import Transcript, reinterpret_challenge, sample_challenge
 from zorch.utils.bits import log2_ceil_usize
 
@@ -404,7 +404,7 @@ def _eval_inputs(
     return offsets, merged, weights
 
 
-class JaggedEvalRound(Round):
+class JaggedEvalRound(ProverRound):
     """One prover recurrence step for the jagged PCS evaluation sumchecks.
 
     ``__call__`` maps ``(JaggedEvalInputs, transcript)`` to the unchanged carry,
@@ -421,7 +421,7 @@ class JaggedEvalRound(Round):
         self._dtype = dtype
 
     def __call__(
-        self, carry: JaggedEvalInputs, transcript: Transcript, _incoming: None
+        self, carry: JaggedEvalInputs, transcript: Transcript
     ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
         offsets, merged, weights = _eval_inputs(
             carry.col_heights, carry.z_col, self._dtype

@@ -45,6 +45,7 @@ from zorch.sumcheck.stage import SumcheckWitness, SumClaim
 from zorch.sumcheck.verifier import SumcheckRound, UnivariateSkipRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
+from zorch.verify import RunningClaim
 
 
 def _next_power_of_two(x: int) -> int:
@@ -157,7 +158,7 @@ def verify_univariate_skip(
     transcript: Transcript,
     degree: int,
     challenges: ChallengePolicy = DEFAULT_CHALLENGES,
-) -> tuple[Array, Transcript, list[Array], Array]:
+) -> tuple[Array, Transcript, Array, Array]:
     """Replay the skip prover: the subgroup round-0 check then the coefficient tail,
     threading the claim and ANDing every round's `ok`. Returns the reduced final claim
     (which a consumer checks equals combine(factors)(point)), the transcript, the bound
@@ -165,38 +166,38 @@ def verify_univariate_skip(
     (`SumcheckRound`), the exact dual of the prover's off-switch."""
     if not 0 <= skip_rounds <= total:
         raise ValueError(f"skip_rounds must be in [0, {total}], got {skip_rounds}")
+    # The point is bound in the challenge field, which the skip deliberately
+    # keeps wider than the round-0 claim: round 0 is base-field work and the
+    # extension only enters once r0 is sampled.
+    point_dtype = challenges.target_dtype(claim.dtype) or claim.dtype
     if skip_rounds == 0:
         rnd = SumcheckRound(degree=degree, challenges=challenges)
-        point: list[Array] = []
+        state = RunningClaim(claim, fnp.zeros((len(msgs),), point_dtype), fnp.int32(0))
         ok = fnp.bool_(True)
         for msg in msgs:
-            claim, transcript, outgoing = rnd(claim, transcript, msg)
-            r, ok_r = outgoing
-            point.append(r)
+            state, transcript, ok_r = rnd(state, transcript, msg)
             ok = ok & ok_r
-        return claim, transcript, point, ok
+        return state.value, transcript, state.point, ok
 
     n = total - skip_rounds
     if len(msgs) != 1 + n:
         raise ValueError(f"need {1 + n} messages, got {len(msgs)}")
 
     # Round 0: the subgroup-sum check + s₀(r₀) reduction.
-    claim, transcript, outgoing = UnivariateSkipRound(
+    state = RunningClaim(claim, fnp.zeros((1 + n,), point_dtype), fnp.int32(0))
+    state, transcript, ok = UnivariateSkipRound(
         skip_rounds=skip_rounds,
         degree=degree,
         challenges=challenges,
-    )(claim, transcript, msgs[0])
-    r0, ok = outgoing
-    point = [r0]
+    )(state, transcript, msgs[0])
 
     # Rounds 1..n: the eval-form tail. Reuse SumcheckRound's identity math
     # (`check_reduce`) but squeeze the extension challenge the tail folds at.
     tail = SumcheckRound(degree=degree, challenges=challenges)
     for msg in msgs[1:]:
-        claim, transcript, (r, ok_r) = tail(claim, transcript, msg)
-        point.append(r)
+        state, transcript, ok_r = tail(state, transcript, msg)
         ok = ok & ok_r
-    return claim, transcript, point, ok
+    return state.value, transcript, state.point, ok
 
 
 @dataclass(frozen=True)
@@ -263,7 +264,7 @@ class UnivariateSkipProver(
         )
         reduction_proof = UnivariateSkipProof(messages[0], tuple(messages[1:]))
         return ProveResult(
-            PrismEvaluationClaim(fnp.stack(point), value),
+            PrismEvaluationClaim(point, value),
             reduction_proof,
             replayed,
         )
@@ -303,6 +304,4 @@ class UnivariateSkipVerifier(
             self.summand.degree,
             self.challenges,
         )
-        return VerifyResult(
-            PrismEvaluationClaim(fnp.stack(point), value), transcript, ok
-        )
+        return VerifyResult(PrismEvaluationClaim(point, value), transcript, ok)

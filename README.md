@@ -46,20 +46,22 @@ proof system.
 
 ### Round: repeat one recurrence
 
-A **`Round`** is one step of a homogeneous recurrence, such as eliminating one
+A **round** is one step of a homogeneous recurrence, such as eliminating one
 sumcheck variable, folding one polynomial dimension, or reducing one GKR layer.
-Every executable round implements one generic transition:
+The two roles have different shapes, so they are separate protocols:
 
 ```text
-(carry, transcript, incoming) → (carry, transcript, outgoing)
+ProverRound:    (carry, transcript)          → (carry, transcript, message)
+VerifierRound:  (carry, transcript, message) → (carry, transcript, outgoing, ok)
 ```
 
-The prover specializes it as `incoming=None`, `outgoing=message`; the verifier
-consumes that message as `incoming` and emits whatever the recurrence needs
-next. A sumcheck verifier round, for example, emits `(challenge, consistency)`.
-`ProverRound` and `VerifierRound` are readable type aliases for those uses of
-`Round`, not separate interfaces. The `incoming` position is required on every
-call: `None` is the prover role’s explicit unit input, not an omitted argument.
+`outgoing` is protocol data the driver accumulates — a sumcheck round's
+challenge, which becomes a coordinate of the reduced claim's point. It is `None`
+for a round that folds its own challenge into the carry and exports nothing per
+step, as a GKR layer does. `ok` is the round's consistency verdict, ANDed across
+the recurrence. Separating the two is what lets one verifier protocol serve both
+a verdict-only driver and a point-collecting one, rather than each recurrence
+shape needing its own round type.
 
 Use `prove_rounds()` and `verify_rounds()` when every step has the same meaning
 for its carry and message. The concrete round objects and message shapes may
@@ -199,7 +201,7 @@ universal context object or adapter stage.
 | | **`Round`** | **`Stage`** | **Named protocol operation** |
 | --- | --- | --- | --- |
 | **Represents** | one step of a repeated recurrence | one conditional claim reduction with separate prover/verifier roles | shared framing, reduction, or security-amplification step without its own proof section |
-| **Owns** | recurrence carry and incoming/outgoing contract | shared claim/proof contract; each role owns only its capabilities | no proof section |
+| **Owns** | recurrence carry, message, and per-step export | shared claim/proof contract; each role owns only its capabilities | no proof section |
 | **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a stage wrapping a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
 | **Composed by** | a recurrence driver inside a stage role | an explicit parent role implementation | the parent whose transcript and soundness accounting require it |
 

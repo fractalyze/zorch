@@ -6,16 +6,16 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
 
-class _CollectRound(Round):
+class _CollectRound(ProverRound):
     """Halves a 1-element-per-factor carry; emits a heterogeneous dict message."""
 
-    def __call__(self, state: Any, transcript: Any, _incoming: None) -> Any:
+    def __call__(self, state: Any, transcript: Any) -> Any:
         (xs,) = state
         half = xs.shape[-1] // 2
         msg = {"first": xs[0], "len": xs.shape[-1]}  # non-stackable on purpose

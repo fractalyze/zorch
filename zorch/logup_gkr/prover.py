@@ -45,7 +45,7 @@ from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import fold, natural_domain, split_pairs, summand_evals
 from zorch.sumcheck.prover import RoundMsg
 from zorch.transcript import Transcript
@@ -195,7 +195,7 @@ def fold_carry(
     meta_fields=["challenges"],
 )
 @dataclass(frozen=True)
-class LogupSumcheckRound(Round):
+class LogupSumcheckRound(ProverRound):
     """Per-variable sumcheck round for the LogUp combine (sibling of the product
     `zorch.sumcheck.prover.StandardRound`); emits a `RoundMsg`."""
 
@@ -244,7 +244,7 @@ class LogupSumcheckRound(Round):
         )
 
     def __call__(
-        self, folded: Array, transcript: Transcript, _incoming: None
+        self, folded: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, RoundMsg]:
         msg = self._round_poly(folded)
         transcript, r = self.challenges.observe_and_sample(
@@ -297,7 +297,7 @@ def bind_output(
     return (num_eval, den_eval, eval_point), transcript
 
 
-class GkrLayerRound(Round):
+class GkrLayerRound(ProverRound):
     """Prove one GKR layer; the chain of these (floor outward) is the GKR prover."""
 
     def __init__(
@@ -307,7 +307,7 @@ class GkrLayerRound(Round):
         self.challenges = challenges
 
     def __call__(
-        self, carry: Carry, transcript: Transcript, _incoming: None
+        self, carry: Carry, transcript: Transcript
     ) -> tuple[Carry, Transcript, LayerProof]:
         num_eval, den_eval, eval_point = carry
         transcript, lam = self.challenges.sample(transcript, num_eval.dtype)

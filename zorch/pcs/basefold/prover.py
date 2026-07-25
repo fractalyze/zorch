@@ -52,7 +52,7 @@ from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.fold import lane_combine, open_rows, to_base_field
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -95,7 +95,7 @@ _RoundMsg = tuple[tuple, Array, Array, list[Array], "Array | None"]
 
 
 @dataclass(frozen=True)
-class _SumcheckPairFoldRound(Round):
+class _SumcheckPairFoldRound(ProverRound):
     """One interleaved-sumcheck round of the batch open, driven by the kernel +
     choreography. Ask the kernel for the round-message components, frame them
     (`round_message`) and emit (`observe_message`), commit the pre-fold
@@ -115,7 +115,7 @@ class _SumcheckPairFoldRound(Round):
     kernel: SumcheckKernel
 
     def __call__(
-        self, carry: _OpenCarry, transcript: Transcript, _incoming: None
+        self, carry: _OpenCarry, transcript: Transcript
     ) -> tuple[_OpenCarry, Transcript, _RoundMsg]:
         cw, state, level = carry
         chor = self.choreography

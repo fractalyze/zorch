@@ -43,7 +43,7 @@ class StandardRoundTest(absltest.TestCase):
 
     def test_call_threads_state_transcript_msg(self) -> None:
         f = rand_field(15, (8,), KB)
-        state, _, msg = _product_round(1)(f[None], cheap_transcript(KB), None)
+        state, _, msg = _product_round(1)(f[None], cheap_transcript(KB))
         self.assertEqual(msg.shape, (2,))
         self.assertEqual(state.shape, (1, 4))  # width halved — one round consumed
 
@@ -78,7 +78,7 @@ class CompressedProductRoundTest(absltest.TestCase):
         a = rand_field(32, (8,), KB)
         b = rand_field(33, (8,), KB)
         state, _, msg = prover.CompressedProductRound()(
-            fnp.stack([a, b]), cheap_transcript(KB), None
+            fnp.stack([a, b]), cheap_transcript(KB)
         )
         self.assertEqual(msg.shape, (2,))
         self.assertEqual(state.shape, (2, 4))  # width halved — one round consumed

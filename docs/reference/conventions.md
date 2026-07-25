@@ -262,11 +262,11 @@ Vocabulary:
 - `Any` for a field dtype — the core names no field and treats `dtype` as
   opaque, so `dtype: Any` is the honest type, not a placeholder.
 
-`Round[Carry, Incoming, Outgoing]` names one generic transition:
-`(carry, transcript, incoming) -> (carry, transcript, outgoing)`. Provers use
-`None` as an explicit unit input and emit a proof message; verifiers consume
-that message and emit their verdict. Concrete rounds give the precise carry and
-message types.
+`ProverRound[Carry, Message]` maps `(carry, transcript)` to
+`(carry, transcript, message)`. `VerifierRound[Carry, Message, Outgoing]` maps
+`(carry, transcript, message)` to `(carry, transcript, outgoing, ok)`, splitting
+the data a driver accumulates from the verdict it ANDs. Concrete rounds give the
+precise carry, message, and outgoing types.
 
 mypy can't see through FRX (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value

@@ -39,7 +39,7 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import (
     EvalDomain,
     fold,
@@ -82,7 +82,7 @@ class ProductSummand:
         return self.combine(self.combine_scalars(), *factors)
 
 
-class StandardRound(Round):
+class StandardRound(ProverRound):
     """The plain materialized sumcheck round: send the summand's round poly over
     `domain`, sample the challenge, fold the stacked `(m, N)` state. Bound to a
     `SumcheckSummand` (product by default) and an `EvalDomain` (the natural
@@ -112,7 +112,7 @@ class StandardRound(Round):
         return summand_evals(folded, self.summand._combine, domain)
 
     def __call__(
-        self, folded: Array, transcript: Transcript, _incoming: None
+        self, folded: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         transcript, r = self.challenges.observe_and_sample(
@@ -121,7 +121,7 @@ class StandardRound(Round):
         return fold(folded, r), transcript, msg
 
 
-class CompressedProductRound(Round):
+class CompressedProductRound(ProverRound):
     """Two-factor product round with the compressed coefficient wire: the message
     is `[c_0, c_2]` — the degree-2 round polynomial's constant and leading
     coefficients — and the linear coefficient stays off the wire (the verifier
@@ -149,7 +149,7 @@ class CompressedProductRound(Round):
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
-        self, folded: Array, transcript: Transcript, _incoming: None
+        self, folded: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, Array]:
         msg = self._round_poly(folded)
         transcript, r = self.challenges.observe_and_sample(

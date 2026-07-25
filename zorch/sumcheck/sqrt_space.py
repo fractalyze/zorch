@@ -27,7 +27,7 @@ from frx import Array
 from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import EvalDomain, summand_evals, uhat_domain
 from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
 from zorch.transcript import Transcript
@@ -48,7 +48,7 @@ def compute_folded_evaluations(p_stacked: Array, eq_evals: Array) -> Array:
     return (p_reshaped * eq_evals[None, :, None]).sum(axis=1)
 
 
-class SqrtSpaceRound(Round):
+class SqrtSpaceRound(ProverRound):
     """One first-phase round: refold on the fly, send the summand's round poly over
     the sampling domain, and extend the eq table by the sampled challenge (the
     factors stay put). Bound to a SumcheckSummand and an EvalDomain.
@@ -73,7 +73,7 @@ class SqrtSpaceRound(Round):
         )
 
     def __call__(
-        self, state: SqrtSpaceState, transcript: Transcript, _incoming: None
+        self, state: SqrtSpaceState, transcript: Transcript
     ) -> tuple[SqrtSpaceState, Transcript, Array]:
         p_stacked, eq_evals = state
         msg = self._round_poly(state)

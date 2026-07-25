@@ -212,7 +212,7 @@ class ChallengeRuleTest(absltest.TestCase):
             z_col=rand_ef(3, (1,)),
             dense=fnp.array([3, 5, 7, 11], dtype=BF),
         )
-        _, _, msg = JaggedEvalRound(dtype=EF)(inputs, cheap_transcript(BF), None)
+        _, _, msg = JaggedEvalRound(dtype=EF)(inputs, cheap_transcript(BF))
 
         # Independent replay of the stage's whole challenge stream off the
         # message: observe each round poly, take one extension sample, and

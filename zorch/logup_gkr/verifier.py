@@ -25,18 +25,15 @@ from frx import Array
 from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.prover import Carry, LayerProof, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
-from zorch.round import Round
+from zorch.round import VerifierRound
 from zorch.sumcheck.verifier import SumcheckRound as SumcheckVerifierRound
 from zorch.transcript import Transcript
 from zorch.verify import verify
 
-if TYPE_CHECKING:
-    from zorch.round import VerifierRound
-
 _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 
 
-class GkrLayerRound(Round):
+class GkrLayerRound(VerifierRound):
     """Verify one GKR layer; the chain of these is the GKR verifier."""
 
     def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:

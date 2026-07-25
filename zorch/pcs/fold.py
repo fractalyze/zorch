@@ -29,7 +29,7 @@ from frx import Array, lax
 
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.transcript import GrindingTranscript, Transcript, TranscriptT
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ class PairCommittedLayer:
 
 
 @dataclass(frozen=True)
-class PreFoldPairCommitRound(Round):
+class PreFoldPairCommitRound(ProverRound):
     """The shared commit-and-fold round, pre-fold pair-leaf schedule: commit the
     codeword's conjugate-pair leaves (`code.pair_leaves`, one leaf = one pair) →
     observe the root → sample β → fold. Committing *before* the fold binds the
@@ -90,7 +90,7 @@ class PreFoldPairCommitRound(Round):
     tree: MerkleTree
 
     def __call__(
-        self, cw: Array, transcript: Transcript, _incoming: None
+        self, cw: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, PairCommittedLayer]:
         leaves = to_base_field(self.code.pair_leaves(cw))
         root, digest_layers = self.tree.commit(leaves)
@@ -116,7 +116,7 @@ class KGroupCommittedLayer:
 
 
 @dataclass(frozen=True)
-class PreFoldKGroupCommitRound(Round):
+class PreFoldKGroupCommitRound(ProverRound):
     """The k-ary `PreFoldPairCommitRound`: commit the codeword's k-group leaves
     (`code.group_leaves`, one leaf = one k-th-root coset) → observe the root →
     sample β → fold by `fold_factor`. Committing before the fold binds the layer
@@ -128,7 +128,7 @@ class PreFoldKGroupCommitRound(Round):
     tree: MerkleTree
 
     def __call__(
-        self, cw: Array, transcript: Transcript, _incoming: None
+        self, cw: Array, transcript: Transcript
     ) -> tuple[Array, Transcript, KGroupCommittedLayer]:
         leaves = to_base_field(self.code.group_leaves(cw))
         root, digest_layers = self.tree.commit(leaves)

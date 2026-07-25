@@ -84,9 +84,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
 
     def test_call_returns_round_msg_with_challenge(self) -> None:
         st = _state(50, 8)
-        state, _, msg = LogupSumcheckRound(fnp.array(2, KB))(
-            st, cheap_transcript(KB), None
-        )
+        state, _, msg = LogupSumcheckRound(fnp.array(2, KB))(st, cheap_transcript(KB))
         self.assertEqual(msg.round_poly.shape, (4,))
         self.assertEqual(len(state), 5)
         self.assertEqual(state[0].shape, (4,))  # width halved — one round consumed
@@ -106,7 +104,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         state = st
         t: Transcript = cheap_transcript(KB)
         for _ in range(n):
-            state, t, msg = rnd(state, t, None)
+            state, t, msg = rnd(state, t)
             self.assertTrue(bool(msg.round_poly[0] + msg.round_poly[1] == claim))
             claim = eval_univariate(msg.round_poly, msg.challenge)
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
@@ -235,7 +233,7 @@ class GkrProverTest(absltest.TestCase):
         layers = build_pyramid(first)
         output = extract_outputs(layers[-1])
         carry, transcript = bind_output(output, cheap_transcript(KB))
-        (_, _, new_point), _, proof = GkrLayerRound(layers[-2])(carry, transcript, None)
+        (_, _, new_point), _, proof = GkrLayerRound(layers[-2])(carry, transcript)
         self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
         self.assertTrue(bool(fnp.all(proof.point == new_point[:-1])))
 

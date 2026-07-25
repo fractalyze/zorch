@@ -25,7 +25,7 @@ from frx import Array
 from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import EvalDomain, split_halves, uhat_domain
 from zorch.sumcheck.prover import ProductSummand, SumcheckSummand
 from zorch.transcript import Transcript
@@ -98,7 +98,7 @@ def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, domain: EvalDomain) -> 
     return finite
 
 
-class EqPolyRound(Round):
+class EqPolyRound(ProverRound):
     """One EqPoly variable-binding round, reused across all l rounds — it reads the
     round index off the state width, so one object drives the whole proof. Bound to a
     homogeneous SumcheckSummand (its combine weighted by eq); product by default."""
@@ -172,7 +172,7 @@ class EqPolyRound(Round):
         return diffs * r + p0s, eq_w_prev * eq_factor(r, w_i)
 
     def __call__(
-        self, state: EqPolyState, transcript: Transcript, _incoming: None
+        self, state: EqPolyState, transcript: Transcript
     ) -> tuple[EqPolyState, Transcript, Array]:
         msg, cache = self._round_poly(state)
         transcript, r = self.challenges.observe_and_sample(

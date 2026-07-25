@@ -12,14 +12,15 @@ which code owns a proof boundary, and where proof-system dataflow belongs.
 
 ## Round: repeat one contract
 
-Every round has one generic transition contract:
-`(carry, transcript, incoming)` maps to `(carry, transcript, outgoing)`.
-A prover round receives `None` and emits its proof message; the verifier round
-receives that message and emits the recurrence's next data. A sumcheck verifier
-round emits `(challenge, consistency)`. `ProverRound` and
-`VerifierRound` are type aliases specializing this one `Round` protocol. The
-`incoming` position remains required: `None` is an explicit unit input for the
-prover role, while a verifier must supply the corresponding proof message.
+The two roles are separate protocols, because they carry different data.
+`ProverRound` maps `(carry, transcript)` to `(carry, transcript, message)`.
+`VerifierRound` maps `(carry, transcript, message)` to
+`(carry, transcript, outgoing, ok)`, where `outgoing` is protocol data the
+driver accumulates — a sumcheck round's challenge, or `None` for a round whose
+challenge stays inside the carry — and `ok` is the consistency verdict the
+driver ANDs. Keeping the export separate from the verdict means one verifier
+protocol serves every recurrence shape, rather than each driver needing its own
+round type.
 
 Use `prove_rounds` and `verify_rounds` when every step shares that recurrence
 contract. The concrete rounds may hold different data and produce

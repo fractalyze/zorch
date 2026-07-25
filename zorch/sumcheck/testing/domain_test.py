@@ -19,6 +19,7 @@ from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
+from zorch.verify import RunningClaim
 
 KB = zk_dtypes.koalabear_mont
 
@@ -174,14 +175,14 @@ class DomainTest(absltest.TestCase):
         state = P
         verifier = CoeffsSumcheckRound(degree=m)
         transcript: Transcript = cheap_transcript(KB)
-        point = []
-        for _ in range(l):
+        running = RunningClaim(claim, fnp.zeros((l,), claim.dtype), fnp.int32(0))
+        for i in range(l):
             coeffs = product_round_coeffs(state)
             self.assertEqual(coeffs.shape, (m + 1,))
-            claim, transcript, (r, ok) = verifier(claim, transcript, coeffs)
+            running, transcript, ok = verifier(running, transcript, coeffs)
             self.assertTrue(bool(ok))
-            state = fold(state, r)
-            point.append(r)
+            state = fold(state, running.point[i])
+        claim = running.value
         self.assertTrue(bool(claim == fnp.prod(state[:, 0])))
 
     def test_product_coeffs_single_factor(self) -> None:

@@ -55,7 +55,7 @@ from zorch.logup_gkr._jagged_rounds import _round_interp_constants
 from zorch.logup_gkr._jagged_types import _JaggedState, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.prover import Carry, fold_carry
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.jagged.buffers import (
     LayerBuffers,
     _pad_to_width,
@@ -653,7 +653,7 @@ def _jagged_round_via_zone(
     )
 
 
-class JaggedGkrLayerRound(Round):
+class JaggedGkrLayerRound(ProverRound):
     """Prove one jagged GKR layer; the chain of these (floor outward) is the
     jagged GKR prover, threading the same `(num_eval, den_eval, eval_point)`
     carry as the dense chain. One `ChallengePolicy` configures lam, every
@@ -689,7 +689,7 @@ class JaggedGkrLayerRound(Round):
         )
 
     def __call__(
-        self, carry: Carry, transcript: Transcript, _incoming: None
+        self, carry: Carry, transcript: Transcript
     ) -> tuple[Carry, Transcript, JaggedLayerProof]:
         return self._call(carry, transcript)
 

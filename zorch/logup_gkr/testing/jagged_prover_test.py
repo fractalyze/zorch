@@ -321,7 +321,7 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
 
         (num_eval, den_eval, new_point), _, proof = JaggedGkrLayerRound(
             layer, caps=caps_for(row_counts, nrv)
-        )(carry, transcript, None)
+        )(carry, transcript)
 
         p0 = proof.round_polys[0]
         zero = fnp.zeros((), KB)
@@ -349,7 +349,7 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         )
         (_, _, new_point), _, proof = JaggedGkrLayerRound(
             layer, caps=caps_for((3, 1, 5, 2), 3)
-        )(carry, cheap_transcript(KB), None)
+        )(carry, cheap_transcript(KB))
         self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
         self.assertTrue(bool(fnp.all(proof.point == new_point[:-1])))
 
@@ -369,7 +369,7 @@ class JaggedGkrLayerRoundTest(absltest.TestCase):
         _, lam = sample_challenge(transcript, KB, 1)
 
         _, _, proof = JaggedGkrLayerRound(layer, caps=caps_for((3, 1, 5, 2), 3))(
-            carry, transcript, None
+            carry, transcript
         )
 
         self.assertTrue(bool(proof.lam == lam))
@@ -537,7 +537,7 @@ class JaggedGkrLayerRoundZoneTest(absltest.TestCase):
             def _call() -> None:
                 layer = random_jagged_layer(seed, self.ROW_COUNTS)
                 JaggedGkrLayerRound(layer, caps=caps_for(self.ROW_COUNTS, self.NRV))(
-                    carry, cheap_transcript(KB), None
+                    carry, cheap_transcript(KB)
                 )
 
             return _call
@@ -587,13 +587,9 @@ class CapacityRoundTest(absltest.TestCase):
     def test_matches_static_capped_round(self) -> None:
         layer = random_jagged_layer(410, self.ROW_COUNTS)
         carry = self._carry(420)
-        want = JaggedGkrLayerRound(layer, caps=self.CAPS)(
-            carry, cheap_transcript(KB), None
-        )
+        want = JaggedGkrLayerRound(layer, caps=self.CAPS)(carry, cheap_transcript(KB))
         wide = widen_jagged_layer(layer, layer.width + 3)
-        got = JaggedGkrLayerRound(wide, caps=self.CAPS)(
-            carry, cheap_transcript(KB), None
-        )
+        got = JaggedGkrLayerRound(wide, caps=self.CAPS)(carry, cheap_transcript(KB))
         self._assert_stream_equal(got, want)
 
     def test_matches_static_on_mixed_field_first_layer(self) -> None:
@@ -605,17 +601,17 @@ class CapacityRoundTest(absltest.TestCase):
         )
         want = JaggedGkrLayerRound(
             layer, challenges=ChallengePolicy(limbs=4), caps=self.CAPS
-        )(carry, cheap_transcript(KB), None)
+        )(carry, cheap_transcript(KB))
         wide = widen_jagged_layer(layer, layer.width + 3)
         got = JaggedGkrLayerRound(
             wide, challenges=ChallengePolicy(limbs=4), caps=self.CAPS
-        )(carry, cheap_transcript(KB), None)
+        )(carry, cheap_transcript(KB))
         self._assert_stream_equal(got, want)
 
     def test_requires_caps(self) -> None:
         layer = random_jagged_layer(450, self.ROW_COUNTS)
         with self.assertRaises(ValueError):
-            JaggedGkrLayerRound(layer)(self._carry(460), cheap_transcript(KB), None)
+            JaggedGkrLayerRound(layer)(self._carry(460), cheap_transcript(KB))
 
     def test_widened_chain_matches_zero_slack_chain(self) -> None:
         # End to end through the pyramid: the zero-slack chain and the
@@ -680,7 +676,7 @@ class CapacityRoundTest(absltest.TestCase):
             def _call() -> None:
                 layer = widen_jagged_layer(random_jagged_layer(seed, rc), 14)
                 JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=bufs)(
-                    carry, cheap_transcript(KB), None
+                    carry, cheap_transcript(KB)
                 )
 
             return _call
@@ -688,7 +684,7 @@ class CapacityRoundTest(absltest.TestCase):
         def zero_slack_call() -> None:
             layer = random_jagged_layer(490, self.ROW_COUNTS)
             JaggedGkrLayerRound(layer, caps=self.CAPS, layer_bufs=bufs)(
-                carry, cheap_transcript(KB), None
+                carry, cheap_transcript(KB)
             )
 
         assert_single_trace(

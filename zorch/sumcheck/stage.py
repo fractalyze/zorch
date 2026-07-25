@@ -4,15 +4,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import frx.numpy as fnp
 from frx import Array
 
 from zorch.prove import fold_rounds
-from zorch.round import InnerVerifierRound, ProverRound
+from zorch.round import ProverRound, VerifierRound
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
-from zorch.verify import verify
+from zorch.verify import RunningClaim, verify
 
 
 @dataclass(frozen=True)
@@ -43,8 +44,8 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
 
     def __init__(
         self,
-        prover_round: ProverRound,
-        verifier_round: InnerVerifierRound,
+        prover_round: ProverRound[Any, Array],
+        verifier_round: VerifierRound[RunningClaim, Array],
     ) -> None:
         self.prover_round = prover_round
         # Public replay logic derives the canonical reduced claim and transcript.
@@ -70,7 +71,7 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
 class SumcheckVerifier(VerifierStage[SumClaim, EvaluationClaim, Array]):
     """The verifier role of dense sumcheck."""
 
-    def __init__(self, verifier_round: InnerVerifierRound) -> None:
+    def __init__(self, verifier_round: VerifierRound[RunningClaim, Array]) -> None:
         self.verifier_round = verifier_round
 
     def verify(

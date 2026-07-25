@@ -17,6 +17,7 @@ from zorch.sumcheck.prover import ProductSummand
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
+from zorch.verify import RunningClaim
 
 KB = zk_dtypes.koalabear_mont
 
@@ -88,15 +89,15 @@ class EqPolyTest(absltest.TestCase):
         state = (P, fnp.ones(1, dtype=KB))
         verifier = CoeffsSumcheckRound(degree=d + 1)
         transcript: Transcript = cheap_transcript(KB)
-        point = []
-        for _ in range(l):
+        running = RunningClaim(claim, fnp.zeros((l,), claim.dtype), fnp.int32(0))
+        for i in range(l):
             coeffs, cache = rnd._round_coeffs(state)
             self.assertEqual(coeffs.shape, (d + 2,))
-            claim, transcript, (r, ok) = verifier(claim, transcript, coeffs)
+            running, transcript, ok = verifier(running, transcript, coeffs)
             self.assertTrue(bool(ok))
-            state = rnd._fold(cache, state[1], r)
-            point.append(r)
-        expected = eval_eq(w, fnp.stack(point)) * fnp.prod(state[0][:, 0])
+            state = rnd._fold(cache, state[1], running.point[i])
+        claim = running.value
+        expected = eval_eq(w, running.point) * fnp.prod(state[0][:, 0])
         self.assertTrue(bool(claim == expected))
 
 
