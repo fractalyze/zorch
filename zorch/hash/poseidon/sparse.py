@@ -18,12 +18,19 @@ factorization from a random naive instance and byte-matching.
 
 Like `Poseidon`, the whole permute is one straight-line function (rounds
 unrolled, linear layers via the normal-form helpers, no reduce/dot/gather) so it
-lowers to a single kernel. The dense full-field matrices are too large for int64
-literals, so — exactly as `Poseidon2`'s free-form (non-M4) path does — it rides
-them as field arrays under the generic `zorch.fused_region` marker rather than a
-name-routed emitter ABI. A dedicated `zorch.poseidon`-family emitter that
-exploits the sparse structure (and its marker) is a perf follow-up; the generic
-marker already fuses this body to one kernel meanwhile.
+lowers to a single kernel under the generic `zorch.fused_region` marker.
+
+There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirroring
+`zorch.poseidon2` — whose emitter (`SparsePoseidonFusion`, in the Fractalyze XLA
+plugin) exploits the sparse structure: the schedule shape and the four matrices
+(`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
+pairs) ride as int64 marker attributes, the additive round constants as operands.
+That path is gated behind `_DEDICATED_EMITTER_AVAILABLE`, kept `False` until the
+plugin ships the emitter — emitting the marker before the recognizer exists fails
+every compile with `custom op 'stablehlo.composite' is unknown`. Until then the
+permutation stays on the generic marker, which already fuses this body to one
+kernel. The dedicated path's attributes and reference body are exercised directly
+by `testing/sparse_test.py`, so they cannot rot while dormant.
 """
 
 from __future__ import annotations
@@ -34,15 +41,33 @@ from typing import TYPE_CHECKING, Any
 
 import frx
 import frx.numpy as fnp
+import numpy as np
 from frx import Array
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.linear import apply_matrix
-from zorch.hash.poseidon.linear import apply_sparse_partial
+from zorch.hash.poseidon.linear import (
+    apply_dense_mds,
+    apply_sparse_partial,
+    apply_sparse_partial_ints,
+)
 from zorch.hash.poseidon.params import SparsePoseidonParams
 
 if TYPE_CHECKING:
     from zorch.hash.permutation import Permutation
+
+POSEIDON_SPARSE_MARKER = "zorch.sparse_poseidon"
+# Marker revision riding as `composite.version`. XLA recognizes the marker by
+# name + attributes and deliberately does not gate on the version; it exists so
+# a future contract change can be staged without renaming the marker.
+POSEIDON_SPARSE_MARKER_VERSION = 1
+
+# Whether the dedicated `SparsePoseidonFusion` emitter is published in the
+# Fractalyze XLA plugin. Flip to True in lockstep with the wheel bump that ships
+# it (fractalyze/zorch#527) — until then, emitting the `zorch.sparse_poseidon`
+# marker would fail every compile with `custom op 'stablehlo.composite' is
+# unknown`, so the permutation stays on the generic `zorch.fused_region` marker.
+_DEDICATED_EMITTER_AVAILABLE = False
 
 
 class SparsePoseidon:
@@ -58,23 +83,49 @@ class SparsePoseidon:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
-        # False: the dense full-field matrices ride as closed-over field arrays
-        # under the generic marker (a Goldilocks entry overflows an int64 literal,
-        # so they cannot be a name-routed emitter's int attrs), and there is no
-        # sparse-structure emitter to expand a whole region — so consumers keep it
-        # on the per-block path, exactly like Poseidon2's free-form matrix.
-        self.has_dedicated_fusion = False
+        self._fused_region_name = self._select_fused_region_name()
+        # Dedicated == permute lowers to the hash-named marker, not the generic
+        # region one. Derived from the marker choice itself so the two can't drift
+        # (mirrors Poseidon2).
+        self.has_dedicated_fusion = self._fused_region_name != FUSED_REGION_MARKER
+        # Canonical-int views of the four matrices — the dedicated emitter carries
+        # them as int64 marker attributes and the reference body applies them via
+        # integer literals (no captured field array, which the name-routed marker
+        # would lift to a leading operand). Extracted once here (eager), as classic
+        # Poseidon does; the generic path never reads them.
+        if self.has_dedicated_fusion:
+            self._mds_rows = params.mds_rows
+            self._transition_rows = params.transition_matrix_rows
+            self._partial_dot_rows = params.partial_dot_rows
+            self._partial_col_rows = params.partial_col_rows
+
+    def _select_fused_region_name(self) -> str:
+        """Route to the dedicated `SparsePoseidonFusion` once the plugin ships it;
+        until then keep the generic marker so compiles don't fail on an unknown
+        composite. Gated on `_DEDICATED_EMITTER_AVAILABLE`, not on a data property
+        (unlike Poseidon2's M4 check) — readiness is the emitter's existence, not
+        the params."""
+        if _DEDICATED_EMITTER_AVAILABLE:
+            return POSEIDON_SPARSE_MARKER
+        return FUSED_REGION_MARKER
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux seat
         # in `DuplexTranscript` (docs/reference/conventions.md "Pytree
-        # registration").
+        # registration"). The marker name joins the key because it is part of what
+        # `permute` lowers to and, unlike Poseidon2's params-derived M4 gate, is
+        # NOT a function of the params (it tracks `_DEDICATED_EMITTER_AVAILABLE`).
+        # Without it a dedicated and a generic perm on the same params collide in
+        # the `_permute_body` static-arg cache. In production the flag is a global
+        # constant, so every live instance shares it and pytree-aux stability holds.
         if not isinstance(other, SparsePoseidon):
             return NotImplemented
-        return self._p == other._p
+        return (
+            self._p == other._p and self._fused_region_name == other._fused_region_name
+        )
 
     def __hash__(self) -> int:
-        return hash(self._p)
+        return hash((self._p, self._fused_region_name))
 
     def permute(self, state: Array) -> Array:
         if state.ndim != 1 or state.shape[0] != self.width:
@@ -89,13 +140,22 @@ class SparsePoseidon:
             )
         return _permute_body(self, state)
 
-    # Inert fused-region ABI: non-dedicated, so consumers never route a
-    # whole-region composite through this. A conformant stub (see
-    # `Permutation.fused_region_spec`).
     def fused_region_spec(
         self, leading: Array
     ) -> tuple[tuple[Array, ...], Callable[..., Array], dict[str, Any]]:
-        return (leading,), (lambda state, *ops: self.permute(state)), {}
+        """The SparsePoseidonFusion ABI: operands `(leading, *additive round
+        constants)`, the int-literal-matrix permute, and attrs whose four matrices
+        (`mds` / `transition_matrix` / `partial_dot` / `partial_col`) name the
+        linear layers. Dedicated path only; otherwise an inert stub (non-dedicated,
+        so consumers never route a whole-region composite through it)."""
+        if not self.has_dedicated_fusion:
+            return (leading,), (lambda state, *ops: self.permute(state)), {}
+        attrs, _version = _marker_attrs(self)
+        return (
+            _abi_operands(self, leading),
+            partial(_permute_from_operands, self),
+            {"permutation": "sparse_poseidon", **attrs},
+        )
 
 
 def _permute_from_params(perm: "SparsePoseidon", s: Array) -> Array:
@@ -132,6 +192,97 @@ def _permute_from_params(perm: "SparsePoseidon", s: Array) -> Array:
     return s
 
 
+def _permute_from_operands(
+    perm: "SparsePoseidon",
+    s: Array,
+    initial_arc: Array,
+    full_rc_pre: Array,
+    transition_rc: Array,
+    partial_rc: Array,
+    full_rc_post: Array,
+) -> Array:
+    """The SparsePoseidonFusion ABI reference body: the same schedule as
+    `_permute_from_params`, but the additive round constants arrive as explicit
+    operands (so `frx.lax.composite` can't lift them and break the ABI) and the
+    four matrices apply via integer literals from `perm._*_rows` (so no field array
+    is captured — the sparse structure rides as int64 marker attributes instead).
+    `full_rc_pre` / `full_rc_post` arrive flattened row-major."""
+    p = perm._p
+    alpha = p.alpha
+    w = perm.width
+    half = p.half_full_rounds
+    pre = full_rc_pre.reshape(half - 1, w)
+    post = full_rc_post.reshape(half - 1, w)
+
+    # S-box THEN add the round constant, then the int-literal linear layer.
+    def full_round(state: Array, rc: Array, rows: tuple[tuple[int, ...], ...]) -> Array:
+        return apply_dense_mds(rows, fnp.power(state, alpha) + rc)
+
+    s = s + initial_arc
+    for r in range(half - 1):
+        s = full_round(s, pre[r], perm._mds_rows)
+    # Transition full round: the linear layer is P, not M.
+    s = full_round(s, transition_rc, perm._transition_rows)
+    for r in range(p.n_partial_rounds):
+        a = fnp.power(s[0], alpha) + partial_rc[r]
+        s = apply_sparse_partial_ints(
+            perm._partial_dot_rows[r], perm._partial_col_rows[r], a, s[1:]
+        )
+    for r in range(half - 1):
+        s = full_round(s, post[r], perm._mds_rows)
+    s = apply_dense_mds(perm._mds_rows, fnp.power(s, alpha))
+    return s
+
+
+def _abi_operands(perm: "SparsePoseidon", state: Array) -> tuple[Array, ...]:
+    """The SparsePoseidonFusion ABI operands: `state` then the additive round
+    constants (the transition round's `P` and the partial rounds' sparse pairs
+    ride as attributes, not operands). `state` is `(width,)` single or
+    `(n, width)` batched; the constants are identical either way. The full-round
+    constants flatten row-major."""
+    p = perm._p
+    return (
+        state,
+        p.initial_arc,
+        p.full_rc_pre.reshape(-1),
+        p.transition_rc,
+        p.partial_rc,
+        p.full_rc_post.reshape(-1),
+    )
+
+
+def _rows_to_i64(rows: tuple[tuple[int, ...], ...]) -> np.ndarray:
+    """Canonical-int rows flattened row-major as a numpy int64 array — a numpy
+    value (not a Python list) so the marker attribute lowers to a
+    `dense<[..]> : tensor<Nxi64>` the recognizer parses, not an unparsed ArrayAttr.
+    Mirrors `Poseidon._poseidon_marker_attrs`' `mds`; the emitter supports only
+    fields whose canonical values fit an int64 literal."""
+    return np.array(rows, dtype=np.int64).flatten()
+
+
+def _marker_attrs(perm: "SparsePoseidon") -> tuple[dict[str, object], int]:
+    """The dedicated marker's `composite.attributes` + version: the schedule shape
+    ints (the recognizer maps `alpha` to its s-box degree) plus the four matrices
+    flattened row-major as int64 dense attrs. The marker NAME disambiguates the
+    permutation, so no `permutation` discriminator here (that rides only in
+    `fused_region_spec`, where a region could wrap any permutation). The body
+    ignores these (metadata only); the generic marker stays attrs-free."""
+    if not perm.has_dedicated_fusion:
+        return {}, 0
+    p = perm._p
+    attrs: dict[str, object] = {
+        "width": perm.width,
+        "half_full_rounds": p.half_full_rounds,
+        "n_partial_rounds": p.n_partial_rounds,
+        "alpha": p.alpha,
+        "mds": _rows_to_i64(perm._mds_rows),
+        "transition_matrix": _rows_to_i64(perm._transition_rows),
+        "partial_dot": _rows_to_i64(perm._partial_dot_rows),
+        "partial_col": _rows_to_i64(perm._partial_col_rows),
+    }
+    return attrs, POSEIDON_SPARSE_MARKER_VERSION
+
+
 # Module-level jit zone so the permutation body traces once per (params, state
 # aval) process-wide: `lax.composite` re-traces its decomposition on every
 # emission, and one PCS open emits hundreds of identical-aval permutes. The
@@ -139,10 +290,37 @@ def _permute_from_params(perm: "SparsePoseidon", s: Array) -> Array:
 # cached jaxpr into the enclosing trace, so the emitted module is unchanged.
 @partial(frx.jit, static_argnames=("perm",), inline=True)
 def _permute_body(perm: SparsePoseidon, state: Array) -> Array:
-    def decomposition(s: Array) -> Array:
-        return _permute_from_params(perm, s)
+    # `perm` is static, so this branch resolves at trace time (no HLO select).
+    if not perm.has_dedicated_fusion:
 
-    return fused_region(decomposition, state, name=FUSED_REGION_MARKER)
+        def decomposition(s: Array) -> Array:
+            return _permute_from_params(perm, s)
+
+        return fused_region(decomposition, state, name=FUSED_REGION_MARKER)
+
+    def dedicated(
+        s: Array,
+        initial_arc: Array,
+        full_rc_pre: Array,
+        transition_rc: Array,
+        partial_rc: Array,
+        full_rc_post: Array,
+        **_attrs: object,
+    ) -> Array:
+        # `_attrs` is marker metadata (the shape ints + matrices); the body
+        # ignores it and applies the matrices via `perm._*_rows` int literals.
+        return _permute_from_operands(
+            perm, s, initial_arc, full_rc_pre, transition_rc, partial_rc, full_rc_post
+        )
+
+    attrs, version = _marker_attrs(perm)
+    return fused_region(
+        dedicated,
+        *_abi_operands(perm, state),
+        name=perm._fused_region_name,
+        version=version,
+        **attrs,
+    )
 
 
 if TYPE_CHECKING:

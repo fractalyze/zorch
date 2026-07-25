@@ -8,14 +8,17 @@ lower to a reduction (the `kInput` fusion boundary) and dynamic indexing to
 poseidon2 in `zorch.hash.linear`; this module adds the Poseidon-specific forms.
 
 Two matrix forms, by where the matrix rides:
-- `apply_dense_mds` takes the MDS as **integer literals** (canonical ints) — no
-  field array is captured, required inside a name-routed `fused_region` where a
-  closed-over array lifts to a leading operand and breaks the emitter's ABI.
-- `apply_matrix` (shared) / `apply_sparse_partial` take **field-array** matrices —
-  for the optimized-sparse variant, whose dense full-field entries exceed an
-  int64 literal and so cannot ride as ints; they stay field arrays, which the
-  generic `zorch.fused_region` marker lifts to operands harmlessly (no
-  name-routed ABI).
+- **Integer-literal** (`apply_dense_mds`, `apply_sparse_partial_ints`) — the
+  matrix is canonical ints, so no field array is captured; required inside a
+  name-routed `fused_region`, where a closed-over array lifts to a leading operand
+  and breaks the emitter's ABI (the structure rides as an int64 marker attribute
+  instead). The dedicated `zorch.sparse_poseidon` emitter's reference body uses
+  these; it supports only fields whose canonical values fit an int64 literal.
+- **Field-array** (`apply_matrix` (shared), `apply_sparse_partial`) — the matrix
+  stays a field array, which the generic `zorch.fused_region` marker lifts to an
+  operand harmlessly (no name-routed ABI). This is the optimized-sparse variant's
+  readable body when the dedicated emitter is absent, and the only form for fields
+  whose entries exceed an int64 literal.
 """
 
 from __future__ import annotations
@@ -75,6 +78,43 @@ def apply_sparse_partial(
     if col_vec.shape[0] != w - 1:
         raise ValueError(
             f"col_vec must have width-1 entries, got {col_vec.shape[0]} for width {w}"
+        )
+    if active.ndim != 0:
+        raise ValueError(
+            f"active (post-S-box lane 0) must be a scalar, got shape {active.shape}"
+        )
+    if tail.shape != (w - 1,):
+        raise ValueError(
+            f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
+            f"width {w}"
+        )
+    out0 = unrolled_sum(
+        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
+    )
+    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
+    return fnp.concatenate([out0[None], out_rest])
+
+
+def apply_sparse_partial_ints(
+    dot_row: tuple[int, ...],
+    col_vec: tuple[int, ...],
+    active: Array,
+    tail: Array,
+) -> Array:
+    """Integer-literal twin of `apply_sparse_partial`, for the dedicated
+    `zorch.sparse_poseidon` emitter's reference body.
+
+    `dot_row` (width ints) and `col_vec` (width-1 ints) are canonical Python ints,
+    so the lanes scale by integer literals and no field array is captured — a
+    name-routed `fused_region` would lift a closed-over array to a leading operand
+    and break the emitter's operand ABI (the sparse structure rides as an int64
+    marker attribute instead). Same arithmetic and reduction-free normal form as
+    `apply_sparse_partial`; this is the sparse-partial sibling of `apply_dense_mds`.
+    """
+    w = len(dot_row)
+    if len(col_vec) != w - 1:
+        raise ValueError(
+            f"col_vec must have width-1 entries, got {len(col_vec)} for width {w}"
         )
     if active.ndim != 0:
         raise ValueError(

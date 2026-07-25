@@ -10,6 +10,13 @@ import numpy as np
 from frx import Array
 
 
+def _canon_int_rows(matrix: Array) -> tuple[tuple[int, ...], ...]:
+    """A 2-D field array as rows of canonical Python ints. The numpy object cast
+    Montgomery-decodes without needing frx x64 (as `PoseidonParams.mds_rows` does)."""
+    canon = np.asarray(matrix).astype(object)
+    return tuple(tuple(int(x) for x in row) for row in canon)
+
+
 @dataclass(frozen=True)
 class PoseidonParams:
     """Fully-free parameter surface of a classic Poseidon permutation.
@@ -268,3 +275,30 @@ class SparsePoseidonParams:
             h = hash(self._value_key())
             object.__setattr__(self, "_hash", h)
         return h
+
+    # Canonical-int views of the four matrices — the form the dedicated
+    # `zorch.sparse_poseidon` emitter carries as marker attributes (flattened
+    # row-major) and the reference body applies via integer literals (no captured
+    # field array, which a name-routed `fused_region` would lift to a leading
+    # operand). Canonical ints come from a numpy object cast, which Montgomery-
+    # decodes without needing frx x64. As with `PoseidonParams.mds`, the emitter
+    # only supports fields whose canonical values fit an int64 literal.
+    @property
+    def mds_rows(self) -> tuple[tuple[int, ...], ...]:
+        """The dense MDS `M` as canonical ints, applied every full round + final."""
+        return _canon_int_rows(self.mds)
+
+    @property
+    def transition_matrix_rows(self) -> tuple[tuple[int, ...], ...]:
+        """The transition matrix `P` as canonical ints (the transition round's layer)."""
+        return _canon_int_rows(self.transition_matrix)
+
+    @property
+    def partial_dot_rows(self) -> tuple[tuple[int, ...], ...]:
+        """Per partial round, the lane-0 dot row as canonical ints (`(NP, W)`)."""
+        return _canon_int_rows(self.partial_dot)
+
+    @property
+    def partial_col_rows(self) -> tuple[tuple[int, ...], ...]:
+        """Per partial round, the lane-t update column as canonical ints (`(NP, W-1)`)."""
+        return _canon_int_rows(self.partial_col)

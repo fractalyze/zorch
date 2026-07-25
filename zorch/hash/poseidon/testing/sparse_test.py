@@ -13,6 +13,7 @@ that supplies genuine constants.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -24,8 +25,13 @@ from zk_dtypes import pfinfo
 
 from zorch.fusion import FUSED_REGION_MARKER
 from zorch.hash.permutation import Permutation
+from zorch.hash.poseidon import sparse as sparse_mod
 from zorch.hash.poseidon.params import SparsePoseidonParams
-from zorch.hash.poseidon.sparse import SparsePoseidon
+from zorch.hash.poseidon.sparse import (
+    POSEIDON_SPARSE_MARKER,
+    POSEIDON_SPARSE_MARKER_VERSION,
+    SparsePoseidon,
+)
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
 
@@ -199,16 +205,109 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
     def test_permute_emits_generic_fused_region(self) -> None:
-        # Dense full-field matrices (not int-literal-carryable), so — like
-        # Poseidon2's free-form path — the permute marks its region with the
-        # generic "zorch.fused_region" name; the normal-form body still fuses.
+        # Default (emitter not shipped, `_DEDICATED_EMITTER_AVAILABLE=False`): the
+        # permute marks its region with the generic "zorch.fused_region" name so no
+        # compile fails on an unknown composite; the normal-form body still fuses.
+        # Flips to the dedicated marker below once the emitter is available.
         perm = SparsePoseidon(_params())
+        self.assertFalse(perm.has_dedicated_fusion)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
+
+
+def _dedicated_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
+    """A SparsePoseidon built with the dedicated emitter forced available, so its
+    permute routes to the `zorch.sparse_poseidon` marker. `_DEDICATED_EMITTER_-
+    AVAILABLE` is read in `__init__`, so the patch must wrap construction; the
+    instance then carries the dedicated name/attrs and lowers the same afterwards."""
+    with mock.patch.object(sparse_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+        return SparsePoseidon(params if params is not None else _params())
+
+
+class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
+    """The dormant dedicated path: verified by lowering (the emitter is not
+    published, so these must not compile/run the marker) and by exercising the
+    reference body directly (eager, no emitter needed)."""
+
+    def test_permute_emits_dedicated_composite(self) -> None:
+        # When the emitter is available the permute marks its region
+        # "zorch.sparse_poseidon" so XLA routes it to SparsePoseidonFusion. The
+        # ABI operands are exactly [state, initial_arc, full_rc_pre, transition_rc,
+        # partial_rc, full_rc_post] = 6; a closed-over matrix would be lifted to a
+        # leading operand (frx.lax.composite prepends consts) and break that ABI.
+        perm = _dedicated_perm()
+        self.assertTrue(perm.has_dedicated_fusion)
+        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        self.assertIn(f'"{POSEIDON_SPARSE_MARKER}"', composite_line)
+        self.assertIn(f"version = {POSEIDON_SPARSE_MARKER_VERSION}", composite_line)
+        operands = composite_line.split(f'"{POSEIDON_SPARSE_MARKER}"')[1].split("{")[0]
+        self.assertEqual(operands.count("%"), 6, composite_line)
+
+    def test_shape_and_matrix_attrs_serialize_as_dense_i64(self) -> None:
+        # The schedule shape rides as int attrs and the four matrices as
+        # DenseElementsAttrs (`dense<[..]> : tensor<Nxi64>`) — the form the XLA
+        # recognizer reads via GetCompositeAttrIntArray, NOT a plain ArrayAttr
+        # (`mds = [..]`) a Python list would produce. Matrices flatten row-major.
+        perm = _dedicated_perm()
+        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
+        for shape_attr in (
+            f"width = {_WIDTH} : i64",
+            f"half_full_rounds = {_HALF} : i64",
+            f"n_partial_rounds = {_NPART} : i64",
+            f"alpha = {_ALPHA} : i64",
+        ):
+            self.assertIn(shape_attr, txt)
+        self.assertIn(
+            "mds = dense<[2, 3, 1, 4, 1, 2, 3, 1, 4, 1, 2, 3, 3, 4, 1, 2]> :"
+            " tensor<16xi64>",
+            txt,
+        )
+        self.assertIn(
+            "transition_matrix = dense<[5, 1, 2, 1, 1, 6, 1, 2, 2, 1, 7, 1, 1, 2,"
+            " 1, 8]> : tensor<16xi64>",
+            txt,
+        )
+        self.assertIn(
+            "partial_dot = dense<[9, 2, 3, 5, 7, 1, 4, 6]> : tensor<8xi64>", txt
+        )
+        self.assertIn("partial_col = dense<[2, 3, 5, 1, 4, 2]> : tensor<6xi64>", txt)
+
+    def test_reference_body_byte_matches(self) -> None:
+        # The composite's decomposition (`_permute_from_operands`, int-literal
+        # matrices + operand constants) is the semantics the emitter must match, so
+        # it must byte-match the same pure-Python reference the generic body does.
+        # Called directly (eager) — the marker itself can't be compiled until the
+        # emitter ships.
+        perm = _dedicated_perm()
+        rng = np.random.default_rng(0)
+        for _ in range(8):
+            canon = rng.integers(0, _P, size=_WIDTH, dtype=np.int64)
+            operands = sparse_mod._abi_operands(perm, _to_field(canon))
+            out = sparse_mod._permute_from_operands(perm, *operands)
+            got = [int(x) for x in _to_canon(out)]
+            want = _reference_permute([int(x) for x in canon])
+            self.assertEqual(got, want)
+
+    def test_fused_region_spec_is_dedicated(self) -> None:
+        # On the dedicated path the ABI spec is live (not the inert stub): 6
+        # operands, a callable body, and attrs carrying the permutation
+        # discriminator plus the four matrices for a region wrapper (e.g. a Merkle
+        # commit) to route the whole region through SparsePoseidonFusion.
+        perm = _dedicated_perm()
+        operands, body, attrs = perm.fused_region_spec(fnp.arange(_WIDTH, dtype=F))
+        self.assertLen(operands, 6)
+        self.assertTrue(callable(body))
+        self.assertEqual(attrs["permutation"], "sparse_poseidon")
+        for key in ("mds", "transition_matrix", "partial_dot", "partial_col"):
+            self.assertIn(key, attrs)
 
 
 # --- Self-contained equivalence: derive the sparse factorization from a RANDOM
@@ -284,8 +383,9 @@ def _sbox(x: int) -> int:
     return pow(x % _EQ_P, _ALPHA, _EQ_P)
 
 
-def _naive_permute(state: list, M: list, iarc: list, pre: list, trans_c: list,
-                   part_c: list, post: list) -> list:
+def _naive_permute(
+    state: list, M: list, iarc: list, pre: list, trans_c: list, part_c: list, post: list
+) -> list:
     """Naive Hades in SparsePoseidon's conventions: dense MDS EVERY round,
     full-width constants, S-box on lane 0 in partial rounds, `S-box -> ARC ->
     matrix` order, final round with no trailing constant. The transition round is
@@ -301,14 +401,17 @@ def _naive_permute(state: list, M: list, iarc: list, pre: list, trans_c: list,
         s = full(s, pre[k])
     s = full(s, trans_c)  # transition round (dense M in the naive form)
     for i in range(_NPART):
-        s = _mv(M, [(_sbox(s[0]) + part_c[i][0]) % _EQ_P]
-                + [(s[t] + part_c[i][t]) % _EQ_P for t in range(1, w)])
+        s = _mv(
+            M,
+            [(_sbox(s[0]) + part_c[i][0]) % _EQ_P]
+            + [(s[t] + part_c[i][t]) % _EQ_P for t in range(1, w)],
+        )
     for k in range(_HALF - 1):
         s = full(s, post[k])
     return _mv(M, [_sbox(x) for x in s])  # final, no constant
 
 
-def _derive_sparse(M: list, trans_c: list, part_c: list):
+def _derive_sparse(M: list, trans_c: list, part_c: list) -> tuple:
     """Factor the naive partial segment into (P, [Sp_i], [prc_i], folded trans).
 
     Sp_i = B_{i+1}^{-1} M B_i with B_i = blockdiag(1, M-hat^{-(NP-i)}) is the
@@ -318,7 +421,7 @@ def _derive_sparse(M: list, trans_c: list, part_c: list):
     transition constant."""
     w, npr = _WIDTH, _NPART
     Mhat_inv = _matinv([row[1:] for row in M[1:]])
-    N = [None] * (npr + 1)
+    N: list = [None] * (npr + 1)
     N[npr] = [[1 if i == j else 0 for j in range(w - 1)] for i in range(w - 1)]
     for i in range(npr - 1, -1, -1):
         N[i] = _mm(Mhat_inv, N[i + 1])
@@ -387,8 +490,9 @@ class SparsePoseidonEquivalenceTest(absltest.TestCase):
         for _ in range(8):
             canon = rng_in.integers(0, _EQ_P, size=w, dtype=np.int64)
             got = [int(x) for x in _to_canon(perm.permute(_to_field(canon)))]
-            want = _naive_permute([int(x) for x in canon], M, iarc, pre, trans_c,
-                                  part_c, post)
+            want = _naive_permute(
+                [int(x) for x in canon], M, iarc, pre, trans_c, part_c, post
+            )
             self.assertEqual(got, want)
 
 
