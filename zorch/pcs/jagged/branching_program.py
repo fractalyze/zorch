@@ -31,7 +31,7 @@ NUM_BIT_STATES = 16  # (row_bit, index_bit, t_c_bit, t_{c+1}_bit)
 # into one register-resident kernel, replacing the ~thousands of launch-bound
 # tiny extension-field matmuls the batched form scatters. Domain-named — the
 # branching program exists only for the jagged indicator, so a generic
-# `matrix_fold` name would be YAGNI (see fractalyze/zorch#413). The decomposition
+# `matrix_fold` name would be YAGNI. The decomposition
 # (`_bp_eval_decomposition`) is byte-identical to the pre-marker body, so an
 # unrecognized marker inlines it with no behavior change.
 JAGGED_BP_MARKER = "zorch.jagged_bp"

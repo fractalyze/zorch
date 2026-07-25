@@ -120,7 +120,7 @@ def verify_jagged_eval_msg(
     ok = ok & ok_rounds & fnp.array_equal(z_final, msg.outer_sumcheck_point)
 
     # SP1 absorbs the claimed J̃ value before the inner rounds
-    # (fractalyze/sp1-zorch#90), then replays them with the same rule.
+    # , then replays them with the same rule.
     transcript = transcript.observe(msg.inner_claimed_sum)
     ipoint, inner_final, transcript, ok_inner = verify(
         CoeffsSumcheckRound(_DEGREE, ChallengePolicy(limbs=ef_limbs)),

@@ -14,8 +14,8 @@ challenge is derived state, not a message, and derived state belongs in the
 carry.
 
 The replay is one `lax.scan` over the proof rows, not a Python loop: the whole
-verification compiles to a single traced region that is flat in the round count
-(issue #58), so it stays one fused unit rather than an unrolled body that
+verification compiles to a single traced region that is flat in the round count, so it
+stays one fused unit rather than an unrolled body that
 crosses the XLA PTX cliff.
 """
 from __future__ import annotations

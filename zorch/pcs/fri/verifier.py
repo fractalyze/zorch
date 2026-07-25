@@ -64,7 +64,7 @@ class FriVerifier:
         return fnp.all(fnp.stack(oks)), t
 
 
-# Jitted per-poly verify body (issue #140); one compile serves the batch. The
+# Jitted per-poly verify body; one compile serves the batch. The
 # params are the static key (by value, #214).
 @partial(frx.jit, static_argnames=("params",))
 def _verify_one(

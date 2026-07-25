@@ -3,7 +3,7 @@
 multiplicative Reed-Solomon code, against an independent multilinear evaluation
 (`eval_mle`) of the committed polynomial. Reed-Solomon is the de-risk vehicle for
 the code-generic recursion; the binary-field (GHASH) instantiation is deferred to
-the additive-NTT code (fractalyze/flock-zorch#11, #27).
+the additive-NTT code.
 """
 from __future__ import annotations
 
@@ -276,7 +276,7 @@ class _FlockShapedChoreography(LigeritoChoreography):
     emission, tapered per-fold PoW, unconditional per-level query PoW (0 bits
     still advances the stream), rejection-sampled distinct sorted queries, and
     element-wise residual framing — the zorch-side rehearsal of the byte-fixed
-    consumer (fractalyze/flock-zorch#32), exercising every seam hook at once."""
+    consumer, exercising every seam hook at once."""
 
     fold_bits: tuple[int, ...] = ()
     query_bits: tuple[int, ...] = ()

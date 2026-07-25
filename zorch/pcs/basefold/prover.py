@@ -518,7 +518,7 @@ def _fold_and_query(
 
 
 # Jitted open body: an eager replay re-traces the per-round pair-leaf
-# `open_rows` vmaps per call (issue #186); unlike `commit` — which the jagged
+# `open_rows` vmaps per call; unlike `commit` — which the jagged
 # seam also reaches inside its enclosing jit — `open` is reached eagerly via
 # `stacked_open`. The prover is the static key (by value, #214), so its config
 # and choreography (both frozen, value-compared) fix the compiled zone.

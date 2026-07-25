@@ -32,7 +32,7 @@ class CheapPermutationTest(absltest.TestCase):
 
     def test_value_equality(self) -> None:
         # Pytree-aux seat: fresh instances must compare by value or every jit
-        # zone taking a cheap transcript re-traces per call (issue #163).
+        # zone taking a cheap transcript re-traces per call.
         self.assertEqual(
             CheapPermutation(width=8, dtype=KB), CheapPermutation(width=8, dtype=KB)
         )

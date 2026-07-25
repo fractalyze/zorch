@@ -2,11 +2,6 @@
 
 > **SNARK = Σ IOP Round**
 
-This is an implementation-layer mnemonic: repeated IOP rounds are the core
-interactive computation. A full non-interactive argument also includes its
-relation/compiler, transcript transform, and commitment machinery (when the
-scheme uses them).
-
 FRX-native building blocks for proof systems. `zorch` sits between **FRX** —
 Fractalyze's fork of [JAX](https://github.com/jax-ml/jax) — and the proof systems
 that consume it: FRX provides tracing and codegen, lowered through **Fractalyze
@@ -14,18 +9,21 @@ XLA**, its fork of stock [XLA](https://github.com/openxla/xla) that adds native
 field and elliptic-curve types. `zorch` provides the reusable pieces a proof
 system is assembled from.
 
-A polynomial-IOP SNARK commonly combines an IOP, polynomial commitments, and a
-Fiat–Shamir transform. Folding and other families reuse many of the same
-components without fitting that equation literally. zorch separates repeated
-protocol rounds from paired proof stages and explicit proof-system pipelines.
+The banner is a mnemonic for where the work is, not a definition: repeated IOP
+rounds are the core interactive computation, and a non-interactive argument adds
+its relation, a Fiat–Shamir transform, and commitment machinery around them.
+Folding and other families reuse the same pieces without fitting the equation
+literally. So zorch's two units are the **round** — one step of a repeated
+recurrence — and the **stage** — one claim reduction with paired prover and
+verifier roles.
 
 ## Design Philosophy
 
 - **Proving-scheme-agnostic.** The blocks are reusable across proving schemes,
-  rather than encoding a single one. `Round` / Fiat-Shamir / `Polynomial` /
-  `PCS` / fold / zero-check
-  compose into FRI, sumcheck, GKR, STARK, Basefold, WHIR, …; pairing-based
-  schemes plug in by swapping the `PCS` block (e.g. a KZG-style commitment).
+  rather than encoding a single one. `Round`, Fiat-Shamir, `Polynomial`, `PCS`,
+  fold, and zero-check compose into FRI, sumcheck, GKR, STARK, Basefold, WHIR,
+  …; pairing-based schemes plug in by swapping the `PCS` block (e.g. a
+  KZG-style commitment).
 - **Implementation-agnostic.** `zorch` targets the proving scheme, not any one
   downstream implementation — a zkVM, a zkML prover, a zkTLS prover. Each plugs
   in as a *consumer*; nothing implementation-specific leaks into a block.
@@ -38,11 +36,12 @@ protocol rounds from paired proof stages and explicit proof-system pipelines.
 
 ## Building blocks
 
-zorch composes protocols at two different scales: repeated **rounds** inside a
-protocol component, and paired prover/verifier **stages** at proof boundaries.
-Keeping the two scales separate makes it clear which state is one recurrence's
-carry and which values are the semantic outputs consumed by the rest of the
-proof system.
+The two units differ in kind, not size. A **round** is *directional and
+repeated*: one step of a homogeneous recurrence, driven in a loop. A **stage**
+is *paired and whole*: a claim reduction with a prover role and a verifier role
+that can be deployed separately. A whole sumcheck stage may be cheaper than one
+GKR round — what separates them is repetition versus pairing, so the question
+"is this a round or a stage?" is answered by shape, never by scale.
 
 ### Round: repeat one recurrence
 
@@ -107,9 +106,9 @@ the prover, not separately serialized proof data. The verifier reconstructs it
 from the source claim, reduction proof, and transcript.
 
 A role implementation may run a recurrence of rounds, perform a PCS operation,
-or contain child role implementations. `SumcheckProver` and
-`SumcheckVerifier`, for example, implement the two roles that reduce a sum claim
-to an evaluation claim through internal per-variable rounds. Compilation boundaries are a
+or contain child role implementations. `SumcheckProver` and `SumcheckVerifier`,
+for example, implement the two roles that reduce a sum claim to an evaluation
+claim through internal per-variable rounds. Compilation boundaries are a
 separate performance choice; one stage may contain several compiled regions.
 
 ### Example: a composite proof-system stage
@@ -205,7 +204,7 @@ universal context object or adapter stage.
 | | **`Round`** | **`Stage`** | **Named protocol operation** |
 | --- | --- | --- | --- |
 | **Represents** | one step of a repeated recurrence | one conditional claim reduction with separate prover/verifier roles | shared framing, reduction, or security-amplification step without its own proof section |
-| **Owns** | recurrence carry, message, and per-step export | shared claim/proof contract; each role owns only its capabilities | no proof section |
+| **Owns** | the recurrence carry and the message on the wire | shared claim/proof contract; each role owns only its capabilities | no proof section |
 | **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a stage wrapping a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
 | **Composed by** | a recurrence driver inside a stage role | an explicit parent role implementation | the parent whose transcript and soundness accounting require it |
 

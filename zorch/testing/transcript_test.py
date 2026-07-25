@@ -71,7 +71,7 @@ class DuplexTranscriptTest(absltest.TestCase):
 
     def test_threads_under_jit(self) -> None:
         # Acceptance: state threads functionally under @jit (so the transcript
-        # can later live in a lax.scan carry, issue #58).
+        # can later live in a lax.scan carry).
         v = rand_field(4, (5,), F)
         got = frx.jit(lambda t, x: t.observe(x).sample(2)[1])(self._new(), v)
         _, want = self._new().observe(v).sample(2)
@@ -131,7 +131,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         # default instance's identity scale hides a whole bug class: a vendor
         # kernel that substitutes identity for the J term's scale — e.g. by
         # re-encoding the operand's Montgomery storage as a canonical value
-        # (fractalyze/xla#206, sp1-zorch#208) — is byte-invisible above but
+        # — is byte-invisible above but
         # diverges here on every hop.
         self._assert_marked_matches_plain(
             DuplexTranscript.new(koalabear16_scaled_perm(), rate=8)
@@ -208,7 +208,7 @@ class TranscriptJitCacheTest(absltest.TestCase):
     """Fresh transcripts must be cache-key-equal: the permutation is pytree aux
     (meta_fields), so two `DuplexTranscript.new(...)` over independently built,
     value-equal permutations must yield IDENTICAL treedefs — otherwise every jit
-    zone taking a transcript re-traces per call (issue #163: ~2 min/call on the
+    zone taking a transcript re-traces per call (~2 min/call on the
     jagged verify replay whose kernels run in 20 ms)."""
 
     def test_fresh_cheap_transcripts_share_treedef(self) -> None:
@@ -231,8 +231,8 @@ class TranscriptJitCacheTest(absltest.TestCase):
 
     def test_sample_reuses_one_cached_zone(self) -> None:
         # Eager sample must hit the module-level zone: repeated calls and
-        # fresh same-config instances add no trace (#226 — the eager Python
-        # loop used to re-trace the permutation graph on every call).
+        # fresh same-config instances add no trace: an eager Python loop would
+        # re-trace the permutation graph on every call.
         calls = [
             functools.partial(cheap_transcript(F).sample, 3),
             functools.partial(cheap_transcript(F).sample, 3),

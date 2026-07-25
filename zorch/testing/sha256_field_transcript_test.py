@@ -134,7 +134,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
                 t.check_witness(0, bits)
 
     def test_ghash_dtype_matches_byte_transcript_via_uint32_lanes(self) -> None:
-        # flock-zorch#75: ghash <-> bytes routes through uint32 lanes to stay
+        # ghash <-> bytes routes through uint32 lanes to stay
         # correct on the CPU PJRT backend. Observe a ghash element and sample
         # ghash challenges; the wire bytes match the byte transcript over the same
         # 16-byte serialization, and the samples come back as device ghash.
@@ -168,7 +168,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
 
     def test_ghash_threads_under_jit(self) -> None:
         # The 16-byte-element serde must be byte-identical under `@jit` — the
-        # bitcast-chain simplification path has regressed before (xla#259).
+        # bitcast-chain simplification path has regressed before.
         # Eager is the pinned reference
         # (test_ghash_dtype_matches_byte_transcript_via_uint32_lanes).
         import zk_dtypes  # noqa: F401  (registers fnp.binary_field_ghash)
@@ -191,7 +191,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # The acceptance-critical path: the transcript threads the sumcheck round
         # driver (fold_rounds over StandardRound) under jit, no host callback. A
         # uint32 ring stands in for a scalar challenge field (flock's F128 rides
-        # the GHASH dtype seam, flock-zorch#9); the point here is the transcript
+        # the GHASH dtype seam); the point here is the transcript
         # threading, not the sumcheck math.
         from zorch.prove import fold_rounds
         from zorch.sumcheck.prover import ProductSummand, StandardRound

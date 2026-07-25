@@ -49,7 +49,7 @@ def _field_val(x: Array) -> bytes:
 
 def _indicator(offsets: Array, z_row: Array, z_col: Array, n_d: int) -> Array:
     """Production partial_eval_core over the full 2^n_d domain (the cfg-free
-    entry point; the old cfg-keyed `partial_eval` wrapper is retired)."""
+    entry point)."""
     return partial_eval_core(offsets, z_row, z_col, 1 << n_d)
 
 

@@ -301,7 +301,7 @@ def _open_fold(
     final_poly = codeword[0]
     t = t.observe(fnp.atleast_1d(final_poly))
 
-    # FRI query-phase proof-of-work grind (zorch#170). Even at pow_bits == 0 the
+    # FRI query-phase proof-of-work grind. Even at pow_bits == 0 the
     # canonical-zero witness advances the transcript (observe + squeeze), so the
     # query positions depend on it.
     t, pow_witness = t.grind(pow_bits)

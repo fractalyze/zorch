@@ -412,7 +412,7 @@ def _verify_with_basis_cadence(
 
 
 # Jitted verify body: an eager replay interprets each composite op-by-op in
-# Python (issue #140). The verifier is the static key (by value, #214), so its
+# Python. The verifier is the static key (by value, #214), so its
 # config and choreography (both frozen, value-compared) fix the compiled zone.
 @partial(frx.jit, static_argnames=("verifier",))
 def _verify_batch_body(

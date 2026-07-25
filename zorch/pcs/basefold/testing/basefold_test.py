@@ -139,7 +139,7 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> fnp.ndarray:
     return rand_ext_field(seed, shape, F, EF)
 
 
-# TODO(zorch#202): basefold open emits a multi-batch NTT the published nightly's
+# TODO: basefold open emits a multi-batch NTT the published nightly's
 # rewriter rejects (`Unsupported opcode: ntt`); the fix is in XLA,
 # not the published wheel.
 @unittest.skip("basefold open hits an unsupported multi-batch NTT; see zorch#202")

@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""`zorch.sumcheck.round` marker composites (xla#179): each wraps one
+"""`zorch.sumcheck.round` marker composites: each wraps one
 eager round body so a recognizing emitter fuses it while an unclaimed
 marker decomposes inline, byte-identical."""
 
@@ -27,7 +27,7 @@ from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER_VERSION,
 )
 
-# --- zorch#327: FS-less compute-only round composites ------------------------
+# --- FS-less compute-only round composites -----------------------------------
 # The host loop wraps each round's fold+sum in a `zorch.sumcheck.round` marker;
 # Fiat-Shamir stays the separate `zorch.poseidon2` composite the transcript emits
 # between rounds. When no emitter claims the marker (CPU, or a pre-#327 pin), the
@@ -56,7 +56,7 @@ def _round_composite_dense_decomp(
     emitter may instead rebuild them from `degree` + `poly_form` and drop the two
     trailing operands.
 
-    Width-preserving (xla#179 size-invariance): the state enters live to
+    Width-preserving (size-invariant): the state enters live to
     `4 * live[0]` elements (`live[0]` = the round's live reduce pairs) in
     width-`m` buffers and leaves live to `2 * live[0]` in the SAME width -- the
     fold's halved output zero-pads back to `m`, and the sum masks to the live
@@ -132,15 +132,15 @@ def _round_composite_row_decomp(
     """The `zorch.sumcheck.round` decomposition for the `jagged` (row) `mid` phase
     -- the byte-exact fallback a recognizing emitter replaces. `_attrs` (phase /
     variant / degree / poly_form) are composite metadata the emitter parses; the
-    decomposition needs only the operands. The device-derived schedule
-    (xla#179): the re-pad schedule derives in-trace from `row_counts` + the
+    decomposition needs only the operands. The device-derived schedule: the re-pad
+    schedule derives in-trace from `row_counts` + the
     round index `live[2]` (`_derive_row_schedule` — the claimed kernel runs
     the same derivation in place), so no index array is uploaded per round.
     `out_pairs` is the exact layout's STATIC padded pair count, closed over by
     the wrapper (not an operand); None selects the width-preserving capped
     convention (out width = the plane buffer width).
 
-    Size-invariance (xla#179): the sum masks to the `live[0]` live pairs (the
+    Size-invariance: the sum masks to the `live[0]` live pairs (the
     re-padded state's live prefix is `2 * live[0]`, the rest of the derived
     gather is sentinel → neutral pad), and the folded `eq_row` zero-pads back
     to its input width, live to `live[1] // 2`. On the exact layout the live

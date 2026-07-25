@@ -13,8 +13,8 @@ from frx import Array
 
 @dataclass(frozen=True)
 class RoundWidthCaps:
-    """Fixed round-buffer widths for the size-invariant jagged sumcheck
-    (xla#179): with caps set, every round of a phase runs at one static
+    """Fixed round-buffer widths for the size-invariant jagged sumcheck: with caps set,
+    every round of a phase runs at one static
     operand shape -- the live prefix tracked by the round's `live` operand --
     so one compiled round kernel serves every round, layer, and shard under
     the caps. Hashable (a jit static arg on the per-layer round zone).

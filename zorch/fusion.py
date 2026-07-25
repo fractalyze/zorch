@@ -14,7 +14,7 @@ the body (fixed, small counts) and the linear layers use the normal-form helpers
 call inside the body, which the single-kernel rewriter rejects. Name-routed
 markers with a dedicated emitter (`zorch.sumcheck`, `zorch.poseidon2`) are exempt —
 their emitters tolerate reductions and calls. Loop-carrying large-N rounds
-await the in-kernel-loop emitter; see fractalyze/zorch#25.
+await the in-kernel-loop emitter.
 
 The `lax.composite` marker is emitted via `zorch._composite.composite`, the one
 place every zorch composite marker routes through.

@@ -119,7 +119,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
 
     def test_round_poly_is_fusion_ready(self) -> None:
         # Straight-line element-wise field ops + the one inherent Sigma; see
-        # zorch.testkit.fusion (proxy for issue #21's ZorchRoundRewriter).
+        # zorch.testkit.fusion (proxy for the round rewriter).
         st = _state(80, 8)
         assert_fusion_ready(
             LogupSumcheckRound(fnp.array(5, KB))._round_poly, st, reduces=1

@@ -209,8 +209,8 @@ class ProveJaggedLayerTest(absltest.TestCase):
             )
 
     def test_rejects_missing_caps(self) -> None:
-        # Row counts are traced, so the uncapped exact layout no longer
-        # exists; a caps-less prove must fail loudly, not fall back.
+        # Row counts are traced, so there is no uncapped exact layout: a
+        # caps-less prove must fail loudly, not fall back.
         layer = random_jagged_layer(71, (1, 1))
         with self.assertRaises(ValueError):
             prove_jagged_layer(

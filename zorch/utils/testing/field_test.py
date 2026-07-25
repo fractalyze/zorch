@@ -42,7 +42,7 @@ class NaturalsTest(absltest.TestCase):
 
     def test_matches_per_element_embedding(self) -> None:
         # The base nodes an extension caller promotes must equal embedding each
-        # integer into the extension directly (the pattern this replaces).
+        # integer into the extension directly.
         got = naturals(6, KX).astype(KX)
         want = fnp.stack([fnp.array(i, KX) for i in range(6)])
         self.assertTrue(bool(fnp.all(got == want)))
@@ -122,7 +122,7 @@ class BinaryFieldReduceAddTest(parameterized.TestCase):
     XOR-reduce over the packed uint64 lanes is an exact, reduce-free oracle for the
     native `fnp.sum`. This pins the binary-field reduce-add lowering that
     `ring_switch.inner_product` — and any field reduction — relies on: a wheel that
-    regressed it (cf. the historical CUDA reduce-add SIGSEGV, zorch#400) would fail
+    regressed it (cf. the historical CUDA reduce-add SIGSEGV) would fail
     here rather than deep in a prover. Run under `jit`, where the full-reduction
     (0-d) case lowers cleanly."""
 

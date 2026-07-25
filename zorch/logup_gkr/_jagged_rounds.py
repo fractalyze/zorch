@@ -37,7 +37,7 @@ def _paired_sums(
     so the summand cannot drift from the verifier oracle's.
 
     `live_pairs` masks the sums to the first `live_pairs` pairs -- the
-    fixed-width round buffers (xla#179) carry a dead tail past the live state,
+    fixed-width round buffers carry a dead tail past the live state,
     and field addition is exact, so the masked full-width sum is bit-identical
     to the exact-width sum. None sums every pair (the exact-width layout).
     """

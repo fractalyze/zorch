@@ -5,7 +5,7 @@ the committed polynomial. The tamper cases pin the two Ligero checks — proximi
 (the opened codeword rows) and value (the sent vector `w`) — plus the Merkle and
 commitment-root bindings. Reed-Solomon here is the de-risk vehicle for the
 code-generic core; the binary-field (GHASH) instantiation is deferred to the
-additive-NTT code (fractalyze/flock-zorch#11, #27).
+additive-NTT code.
 """
 from __future__ import annotations
 

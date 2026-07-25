@@ -58,7 +58,7 @@ class ChallengeMathTest(absltest.TestCase):
         # The dense coeffs are the check polynomial's coeffs:
         # h(X) = ∏(1 + u_j·X^{2^{k-1-j}}) (no inverses) — the descending-block
         # layout the decider's final-key MSM byte-matches arkworks ipa_pc over
-        # (zorch#339 W4; the formula is the contract). For k=2,
+        # (the formula is the contract). For k=2,
         # h(X) = (1 + u0·X²)(1 + u1·X) → [1, u1, u0, u0·u1].
         u = fnp.array([2, 3], dtype=SF)
         self.assertEqual([int(c) for c in challenge_vector(u)], [1, 3, 2, 6])
@@ -79,7 +79,7 @@ class TranscriptChallengerPytreeTest(absltest.TestCase):
     def test_two_instances_share_one_treedef(self) -> None:
         # `dtype` is an object-typed meta field, so independently built challengers
         # must share one treedef — else the fold's scan zone re-traces every call
-        # (conventions.md / issue #163).
+        # (conventions.md).
         a = TranscriptChallenger(cheap_transcript(SF), SF)
         b = TranscriptChallenger(cheap_transcript(SF), SF)
         self.assertEqual(
@@ -115,7 +115,7 @@ _ZK_CURVES = (*_CURVES, ("vesta", zk_dtypes.vesta_sf_mont, curves.VESTA))
 
 # Sizes that exercise the fold's `lax.scan` at several round counts k = log₂ n
 # (one binary per n; n=2 is the single-round edge), the recompile-free-compile
-# property zorch#344 lands the scan for.
+# property the scan exists for.
 _CURVE_SIZES = tuple(
     (f"{name}_n{n}", sf, curve, n)
     for (name, sf, curve) in _CURVES
@@ -157,7 +157,7 @@ class IpaRoundTripTest(parameterized.TestCase):
     ) -> None:
         # The fold's `lax.scan` runs k = log₂ n rounds; verify the commit -> open ->
         # verify round trip closes at each size (and the single-round n=2 edge), so
-        # the scan fold byte-matches the shrinking fold it replaced (zorch#344).
+        # the scan fold byte-matches the shrinking fold it replaced.
         key = basis.toy_key(curve, n=n)
         coeffs = fnp.arange(1, n + 1, dtype=sf)
         x = fnp.array(7, dtype=sf)

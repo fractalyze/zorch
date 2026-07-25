@@ -174,9 +174,9 @@ class WhirTest(parameterized.TestCase):
     def test_open_verify_roundtrip_with_grinds(self) -> None:
         """All three proof-of-work grinds active (μ, folding, query) round-trip,
         and a tampered μ witness is rejected. The eager-driver / jitted-island
-        structure exists precisely so `grind(pow_bits>0)` runs (it validates on the
-        host and cannot be traced) — under the old single-`@jit` `open` this raised
-        `TracerBoolConversionError`."""
+        structure exists precisely so `grind(pow_bits>0)` runs: it validates on
+        the host and cannot be traced, so a single `@jit` over the whole `open`
+        raises `TracerBoolConversionError`."""
         prover, verifier = _whir(num_vars=4, k_whir=2, pow_bits=4)
         polys = [rand_field(i, (16,), F) for i in range(3)]
         z = rand_ext_field(7, (4,), F, EF)

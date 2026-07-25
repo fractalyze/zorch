@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Fixed-width round buffers (xla#179): cap-width pads/resizes and the
+"""Fixed-width round buffers: cap-width pads/resizes and the
 layer-entry donated buffer pool that lays each layer's live prefix in
 place."""
 
@@ -17,7 +17,7 @@ from frx import Array
 def _pad_to_width(arr: Array, width: int, neutral: int) -> Array:
     """Extend `arr` to `width` with the fold-neutral fraction tail -- 0 for a
     numerator, 1 for a denominator -- keeping the live prefix at the front. The
-    fixed-width round-buffer convention (xla#179), so every round of a phase
+    fixed-width round-buffer convention, so every round of a phase
     runs at one static shape."""
     pad = width - arr.shape[0]
     if pad == 0:

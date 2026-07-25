@@ -8,7 +8,7 @@ interleaved sumcheck that batches every level's committed-`w` eval-claims and
 recurses on the residual. The schedule below fixes, per
 recursive level, how many witness variables the sumcheck folds before re-committing
 and at what (shrinking) rate. Code-generic over a `TensorCode`; the multiplicative
-Reed-Solomon instantiation is the de-risk vehicle (fractalyze/flock-zorch#32),
+Reed-Solomon instantiation is the de-risk vehicle,
 the additive-NTT (GHASH) one is #11/#27.
 """
 
@@ -161,7 +161,7 @@ class LigeritoProof:
     """One Ligerito recursive-open proof.
 
     NOTE: first-draft wire, co-evolving with the prover/verifier (fractalyze/
-    flock-zorch#32 slice 1) — fields may still move as the round-trip settles.
+    the consumer's first slice) — fields may still move as the round-trip settles.
 
     sumcheck_messages: the continuous interleaved sumcheck's per-variable
         messages (degree-2 product `ŵ·B`, so each carries the round polynomial's

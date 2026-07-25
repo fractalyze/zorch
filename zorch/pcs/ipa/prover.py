@@ -20,7 +20,7 @@ all three vectors in half
 The L/R labeling (`L` pairs `a_hi` with `G_lo`) and the no-inverse fold (the low
 half carried unscaled, the high half scaled by `u_j`) are arkworks `ipa_pc`'s
 convention — the same the check polynomial `h(X) = ∏(1 + u_j·X^…)` and the
-decider's final-key MSM are written against (see `math.py` and zorch#339).
+decider's final-key MSM are written against (see `math.py`).
 Folding continues until each vector collapses to a single element. Each cross
 term is one `lax.msm` (the `h'` term folded in as one extra (scalar, point) pair),
 so the only raw EC arithmetic is the basis fold `G_lo + G_hi·u` — vectorized
@@ -34,7 +34,7 @@ byte-identical to the shrinking fold (`0·P = identity`) — trading the unroll'
 static-slice fusion for the `dynamic_slice`/scatter fusion boundaries the scan
 needs (a compile-time-for-fusion trade, not a claim of one fused kernel). Warm
 runtime is unchanged at tested sizes (FS-permute-bound); the `valid_count` msm
-operand removes the resulting k·n mask padding (see `_open_one`, zorch#344).
+operand removes the resulting k·n mask padding (see `_open_one`).
 
 Scope: one base-field polynomial per opening, power-of-two length. `open` is
 transparent (no blinding); the hiding/zk `_open_one_zk` below blinds the witness
@@ -186,8 +186,8 @@ def _open_one(
     fs, xi0 = fs.seed(commitment, x, value)
 
     # The fold is a `lax.scan` over the round count, not a Python unroll: the unroll
-    # recompiles per size and its compile time grows ~linearly in k (zorch#344
-    # measured ≈23 s/round for an on-device-FS open, so a 2²⁰ open extrapolates to
+    # recompiles per size and its compile time grows ~linearly in k (measured
+    # ≈23 s/round for an on-device-FS open, so a 2²⁰ open extrapolates to
     # minutes), whereas the scan compiles in O(1). A scan needs a fixed-shape carry,
     # so the half-collapsing a/b/G stay full size n; round j reads the active half at
     # [half_j : half_j+hn] (half_j = n>>(j+1)) with a `dynamic_slice` and masks the

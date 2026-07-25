@@ -113,7 +113,7 @@ class FriProver:
         return fnp.stack(values), proofs, t
 
 
-# Jitted per-poly commit/open bodies (issue #140), like basefold's zones; one
+# Jitted per-poly commit/open bodies, like basefold's zones; one
 # compile serves the batch. Commit is keyed on code + tree, not the whole
 # FriParams: it never reads the open-side knobs (num_rounds / num_queries), so
 # params differing only there must not compile twice (static keys compare by

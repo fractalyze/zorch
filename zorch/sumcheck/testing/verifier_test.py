@@ -35,7 +35,7 @@ def _prove(
     """Drive `rnd` over every variable and stack its round polys into the 2-D
     proof the verifier consumes. `StandardRound.__call__` returns the raw
     round-poly array (not a `RoundMsg`), so `fold_rounds` yields a `list[Array]`;
-    stacking recovers the `(rounds, degree+1)` proof the old scan `prove` returned
+    stacking recovers the `(rounds, degree+1)` proof shape the scan driver reads
     as `msgs.round_poly`. Returns the final folded stacked state alongside the
     proof."""
     state = fnp.stack(list(factors))

@@ -36,8 +36,7 @@ Reuses `pcs/basefold`'s staggered partial-Lagrange batching for the per-level
 interaction routes through the `LigeritoChoreography` seam (statement binding, round
 hops, root/residual framing, query sampling), so a byte-fixed consumer swaps
 the wire without touching the recursion. Code-generic over a `TensorCode`; the
-multiplicative Reed-Solomon instantiation is the de-risk vehicle
-(fractalyze/flock-zorch#32).
+multiplicative Reed-Solomon instantiation is the de-risk vehicle.
 """
 
 from __future__ import annotations

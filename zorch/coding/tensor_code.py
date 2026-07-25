@@ -19,7 +19,7 @@ The seam contract (independent-oracle form, pinned in `tensor_code_test`):
 
 Reed-Solomon implements it — its Vandermonde generator row `(1, d_s, d_s², …)`
 factors as a geometric tensor. The additive-NTT code (flock's LCH novel basis)
-implements it for the binary-field instantiation (fractalyze/flock-zorch#11).
+implements it for the binary-field instantiation.
 
 Like every code seam, an implementation MUST carry value-based `__eq__`/`__hash__`
 (the `LinearCode` static-jit-zone-key contract, #214).

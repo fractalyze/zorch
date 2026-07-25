@@ -138,8 +138,7 @@ def sample_challenge(
 class DuplexState:
     """Duplex-sponge state. Fixed-size buffers + position scalars: the buffers
     keep `observe`'s absorb a single `lax.scan` (compile size independent of input
-    length), and the constant shape makes the whole state a valid `lax.scan` carry
-    (issue #58)."""
+    length), and the constant shape makes the whole state a valid `lax.scan` carry."""
 
     input_buffer: Array  # (rate,) — valid prefix is [0:in_pos]
     output_buffer: Array  # (rate,) — valid prefix is [0:out_pos]

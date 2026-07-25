@@ -9,7 +9,7 @@ unchanged.
 Implementations MUST define value-based `__eq__`/`__hash__` over their full
 parameter surface: a permutation rides pytree aux (`DuplexTranscript`
 meta_fields), where identity equality silently re-traces the enclosing jit
-zone on every freshly built instance (issue #163). A Protocol cannot enforce
+zone on every freshly built instance. A Protocol cannot enforce
 this — each implementation carries it (`Poseidon2`, `CheapPermutation`).
 """
 

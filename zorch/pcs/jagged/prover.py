@@ -66,7 +66,7 @@ class JaggedEvalInputs:
     ``dense`` is the combined committed dense buffer ``D`` (both rounds' raw
     packed columns concatenated, padded to ``2^n``) over which the outer
     Hadamard sumcheck runs; the outer point ``z_final`` it produces feeds the
-    inner sumcheck, so it is no longer carried in."""
+    inner sumcheck, so it is not carried in."""
 
     col_heights: tuple[int, ...]
     all_claims: Array
@@ -288,7 +288,7 @@ def inner_sumcheck_core(
     claimed_sum = fnp.sum(weights * bp_all(merged))
 
     # SP1's prove_jagged_evaluation absorbs the claimed J̃ value before the
-    # rounds; its verifier re-absorbs it the same way (fractalyze/sp1-zorch#90).
+    # rounds; its verifier re-absorbs it the same way.
     transcript = transcript.observe(claimed_sum)
 
     # Eliminate LSB-first (column n_vars-1 down to 0), unrolled so each round's

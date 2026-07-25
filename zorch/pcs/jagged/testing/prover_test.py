@@ -72,8 +72,8 @@ class _ScriptedTranscript:
     reference run's Fiat-Shamir outcomes rather than re-deriving them (the duplex
     encoding is the pipeline's concern, not this round's). Mirrors
     ``zerocheck/jagged_byte_match_test``: the sumchecks squeeze base limbs and
-    reassemble each EF challenge (the ``sample_challenge`` rule,
-    fractalyze/sp1-zorch#88), so the script holds one flat base-limb stream.
+    reassemble each EF challenge (the ``sample_challenge`` rule), so the script holds
+    one flat base-limb stream.
 
     A registered pytree with a traced ``pos``: ``inner_sumcheck_core`` threads the
     transcript through a ``lax.scan``, whose carry must be a JAX type (the prior
@@ -194,7 +194,7 @@ class ChallengeRuleTest(absltest.TestCase):
     """Pin the squeeze rule on a real transcript: SP1 binds each outer and
     inner round with ``sample_ext_element`` — degree base squeezes
     reinterpreted as one extension element, the shared ``sample_challenge``
-    definition (fractalyze/sp1-zorch#88). The scripted byte-match above
+    definition. The scripted byte-match above
     bypasses the rule entirely, so it cannot catch a squeeze-count drift."""
 
     def test_outer_and_inner_rounds_sample_extension_challenges(self) -> None:
@@ -235,7 +235,7 @@ class ChallengeRuleTest(absltest.TestCase):
             t, msg.outer_sumcheck_polys, msg.outer_sumcheck_point, "outer"
         )
         # SP1 absorbs the claimed J̃ value before the inner rounds
-        # (fractalyze/sp1-zorch#90).
+        # .
         t = t.observe(msg.inner_claimed_sum)
         replay_rounds(t, msg.inner_sumcheck_polys, msg.inner_point, "inner")
 

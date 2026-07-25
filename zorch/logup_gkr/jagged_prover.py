@@ -144,15 +144,15 @@ def prove_jagged_layer(
     virtual positions' values. Returns the bound point (MSB-first, i.e. the
     challenges reversed), the advanced transcript, and the proof.
 
-    `caps` is the fixed-width round layout (xla#179 size-invariance), and is
+    `caps` is the fixed-width, size-invariant round layout, and is
     mandatory: every round runs at one static operand shape per phase, live
     prefix tracked by the rounds' `live` operand, so one compiled round
     kernel serves every round -- and every layer and input proved under the
-    same caps. Row counts are traced, so an exact-layout fallback (static
-    per-round output widths) no longer exists; the zero-slack layout is the
-    capacity layout whose caps happen to be tight.
+    same caps. Row counts are traced, so there is no exact-layout fallback
+    with static per-round output widths; the zero-slack layout is the capacity
+    layout whose caps happen to be tight.
 
-    The device-derived schedule (xla#179): the per-round re-pad schedule is a
+    The device-derived schedule: the per-round re-pad schedule is a
     pure function of `row_counts` + the round index and derives inside the
     claimed kernels, so the loop carries only the tiny i32[nseg] `row_counts`
     operand plus per-round i32[3] live triples -- both ride as traced operands,
@@ -287,7 +287,7 @@ def _run_jagged_rounds(
     consts = sched.consts
     transcript = cast(DuplexTranscript, transcript)
 
-    # Fixed-width layout (xla#179): lay the state into the capped buffers once
+    # Fixed-width layout: lay the state into the capped buffers once
     # at layer entry; every round then runs at one static shape per phase with
     # the live prefix riding the `live` operand, so one compiled round kernel
     # serves every round/layer/shard under the caps. The dead tails are zeros

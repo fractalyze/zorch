@@ -202,7 +202,7 @@ class SumcheckSummand(Protocol):
     def _combine(self, *factors: Array) -> Array: ...
 
 
-# The FS-less compute-only round marker (zorch#327): the jagged LogUp-GKR host
+# The FS-less compute-only round marker: the jagged LogUp-GKR host
 # loop wraps each round's fold+sum (no Fiat-Shamir) in this composite, while the
 # separate `zorch.poseidon2` marker carries FS between rounds. The composite
 # attributes the recognizing emitter parses:
