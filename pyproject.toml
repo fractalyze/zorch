@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "zorch"
+name = "pyzorch"
 dynamic = ["version"]
 description = "zorch — scheme- and zkVM-agnostic JAX-native ZK proving blocks (hashing, Merkle commitment, sumcheck, PCS, LogUp-GKR)."
 readme = "README.md"
