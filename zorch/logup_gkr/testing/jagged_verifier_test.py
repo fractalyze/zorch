@@ -28,7 +28,7 @@ from zorch.logup_gkr.jagged_prover import JaggedGkrLayerRound, JaggedLayerProof
 from zorch.logup_gkr.jagged_verifier import (
     JaggedGkrLayerRound as JaggedVerifierLayerRound,
 )
-from zorch.logup_gkr.prover import Carry, bind_output
+from zorch.logup_gkr.prover import LayerClaim, bind_output
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
     caps_for,
@@ -48,7 +48,7 @@ ROW_COUNTS = (3, 1, 5, 2)
 
 def _prove(
     layers: list[JaggedGkrLayer],
-) -> tuple[Carry, list[JaggedLayerProof], LogUpGkrOutput]:
+) -> tuple[LayerClaim, list[JaggedLayerProof], LogUpGkrOutput]:
     output = extract_jagged_outputs(layers[-1])
     carry, transcript = bind_output(output, cheap_transcript(KB))
     caps = caps_for(host_counts(layers[0]), len(layers) - 1)
@@ -62,7 +62,7 @@ def _prove(
 
 def _verify(
     output: LogUpGkrOutput, proofs: list[JaggedLayerProof]
-) -> tuple[Carry, Array]:
+) -> tuple[LayerClaim, Array]:
     carry, transcript = bind_output(output, cheap_transcript(KB))
     final, _, ok = verify_rounds(
         [JaggedVerifierLayerRound() for _ in proofs], carry, proofs, transcript

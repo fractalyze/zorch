@@ -54,7 +54,7 @@ from zorch.logup_gkr._jagged_composites import (
 from zorch.logup_gkr._jagged_rounds import _round_interp_constants
 from zorch.logup_gkr._jagged_types import _JaggedState, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import JaggedGkrLayer
-from zorch.logup_gkr.prover import Carry, fold_carry
+from zorch.logup_gkr.prover import LayerClaim, fold_carry
 from zorch.round import ProverRound
 from zorch.sumcheck.jagged.buffers import (
     LayerBuffers,
@@ -490,9 +490,9 @@ def _prove_jagged_layer_round(
     out_pairs: tuple[int, ...] | None,
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
-    carry: Carry,
+    claim: LayerClaim,
     transcript: Transcript,
-) -> tuple[Carry, Transcript, JaggedLayerProof]:
+) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
 
@@ -502,7 +502,7 @@ def _prove_jagged_layer_round(
     implicit `self`) so the chain can drop a round -- and free its layer --
     the moment it builds the next (the one-live-layer release
     `ChainedJaggedProveTest` pins)."""
-    num_eval, den_eval, eval_point = carry
+    num_eval, den_eval, eval_point = claim
     dtype = num_eval.dtype
     transcript = cast(DuplexTranscript, transcript)
     # The per-layer carry brackets the round loop: sample lam + the batched claim
@@ -567,16 +567,16 @@ def _jagged_round_zone(
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
     out_pairs: tuple[int, ...] | None,
-    carry: Carry,
+    claim: LayerClaim,
     transcript: Transcript,
-) -> tuple[Carry, Transcript, JaggedLayerProof]:
+) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
     planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
     # Live triples derive INSIDE the zone: as a separate per-layer jit they
     # were one warm dispatch per layer (~21 launches per prove, pure
     # overhead); in here they join the whole-layer program for free. nrv is
     # a shape (the carry's eval_point length minus niv), so the derivation
     # stays a static unroll.
-    nrv = carry[2].shape[0] - niv
+    nrv = claim[2].shape[0] - niv
     live = _derive_live_meta(row_counts, nrv)
     return _prove_jagged_layer_round(
         planes,
@@ -586,7 +586,7 @@ def _jagged_round_zone(
         out_pairs,
         challenge_limbs,
         caps,
-        carry,
+        claim,
         transcript,
     )
 
@@ -596,9 +596,9 @@ def _jagged_round_via_zone(
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
     layer_bufs: LayerBuffers | None,
-    carry: Carry,
+    claim: LayerClaim,
     transcript: Transcript,
-) -> tuple[Carry, Transcript, JaggedLayerProof]:
+) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
     """Dispatch through `_jagged_round_zone` with the planes + `row_counts`
     as traced operands -- the live triples derive from the traced counts
     inside the zone, so no host code reads a layout value and the
@@ -612,7 +612,7 @@ def _jagged_round_via_zone(
     if caps is None:
         raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
     niv = layer.num_batch_variables
-    eval_point = carry[2]
+    eval_point = claim[2]
     nrv = eval_point.shape[0] - niv
     if nrv < 1:
         raise ValueError(
@@ -648,7 +648,7 @@ def _jagged_round_via_zone(
         challenge_limbs,
         caps,
         None,
-        carry,
+        claim,
         transcript,
     )
 
@@ -689,9 +689,9 @@ class JaggedGkrLayerRound(ProverRound):
         )
 
     def __call__(
-        self, carry: Carry, transcript: Transcript
-    ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-        return self._call(carry, transcript)
+        self, claim: LayerClaim, transcript: Transcript
+    ) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
+        return self._call(claim, transcript)
 
 
 if TYPE_CHECKING:

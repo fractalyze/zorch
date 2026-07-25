@@ -49,7 +49,7 @@ from zorch.pcs.basefold.config import (
     CadenceProof,
 )
 from zorch.pcs.basefold.kernel import SumcheckKernel
-from zorch.pcs.fold import lane_combine, open_rows, to_base_field
+from zorch.pcs.fold import CommittedLayer, lane_combine, open_rows, to_base_field
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound
@@ -85,13 +85,12 @@ class BasefoldProverData:
 # (codeword, opaque kernel round state, level) — the kernel owns the state's
 # shape (native: running MLE + claim + unbound z suffix); `level` counts the
 # round so the choreography's per-round grind schedule can key on it.
-_OpenCarry = tuple[Array, tuple, int]
+_OpenState = tuple[Array, tuple, int, tuple[CommittedLayer, ...]]
 
-# One round's collected artifacts: the raw sumcheck message components (proof
-# wire), the pre-fold commit root (proof wire), the committed pair-leaves +
-# digest layers (query phase), and this round's grind witness (None unless
-# scheduled).
-_RoundMsg = tuple[tuple, Array, Array, list[Array], "Array | None"]
+# What one round puts on the wire: the raw sumcheck message components, the
+# pre-fold commit root, and this round's grind witness (None unless scheduled).
+# The committed layer it commits to is the oracle, and rides the carry.
+_RoundMsg = tuple[tuple, Array, "Array | None"]
 
 
 @dataclass(frozen=True)
@@ -115,11 +114,11 @@ class _SumcheckPairFoldRound(ProverRound):
     kernel: SumcheckKernel
 
     def __call__(
-        self, carry: _OpenCarry, transcript: Transcript
-    ) -> tuple[_OpenCarry, Transcript, _RoundMsg]:
-        cw, state, level = carry
+        self, state: _OpenState, transcript: Transcript
+    ) -> tuple[_OpenState, Transcript, _RoundMsg]:
+        cw, kernel_state, level, layers = state
         chor = self.choreography
-        components = self.kernel.message(state)
+        components = self.kernel.message(kernel_state)
         msg = chor.round_message(*components)
         t = chor.observe_message(transcript, msg)
         # Pre-fold pair commit, decoupled so the root observe routes through the
@@ -136,11 +135,12 @@ class _SumcheckPairFoldRound(ProverRound):
         t, beta = t.sample()
         beta = beta.reshape(())
         cw = self.code.fold(cw, beta)
-        state = self.kernel.fold(state, components, beta)
+        kernel_state = self.kernel.fold(kernel_state, components, beta)
+        layer = CommittedLayer(leaves, digest_layers)
         return (
-            (cw, state, level + 1),
+            (cw, kernel_state, level + 1, layers + (layer,)),
             t,
-            (components, root, leaves, digest_layers, witness),
+            (components, root, witness),
         )
 
 
@@ -479,18 +479,17 @@ def _fold_and_query(
     # `blowup`) is the cleartext final poly. The kernel owns the round state's
     # shape (native: the MLE + running claim + unbound point suffix).
     state = kernel.initial_state(mle, zs, claim)
-    carry: _OpenCarry = (cw, state, 0)
-    carry, t, msgs = fold_rounds(
+    open_state: _OpenState = (cw, state, 0, ())
+    open_state, t, msgs = fold_rounds(
         _SumcheckPairFoldRound(prover.code, prover.tree, chor, kernel),
-        carry,
+        open_state,
         transcript,
         num_vars,
     )
-    final_poly = carry[0]
+    final_poly = open_state[0]
     uni_msgs = [m[0] for m in msgs]
     fri_roots = [m[1] for m in msgs]
-    layer_leaves = [m[2] for m in msgs]
-    layer_digests = [m[3] for m in msgs]
+    fold_layers = open_state[3]
 
     # Bind the cleartext final codeword before sampling queries, so the query
     # positions depend on it (the IOPP terminal binding; `verify` mirrors).
@@ -507,7 +506,9 @@ def _fold_and_query(
         for pd in component_pds
     ]
     query_openings = [
-        open_rows(prover.tree, layer_leaves[i], layer_digests[i], a[i])
+        open_rows(
+            prover.tree, fold_layers[i].leaves, fold_layers[i].digest_layers, a[i]
+        )
         for i in range(num_vars)
     ]
     proof = BasefoldProof(

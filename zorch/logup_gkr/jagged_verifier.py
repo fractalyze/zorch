@@ -29,7 +29,7 @@ from frx import Array
 
 from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
-from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
+from zorch.logup_gkr.prover import LayerClaim, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import VerifierRound
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
@@ -48,9 +48,9 @@ class JaggedGkrLayerRound(VerifierRound):
         self.challenges = challenges
 
     def __call__(
-        self, carry: Carry, transcript: Transcript, layer_proof: JaggedLayerProof
-    ) -> tuple[Carry, Transcript, Array]:
-        num_eval, den_eval, eval_point = carry
+        self, claim: LayerClaim, transcript: Transcript, layer_proof: JaggedLayerProof
+    ) -> tuple[LayerClaim, Transcript, Array]:
+        num_eval, den_eval, eval_point = claim
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1
         d0, d1 = layer_proof.denominator_0, layer_proof.denominator_1
         transcript, lam = self.challenges.sample(transcript, num_eval.dtype)
@@ -69,7 +69,7 @@ class JaggedGkrLayerRound(VerifierRound):
         # broadcast silently against the bound point) -- reject, never broadcast.
         if eval_point.shape[0] != point.shape[0]:
             raise ValueError(
-                f"eq point mismatch: carry has {eval_point.shape[0]} coords, "
+                f"eq point mismatch: claim has {eval_point.shape[0]} coords, "
                 f"layer ran {point.shape[0]} rounds"
             )
         # LogUp oracle: the reduced claim equals the combine at the bound

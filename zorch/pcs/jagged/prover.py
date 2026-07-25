@@ -421,23 +421,23 @@ class JaggedEvalRound(ProverRound):
         self._dtype = dtype
 
     def __call__(
-        self, carry: JaggedEvalInputs, transcript: Transcript
+        self, inputs: JaggedEvalInputs, transcript: Transcript
     ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
         offsets, merged, weights = _eval_inputs(
-            carry.col_heights, carry.z_col, self._dtype
+            inputs.col_heights, inputs.z_col, self._dtype
         )
         msg, transcript = eval_round_core(
             offsets,
             merged,
             weights,
-            carry.all_claims,
-            carry.dense,
-            carry.z_row,
-            carry.z_col,
+            inputs.all_claims,
+            inputs.dense,
+            inputs.z_row,
+            inputs.z_col,
             transcript,
             dtype=self._dtype,
         )
-        return carry, transcript, msg
+        return inputs, transcript, msg
 
 
 __all__ = [

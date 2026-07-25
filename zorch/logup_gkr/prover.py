@@ -272,14 +272,16 @@ class LayerProof:
     denominator_1: Array
 
 
-Carry = tuple[Array, Array, Array]  # (num_eval, den_eval, eval_point)
+# The running GKR claim: the layer's numerator and denominator evaluations at
+# the bound point, threaded down the pyramid one layer at a time.
+LayerClaim = tuple[Array, Array, Array]  # (num_eval, den_eval, eval_point)
 
 
 def bind_output(
     output: LogUpGkrOutput,
     transcript: Transcript,
     challenges: ChallengePolicy = DEFAULT_CHALLENGES,
-) -> tuple[Carry, Transcript]:
+) -> tuple[LayerClaim, Transcript]:
     """Commit the circuit output and draw the initial evaluation claim.
 
     The shared head of both chains: observe the output numerator/denominator,
@@ -307,9 +309,9 @@ class GkrLayerRound(ProverRound):
         self.challenges = challenges
 
     def __call__(
-        self, carry: Carry, transcript: Transcript
-    ) -> tuple[Carry, Transcript, LayerProof]:
-        num_eval, den_eval, eval_point = carry
+        self, claim: LayerClaim, transcript: Transcript
+    ) -> tuple[LayerClaim, Transcript, LayerProof]:
+        num_eval, den_eval, eval_point = claim
         transcript, lam = self.challenges.sample(transcript, num_eval.dtype)
         one = fnp.ones((), eval_point.dtype)
         # State order is LogupSumcheckRound's: [eq, n0, d1, n1, d0], stacked (5, N).

@@ -9,8 +9,8 @@ from frx import Array
 
 from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput, build_pyramid
-from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as ProverLayerRound
+from zorch.logup_gkr.prover import LayerClaim, LayerProof, bind_output
 from zorch.logup_gkr.verifier import GkrLayerRound as VerifierLayerRound
 from zorch.round import prove_rounds, verify_rounds
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
@@ -41,8 +41,8 @@ class GkrProof:
     layers: tuple[LayerProof, ...]
 
 
-def _input_claim(carry: Carry) -> InputLayerClaim:
-    numerator, denominator, point = carry
+def _input_claim(claim: LayerClaim) -> InputLayerClaim:
+    numerator, denominator, point = claim
     return InputLayerClaim(numerator, denominator, point)
 
 

@@ -33,7 +33,7 @@ from zorch.logup_gkr.jagged_prover import (
     _jagged_round_zone,
     prove_jagged_layer,
 )
-from zorch.logup_gkr.prover import Carry, bind_output
+from zorch.logup_gkr.prover import LayerClaim, bind_output
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
     caps_for,
@@ -384,7 +384,7 @@ class ChainedJaggedProveTest(absltest.TestCase):
 
     def _hand_loop(
         self, layers: list[JaggedGkrLayer]
-    ) -> tuple[Carry, Transcript, list[JaggedLayerProof]]:
+    ) -> tuple[LayerClaim, Transcript, list[JaggedLayerProof]]:
         """The hand-threaded layer loop the chain replaces: the reference
         stream, whose proofs carry the loop's own (lam, claim)."""
         caps = caps_for(self.ROW_COUNTS, len(layers) - 1)
@@ -554,7 +554,7 @@ class CapacityRoundTest(absltest.TestCase):
     NRV = 3
     CAPS = RoundWidthCaps(elements=16, eq_row=8, interaction=8)
 
-    def _carry(self, seed: int) -> Carry:
+    def _carry(self, seed: int) -> LayerClaim:
         return (
             rand_field(seed, (), KB),
             rand_field(seed + 1, (), KB),
@@ -563,8 +563,8 @@ class CapacityRoundTest(absltest.TestCase):
 
     def _assert_stream_equal(
         self,
-        got: tuple[Carry, Transcript, JaggedLayerProof],
-        want: tuple[Carry, Transcript, JaggedLayerProof],
+        got: tuple[LayerClaim, Transcript, JaggedLayerProof],
+        want: tuple[LayerClaim, Transcript, JaggedLayerProof],
     ) -> None:
         got_carry, got_t, got_proof = got
         want_carry, want_t, want_proof = want

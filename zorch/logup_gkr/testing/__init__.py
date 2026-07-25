@@ -19,8 +19,8 @@ from zorch.logup_gkr.circuit import (
     extract_outputs,
     jagged_layer_transition,
 )
-from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
+from zorch.logup_gkr.prover import LayerClaim, LayerProof, bind_output
 from zorch.logup_gkr.verifier import GkrLayerRound as _VerifierLayer
 from zorch.round import prove_rounds, verify_rounds
 from zorch.sumcheck.jagged.types import RoundWidthCaps
@@ -159,7 +159,7 @@ def random_first_layer(
 
 def prove_gkr_with_transcript(
     first: GkrLayer, transcript: Transcript
-) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], Carry]:
+) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], LayerClaim]:
     """Run the GKR prover chain over `first`'s pyramid, drawing Fiat-Shamir
     challenges from `transcript` (a cheap test `DuplexTranscript` or the
     on-device poseidon2 one).
@@ -177,7 +177,7 @@ def prove_gkr_with_transcript(
 
 def prove_gkr(
     first: GkrLayer,
-) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], Carry]:
+) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], LayerClaim]:
     """`prove_gkr_with_transcript` over a cheap deterministic test transcript."""
     return prove_gkr_with_transcript(first, cheap_transcript(_KB))
 
@@ -210,7 +210,7 @@ def prove_gkr_jitted(
 
 def verify_gkr_with_transcript(
     output: LogUpGkrOutput, proofs: list[LayerProof], transcript: Transcript
-) -> tuple[Carry, Array]:
+) -> tuple[LayerClaim, Array]:
     """Run the GKR verifier chain, re-deriving challenges from `transcript` (the
     dual of `prove_gkr_with_transcript`). Returns (final_carry, ok)."""
     carry, transcript = bind_output(output, transcript)
@@ -220,6 +220,8 @@ def verify_gkr_with_transcript(
     return final, ok
 
 
-def verify_gkr(output: LogUpGkrOutput, proofs: list[LayerProof]) -> tuple[Carry, Array]:
+def verify_gkr(
+    output: LogUpGkrOutput, proofs: list[LayerProof]
+) -> tuple[LayerClaim, Array]:
     """`verify_gkr_with_transcript` over a cheap deterministic test transcript."""
     return verify_gkr_with_transcript(output, proofs, cheap_transcript(_KB))
