@@ -4,37 +4,39 @@ Spartan reduces R1CS satisfiability `(A·z)∘(B·z) = C·z` to an outer
 zerocheck, a random-linear-combination of its terminal claims, an inner
 lincheck, and a PCS opening of the witness.
 
-`Spartan` is the reference composite `Stage` for
-[`stage-composition.md`](../composition/stage-composition.md). It owns three
-child stages and spells out their non-linear dataflow:
+`SpartanProver` and `SpartanVerifier` are the reference composite stage roles
+for [`stage-composition.md`](../composition/stage-composition.md). Each owns only
+its corresponding child roles and spells out the same non-linear dataflow:
 
-- `OuterStage` reduces a `ZerocheckClaim` to a `RowEvaluationClaim` at
-  `r_x`, containing `(Az, Bz, Cz)(r_x)`; its reduction proof contains the outer
-  round polynomials and claimed evaluations.
-- `batch_claims` samples `r` and derives `Az + r·Bz + r²·Cz`. Both sides
-  call this shared transcript operation, which has no proof section.
-- `InnerStage` reduces a `LincheckClaim`, assembled from the instance, row
-  evaluation claim, and batched value, to a `ColumnEvaluationClaim` at `r_y`.
-- `WitnessOpenStage` reduces the resulting `WitnessOpeningClaim` to `None` by
-  opening the committed witness at `r_y[1:]` and closing the lincheck identity.
+- `OuterProver` and `OuterVerifier` reduce a `ZerocheckClaim` to a
+  `RowEvaluationClaim` at `r_x`, containing `(Az, Bz, Cz)(r_x)`.
+- `batch_claims` samples `r` and derives `Az + r·Bz + r²·Cz`. Both roles call
+  this shared transcript operation, which has no proof section.
+- `InnerProver` and `InnerVerifier` reduce a `LincheckClaim`, assembled from the
+  instance, row claim, and batched value, to a `ColumnEvaluationClaim` at `r_y`.
+- `WitnessOpenProver` and `WitnessOpenVerifier` reduce the resulting
+  `WitnessOpeningClaim` to `None` by opening the committed witness at `r_y[1:]`
+  and closing the lincheck identity.
 
-Both `Spartan.prove` and `Spartan.verify` accept the same public `SpartanClaim`;
-only `prove` additionally accepts a private `SpartanWitness`. `SpartanProof`
-exposes named `outer`, `inner`, and `witness_open` sections. There are no
-separate free prover/verifier entry points: pairing the methods on the object
-keeps the child configuration and proof contract together.
+`SpartanProver.prove` and `SpartanVerifier.verify` accept the same public
+`SpartanClaim`; only the prover additionally accepts a private
+`SpartanWitness`. `SpartanProof` exposes named `outer`, `inner`, and
+`witness_open` sections. The role objects are deliberately separate: a deployed
+verifier is constructible with a `PcsVerifier` alone and never retains a PCS
+proving key.
 
 ## Injection points
 
-The outer and inner stages each own an ordinary `SumcheckStage` child. That
-child pairs proving and verification and owns its recurrence schedule, proof
-assembly, transcript advancement, and wire format; its configured `Round`
-objects are internal recurrence kernels. Callers can replace the child stage
-without introducing a separate engine or chain abstraction. `PcsProver` and
-`PcsVerifier` are injected into `Spartan`, which constructs the terminal
-`WitnessOpenStage`; they are static stage configuration rather than per-proof
-claim or witness data. Both the transparent test PCS and Ligerito exercise the
-same witness-opening stage.
+The outer and inner roles own corresponding sumcheck roles. Those children own
+their recurrence schedule, proof assembly, transcript advancement, and wire
+format; configured `Round` objects remain internal recurrence kernels. Callers
+can replace one role without introducing an engine or chain abstraction.
+
+`PcsProver` is injected only into `SpartanProver`, and `PcsVerifier` only into
+`SpartanVerifier`. They construct `WitnessOpenProver` and
+`WitnessOpenVerifier`, respectively, so role-specific keys remain static
+configuration without crossing the deployment boundary. Both the transparent
+test PCS and Ligerito exercise this separation.
 
 The field is the caller's dtype. The assignment layout is witness-first
 `z = (W, 1, X)`: `r_y[0]` selects the witness/public half and `W` opens at

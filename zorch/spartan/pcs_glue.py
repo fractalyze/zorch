@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""The terminal witness-opening reduction."""
+"""Separately deployable roles for the terminal witness-opening reduction."""
 
 from __future__ import annotations
 
@@ -9,13 +9,10 @@ from typing import Any
 from frx import Array
 
 from zorch.pcs.protocol import PcsProver, PcsVerifier
-from zorch.spartan.lincheck import (
-    BatchedClaims,
-    ColumnEvaluationClaim,
-)
+from zorch.spartan.lincheck import BatchedClaims, ColumnEvaluationClaim
 from zorch.spartan.r1cs import R1CS, eval_public_half, recombine_z_eval
 from zorch.spartan.zerocheck import RowEvaluationClaim
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
 
 
@@ -69,18 +66,13 @@ def witness_opening_claim(
     )
 
 
-class WitnessOpenStage(
-    Stage[WitnessOpeningClaim, WitnessOpeningWitness, None, WitnessOpenProof]
+class WitnessOpenProver(
+    ProverStage[WitnessOpeningClaim, WitnessOpeningWitness, None, WitnessOpenProof]
 ):
-    """Close a witness-opening claim with a PCS proof and terminal identity."""
+    """Prove a committed-witness opening; owns only the PCS prover capability."""
 
-    def __init__(
-        self,
-        pcs_prover: PcsProver[Any, Any, Any],
-        pcs_verifier: PcsVerifier[Any, Any],
-    ) -> None:
+    def __init__(self, pcs_prover: PcsProver[Any, Any, Any]) -> None:
         self.pcs_prover = pcs_prover
-        self.pcs_verifier = pcs_verifier
 
     def prove(
         self,
@@ -92,6 +84,13 @@ class WitnessOpenStage(
             witness.prover_data, [claim.point[1:]], transcript
         )
         return ProveResult(None, WitnessOpenProof(values, pcs_proof), transcript)
+
+
+class WitnessOpenVerifier(VerifierStage[WitnessOpeningClaim, None, WitnessOpenProof]):
+    """Verify a committed-witness opening; owns only the PCS verifier capability."""
+
+    def __init__(self, pcs_verifier: PcsVerifier[Any, Any]) -> None:
+        self.pcs_verifier = pcs_verifier
 
     def verify(
         self,

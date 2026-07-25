@@ -18,7 +18,8 @@ from zorch.spartan.summand import ZerocheckSummand
 from zorch.spartan.testing.toy import toy_r1cs
 from zorch.spartan.zerocheck import (
     OuterProof,
-    OuterStage,
+    OuterProver,
+    OuterVerifier,
     RowEvaluationClaim,
     ZerocheckClaim,
     ZerocheckWitness,
@@ -26,7 +27,7 @@ from zorch.spartan.zerocheck import (
 from zorch.stage import ProveResult
 from zorch.sumcheck.domain import natural_domain
 from zorch.sumcheck.eq.eq_poly import EqPolyRound
-from zorch.sumcheck.eq.stage import EqPolyStage, EqPolyWitness, EqSumClaim
+from zorch.sumcheck.eq.stage import EqPolyProver, EqPolyWitness, EqSumClaim
 from zorch.sumcheck.stage import EvaluationClaim
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
@@ -39,7 +40,7 @@ BB = zk_dtypes.babybear_mont
 FIELDS = (("koalabear", KB), ("babybear", BB))
 
 
-class _RecordingEqPolyStage(EqPolyStage):
+class _RecordingEqPolyProver(EqPolyProver):
     def __init__(self) -> None:
         super().__init__(ZerocheckSummand(), challenges=ChallengePolicy(KBX4))
         self.claim: EqSumClaim | None = None
@@ -56,13 +57,13 @@ class _RecordingEqPolyStage(EqPolyStage):
         return super().prove(claim, witness, transcript)
 
 
-class OuterStageTest(parameterized.TestCase):
+class OuterRoleTest(parameterized.TestCase):
     def _prove(
         self, seed: int, dtype: Any
     ) -> tuple[R1CS, Array, ProveResult[RowEvaluationClaim, OuterProof]]:
         inst, z, _, _ = toy_r1cs(seed, s_x=3, num_vars_padded=4, num_io=2, dtype=dtype)
         az, bz, cz = inst.matvecs(z)
-        result = OuterStage().prove(
+        result = OuterProver().prove(
             ZerocheckClaim(inst.s_x),
             ZerocheckWitness(az, bz, cz),
             cheap_transcript(dtype),
@@ -72,7 +73,7 @@ class OuterStageTest(parameterized.TestCase):
     @parameterized.named_parameters(*FIELDS)
     def test_roundtrip_accepts(self, dtype: Any) -> None:
         inst, _, proved = self._prove(1, dtype)
-        verified = OuterStage().verify(
+        verified = OuterVerifier().verify(
             ZerocheckClaim(inst.s_x), proved.reduction_proof, cheap_transcript(dtype)
         )
         self.assertTrue(bool(verified.ok))
@@ -103,7 +104,7 @@ class OuterStageTest(parameterized.TestCase):
             proved.reduction_proof,
             claims=proved.reduction_proof.claims.at[0].add(fnp.ones((), dtype)),
         )
-        verified = OuterStage().verify(
+        verified = OuterVerifier().verify(
             ZerocheckClaim(inst.s_x), bad, cheap_transcript(dtype)
         )
         self.assertFalse(bool(verified.ok))
@@ -115,7 +116,7 @@ class OuterStageTest(parameterized.TestCase):
             proved.reduction_proof,
             sumcheck=proved.reduction_proof.sumcheck.at[0, 0].add(fnp.ones((), dtype)),
         )
-        verified = OuterStage().verify(
+        verified = OuterVerifier().verify(
             ZerocheckClaim(inst.s_x), bad, cheap_transcript(dtype)
         )
         self.assertFalse(bool(verified.ok))
@@ -123,8 +124,8 @@ class OuterStageTest(parameterized.TestCase):
     def test_extension_keeps_round_zero_factors_in_base_field(self) -> None:
         inst, z, _, _ = toy_r1cs(8, s_x=3, num_vars_padded=4, num_io=2, dtype=KB)
         az, bz, cz = inst.matvecs(z)
-        sumcheck = _RecordingEqPolyStage()
-        OuterStage(sumcheck=sumcheck, challenges=ChallengePolicy(KBX4)).prove(
+        sumcheck = _RecordingEqPolyProver()
+        OuterProver(sumcheck=sumcheck, challenges=ChallengePolicy(KBX4)).prove(
             ZerocheckClaim(inst.s_x),
             ZerocheckWitness(az, bz, cz),
             cheap_transcript(KB),
@@ -142,6 +143,18 @@ class OuterStageTest(parameterized.TestCase):
         assert_fusion_ready(
             lambda value: round_._round_poly(value)[0], state, reduces=1
         )
+
+
+class ChallengePolicyRejectionTest(absltest.TestCase):
+    def test_limb_only_policy_is_rejected_at_construction(self) -> None:
+        # Tau precedes every value it could inherit a field from, so a policy
+        # that resolves its field from a running claim cannot serve zerocheck;
+        # the failure belongs at construction, not part-way through a proof.
+        policy = ChallengePolicy(limbs=4)
+        with self.assertRaises(ValueError):
+            OuterProver(challenges=policy)
+        with self.assertRaises(ValueError):
+            OuterVerifier(challenges=policy)
 
 
 if __name__ == "__main__":

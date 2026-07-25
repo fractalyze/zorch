@@ -25,7 +25,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
 from zorch.sumcheck.domain import subgroup_sum
@@ -45,7 +45,7 @@ class SumcheckRound(Round):
     """Verifier for any sumcheck round; the dual of `prover.SumcheckRound`."""
 
     degree: int
-    challenges: ChallengePolicy = ChallengePolicy()
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES
 
     def __post_init__(self) -> None:
         if self.degree < 1:
@@ -84,7 +84,7 @@ class CoeffsSumcheckRound(Round):
     coefficients directly."""
 
     degree: int
-    challenges: ChallengePolicy = ChallengePolicy()
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES
 
     def __post_init__(self) -> None:
         if self.degree < 1:
@@ -119,7 +119,7 @@ class CompressedCoeffsSumcheckRound(Round):
     check (`ok` is constant true); binding rests on the terminal claim check,
     the trade the compressed form makes for wire size."""
 
-    challenges: ChallengePolicy = ChallengePolicy()
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES
 
     def check_reduce(self, claim: Array, msg: Array, r: Array) -> tuple[Array, Array]:
         """Reconstruct `c_1` from the claim and reduce, for an externally
@@ -164,7 +164,7 @@ class UnivariateSkipRound(Round):
 
     skip_rounds: int
     degree: int
-    challenges: ChallengePolicy = ChallengePolicy()
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES
 
     def __post_init__(self) -> None:
         if self.skip_rounds < 1:

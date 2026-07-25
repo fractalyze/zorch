@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Outer Spartan zerocheck as a conditional claim reduction."""
+"""Outer Spartan zerocheck role implementations."""
 
 from __future__ import annotations
 
@@ -9,12 +9,17 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.eq import eval_eq
 from zorch.poly.multilinear import eval_mle
 from zorch.spartan.summand import ZerocheckSummand
-from zorch.stage import ProveResult, Stage, VerifyResult
-from zorch.sumcheck.eq.stage import EqPolyStage, EqPolyWitness, EqSumClaim
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
+from zorch.sumcheck.eq.stage import (
+    EqPolyProver,
+    EqPolyVerifier,
+    EqPolyWitness,
+    EqSumClaim,
+)
 from zorch.sumcheck.stage import EvaluationClaim
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -52,20 +57,42 @@ class OuterProof:
     claims: Array
 
 
-class OuterStage(
-    Stage[ZerocheckClaim, ZerocheckWitness, RowEvaluationClaim, OuterProof]
+def _require_static_field(challenges: ChallengePolicy) -> ChallengePolicy:
+    """Reject a policy whose field would come from a value tau precedes."""
+    if challenges.needs_value_dtype:
+        raise ValueError(
+            "zerocheck needs a challenge policy with an explicit dtype: tau is "
+            "sampled before any value it could inherit a field from"
+        )
+    return challenges
+
+
+def _sample_tau(
+    rounds: int, transcript: Transcript, challenges: ChallengePolicy
+) -> tuple[Array, Transcript]:
+    values = []
+    for _ in range(rounds):
+        transcript, challenge = challenges.sample(transcript)
+        values.append(challenge)
+    return fnp.stack(values), transcript
+
+
+class OuterProver(
+    ProverStage[ZerocheckClaim, ZerocheckWitness, RowEvaluationClaim, OuterProof]
 ):
-    """Prove zerocheck conditional on the returned row-evaluation claim."""
+    """Prove zerocheck conditional on a row-evaluation claim."""
 
     def __init__(
         self,
         *,
-        sumcheck: Stage[EqSumClaim, EqPolyWitness, EvaluationClaim, Any] | None = None,
-        challenges: ChallengePolicy | None = None,
+        sumcheck: (
+            ProverStage[EqSumClaim, EqPolyWitness, EvaluationClaim, Any] | None
+        ) = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
-        self.challenges = challenges or ChallengePolicy()
-        self.sumcheck = sumcheck or EqPolyStage(
-            ZerocheckSummand(), challenges=self.challenges
+        self.challenges = _require_static_field(challenges)
+        self.sumcheck = sumcheck or EqPolyProver(
+            ZerocheckSummand(), challenges=challenges
         )
 
     def prove(
@@ -80,14 +107,8 @@ class OuterStage(
             raise ValueError(
                 f"claim expects {claim.rounds} outer rounds, witness needs {rounds}"
             )
-        tau_values = []
-        for _ in range(claim.rounds):
-            transcript, challenge = self.challenges.sample(transcript)
-            tau_values.append(challenge)
-        tau = fnp.stack(tau_values)
+        tau, transcript = _sample_tau(claim.rounds, transcript, self.challenges)
         factors = fnp.stack([az, bz, cz])
-        # The scalar source claim lives in the challenge field, while the full
-        # factor tables remain base-typed through round zero.
         zero = fnp.zeros((), tau.dtype)
         reduced = self.sumcheck.prove(
             EqSumClaim(tau, zero, claim.rounds),
@@ -99,9 +120,26 @@ class OuterStage(
             [eval_mle(az, point), eval_mle(bz, point), eval_mle(cz, point)]
         )
         transcript = reduced.transcript.observe(values)
-        reduced_claim = RowEvaluationClaim(point, values)
-        reduction_proof = OuterProof(reduced.reduction_proof, values)
-        return ProveResult(reduced_claim, reduction_proof, transcript)
+        return ProveResult(
+            RowEvaluationClaim(point, values),
+            OuterProof(reduced.reduction_proof, values),
+            transcript,
+        )
+
+
+class OuterVerifier(VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof]):
+    """Verify zerocheck conditional on a row-evaluation claim."""
+
+    def __init__(
+        self,
+        *,
+        sumcheck: VerifierStage[EqSumClaim, EvaluationClaim, Any] | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    ) -> None:
+        self.challenges = _require_static_field(challenges)
+        self.sumcheck = sumcheck or EqPolyVerifier(
+            ZerocheckSummand(), challenges=challenges
+        )
 
     def verify(
         self,
@@ -109,12 +147,9 @@ class OuterStage(
         reduction_proof: OuterProof,
         transcript: Transcript,
     ) -> VerifyResult[RowEvaluationClaim]:
-        tau_values = []
-        for _ in range(claim.rounds):
-            transcript, challenge = self.challenges.sample(transcript)
-            tau_values.append(challenge)
-        tau = fnp.stack(tau_values)
-        zero = fnp.zeros((), reduction_proof.claims.dtype)
+        tau, transcript = _sample_tau(claim.rounds, transcript, self.challenges)
+        # Both roles derive the source-claim field from the public challenge.
+        zero = fnp.zeros((), tau.dtype)
         reduced = self.sumcheck.verify(
             EqSumClaim(tau, zero, claim.rounds),
             reduction_proof.sumcheck,

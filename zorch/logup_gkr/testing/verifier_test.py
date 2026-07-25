@@ -23,7 +23,11 @@ from zorch.logup_gkr.circuit import (
     build_pyramid,
     extract_outputs,
 )
-from zorch.logup_gkr.stage import LogUpGkrStage, LogUpOutputClaim
+from zorch.logup_gkr.stage import (
+    LogUpGkrProver,
+    LogUpGkrVerifier,
+    LogUpOutputClaim,
+)
 from zorch.logup_gkr.testing import (
     prove_gkr,
     prove_gkr_with_transcript,
@@ -73,12 +77,13 @@ class GkrRoundtripTest(absltest.TestCase):
 
     def test_stage_roundtrips_and_transcripts_agree(self) -> None:
         first = random_first_layer(17, 1, 2)
-        stage = LogUpGkrStage()
+        prover = LogUpGkrProver()
+        verifier = LogUpGkrVerifier()
         claim = LogUpOutputClaim(
             extract_outputs(build_pyramid(first)[-1]), first.num_row_variables
         )
-        proved = stage.prove(claim, first, cheap_transcript(KB))
-        verified = stage.verify(claim, proved.reduction_proof, cheap_transcript(KB))
+        proved = prover.prove(claim, first, cheap_transcript(KB))
+        verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(KB))
         self.assertTrue(bool(verified.ok))
         self.assertTrue(
             bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
@@ -95,14 +100,15 @@ class GkrRoundtripTest(absltest.TestCase):
 
     def test_stage_statement_owns_layer_count(self) -> None:
         first = random_first_layer(19, 1, 2)
-        stage = LogUpGkrStage()
+        prover = LogUpGkrProver()
+        verifier = LogUpGkrVerifier()
         claim = LogUpOutputClaim(
             extract_outputs(build_pyramid(first)[-1]), first.num_row_variables
         )
-        proved = stage.prove(claim, first, cheap_transcript(KB))
+        proved = prover.prove(claim, first, cheap_transcript(KB))
         bad = replace(claim, layers=claim.layers + 1)
         with self.assertRaises(ValueError):
-            stage.verify(bad, proved.reduction_proof, cheap_transcript(KB))
+            verifier.verify(bad, proved.reduction_proof, cheap_transcript(KB))
 
     def test_rejects_tampered_round_poly(self) -> None:
         first = random_first_layer(7, 1, 2)

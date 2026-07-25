@@ -10,7 +10,7 @@ import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import efinfo
 
-from zorch.transcript import Transcript, sample_challenge
+from zorch.transcript import Transcript, reinterpret_challenge
 
 
 def challenge_limbs(dtype: Any) -> int:
@@ -40,8 +40,14 @@ class ChallengePolicy:
             raise ValueError("challenge limbs must be >= 1")
 
     @property
-    def is_native(self) -> bool:
-        return self.dtype is None and self.limbs is None
+    def needs_value_dtype(self) -> bool:
+        """Whether sampling requires the caller to supply a value dtype.
+
+        A limb-only policy takes its field from the running claim, so a site
+        that samples fresh randomness has no value to inherit one from and must
+        reject such a policy up front rather than failing mid-proof.
+        """
+        return self.dtype is None and self.limbs is not None
 
     def target_dtype(self, value_dtype: Any | None = None) -> Any | None:
         if self.dtype is not None:
@@ -58,25 +64,33 @@ class ChallengePolicy:
             return self.limbs
         return 1 if target is None else challenge_limbs(target)
 
+    def _regroup(self, raw: Array, count: int, value_dtype: Any | None) -> Array:
+        """Read ``count`` challenges out of consecutive base-field squeezes."""
+        target = self.target_dtype(value_dtype)
+        if target is None:
+            return raw
+        limbs = self.limbs_for(value_dtype)
+        return fnp.stack(
+            [
+                reinterpret_challenge(raw[i * limbs : (i + 1) * limbs], target)
+                for i in range(count)
+            ]
+        )
+
     def sample(
         self, transcript: Transcript, value_dtype: Any | None = None
     ) -> tuple[Transcript, Array]:
-        target = self.target_dtype(value_dtype)
-        if target is None:
-            transcript, sampled = transcript.sample(1)
-            return transcript, sampled[0]
-        return sample_challenge(transcript, target, self.limbs_for(value_dtype))
+        transcript, challenges = self.sample_many(transcript, 1, value_dtype)
+        return transcript, challenges[0]
 
     def sample_many(
         self, transcript: Transcript, count: int, value_dtype: Any | None = None
     ) -> tuple[Transcript, Array]:
-        if self.is_native:
-            return transcript.sample(count)
-        values = []
-        for _ in range(count):
-            transcript, value = self.sample(transcript, value_dtype)
-            values.append(value)
-        return transcript, fnp.stack(values)
+        # One squeeze call for all `count * limbs` limbs: the duplex squeezes a
+        # rate-block per permutation, so batching costs ~ceil(n/rate) permutes
+        # where a per-challenge loop costs ~n, for the same stream.
+        transcript, raw = transcript.sample(count * self.limbs_for(value_dtype))
+        return transcript, self._regroup(raw, count, value_dtype)
 
     def observe_and_sample(
         self,
@@ -84,7 +98,15 @@ class ChallengePolicy:
         values: Array,
         value_dtype: Any | None = None,
     ) -> tuple[Transcript, Array]:
-        if self.is_native:
-            transcript, sampled = transcript.observe_and_sample(values, 1)
-            return transcript, sampled[0]
-        return self.sample(transcript.observe(values), value_dtype)
+        # The absorb and the squeeze stay one hop: splitting them into `observe`
+        # then `sample` bypasses the duplex-FS fusion marker and scatters ~9
+        # kernels per round, which `zorch`'s fusion rule does not allow.
+        transcript, raw = transcript.observe_and_sample(
+            values, self.limbs_for(value_dtype)
+        )
+        return transcript, self._regroup(raw, 1, value_dtype)[0]
+
+
+# The immutable protocol default: use the transcript's ordinary challenge
+# sampling without an explicit target field or limb-width override.
+DEFAULT_CHALLENGES = ChallengePolicy()

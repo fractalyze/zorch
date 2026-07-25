@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck as a conditional reduction from a sum claim to an evaluation claim."""
+"""Sumcheck roles reducing a sum claim to an evaluation claim."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from frx import Array
 
 from zorch.prove import fold_rounds
 from zorch.round import InnerVerifierRound, ProverRound
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
 from zorch.verify import verify
 
@@ -38,12 +38,8 @@ class EvaluationClaim:
     value: Array
 
 
-class SumcheckStage(Stage[SumClaim, SumcheckWitness, EvaluationClaim, Array]):
-    """Prove a sum claim conditional on the returned evaluation claim.
-
-    The configured rounds are recurrence kernels. This stage owns their
-    scheduling, proof assembly, transcript advancement, and verification.
-    """
+class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Array]):
+    """The prover role of dense sumcheck."""
 
     def __init__(
         self,
@@ -51,6 +47,7 @@ class SumcheckStage(Stage[SumClaim, SumcheckWitness, EvaluationClaim, Array]):
         verifier_round: InnerVerifierRound,
     ) -> None:
         self.prover_round = prover_round
+        # Public replay logic derives the canonical reduced claim and transcript.
         self.verifier_round = verifier_round
 
     def prove(
@@ -64,13 +61,17 @@ class SumcheckStage(Stage[SumClaim, SumcheckWitness, EvaluationClaim, Array]):
             self.prover_round, witness.state, transcript, claim.rounds
         )
         reduction_proof = fnp.stack(messages)
-        # Verifier replay is authoritative for both the reduced claim and the
-        # transcript. An invalid witness still produces a proof that verification
-        # can reject against the independently supplied source claim.
         point, value, replayed, _ = verify(
             self.verifier_round, claim.value, reduction_proof, pre
         )
         return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
+
+
+class SumcheckVerifier(VerifierStage[SumClaim, EvaluationClaim, Array]):
+    """The verifier role of dense sumcheck."""
+
+    def __init__(self, verifier_round: InnerVerifierRound) -> None:
+        self.verifier_round = verifier_round
 
     def verify(
         self,

@@ -1,10 +1,9 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Paired proof stages and their typed results.
+"""Separately deployable roles for conditional proof reductions.
 
-A stage is a reusable protocol component with paired prover and verifier
-behavior. It may drive round recurrences, perform PCS operations, or own child
-stages. A composite stage writes its protocol dataflow explicitly with ordinary
-Python, preserving fan-out and skip-level dependencies as named values.
+A stage is one mathematical claim-reduction contract. Its prover and verifier
+are separate runtime objects so role-specific capabilities, especially proving
+and verification keys, never need to share an object.
 """
 
 from __future__ import annotations
@@ -41,20 +40,17 @@ class VerifyResult(Generic[ReducedClaim]):
     ok: Array
 
 
-class Stage(
-    ABC,
-    Generic[Claim, Witness, ReducedClaim, ReductionProof],
-):
-    """A paired proof reduction.
-
-    The reduction proof establishes the source claim conditional on the reduced
-    claim. It does not normally establish the reduced claim itself.
-    """
+class ProverStage(ABC, Generic[Claim, Witness, ReducedClaim, ReductionProof]):
+    """The prover role of one conditional claim reduction."""
 
     @abstractmethod
     def prove(
         self, claim: Claim, witness: Witness, transcript: Transcript
     ) -> ProveResult[ReducedClaim, ReductionProof]: ...
+
+
+class VerifierStage(ABC, Generic[Claim, ReducedClaim, ReductionProof]):
+    """The verifier role of the same conditional claim reduction."""
 
     @abstractmethod
     def verify(
@@ -63,3 +59,15 @@ class Stage(
         reduction_proof: ReductionProof,
         transcript: Transcript,
     ) -> VerifyResult[ReducedClaim]: ...
+
+
+@dataclass(frozen=True)
+class Stage(Generic[Claim, Witness, ReducedClaim, ReductionProof]):
+    """Optional pairing of separately deployable roles for tests and tooling.
+
+    Deployment code should depend directly on ``ProverStage`` or
+    ``VerifierStage`` and therefore construct only the capabilities it owns.
+    """
+
+    prover: ProverStage[Claim, Witness, ReducedClaim, ReductionProof]
+    verifier: VerifierStage[Claim, ReducedClaim, ReductionProof]

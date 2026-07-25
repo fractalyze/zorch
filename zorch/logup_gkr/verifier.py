@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.prover import Carry, LayerProof, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import Round
@@ -39,8 +39,8 @@ _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 class GkrLayerRound(Round):
     """Verify one GKR layer; the chain of these is the GKR verifier."""
 
-    def __init__(self, challenges: ChallengePolicy | None = None) -> None:
-        self.challenges = challenges or ChallengePolicy()
+    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+        self.challenges = challenges
 
     def __call__(
         self, carry: Carry, transcript: Transcript, layer_proof: LayerProof

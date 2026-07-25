@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Dense LogUp-GKR as a conditional claim reduction."""
+"""Dense LogUp-GKR role implementations."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ from dataclasses import dataclass
 
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput, build_pyramid
 from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as ProverLayerRound
 from zorch.logup_gkr.verifier import GkrLayerRound as VerifierLayerRound
 from zorch.round import prove_rounds, verify_rounds
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
 
 
@@ -46,15 +46,13 @@ def _input_claim(carry: Carry) -> InputLayerClaim:
     return InputLayerClaim(numerator, denominator, point)
 
 
-class LogUpGkrStage(Stage[LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof]):
-    """Prove an output claim conditional on an input-layer evaluation claim.
+class LogUpGkrProver(
+    ProverStage[LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof]
+):
+    """Prove an output claim conditional on an input-layer claim."""
 
-    The stage deliberately stops before proving the input-layer MLE opening.
-    That terminal claim belongs to the consumer composing GKR with its PCS.
-    """
-
-    def __init__(self, challenges: ChallengePolicy | None = None) -> None:
-        self.challenges = challenges or ChallengePolicy()
+    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+        self.challenges = challenges
 
     def prove(
         self,
@@ -69,7 +67,7 @@ class LogUpGkrStage(Stage[LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof]
             )
         pyramid = build_pyramid(witness)
         carry, transcript = bind_output(claim.output, transcript, self.challenges)
-        carry, transcript, reduction_proofs = prove_rounds(
+        carry, transcript, proofs = prove_rounds(
             (
                 ProverLayerRound(layer, self.challenges)
                 for layer in reversed(pyramid[:-1])
@@ -77,11 +75,23 @@ class LogUpGkrStage(Stage[LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof]
             carry,
             transcript,
         )
+        reduction_proofs = tuple(proofs)
+        if len(reduction_proofs) != claim.layers:
+            raise AssertionError(
+                f"built {len(reduction_proofs)} GKR proofs for {claim.layers} layers"
+            )
         return ProveResult(
             _input_claim(carry),
-            GkrProof(tuple(reduction_proofs)),
+            GkrProof(reduction_proofs),
             transcript,
         )
+
+
+class LogUpGkrVerifier(VerifierStage[LogUpOutputClaim, InputLayerClaim, GkrProof]):
+    """Verify an output-to-input-layer LogUp-GKR reduction."""
+
+    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+        self.challenges = challenges
 
     def verify(
         self,

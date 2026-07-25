@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Spartan claim batching and the inner lincheck reduction."""
+"""Spartan claim batching and inner lincheck roles."""
 
 from __future__ import annotations
 
@@ -9,14 +9,15 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.spartan.r1cs import R1CS
 from zorch.spartan.zerocheck import RowEvaluationClaim
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.prover import ProductSummand, StandardRound
 from zorch.sumcheck.stage import (
     EvaluationClaim,
-    SumcheckStage,
+    SumcheckProver,
+    SumcheckVerifier,
     SumcheckWitness,
     SumClaim,
 )
@@ -33,7 +34,6 @@ class BatchedClaims:
 
 
 def _joint_claim(claims: Array, challenge: Array) -> Array:
-    """``Az + r·Bz + r²·Cz``."""
     va, vb, vc = claims[0], claims[1], claims[2]
     return va + challenge * vb + challenge * challenge * vc
 
@@ -41,15 +41,10 @@ def _joint_claim(claims: Array, challenge: Array) -> Array:
 def batch_claims(
     claims: Array,
     transcript: Transcript,
-    challenges: ChallengePolicy | None = None,
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
 ) -> tuple[BatchedClaims, Transcript]:
-    """Sample the batching challenge and derive the joint value.
-
-    The claims must already have been absorbed into ``transcript``. This named
-    protocol operation emits no proof; both roles call it at the same point.
-    """
-    policy = challenges or ChallengePolicy()
-    transcript, challenge = policy.sample(transcript)
+    """Sample the batching challenge and derive the joint value."""
+    transcript, challenge = challenges.sample(transcript)
     return BatchedClaims(challenge, _joint_claim(claims, challenge)), transcript
 
 
@@ -84,21 +79,22 @@ class InnerProof:
     sumcheck: Any
 
 
-class InnerStage(
-    Stage[LincheckClaim, LincheckWitness, ColumnEvaluationClaim, InnerProof]
+class InnerProver(
+    ProverStage[LincheckClaim, LincheckWitness, ColumnEvaluationClaim, InnerProof]
 ):
     """Prove lincheck conditional on a column-evaluation claim."""
 
     def __init__(
         self,
         *,
-        sumcheck: Stage[SumClaim, SumcheckWitness, EvaluationClaim, Any] | None = None,
-        challenges: ChallengePolicy | None = None,
+        sumcheck: (
+            ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Any] | None
+        ) = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
-        self.challenges = challenges or ChallengePolicy()
-        self.sumcheck = sumcheck or SumcheckStage(
-            StandardRound(ProductSummand(2), challenges=self.challenges),
-            SumcheckRound(2, self.challenges),
+        self.sumcheck = sumcheck or SumcheckProver(
+            StandardRound(ProductSummand(2), challenges=challenges),
+            SumcheckRound(2, challenges),
         )
 
     def prove(
@@ -114,14 +110,25 @@ class InnerStage(
             SumcheckWitness(state),
             transcript,
         )
-        reduced_claim = ColumnEvaluationClaim(
-            reduced.reduced_claim.point, reduced.reduced_claim.value
-        )
         return ProveResult(
-            reduced_claim,
+            ColumnEvaluationClaim(
+                reduced.reduced_claim.point, reduced.reduced_claim.value
+            ),
             InnerProof(reduced.reduction_proof),
             reduced.transcript,
         )
+
+
+class InnerVerifier(VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerProof]):
+    """Verify lincheck conditional on a column-evaluation claim."""
+
+    def __init__(
+        self,
+        *,
+        sumcheck: VerifierStage[SumClaim, EvaluationClaim, Any] | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    ) -> None:
+        self.sumcheck = sumcheck or SumcheckVerifier(SumcheckRound(2, challenges))
 
     def verify(
         self,
@@ -134,7 +141,10 @@ class InnerStage(
             reduction_proof.sumcheck,
             transcript,
         )
-        reduced_claim = ColumnEvaluationClaim(
-            reduced.reduced_claim.point, reduced.reduced_claim.value
+        return VerifyResult(
+            ColumnEvaluationClaim(
+                reduced.reduced_claim.point, reduced.reduced_claim.value
+            ),
+            reduced.transcript,
+            reduced.ok,
         )
-        return VerifyResult(reduced_claim, reduced.transcript, reduced.ok)

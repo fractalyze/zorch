@@ -73,16 +73,23 @@ orchestration directly.
 
 ### Stage: reduce one claim
 
-A **`Stage`** is a paired reusable proof reduction:
+A **stage** is a paired proof-reduction contract with separately deployable
+roles:
 
 ```python
-prove(claim, witness, transcript) -> ProveResult[reduced_claim, reduction_proof]
-verify(claim, reduction_proof, transcript) -> VerifyResult[reduced_claim]
+ProverStage.prove(claim, witness, transcript)
+    -> ProveResult[reduced_claim, reduction_proof]
+VerifierStage.verify(claim, reduction_proof, transcript)
+    -> VerifyResult[reduced_claim]
 ```
 
+`Stage(prover, verifier)` can bundle matching role objects for conformance tests
+or local orchestration, but deployed code depends only on its role. A verifier
+therefore never has to construct or retain a prover object or proving key.
+
 The claim is the public assertion entering the stage; the witness is the
-prover's private evidence. Both roles derive the same reduced claim. The stage's
-proof establishes the source claim conditional on that reduced claim:
+prover's private evidence. Both roles derive the same reduced claim. The
+reduction proof establishes the source claim conditional on that reduced claim:
 
 ```text
 reduced claim is true  =>  source claim is true
@@ -93,15 +100,17 @@ claim. The reduced claim in `ProveResult` is an execution value for continuing
 the prover, not separately serialized proof data. The verifier reconstructs it
 from the source claim, reduction proof, and transcript.
 
-A stage may run a recurrence of rounds, perform a PCS operation, or contain
-other stages. `SumcheckStage`, for example, reduces a sum claim to an evaluation
-claim through internal per-variable rounds. Compilation boundaries are a
+A role implementation may run a recurrence of rounds, perform a PCS operation,
+or contain child role implementations. `SumcheckProver` and
+`SumcheckVerifier`, for example, implement the two roles that reduce a sum claim
+to an evaluation claim through internal per-variable rounds. Compilation boundaries are a
 separate performance choice; one stage may contain several compiled regions.
 
 ### Example: a composite proof-system stage
 
-`Spartan` is a composite stage. Its execution order is linear, but its dataflow
-is not a simple `reduced claim → next claim` chain. The terminal opening claim
+`SpartanProver` and `SpartanVerifier` are the two roles of a composite stage.
+Their execution order is linear, but their dataflow is not a simple
+`reduced claim → next claim` chain. The terminal opening claim
 depends on the root claim, commitment, outer reduced claim, batching challenge,
 and inner reduced claim. Prover-only PCS data follows a private skip edge.
 
@@ -109,10 +118,10 @@ and inner reduced claim. Prover-only PCS data follows a private skip edge.
 flowchart LR
     input["SpartanClaim<br/>+ SpartanWitness (P)"]
     commit["commit witness"]
-    outer["OuterStage<br/>zerocheck<br/>SumcheckStage → Round × n"]
+    outer["OuterProver / OuterVerifier<br/>zerocheck<br/>sumcheck roles → Round × n"]
     batch["batch_claims()<br/>named transcript operation"]
-    inner["InnerStage<br/>lincheck<br/>SumcheckStage → Round × m"]
-    opening["WitnessOpenStage"]
+    inner["InnerProver / InnerVerifier<br/>lincheck<br/>sumcheck roles → Round × m"]
+    opening["WitnessOpenProver / WitnessOpenVerifier"]
 
     input --> commit
     input --> outer
@@ -128,9 +137,9 @@ flowchart LR
     inner -->|column-evaluation claim| opening
 ```
 
-The composite writes this dataflow with ordinary Python, like a PyTorch module
-with a custom `forward`. Prover and verifier construct the same child claims;
-only the prover supplies witnesses:
+Each composite role writes this dataflow with ordinary Python, like a PyTorch
+module with a custom `forward`. Prover and verifier construct the same child
+claims; only the prover supplies witnesses:
 
 ```python
 # prove()
@@ -189,10 +198,10 @@ universal context object or adapter stage.
 
 | | **`Round`** | **`Stage`** | **Named protocol operation** |
 | --- | --- | --- | --- |
-| **Represents** | one step of a repeated recurrence | one conditional claim reduction | shared framing, reduction, or security-amplification step without its own proof section |
-| **Owns** | recurrence carry and incoming/outgoing contract | source/reduced claims and one reduction-proof section | no proof section |
+| **Represents** | one step of a repeated recurrence | one conditional claim reduction with separate prover/verifier roles | shared framing, reduction, or security-amplification step without its own proof section |
+| **Owns** | recurrence carry and incoming/outgoing contract | shared claim/proof contract; each role owns only its capabilities | no proof section |
 | **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a stage wrapping a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
-| **Composed by** | a recurrence driver inside a stage | an explicit parent `Stage` | the parent whose transcript and soundness accounting require it |
+| **Composed by** | a recurrence driver inside a stage role | an explicit parent role implementation | the parent whose transcript and soundness accounting require it |
 
 There is deliberately no separate “bridge” component. A domain separator,
 grind, framed observation, or sampled batching challenge does not prove or
@@ -213,11 +222,11 @@ its preconditions and security contribution documented there.
   protocol-specific setup, terminal checks, and exported claims.
 - **LogUp-GKR** reduces a public output-and-layer-count claim to an input-layer
   evaluation claim for a consumer's PCS opening.
-- **A stage can wrap a PCS opening.** `WitnessOpenStage` pairs the injected
-  `PcsProver` and `PcsVerifier` operations at a proof boundary; PCS
-  implementations do not themselves implement `Stage`.
-- **A full proof system** can itself be a composite stage, so it can be
-  tested, nested, or reused through the same paired interface.
+- **A PCS opening is a stage contract.** `WitnessOpenProver` owns only the
+  `PcsProver`; `WitnessOpenVerifier` owns only the `PcsVerifier`. PCS
+  implementations do not themselves implement stage roles.
+- **A full proof system** can expose composite prover and verifier roles.
+  `SpartanVerifier` is constructible with only a PCS verification key.
 
 The full contracts, ownership rules, and reuse guidance live in
 [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).

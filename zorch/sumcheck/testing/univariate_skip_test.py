@@ -16,7 +16,8 @@ from zorch.sumcheck.prover import ProductSummand, StandardRound
 from zorch.sumcheck.sqrt_space import prove_sqrt_space
 from zorch.sumcheck.stage import SumcheckWitness, SumClaim
 from zorch.sumcheck.univariate_skip import (
-    UnivariateSkipStage,
+    UnivariateSkipProver,
+    UnivariateSkipVerifier,
     prove_univariate_skip,
     round0_message,
     skip_round0,
@@ -59,12 +60,14 @@ class SkipRoundTripTest(parameterized.TestCase):
         total = 5
         state = rand_field(200, (2, 1 << total), KB)
         claim = _claim(state)
-        stage = UnivariateSkipStage(
-            2, ProductSummand(2), challenges=ChallengePolicy(KBx4)
-        )
+        policy = ChallengePolicy(KBx4)
+        prover = UnivariateSkipProver(2, ProductSummand(2), challenges=policy)
+        verifier = UnivariateSkipVerifier(2, ProductSummand(2), challenges=policy)
         source_claim = SumClaim(claim, total)
-        proved = stage.prove(source_claim, SumcheckWitness(state), cheap_transcript(KB))
-        verified = stage.verify(
+        proved = prover.prove(
+            source_claim, SumcheckWitness(state), cheap_transcript(KB)
+        )
+        verified = verifier.verify(
             source_claim,
             proved.reduction_proof,
             cheap_transcript(KB),

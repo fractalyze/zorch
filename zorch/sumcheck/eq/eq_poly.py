@@ -22,7 +22,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
@@ -108,12 +108,12 @@ class EqPolyRound(Round):
         summand: SumcheckSummand,
         w: Array,
         domain: EvalDomain | None = None,
-        challenges: ChallengePolicy | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
         self.summand = summand
         self.w = w
         self.domain = domain or uhat_domain(summand.degree, w.dtype)
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
         self.l = int(w.shape[0])
         self.l_half = self.l // 2
         self.eq_w_l_list = compute_eq_evaluations(w[: self.l_half])

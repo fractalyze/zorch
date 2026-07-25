@@ -35,10 +35,10 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.univariate import eval_coeffs
 from zorch.prove import fold_rounds
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.domain import subgroup_evals, subgroup_to_coeffs
 from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
 from zorch.sumcheck.stage import SumcheckWitness, SumClaim
@@ -114,7 +114,7 @@ def prove_univariate_skip(
     skip_rounds: int,
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
-    challenges: ChallengePolicy | None = None,
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck with the first `skip_rounds` rounds collapsed into one
     univariate round over the order-2^skip_rounds subgroup. `summand` defaults to the
@@ -129,7 +129,6 @@ def prove_univariate_skip(
     total = log2_strict_usize(p_initial.shape[1])
     if not 0 <= skip_rounds <= total:
         raise ValueError(f"skip_rounds must be in [0, {total}], got {skip_rounds}")
-    challenges = challenges or ChallengePolicy()
     if skip_rounds == 0:
         return fold_rounds(
             StandardRound(summand, challenges=challenges),
@@ -157,7 +156,7 @@ def verify_univariate_skip(
     total: int,
     transcript: Transcript,
     degree: int,
-    challenges: ChallengePolicy | None = None,
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
 ) -> tuple[Array, Transcript, list[Array], Array]:
     """Replay the skip prover: the subgroup round-0 check then the coefficient tail,
     threading the claim and ANDing every round's `ok`. Returns the reduced final claim
@@ -166,7 +165,6 @@ def verify_univariate_skip(
     (`SumcheckRound`), the exact dual of the prover's off-switch."""
     if not 0 <= skip_rounds <= total:
         raise ValueError(f"skip_rounds must be in [0, {total}], got {skip_rounds}")
-    challenges = challenges or ChallengePolicy()
     if skip_rounds == 0:
         rnd = SumcheckRound(degree=degree, challenges=challenges)
         point: list[Array] = []
@@ -217,34 +215,28 @@ class PrismEvaluationClaim:
     value: Array
 
 
-class UnivariateSkipStage(
-    Stage[
+class UnivariateSkipProver(
+    ProverStage[
         SumClaim,
         SumcheckWitness,
         PrismEvaluationClaim,
         UnivariateSkipProof,
     ]
 ):
-    """Univariate skip packaged as an ordinary paired sumcheck stage.
-
-    Its reduced claim is intentionally not ``EvaluationClaim``: the first
-    coordinate binds a subgroup interpolation of several Boolean variables, so
-    a consumer must understand that relation rather than treating it as an
-    ordinary multilinear evaluation point.
-    """
+    """Prove univariate-skip sumcheck with a prism evaluation result."""
 
     def __init__(
         self,
         skip_rounds: int,
         summand: SumcheckSummand,
         *,
-        challenges: ChallengePolicy | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
         if skip_rounds < 1:
-            raise ValueError("UnivariateSkipStage requires skip_rounds >= 1")
+            raise ValueError("univariate skip requires skip_rounds >= 1")
         self.skip_rounds = skip_rounds
         self.summand = summand
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
 
     def prove(
         self,
@@ -260,7 +252,7 @@ class UnivariateSkipStage(
             self.summand,
             self.challenges,
         )
-        final_claim, replayed, point, _ = verify_univariate_skip(
+        value, replayed, point, _ = verify_univariate_skip(
             claim.value,
             messages,
             self.skip_rounds,
@@ -269,9 +261,31 @@ class UnivariateSkipStage(
             self.summand.degree,
             self.challenges,
         )
-        proof = UnivariateSkipProof(messages[0], tuple(messages[1:]))
-        reduced_claim = PrismEvaluationClaim(fnp.stack(point), final_claim)
-        return ProveResult(reduced_claim, proof, replayed)
+        reduction_proof = UnivariateSkipProof(messages[0], tuple(messages[1:]))
+        return ProveResult(
+            PrismEvaluationClaim(fnp.stack(point), value),
+            reduction_proof,
+            replayed,
+        )
+
+
+class UnivariateSkipVerifier(
+    VerifierStage[SumClaim, PrismEvaluationClaim, UnivariateSkipProof]
+):
+    """Verify univariate-skip sumcheck."""
+
+    def __init__(
+        self,
+        skip_rounds: int,
+        summand: SumcheckSummand,
+        *,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    ) -> None:
+        if skip_rounds < 1:
+            raise ValueError("univariate skip requires skip_rounds >= 1")
+        self.skip_rounds = skip_rounds
+        self.summand = summand
+        self.challenges = challenges
 
     def verify(
         self,
@@ -280,7 +294,7 @@ class UnivariateSkipStage(
         transcript: Transcript,
     ) -> VerifyResult[PrismEvaluationClaim]:
         messages = [reduction_proof.head, *reduction_proof.tail]
-        final_claim, transcript, point, ok = verify_univariate_skip(
+        value, transcript, point, ok = verify_univariate_skip(
             claim.value,
             messages,
             self.skip_rounds,
@@ -289,5 +303,6 @@ class UnivariateSkipStage(
             self.summand.degree,
             self.challenges,
         )
-        reduced_claim = PrismEvaluationClaim(fnp.stack(point), final_claim)
-        return VerifyResult(reduced_claim, transcript, ok)
+        return VerifyResult(
+            PrismEvaluationClaim(fnp.stack(point), value), transcript, ok
+        )

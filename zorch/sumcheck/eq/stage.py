@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Equality-factored sumcheck as a conditional claim reduction."""
+"""Equality-factored sumcheck roles."""
 
 from __future__ import annotations
 
@@ -8,9 +8,9 @@ from dataclasses import dataclass
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.prove import fold_rounds
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.domain import natural_domain
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, EqPolyState
 from zorch.sumcheck.prover import SumcheckSummand
@@ -36,32 +36,27 @@ class EqPolyWitness:
     factors: Array
 
 
-class EqPolyStage(Stage[EqSumClaim, EqPolyWitness, EvaluationClaim, Array]):
-    """Prove an equality-weighted sum claim conditional on an evaluation.
+def _check_claim(claim: EqSumClaim) -> None:
+    if claim.equality_point.shape[0] != claim.rounds:
+        raise ValueError(
+            f"equality point needs {claim.rounds} coordinates, "
+            f"got {claim.equality_point.shape[0]}"
+        )
 
-    The equality polynomial remains factored instead of joining the full
-    hypercube state. Factor tables therefore stay in their original field until
-    the first challenge folds them.
-    """
+
+class EqPolyProver(ProverStage[EqSumClaim, EqPolyWitness, EvaluationClaim, Array]):
+    """Prove equality-weighted sumcheck with the equality factor separate."""
 
     def __init__(
         self,
         summand: SumcheckSummand,
         *,
-        challenges: ChallengePolicy | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
         self.summand = summand
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
         self.degree = summand.degree + 1
-        self.verifier_round = SumcheckRound(self.degree, self.challenges)
-
-    @staticmethod
-    def _check_claim(claim: EqSumClaim) -> None:
-        if claim.equality_point.shape[0] != claim.rounds:
-            raise ValueError(
-                f"equality point needs {claim.rounds} coordinates, "
-                f"got {claim.equality_point.shape[0]}"
-            )
+        self.verifier_round = SumcheckRound(self.degree, challenges)
 
     def prove(
         self,
@@ -69,10 +64,8 @@ class EqPolyStage(Stage[EqSumClaim, EqPolyWitness, EvaluationClaim, Array]):
         witness: EqPolyWitness,
         transcript: Transcript,
     ) -> ProveResult[EvaluationClaim, Array]:
-        self._check_claim(claim)
+        _check_claim(claim)
         pre = transcript
-        # A finite domain is valid for mixed-degree summands. Its nodes use the
-        # factor field so round-0 factor evaluation stays in that field.
         domain = natural_domain(self.degree, witness.factors.dtype)
         prover_round = EqPolyRound(
             self.summand,
@@ -91,13 +84,25 @@ class EqPolyStage(Stage[EqSumClaim, EqPolyWitness, EvaluationClaim, Array]):
         )
         return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
 
+
+class EqPolyVerifier(VerifierStage[EqSumClaim, EvaluationClaim, Array]):
+    """Verify equality-weighted sumcheck."""
+
+    def __init__(
+        self,
+        summand: SumcheckSummand,
+        *,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    ) -> None:
+        self.verifier_round = SumcheckRound(summand.degree + 1, challenges)
+
     def verify(
         self,
         claim: EqSumClaim,
         reduction_proof: Array,
         transcript: Transcript,
     ) -> VerifyResult[EvaluationClaim]:
-        self._check_claim(claim)
+        _check_claim(claim)
         if reduction_proof.shape[0] != claim.rounds:
             raise ValueError(
                 f"expected {claim.rounds} sumcheck rounds, "

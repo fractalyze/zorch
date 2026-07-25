@@ -24,7 +24,7 @@ from __future__ import annotations
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import Round
@@ -61,11 +61,11 @@ class SqrtSpaceRound(Round):
         self,
         summand: SumcheckSummand,
         domain: EvalDomain,
-        challenges: ChallengePolicy | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
         self.summand = summand
         self.domain = domain
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
 
     def _round_poly(self, state: SqrtSpaceState) -> Array:
         return summand_evals(
@@ -88,7 +88,7 @@ def prove_sqrt_space(
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
-    challenges: ChallengePolicy | None = None,
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the sumcheck: √-space first phase, standard second phase. `summand`
     defaults to the product over the factors (ProductSummand) and `domain` to the

@@ -13,7 +13,8 @@ from frx import Array
 
 from zorch.spartan.lincheck import (
     BatchedClaims,
-    InnerStage,
+    InnerProver,
+    InnerVerifier,
     LincheckClaim,
     LincheckWitness,
     _joint_claim,
@@ -50,7 +51,7 @@ class RlcOperationTest(parameterized.TestCase):
         self.assertTrue(bool(prover.joint == verifier.joint))
 
 
-class InnerStageTest(parameterized.TestCase):
+class InnerRoleTest(parameterized.TestCase):
     def _setup(
         self, seed: int, dtype: Any
     ) -> tuple[R1CS, Array, RowEvaluationClaim, BatchedClaims]:
@@ -69,8 +70,8 @@ class InnerStageTest(parameterized.TestCase):
     def test_roundtrip_accepts(self, dtype: Any) -> None:
         inst, z, outer, batch = self._setup(20, dtype)
         claim = LincheckClaim(inst, outer, batch)
-        proved = InnerStage().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
-        verified = InnerStage().verify(
+        proved = InnerProver().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
+        verified = InnerVerifier().verify(
             claim, proved.reduction_proof, cheap_transcript(dtype)
         )
         self.assertTrue(bool(verified.ok))
@@ -85,10 +86,10 @@ class InnerStageTest(parameterized.TestCase):
     def test_wrong_joint_claim_rejected(self, dtype: Any) -> None:
         inst, z, outer, batch = self._setup(21, dtype)
         claim = LincheckClaim(inst, outer, batch)
-        proved = InnerStage().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
+        proved = InnerProver().prove(claim, LincheckWitness(z), cheap_transcript(dtype))
         bad_batch = replace(batch, joint=batch.joint + fnp.ones((), dtype))
         bad_claim = replace(claim, batch=bad_batch)
-        verified = InnerStage().verify(
+        verified = InnerVerifier().verify(
             bad_claim, proved.reduction_proof, cheap_transcript(dtype)
         )
         self.assertFalse(bool(verified.ok))

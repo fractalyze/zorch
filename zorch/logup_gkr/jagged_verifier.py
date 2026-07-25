@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
 from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
@@ -47,8 +47,8 @@ class JaggedGkrLayerRound(Round):
     verifier. Its `ChallengePolicy` must match the prover's because every
     challenge in the layer follows that one schedule."""
 
-    def __init__(self, challenges: ChallengePolicy | None = None) -> None:
-        self.challenges = challenges or ChallengePolicy()
+    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+        self.challenges = challenges
 
     def __call__(
         self, carry: Carry, transcript: Transcript, layer_proof: JaggedLayerProof

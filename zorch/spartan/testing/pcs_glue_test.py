@@ -13,7 +13,8 @@ from zorch.spartan.pcs_glue import (
     WitnessOpeningClaim,
     WitnessOpeningWitness,
     WitnessOpenProof,
-    WitnessOpenStage,
+    WitnessOpenProver,
+    WitnessOpenVerifier,
     witness_opening_claim,
 )
 from zorch.spartan.r1cs import eval_public_half, recombine_z_eval
@@ -48,9 +49,9 @@ class DensePcsTest(absltest.TestCase):
         self.assertFalse(bool(ok))
 
 
-class WitnessOpenStageTest(absltest.TestCase):
+class WitnessOpenRoleTest(absltest.TestCase):
     def _run(self, seed: int) -> tuple[
-        WitnessOpenStage,
+        WitnessOpenVerifier,
         WitnessOpeningClaim,
         ProveResult[None, WitnessOpenProof],
     ]:
@@ -68,14 +69,15 @@ class WitnessOpenStageTest(absltest.TestCase):
             z, point_y
         )
         column = ColumnEvaluationClaim(point_y, final)
-        stage = WitnessOpenStage(pcs, pcs)
+        prover = WitnessOpenProver(pcs)
+        verifier = WitnessOpenVerifier(pcs)
         claim = witness_opening_claim(commitment, instance, io, row, batch, column)
-        proved = stage.prove(claim, WitnessOpeningWitness(data), cheap_transcript(KB))
-        return stage, claim, proved
+        proved = prover.prove(claim, WitnessOpeningWitness(data), cheap_transcript(KB))
+        return verifier, claim, proved
 
     def test_roundtrip_accepts(self) -> None:
-        stage, claim, proved = self._run(5)
-        verified = stage.verify(
+        verifier, claim, proved = self._run(5)
+        verified = verifier.verify(
             claim,
             proved.reduction_proof,
             cheap_transcript(KB),
@@ -83,9 +85,9 @@ class WitnessOpenStageTest(absltest.TestCase):
         self.assertTrue(bool(verified.ok))
 
     def test_wrong_inner_final_rejected(self) -> None:
-        stage, claim, proved = self._run(6)
+        verifier, claim, proved = self._run(6)
         bad = replace(claim, product_value=claim.product_value + fnp.ones((), KB))
-        verified = stage.verify(
+        verified = verifier.verify(
             bad,
             proved.reduction_proof,
             cheap_transcript(KB),

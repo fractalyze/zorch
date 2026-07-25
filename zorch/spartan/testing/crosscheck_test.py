@@ -13,7 +13,12 @@ from frx import Array
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.spartan.r1cs import R1CS
-from zorch.spartan.spartan import Spartan, SpartanClaim, SpartanProof, SpartanWitness
+from zorch.spartan.spartan import (
+    SpartanClaim,
+    SpartanProof,
+    SpartanProver,
+    SpartanWitness,
+)
 from zorch.spartan.summand import ZerocheckSummand
 from zorch.spartan.testing.dense_pcs import DensePcs
 from zorch.spartan.testing.reference import naive_round_polys, replay_challenges
@@ -36,7 +41,7 @@ def _prove(
     )
     pcs = DensePcs()
     proof = (
-        Spartan(pcs, pcs)
+        SpartanProver(pcs)
         .prove(SpartanClaim(inst, io), SpartanWitness(z), cheap_transcript(KB))
         .reduction_proof
     )

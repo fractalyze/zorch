@@ -40,7 +40,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
@@ -201,7 +201,7 @@ class LogupSumcheckRound(Round):
 
     # Batching challenge; fixed across a layer's variable-rounds.
     lam: Array
-    challenges: ChallengePolicy = ChallengePolicy()
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES
 
     @property
     def _summand(self) -> LogupSummand:
@@ -278,7 +278,7 @@ Carry = tuple[Array, Array, Array]  # (num_eval, den_eval, eval_point)
 def bind_output(
     output: LogUpGkrOutput,
     transcript: Transcript,
-    challenges: ChallengePolicy | None = None,
+    challenges: ChallengePolicy = DEFAULT_CHALLENGES,
 ) -> tuple[Carry, Transcript]:
     """Commit the circuit output and draw the initial evaluation claim.
 
@@ -287,7 +287,6 @@ def bind_output(
     `(num_eval, den_eval, eval_point)` and the advanced transcript.
     """
     num_vars = log2_strict_usize(output.numerator.shape[0])
-    challenges = challenges or ChallengePolicy()
     transcript = transcript.observe(output.numerator)
     transcript = transcript.observe(output.denominator)
     transcript, eval_point = challenges.sample_many(
@@ -302,10 +301,10 @@ class GkrLayerRound(Round):
     """Prove one GKR layer; the chain of these (floor outward) is the GKR prover."""
 
     def __init__(
-        self, layer: GkrLayer, challenges: ChallengePolicy | None = None
+        self, layer: GkrLayer, challenges: ChallengePolicy = DEFAULT_CHALLENGES
     ) -> None:
         self.layer = layer
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
 
     def __call__(
         self, carry: Carry, transcript: Transcript, _incoming: None

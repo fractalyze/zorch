@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Spartan as an explicit composition of conditional claim reductions."""
+"""Separately deployable Spartan prover and verifier roles."""
 
 from __future__ import annotations
 
@@ -9,29 +9,35 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.pcs.protocol import PcsProver, PcsVerifier
 from zorch.spartan.lincheck import (
+    ColumnEvaluationClaim,
     InnerProof,
-    InnerStage,
+    InnerProver,
+    InnerVerifier,
     LincheckClaim,
     LincheckWitness,
     batch_claims,
 )
 from zorch.spartan.pcs_glue import (
+    WitnessOpeningClaim,
     WitnessOpeningWitness,
     WitnessOpenProof,
-    WitnessOpenStage,
+    WitnessOpenProver,
+    WitnessOpenVerifier,
     witness_opening_claim,
 )
 from zorch.spartan.r1cs import R1CS
 from zorch.spartan.zerocheck import (
     OuterProof,
-    OuterStage,
+    OuterProver,
+    OuterVerifier,
+    RowEvaluationClaim,
     ZerocheckClaim,
     ZerocheckWitness,
 )
-from zorch.stage import ProveResult, Stage, VerifyResult
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
 
 
@@ -67,54 +73,64 @@ class SpartanProof:
     witness_open: WitnessOpenProof
 
 
-class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
-    """Close a Spartan satisfiability claim through three child reductions."""
+def _observe_framed(transcript: Transcript, tag: int, values: Array) -> Transcript:
+    header = fnp.array([tag, values.ndim, *values.shape], values.dtype)
+    transcript = transcript.observe(header)
+    if values.size > 0:
+        transcript = transcript.observe(fnp.reshape(values, (-1,)))
+    return transcript
+
+
+def _absorb_claim(
+    transcript: Transcript,
+    claim: SpartanClaim,
+    commitment: Array,
+) -> Transcript:
+    # The dense matrices are the index in this prototype. An indexed Spartan
+    # replaces these frames with a verifier-key digest.
+    instance = claim.instance
+    transcript = _observe_framed(transcript, 1, instance.a)
+    transcript = _observe_framed(transcript, 2, instance.b)
+    transcript = _observe_framed(transcript, 3, instance.c)
+    transcript = _observe_framed(
+        transcript, 4, fnp.array([instance.num_io], instance.a.dtype)
+    )
+    transcript = _observe_framed(transcript, 5, commitment)
+    return _observe_framed(transcript, 6, claim.public_inputs)
+
+
+class SpartanProver(ProverStage[SpartanClaim, SpartanWitness, None, SpartanProof]):
+    """The Spartan prover role; owns the PCS proving capability only."""
 
     def __init__(
         self,
         pcs_prover: PcsProver[Any, Any, Any],
-        pcs_verifier: PcsVerifier[Any, Any],
         *,
-        outer: OuterStage | None = None,
-        inner: InnerStage | None = None,
-        witness_open: WitnessOpenStage | None = None,
-        challenges: ChallengePolicy | None = None,
+        outer: (
+            ProverStage[
+                ZerocheckClaim, ZerocheckWitness, RowEvaluationClaim, OuterProof
+            ]
+            | None
+        ) = None,
+        inner: (
+            ProverStage[
+                LincheckClaim, LincheckWitness, ColumnEvaluationClaim, InnerProof
+            ]
+            | None
+        ) = None,
+        witness_open: (
+            ProverStage[
+                WitnessOpeningClaim, WitnessOpeningWitness, None, WitnessOpenProof
+            ]
+            | None
+        ) = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
         self.pcs_prover = pcs_prover
-        self.outer = outer or OuterStage(challenges=self.challenges)
-        self.inner = inner or InnerStage(challenges=self.challenges)
-        self.witness_open = witness_open or WitnessOpenStage(pcs_prover, pcs_verifier)
-
-    @staticmethod
-    def _observe_framed(transcript: Transcript, tag: int, values: Array) -> Transcript:
-        header = fnp.array([tag, values.ndim, *values.shape], values.dtype)
-        transcript = transcript.observe(header)
-        if values.size > 0:
-            transcript = transcript.observe(fnp.reshape(values, (-1,)))
-        return transcript
-
-    @classmethod
-    def _absorb_claim(
-        cls,
-        transcript: Transcript,
-        claim: SpartanClaim,
-        commitment: Array,
-    ) -> Transcript:
-        # The dense matrices are the index in this prototype. An indexed Spartan
-        # replaces these three frames with the verifier-key digest, preserving the
-        # same binding contract without absorbing the full matrices per proof.
-        instance = claim.instance
-        transcript = cls._observe_framed(transcript, 1, instance.a)
-        transcript = cls._observe_framed(transcript, 2, instance.b)
-        transcript = cls._observe_framed(transcript, 3, instance.c)
-        transcript = cls._observe_framed(
-            transcript,
-            4,
-            fnp.array([instance.num_io], instance.a.dtype),
-        )
-        transcript = cls._observe_framed(transcript, 5, commitment)
-        return cls._observe_framed(transcript, 6, claim.public_inputs)
+        self.outer = outer or OuterProver(challenges=challenges)
+        self.inner = inner or InnerProver(challenges=challenges)
+        self.witness_open = witness_open or WitnessOpenProver(pcs_prover)
 
     def prove(
         self,
@@ -131,7 +147,7 @@ class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
             )
         witness_poly = assignment[: instance.num_vars_padded]
         commitment, prover_data = self.pcs_prover.commit([witness_poly])
-        transcript = self._absorb_claim(transcript, claim, commitment)
+        transcript = _absorb_claim(transcript, claim, commitment)
 
         az, bz, cz = instance.matvecs(assignment)
         outer = self.outer.prove(
@@ -142,9 +158,8 @@ class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
         batch, transcript = batch_claims(
             outer.reduced_claim.values, outer.transcript, self.challenges
         )
-        lincheck_claim = LincheckClaim(instance, outer.reduced_claim, batch)
         inner = self.inner.prove(
-            lincheck_claim,
+            LincheckClaim(instance, outer.reduced_claim, batch),
             LincheckWitness(assignment),
             transcript,
         )
@@ -161,13 +176,40 @@ class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
             WitnessOpeningWitness(prover_data),
             inner.transcript,
         )
-        reduction_proof = SpartanProof(
-            commitment,
-            outer.reduction_proof,
-            inner.reduction_proof,
-            opening.reduction_proof,
+        return ProveResult(
+            None,
+            SpartanProof(
+                commitment,
+                outer.reduction_proof,
+                inner.reduction_proof,
+                opening.reduction_proof,
+            ),
+            opening.transcript,
         )
-        return ProveResult(None, reduction_proof, opening.transcript)
+
+
+class SpartanVerifier(VerifierStage[SpartanClaim, None, SpartanProof]):
+    """The Spartan verifier role; owns the PCS verification capability only."""
+
+    def __init__(
+        self,
+        pcs_verifier: PcsVerifier[Any, Any],
+        *,
+        outer: (
+            VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof] | None
+        ) = None,
+        inner: (
+            VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerProof] | None
+        ) = None,
+        witness_open: (
+            VerifierStage[WitnessOpeningClaim, None, WitnessOpenProof] | None
+        ) = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
+    ) -> None:
+        self.challenges = challenges
+        self.outer = outer or OuterVerifier(challenges=challenges)
+        self.inner = inner or InnerVerifier(challenges=challenges)
+        self.witness_open = witness_open or WitnessOpenVerifier(pcs_verifier)
 
     def verify(
         self,
@@ -175,7 +217,7 @@ class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
         reduction_proof: SpartanProof,
         transcript: Transcript,
     ) -> VerifyResult[None]:
-        transcript = self._absorb_claim(transcript, claim, reduction_proof.commitment)
+        transcript = _absorb_claim(transcript, claim, reduction_proof.commitment)
         outer = self.outer.verify(
             ZerocheckClaim(claim.instance.s_x),
             reduction_proof.outer,
@@ -184,24 +226,21 @@ class Spartan(Stage[SpartanClaim, SpartanWitness, None, SpartanProof]):
         batch, transcript = batch_claims(
             outer.reduced_claim.values, outer.transcript, self.challenges
         )
-        lincheck_claim = LincheckClaim(claim.instance, outer.reduced_claim, batch)
         inner = self.inner.verify(
-            lincheck_claim,
+            LincheckClaim(claim.instance, outer.reduced_claim, batch),
             reduction_proof.inner,
             transcript,
         )
-        opening_claim = witness_opening_claim(
-            reduction_proof.commitment,
-            claim.instance,
-            claim.public_inputs,
-            outer.reduced_claim,
-            batch,
-            inner.reduced_claim,
-        )
         opening = self.witness_open.verify(
-            opening_claim,
+            witness_opening_claim(
+                reduction_proof.commitment,
+                claim.instance,
+                claim.public_inputs,
+                outer.reduced_claim,
+                batch,
+                inner.reduced_claim,
+            ),
             reduction_proof.witness_open,
             inner.transcript,
         )
-        ok = outer.ok & inner.ok & opening.ok
-        return VerifyResult(None, opening.transcript, ok)
+        return VerifyResult(None, opening.transcript, outer.ok & inner.ok & opening.ok)

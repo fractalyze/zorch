@@ -19,7 +19,7 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.spartan.r1cs import R1CS
-from zorch.spartan.spartan import Spartan, SpartanClaim
+from zorch.spartan.spartan import SpartanClaim, _absorb_claim
 from zorch.transcript import Transcript
 
 
@@ -63,7 +63,7 @@ def replay_challenges(
 ) -> dict[str, Array]:
     """Re-derive `(τ, r_x, r_batch, r_y)` by replaying the assembly's exact
     Fiat-Shamir schedule against the proof messages."""
-    t = Spartan._absorb_claim(transcript, SpartanClaim(instance, io), commitment)
+    t = _absorb_claim(transcript, SpartanClaim(instance, io), commitment)
     t, tau = t.sample(s_x)
     r_x = []
     for msg in outer_polys:

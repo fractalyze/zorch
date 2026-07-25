@@ -38,12 +38,21 @@ prover and verifier recurrences and packages their messages into its proof type.
 
 ## Stage: reduce one claim
 
-`Stage` is the common base class for paired proof reductions:
+A stage is one mathematical proof-reduction contract implemented by two
+separately deployable role interfaces:
 
 ```python
-prove(claim, witness, transcript) -> ProveResult[reduced_claim, reduction_proof]
-verify(claim, reduction_proof, transcript) -> VerifyResult[reduced_claim]
+ProverStage.prove(claim, witness, transcript)
+    -> ProveResult[reduced_claim, reduction_proof]
+VerifierStage.verify(claim, reduction_proof, transcript)
+    -> VerifyResult[reduced_claim]
 ```
+
+`Stage(prover, verifier)` is an optional pairing for conformance tests and local
+orchestration. It is not a deployment handle: prover and verifier objects may
+hold asymmetric capabilities, so deployed code constructs only its role. This
+is load-bearing for preprocessing schemes whose PCS proving key is large while
+the verification key is small.
 
 A **claim** is the public assertion entering the stage. A **witness** is the
 private evidence used by the prover. Both sides derive the same **reduced
@@ -63,23 +72,24 @@ names the operation performed by a stage, not a generic result object.
 it is not serialized separately. The verifier independently reconstructs the
 same value from the source claim, reduction proof, and transcript.
 
-A stage owns:
+The stage contract owns:
 
-- the pairing between its prover and verifier;
+- the pairing between its prover and verifier role types;
 - one proof type;
 - one source-claim and reduced-claim contract shared by both roles;
 - reusable static configuration;
 - an independently testable protocol boundary.
 
-A stage may drive round recurrences, perform PCS operations, or own child
-stages. Compilation boundaries are an independent performance decision. A
-prover-only helper, transcript schedule, or performance region is an ordinary
+A role implementation may drive round recurrences, perform PCS operations, or
+own child role implementations. Compilation boundaries are an independent
+performance decision. A prover-only helper, transcript schedule, or performance region is an ordinary
 function or class rather than an incomplete stage with a placeholder verifier.
 
 ## Composition is explicit
 
-A composite stage owns child stages and writes their dataflow in ordinary
-`prove` and `verify` methods, like a PyTorch module with a custom `forward`:
+A composite prover and verifier own only their corresponding child roles and
+write their dataflow in ordinary `prove` and `verify` methods, like PyTorch
+modules with custom `forward` methods:
 
 ```text
 claim + witness --------+---- outer ---- batch ---- inner ----+
@@ -109,17 +119,19 @@ claim. The parent can combine it with root-claim data or another earlier claim.
 Private skip-level values remain explicit parent locals and can contribute to a
 later witness without entering the public claim.
 
-`Spartan` is the reference composite stage. Its outer claim feeds both the
-inner stage and the terminal opening claim, while the witness commitment and
-PCS prover data skip directly to the opening stage. `LogUpGkrStage` is the
-second production reduction: its source claim owns the public output and layer
-count, while its reduced claim is the input-layer claim for a consumer's PCS
-opening. Both proofs use frozen dataclasses with named sections.
+`SpartanProver` and `SpartanVerifier` are the reference composite roles. Their
+outer reduced claim feeds both the inner role and the terminal opening claim,
+while the witness commitment and PCS prover data skip directly to the prover's
+opening role. `LogUpGkrProver` and `LogUpGkrVerifier` are the second production
+pair: their source claim owns the public output and layer count, while their
+reduced claim is the input-layer claim for a consumer's PCS opening. Both proofs use frozen dataclasses with named sections.
 
 ## State and ownership rules
 
 - The transcript is explicit in every round call and stage result.
-- Static configuration belongs on reusable round or stage instances.
+- Shared static configuration belongs on corresponding role instances.
+- Role-specific capabilities belong only on that role: proving keys never enter
+  verifier objects, and verification keys never enter prover objects.
 - Per-proof claims and witnesses are separate semantic input dataclasses.
 - Prover and verifier produce the same reduced-claim type.
 - Reduction proofs are conditional proofs of their source claims; they do not
@@ -186,7 +198,8 @@ Tests should pin the properties the abstractions cannot enforce themselves:
 - prover and verifier derive the same reduced claim at every boundary;
 - honest proofs verify;
 - mutating each named proof section rejects;
-- alternate injected round or PCS implementations preserve the stage contract;
+- alternate injected round or PCS implementations preserve the role contract;
+- a verifier role can be constructed without any prover capability;
 - compile count, runtime, and peak memory do not regress.
 
 The parent prover and verifier remain two explicit programs; one is not derived

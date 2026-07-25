@@ -38,7 +38,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.challenge import ChallengePolicy
+from zorch.challenge import DEFAULT_CHALLENGES, ChallengePolicy
 from zorch.round import Round
 from zorch.sumcheck.domain import (
     EvalDomain,
@@ -98,11 +98,11 @@ class StandardRound(Round):
         self,
         summand: SumcheckSummand,
         domain: EvalDomain | None = None,
-        challenges: ChallengePolicy | None = None,
+        challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
         self.summand = summand
         self.domain = domain
-        self.challenges = challenges or ChallengePolicy()
+        self.challenges = challenges
 
     def _round_poly(self, folded: Array) -> Array:
         """s sampled at `domain` (the natural {0..degree} evals by default), shape
@@ -133,8 +133,8 @@ class CompressedProductRound(Round):
     leading coefficient in any characteristic; over char 2 it coincides with the
     `(P0 + P1)` products some wire specs write it as."""
 
-    def __init__(self, challenges: ChallengePolicy | None = None) -> None:
-        self.challenges = challenges or ChallengePolicy()
+    def __init__(self, challenges: ChallengePolicy = DEFAULT_CHALLENGES) -> None:
+        self.challenges = challenges
 
     def _round_poly(self, folded: Array) -> Array:
         """`[c_0, c_2]` of `s(X) = Σ_x' f(X, x')·b(X, x')`, shape (2, *batch):
