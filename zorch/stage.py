@@ -23,6 +23,16 @@ ReductionProof = TypeVar("ReductionProof")
 
 
 @dataclass(frozen=True)
+class TrivialClaim:
+    """The claim that holds by construction, so nothing remains to prove.
+
+    A stage reducing to this is a complete argument rather than one link in a
+    chain: an argument of knowledge is exactly a reduction to the trivial
+    claim.
+    """
+
+
+@dataclass(frozen=True)
 class ProveResult(Generic[ReducedClaim, ReductionProof]):
     """A reduced claim, its conditional reduction proof, and the transcript."""
 

@@ -37,7 +37,13 @@ from zorch.spartan.zerocheck import (
     ZerocheckClaim,
     ZerocheckWitness,
 )
-from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
+from zorch.stage import (
+    ProveResult,
+    ProverStage,
+    TrivialClaim,
+    VerifierStage,
+    VerifyResult,
+)
 from zorch.transcript import Transcript
 
 
@@ -99,7 +105,9 @@ def _absorb_claim(
     return _observe_framed(transcript, 6, claim.public_inputs)
 
 
-class SpartanProver(ProverStage[SpartanClaim, SpartanWitness, None, SpartanProof]):
+class SpartanProver(
+    ProverStage[SpartanClaim, SpartanWitness, TrivialClaim, SpartanProof]
+):
     """The Spartan prover role; owns the PCS proving capability only."""
 
     def __init__(
@@ -120,7 +128,10 @@ class SpartanProver(ProverStage[SpartanClaim, SpartanWitness, None, SpartanProof
         ) = None,
         witness_open: (
             ProverStage[
-                WitnessOpeningClaim, WitnessOpeningWitness, None, WitnessOpenProof
+                WitnessOpeningClaim,
+                WitnessOpeningWitness,
+                TrivialClaim,
+                WitnessOpenProof,
             ]
             | None
         ) = None,
@@ -137,7 +148,7 @@ class SpartanProver(ProverStage[SpartanClaim, SpartanWitness, None, SpartanProof
         claim: SpartanClaim,
         witness: SpartanWitness,
         transcript: Transcript,
-    ) -> ProveResult[None, SpartanProof]:
+    ) -> ProveResult[TrivialClaim, SpartanProof]:
         instance = claim.instance
         assignment = witness.assignment
         if assignment.shape != (instance.num_cols,):
@@ -177,7 +188,7 @@ class SpartanProver(ProverStage[SpartanClaim, SpartanWitness, None, SpartanProof
             inner.transcript,
         )
         return ProveResult(
-            None,
+            TrivialClaim(),
             SpartanProof(
                 commitment,
                 outer.reduction_proof,
@@ -188,7 +199,7 @@ class SpartanProver(ProverStage[SpartanClaim, SpartanWitness, None, SpartanProof
         )
 
 
-class SpartanVerifier(VerifierStage[SpartanClaim, None, SpartanProof]):
+class SpartanVerifier(VerifierStage[SpartanClaim, TrivialClaim, SpartanProof]):
     """The Spartan verifier role; owns the PCS verification capability only."""
 
     def __init__(
@@ -202,7 +213,7 @@ class SpartanVerifier(VerifierStage[SpartanClaim, None, SpartanProof]):
             VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerProof] | None
         ) = None,
         witness_open: (
-            VerifierStage[WitnessOpeningClaim, None, WitnessOpenProof] | None
+            VerifierStage[WitnessOpeningClaim, TrivialClaim, WitnessOpenProof] | None
         ) = None,
         challenges: ChallengePolicy = DEFAULT_CHALLENGES,
     ) -> None:
@@ -216,7 +227,7 @@ class SpartanVerifier(VerifierStage[SpartanClaim, None, SpartanProof]):
         claim: SpartanClaim,
         reduction_proof: SpartanProof,
         transcript: Transcript,
-    ) -> VerifyResult[None]:
+    ) -> VerifyResult[TrivialClaim]:
         transcript = _absorb_claim(transcript, claim, reduction_proof.commitment)
         outer = self.outer.verify(
             ZerocheckClaim(claim.instance.s_x),
@@ -243,4 +254,6 @@ class SpartanVerifier(VerifierStage[SpartanClaim, None, SpartanProof]):
             reduction_proof.witness_open,
             inner.transcript,
         )
-        return VerifyResult(None, opening.transcript, outer.ok & inner.ok & opening.ok)
+        return VerifyResult(
+            TrivialClaim(), opening.transcript, outer.ok & inner.ok & opening.ok
+        )

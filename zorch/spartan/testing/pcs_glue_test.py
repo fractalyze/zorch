@@ -21,7 +21,7 @@ from zorch.spartan.r1cs import eval_public_half, recombine_z_eval
 from zorch.spartan.testing.dense_pcs import DensePcs
 from zorch.spartan.testing.toy import toy_r1cs
 from zorch.spartan.zerocheck import RowEvaluationClaim
-from zorch.stage import ProveResult
+from zorch.stage import ProveResult, TrivialClaim
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 
@@ -53,7 +53,7 @@ class WitnessOpenRoleTest(absltest.TestCase):
     def _run(self, seed: int) -> tuple[
         WitnessOpenVerifier,
         WitnessOpeningClaim,
-        ProveResult[None, WitnessOpenProof],
+        ProveResult[TrivialClaim, WitnessOpenProof],
     ]:
         instance, z, _, io = toy_r1cs(
             seed, s_x=3, num_vars_padded=4, num_io=2, dtype=KB
