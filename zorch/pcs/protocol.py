@@ -18,6 +18,20 @@ not a convention. A static commitment primitive (the Merkle `Mmcs`) has neither
 property and so stays a single unified building block — the split lives in the PCS
 layer that *uses* it, not in the primitive.
 
+**Superseded, pending migration.** Reason (2) no longer justifies a second paired
+abstraction: `ProverStage`/`VerifierStage` (`zorch/stage.py`) encode exactly that
+key isolation, so this pair now says what the stage roles already say. The target
+shape splits the two halves that genuinely differ — a committer for `commit`,
+which runs before any claim exists and so reduces nothing, and a terminal stage
+for the opening, whose claim is "the polynomials behind this commitment evaluate
+at these points", whose witness is the retained prover data, and which reduces to
+`TrivialClaim`. `spartan/pcs_glue.py` is that stage written once by hand and would
+collapse into the shared one.
+
+Migrating is all-or-nothing rather than per-family: `pcs/testing/protocol_test.py`
+types its round-trip driver against these protocols to pin *interchangeability*,
+so it cannot span two seam shapes. Every family moves in one change, or none do.
+
 **Wire types are generic parameters, conformance is mypy-enforced.** The
 commitment, retained prover data, and proof are scheme-defined: `PcsProver[C, D,
 P]` produces `C` and `D` from `commit` and `P` from `open`; `PcsVerifier[C, P]`
