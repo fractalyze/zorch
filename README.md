@@ -14,9 +14,7 @@ stacks **`Round`s** — the one composable unit the rest is threaded through.
 
 ## Installation
 
-**Python 3.11 on Linux x86_64.** `frxlib` publishes a single
-`cp311-cp311-manylinux_2_27_x86_64` wheel, so although its metadata says
-`>=3.11`, on 3.12 or on macOS pip finds nothing to install.
+**Python 3.11 on Linux x86_64 only.**
 
 Install as `pyzorch`, import as `zorch` — the `zorch` name on PyPI belongs to an
 unrelated project.
@@ -24,12 +22,8 @@ unrelated project.
 ### CPU
 
 ```sh
-pip install pyzorch frx frxlib
+pip install pyzorch
 ```
-
-`frx` is not a declared dependency of the wheel, deliberately: it is a
-GPU-correctness-sensitive, continuously bumped build that the consuming workspace
-has to pin exactly, so pinning it here would fight that.
 
 ### GPU (CUDA 12)
 
@@ -38,13 +32,8 @@ pip install pyzorch 'frx[cuda12]' \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The extra index is required, and only for the GPU tier. `frx[cuda12]` pulls
-`frx-cuda12-plugin`, which depends on `frx-cuda12-pjrt` — 129 MB against PyPI's
-100 MiB per-file limit, so PyPI carries only a `0.0.0` name-reservation stub and
-the real wheel is served from the Fractalyze index. A limit increase has been
-requested; when it lands this tier collapses into the CPU command above and the
-extra index goes away. Everything else in the chain (`nvidia-cublas-cu12` and
-friends) already comes from PyPI.
+The extra index carries the CUDA plugin wheels, which are too large for PyPI's
+per-file limit. It is not needed for the CPU tier.
 
 ### Verify
 
@@ -52,9 +41,7 @@ friends) already comes from PyPI.
 python -c "import frx, zorch; print(frx.devices()); print(zorch.__version__)"
 ```
 
-`[CpuDevice(id=0)]` means the CPU tier. A CUDA install prints the GPU devices; if
-it prints `CpuDevice` with a warning that a CUDA-enabled jaxlib is missing, the
-GPU tier did not take effect.
+`[CpuDevice(id=0)]` means the CPU tier; a CUDA install prints the GPU devices.
 
 ## Design Philosophy
 
