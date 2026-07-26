@@ -291,8 +291,18 @@ jobs:
   # PyPI files — there is nothing new to enumerate until they are attached.
   index-rebuild:
     name: Rebuild the Fractalyze index
-    if: github.event_name == 'release'
     needs: [attach]
+    # `!cancelled()` and the explicit result check are load-bearing, not
+    # boilerplate: without a status function the implicit guard walks the whole
+    # upstream graph, so any skipped ancestor silently skips this job. That bit
+    # riscv-witness's copy, where the build matrix is skipped on one of its two
+    # release paths — the index went without a wheel that had already reached
+    # PyPI. Nothing is skipped upstream here today, but the guard should not
+    # depend on that staying true.
+    if: >-
+      !cancelled()
+      && github.event_name == 'release'
+      && needs.attach.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger PyPI index rebuild
