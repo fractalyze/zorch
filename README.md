@@ -88,8 +88,8 @@ VerifierStage.verify(claim, reduction_proof, transcript)
     -> VerifyResult[reduced_claim]
 ```
 
-`Stage(prover, verifier)` can bundle matching role objects for conformance tests
-or local orchestration, but deployed code depends only on its role. A verifier
+The two roles are structural protocols, so an adapter conforms by shape without
+inheriting, and deployed code depends only on the role it runs. A verifier
 therefore never has to construct or retain a prover object or proving key.
 
 The claim is the public assertion entering the stage; the witness is the
@@ -205,7 +205,7 @@ universal context object or adapter stage.
 | --- | --- | --- | --- |
 | **Represents** | one step of a repeated recurrence | one conditional claim reduction with separate prover/verifier roles | shared framing, reduction, or security-amplification step without its own proof section |
 | **Owns** | the recurrence carry and the message on the wire | shared claim/proof contract; each role owns only its capabilities | no proof section |
-| **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a stage wrapping a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
+| **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
 | **Composed by** | a recurrence driver inside a stage role | an explicit parent role implementation | the parent whose transcript and soundness accounting require it |
 
 There is deliberately no separate “bridge” component. A domain separator,
@@ -227,9 +227,10 @@ its preconditions and security contribution documented there.
   protocol-specific setup, terminal checks, and exported claims.
 - **LogUp-GKR** reduces a public output-and-layer-count claim to an input-layer
   evaluation claim for a consumer's PCS opening.
-- **A PCS opening is a stage contract.** `WitnessOpenProver` owns only the
-  `PcsProver`; `WitnessOpenVerifier` owns only the `PcsVerifier`. PCS
-  implementations do not themselves implement stage roles.
+- **A PCS is a committer plus a terminal stage.** `commit` runs before any
+  claim exists, so it reduces nothing; the opening is a claim reduction and
+  every PCS implements the stage roles for it. Keeping the halves apart is what
+  keeps an O(degree) proving key out of a deployed verifier.
 - **A full proof system** can expose composite prover and verifier roles.
   `SpartanVerifier` is constructible with only a PCS verification key.
 
