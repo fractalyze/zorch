@@ -13,7 +13,6 @@ from frx import Array
 from zorch.stage import (
     ProveResult,
     ProverStage,
-    Stage,
     VerifierStage,
     VerifyResult,
 )
@@ -151,16 +150,6 @@ class _FoldVerifier(VerifierStage[_FoldClaim, Array, Array]):
 
 
 class StageTest(absltest.TestCase):
-    def test_pair_bundles_matching_roles_without_becoming_deployment_api(self) -> None:
-        stage = Stage(_CompositeProver(), _CompositeVerifier())
-        initial = fnp.array(11, KB)
-        proved = stage.prover.prove(initial, initial, cheap_transcript(KB))
-        verified = stage.verifier.verify(
-            initial, proved.reduction_proof, cheap_transcript(KB)
-        )
-        self.assertTrue(bool(verified.ok))
-        self.assertTrue(bool(verified.reduced_claim == proved.reduced_claim))
-
     def test_composite_rejects_tampered_child_proof(self) -> None:
         prover = _CompositeProver()
         verifier = _CompositeVerifier()

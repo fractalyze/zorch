@@ -69,15 +69,3 @@ class VerifierStage(ABC, Generic[Claim, ReducedClaim, ReductionProof]):
         reduction_proof: ReductionProof,
         transcript: Transcript,
     ) -> VerifyResult[ReducedClaim]: ...
-
-
-@dataclass(frozen=True)
-class Stage(Generic[Claim, Witness, ReducedClaim, ReductionProof]):
-    """Optional pairing of separately deployable roles for tests and tooling.
-
-    Deployment code should depend directly on ``ProverStage`` or
-    ``VerifierStage`` and therefore construct only the capabilities it owns.
-    """
-
-    prover: ProverStage[Claim, Witness, ReducedClaim, ReductionProof]
-    verifier: VerifierStage[Claim, ReducedClaim, ReductionProof]

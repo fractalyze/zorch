@@ -53,11 +53,11 @@ VerifierStage.verify(claim, reduction_proof, transcript)
     -> VerifyResult[reduced_claim]
 ```
 
-`Stage(prover, verifier)` is an optional pairing for conformance tests and local
-orchestration. It is not a deployment handle: prover and verifier objects may
-hold asymmetric capabilities, so deployed code constructs only its role. This
-is load-bearing for preprocessing schemes whose PCS proving key is large while
-the verification key is small.
+There is deliberately no paired handle bundling the two roles. Prover and
+verifier objects may hold asymmetric capabilities, so code constructs only the
+role it deploys — load-bearing for preprocessing schemes whose PCS proving key
+is large while the verification key is small. A test that needs both simply
+builds both.
 
 A **claim** is the public assertion entering the stage. A **witness** is the
 private evidence used by the prover. Both sides derive the same **reduced
