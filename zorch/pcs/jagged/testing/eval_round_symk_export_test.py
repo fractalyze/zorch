@@ -59,7 +59,7 @@ class SymbolicColumnEvalRoundExportTest(absltest.TestCase):
         ).view(BF)
 
     def _inputs(self, heights: list[int]) -> tuple[Array, Array, Array, Array]:
-        """(offsets, merged, weights, all_claims) as JaggedEvalRound builds them."""
+        """(offsets, merged, weights, all_claims) as prove_jagged_eval builds them."""
         l_max = len(heights)
         _, n_d = build_jagged_layout(heights, l_max, EF)
         assert n_d == _N_D

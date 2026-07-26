@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Byte-match the jagged-eval sumcheck Round against the SP1 pipeline dump.
 
-Drives ``JaggedEvalRound`` through ``prove_rounds`` (the composition path) with a
+Drives ``prove_jagged_eval`` with a
 scripted transcript replaying the dumped outer + inner challenges, and
 byte-matches the full sumcheck half: the outer Hadamard sumcheck ``Σ D·J̃``
 (round polys, folded point, ``dense_eval``) and the inner branching-program
@@ -28,11 +28,10 @@ from zk_dtypes import koalabear_mont, koalabearx4_mont
 
 from zorch.pcs.jagged.prover import (
     JaggedEvalInputs,
-    JaggedEvalRound,
     _eval_inputs,
     assemble_columns,
+    prove_jagged_eval,
 )
-from zorch.round import prove_rounds
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, sample_challenge
 
@@ -108,7 +107,7 @@ class _ScriptedTranscript:
         return self.sample(n)
 
 
-class JaggedEvalRoundByteMatchTest(absltest.TestCase):
+class JaggedEvalByteMatchTest(absltest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         meta = json.loads((_FIXTURE / "meta.json").read_text())
@@ -149,17 +148,13 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
             z_col=z_col,
             dense=dense,
         )
-        # Run via prove_rounds — the round must compose, not just stand alone.
         # The outer sumcheck samples its 23 alphas first, then the inner its 48.
         script = fnp.concatenate([outer_alphas, inner_alphas])
         # _ScriptedTranscript is a replay-only test double that reproduces the
         # dumped Fiat-Shamir stream rather than re-deriving it.
-        _, _, msgs = prove_rounds(
-            [JaggedEvalRound(dtype=EF)],
-            carry,
-            _ScriptedTranscript.create(script),
+        cls.msg, _ = prove_jagged_eval(
+            carry, _ScriptedTranscript.create(script), dtype=EF
         )
-        cls.msg = msgs[0]
 
     def _expect(self, name: str) -> np.ndarray:
         return np.load(_FIXTURE / "outputs" / name).reshape(-1)
@@ -216,7 +211,7 @@ class ChallengeRuleTest(absltest.TestCase):
             z_col=rand_ef(3, (1,)),
             dense=fnp.array([3, 5, 7, 11], dtype=BF),
         )
-        _, _, msg = JaggedEvalRound(dtype=EF)(inputs, cheap_transcript(BF))
+        msg, _ = prove_jagged_eval(inputs, cheap_transcript(BF), dtype=EF)
 
         # Independent replay of the stage's whole challenge stream off the
         # message: observe each round poly, take one extension sample, and

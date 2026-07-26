@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """SP1-schedule stacked BaseFold open — the second half of the stage-5 eval proof.
 
-The sumcheck half (``JaggedEvalRound``) reduces the trace opening to a single
+The sumcheck half (``prove_jagged_eval``) reduces the trace opening to a single
 claim ``D(z_final)`` over the committed dense buffer. This module opens that
 claim: it batch-opens the separately committed regions (preprocessed + main) at
 the trailing ``log_stacking_height`` coordinates of ``z_final`` via one shared

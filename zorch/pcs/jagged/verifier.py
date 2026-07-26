@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """SP1 jagged-eval verifier: the zorch-native dual of the stage-5 prover.
 
-``verify_jagged_eval_msg`` replays the sumcheck half (``JaggedEvalRound``):
+``verify_jagged_eval_msg`` replays the sumcheck half (``prove_jagged_eval``):
 the outer Hadamard sumcheck against the column claim recomputed from the
 zerocheck openings, the inner branching-program sumcheck against the proof's
 claimed J̃, the succinct branching-program leaf check at the reduced point,

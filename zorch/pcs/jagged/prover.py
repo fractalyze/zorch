@@ -1,10 +1,9 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """SP1-schedule jagged evaluation-proof sumcheck as one recurrence step.
 
-``JaggedEvalRound`` packages the sumcheck half of SP1's jagged evaluation phase
-behind the prover-round contract. It can participate in a recurrence whose carry
-is ``JaggedEvalInputs``; a coarse PCS stage may drive it internally alongside its
-verifier dual and the remaining opening work. It reproves SP1's jagged PCS
+``prove_jagged_eval`` is the sumcheck half of SP1's jagged evaluation phase;
+a PCS stage drives it alongside its verifier dual and the remaining opening
+work. It reproves SP1's jagged PCS
 opening sumchecks byte-identically: the OUTER Hadamard sumcheck
 ``Σ_i D(i)·J̃(i)`` over the committed dense buffer (round polys + ``dense_eval``)
 whose folded point feeds the INNER branching-program sumcheck reproving
@@ -51,14 +50,13 @@ from zorch.pcs.jagged.poly import (
 )
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_coeffs
-from zorch.round import ProverRound
 from zorch.transcript import Transcript, reinterpret_challenge, sample_challenge
 from zorch.utils.bits import log2_ceil_usize
 
 
 @dataclass(frozen=True)
 class JaggedEvalInputs:
-    """Carry into ``JaggedEvalRound``: the committed columns' jagged layout plus
+    """Input to ``prove_jagged_eval``: the committed columns' jagged layout plus
     the points the upstream rounds fixed.
 
     ``col_heights`` is the per-unit-column height list and ``all_claims`` the
@@ -390,7 +388,7 @@ def _eval_inputs(
     col_heights: Sequence[int], z_col: Array, dtype: Any
 ) -> tuple[Array, Array, Array]:
     """The column arrays plus the column-eq weights ``col_eq[:L]`` — the eager
-    ``JaggedEvalRound`` form, where ``z_col`` is already concrete."""
+    eager form, where ``z_col`` is already concrete."""
     l_max = len(col_heights)
     # col_eq = expand_eq(z_col) has 2^len(z_col) entries; too few z_col vars would
     # silently truncate weights[:l_max] below l_max and mismatch merged downstream.
@@ -404,46 +402,40 @@ def _eval_inputs(
     return offsets, merged, weights
 
 
-class JaggedEvalRound(ProverRound):
-    """One prover recurrence step for the jagged PCS evaluation sumchecks.
+def prove_jagged_eval(
+    inputs: JaggedEvalInputs, transcript: Transcript, *, dtype: Any
+) -> tuple[JaggedEvalMsg, Transcript]:
+    """The jagged PCS evaluation sumchecks over a `JaggedEvalInputs`.
 
-    ``__call__`` maps ``(JaggedEvalInputs, transcript)`` to the unchanged carry,
-    advanced transcript, and ``JaggedEvalMsg``. It runs the full sumcheck
-    half: the outer Hadamard sumcheck ``Σ D·J̃`` over the committed dense buffer
-    (round polys + ``dense_eval``), whose folded point ``z_final`` then feeds the
-    inner branching-program sumcheck reproving ``J̃(z_row, z_col, z_final)``. See
-    the module docstring for why both are bespoke loops, not ``SumcheckRound``s.
+    Runs the full sumcheck half: the outer Hadamard sumcheck ``Sum D*J~`` over
+    the committed dense buffer (round polys + ``dense_eval``), whose folded
+    point ``z_final`` then feeds the inner branching-program sumcheck reproving
+    ``J~(z_row, z_col, z_final)``. See the module docstring for why both are
+    bespoke loops, not ``SumcheckRound``s.
 
-    Host-prepares the column arrays from ``col_heights`` then defers to
-    ``eval_round_core`` (shape-polymorphic in the column count)."""
-
-    def __init__(self, *, dtype: Any) -> None:
-        self._dtype = dtype
-
-    def __call__(
-        self, inputs: JaggedEvalInputs, transcript: Transcript
-    ) -> tuple[JaggedEvalInputs, Transcript, JaggedEvalMsg]:
-        offsets, merged, weights = _eval_inputs(
-            inputs.col_heights, inputs.z_col, self._dtype
-        )
-        msg, transcript = eval_round_core(
-            offsets,
-            merged,
-            weights,
-            inputs.all_claims,
-            inputs.dense,
-            inputs.z_row,
-            inputs.z_col,
-            transcript,
-            dtype=self._dtype,
-        )
-        return inputs, transcript, msg
+    A function rather than a round: it reduces no carry — the layout it is
+    handed is the layout it proves — so there is nothing for a recurrence to
+    thread. Host-prepares the column arrays from ``col_heights`` then defers to
+    ``eval_round_core`` (shape-polymorphic in the column count).
+    """
+    offsets, merged, weights = _eval_inputs(inputs.col_heights, inputs.z_col, dtype)
+    return eval_round_core(
+        offsets,
+        merged,
+        weights,
+        inputs.all_claims,
+        inputs.dense,
+        inputs.z_row,
+        inputs.z_col,
+        transcript,
+        dtype=dtype,
+    )
 
 
 __all__ = [
     "JaggedEvalInputs",
     "JaggedEvalMsg",
-    "JaggedEvalRound",
+    "prove_jagged_eval",
     "assemble_col_heights",
     "assemble_columns",
     "eval_column_arrays",
