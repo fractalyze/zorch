@@ -4,13 +4,19 @@
 A stage is one mathematical claim-reduction contract. Its prover and verifier
 are separate runtime objects so role-specific capabilities, especially proving
 and verification keys, never need to share an object.
+
+The roles are structural, like `ProverRound`/`VerifierRound` and `Transcript`:
+an adapter or a wrapper conforms by shape, without inheriting. They keep
+`@abstractmethod`, so a class that *does* subclass one still fails loudly at
+construction if it leaves a role method unimplemented — structural conformance
+for foreign types, nominal enforcement for its own implementers.
 """
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, Protocol, TypeVar
 
 from frx import Array
 
@@ -20,6 +26,13 @@ Claim = TypeVar("Claim")
 Witness = TypeVar("Witness")
 ReducedClaim = TypeVar("ReducedClaim")
 ReductionProof = TypeVar("ReductionProof")
+
+# Argument-position parameters are contravariant, which is the contract read
+# out loud: both roles consume a claim, the prover consumes a witness, and the
+# reduction proof the prover produces is the one the verifier consumes.
+Claim_contra = TypeVar("Claim_contra", contravariant=True)
+Witness_contra = TypeVar("Witness_contra", contravariant=True)
+ReductionProof_contra = TypeVar("ReductionProof_contra", contravariant=True)
 
 
 @dataclass(frozen=True)
@@ -50,22 +63,25 @@ class VerifyResult(Generic[ReducedClaim]):
     ok: Array
 
 
-class ProverStage(ABC, Generic[Claim, Witness, ReducedClaim, ReductionProof]):
+class ProverStage(Protocol[Claim_contra, Witness_contra, ReducedClaim, ReductionProof]):
     """The prover role of one conditional claim reduction."""
 
     @abstractmethod
     def prove(
-        self, claim: Claim, witness: Witness, transcript: Transcript
+        self,
+        claim: Claim_contra,
+        witness: Witness_contra,
+        transcript: Transcript,
     ) -> ProveResult[ReducedClaim, ReductionProof]: ...
 
 
-class VerifierStage(ABC, Generic[Claim, ReducedClaim, ReductionProof]):
+class VerifierStage(Protocol[Claim_contra, ReducedClaim, ReductionProof_contra]):
     """The verifier role of the same conditional claim reduction."""
 
     @abstractmethod
     def verify(
         self,
-        claim: Claim,
-        reduction_proof: ReductionProof,
+        claim: Claim_contra,
+        reduction_proof: ReductionProof_contra,
         transcript: Transcript,
     ) -> VerifyResult[ReducedClaim]: ...

@@ -27,9 +27,7 @@ from zorch.pcs.ligerito.verifier import LigeritoVerifier
 from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.stage import (
     ProveResult,
-    ProverStage,
     TrivialClaim,
-    VerifierStage,
     VerifyResult,
 )
 from zorch.transcript import Transcript
@@ -53,14 +51,7 @@ def _make_code(message_len: int, log_inv_rate: int) -> ReedSolomon:
     return ReedSolomon(message_len=message_len, blowup=1 << log_inv_rate, dtype=EF)
 
 
-class LigeritoSpartanProver(
-    ProverStage[
-        OpeningClaim[Array],
-        OpeningWitness[LigeritoProverData],
-        TrivialClaim,
-        OpeningProof[LigeritoProof],
-    ]
-):
+class LigeritoSpartanProver:
     """Committer + opening stage bridging the base-field witness to
     `LigeritoProver`."""
 
@@ -87,9 +78,7 @@ class LigeritoSpartanProver(
         )
 
 
-class LigeritoSpartanVerifier(
-    VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[LigeritoProof]]
-):
+class LigeritoSpartanVerifier:
     """Opening-stage dual of `LigeritoSpartanProver`."""
 
     def __init__(self, config: LigeritoConfig) -> None:

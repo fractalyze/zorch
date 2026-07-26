@@ -184,5 +184,35 @@ class StageTest(absltest.TestCase):
         self.assertTrue(bool(prover_acc == verifier_acc))
 
 
+class RoleShapeTest(absltest.TestCase):
+    """The roles are structural, but still enforced on their own implementers."""
+
+    def test_a_conforming_class_need_not_inherit(self) -> None:
+        # What an adapter or a wrapper over a foreign type relies on: matching
+        # `prove` is enough, no inheritance.
+        class DuckProver:
+            def prove(self, claim, witness, transcript):  # type: ignore[no-untyped-def]
+                return ProveResult(claim, witness, transcript)
+
+        def drive(
+            p: ProverStage[Array, Array, Array, Array],
+            claim: Array,
+        ) -> ProveResult[Array, Array]:
+            return p.prove(claim, claim, cheap_transcript(KB))
+
+        claim = fnp.array(3, KB)
+        self.assertTrue(bool(drive(DuckProver(), claim).reduced_claim == claim))
+
+    def test_an_explicit_subclass_must_implement_its_role(self) -> None:
+        # Structural conformance does not weaken the check on classes that do
+        # declare the role: an unimplemented `prove` fails at construction.
+        class Incomplete(ProverStage[Array, Array, Array, Array]):
+            pass
+
+        with self.assertRaises(TypeError):
+            # mypy flags this too, which is the other half of the guarantee.
+            Incomplete()  # type: ignore[abstract]
+
+
 if __name__ == "__main__":
     absltest.main()

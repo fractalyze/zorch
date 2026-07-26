@@ -12,23 +12,13 @@ from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
 from zorch.stage import (
     ProveResult,
-    ProverStage,
     TrivialClaim,
-    VerifierStage,
     VerifyResult,
 )
 from zorch.transcript import Transcript
 
 
-class DensePcs(
-    ProverStage[
-        OpeningClaim[Array],
-        OpeningWitness[tuple[Array, ...]],
-        TrivialClaim,
-        OpeningProof[Array],
-    ],
-    VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[Array]],
-):
+class DensePcs:
     """A transparent test PCS whose commitment is the polynomial evaluation table."""
 
     def commit(self, polys: Sequence[Array]) -> tuple[Array, tuple[Array, ...]]:
