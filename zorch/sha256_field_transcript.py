@@ -91,7 +91,7 @@ def _u32_le_bytes(values: Array) -> Array:
 # finalize emits both padding candidates: four `zorch.sha256` regions, each a
 # fusion barrier, so the scalar bookkeeping between them cannot merge either.
 # That is ~14 GPU launches per `sample_scalar`, and on a latency-bound prove the
-# cost is the launch count, not the arithmetic (measurements in fractalyze/zorch#501).
+# cost is the launch count, not the arithmetic.
 #
 # The decomposition is the plain `_squeeze_hop`, so with no emitter the marker
 # inlines byte-identically. `pending_len` / `total_len` ride as runtime OPERANDS
@@ -177,6 +177,10 @@ class Sha256FieldTranscript:
 
     state: Sha256State
     dtype: Any
+
+    @property
+    def field(self) -> Any:
+        return self.dtype
 
     @property
     def has_dedicated_fusion(self) -> bool:
@@ -331,7 +335,7 @@ class Sha256FieldTranscript:
     def _elem_bytes(self, values: Array) -> Array:
         """Element array -> uint8 `[..., itemsize]` — a direct bitcast to bytes.
         (The wide-binary-field <-> uint8 bitcast once miscompiled on the CPU
-        PJRT backend, flock-zorch#75, forcing a uint32-lane detour; that is
+        PJRT backend, forcing a uint32-lane detour; that is
         fixed as of the dev20260713 stack.)"""
         return lax.bitcast_convert_type(values, fnp.uint8)
 

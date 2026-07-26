@@ -1,111 +1,150 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""RLC combinator + inner sumcheck (lincheck) stages.
-
-- **`Rlc*`** — samples one batching challenge `r` and folds the three outer claims
-  into `joint = Az + r·Bz + r²·Cz`
-  (`docs/composition/stage-composition.md`'s "RLC openings into claims under a
-  fresh challenge"). Transcript-only glue, so it emits `None`.
-
-- **`Inner*`** — a degree-2 product sumcheck proving `joint = Σ_y M(y)·z̃(y)`, with
-  `M(y) = Σ_i eq(r_x)_i·(A+rB+r²C)_{i,y}` the row-bound batched matrix. It reduces
-  to `(r_y, inner_final)`; the terminal `inner_final == eval_ABC · z̃(r_y)` closes
-  in the PCS glue. The per-variable engine is injected (`StageSumcheck`, default
-  `lincheck_engine`), so a caller can swap the algorithm / domain / wire form.
-"""
+"""Spartan claim batching and inner lincheck roles."""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass
+from typing import Any
 
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.prove import fold_rounds
-from zorch.round import Bridge, Stage
-from zorch.spartan.carry import SpartanCarry, _require
-from zorch.spartan.engine import StageSumcheck, lincheck_engine
+from zorch.challenge import ChallengePolicy
 from zorch.spartan.r1cs import R1CS
+from zorch.spartan.zerocheck import RowEvaluationClaim
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
+from zorch.sumcheck.prover import ProductSummand, StandardRound
+from zorch.sumcheck.stage import (
+    EvaluationClaim,
+    SumcheckProver,
+    SumcheckVerifier,
+    SumcheckWitness,
+    SumClaim,
+)
+from zorch.sumcheck.verifier import SumcheckRound
 from zorch.transcript import Transcript
-from zorch.verify import verify
 
 
-def _joint_claim(claims_outer: Array, r: Array) -> Array:
-    """`Az + r·Bz + r²·Cz` — the three outer claims batched by powers of `r`."""
-    va, vb, vc = claims_outer[0], claims_outer[1], claims_outer[2]
-    return va + r * vb + r * r * vc
+@dataclass(frozen=True)
+class BatchedClaims:
+    """The RLC challenge and joint value derived between the two stages."""
+
+    challenge: Array
+    joint: Array
 
 
-class RlcProver(Bridge):
-    """Sample the batching challenge; fold the outer claims into `joint_claim`."""
-
-    def __call__(
-        self, carry: SpartanCarry, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, None]:
-        claims = _require(carry.claims_outer, "claims_outer", "outer")
-        transcript, r = transcript.sample(1)
-        r = r[0]
-        carry = replace(carry, r_batch=r, joint_claim=_joint_claim(claims, r))
-        return carry, transcript, None
+def _joint_claim(claims: Array, challenge: Array) -> Array:
+    va, vb, vc = claims[0], claims[1], claims[2]
+    return va + challenge * vb + challenge * challenge * vc
 
 
-class RlcVerifier(Bridge):
-    """Verifier dual of `RlcProver`: replay the same sample and fold."""
-
-    def __call__(
-        self, carry: SpartanCarry, msg: None, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, Array]:
-        del msg  # transcript-only round — the prover sends no proof message
-        claims = _require(carry.claims_outer, "claims_outer", "outer")
-        transcript, r = transcript.sample(1)
-        r = r[0]
-        carry = replace(carry, r_batch=r, joint_claim=_joint_claim(claims, r))
-        return carry, transcript, fnp.bool_(True)
+def batch_claims(
+    claims: Array,
+    transcript: Transcript,
+    challenges: ChallengePolicy,
+) -> tuple[BatchedClaims, Transcript]:
+    """Sample the batching challenge and derive the joint value."""
+    transcript, challenge = challenges.sample(transcript)
+    return BatchedClaims(challenge, _joint_claim(claims, challenge)), transcript
 
 
-class InnerProver(Stage):
-    """Prover for the lincheck stage; holds the instance and assignment `z` as
-    stage-local witness. Inject `sumcheck` to swap the per-variable engine."""
+@dataclass(frozen=True)
+class LincheckClaim:
+    """Public claim reduced by the inner linearization sumcheck."""
+
+    instance: R1CS
+    row: RowEvaluationClaim
+    batch: BatchedClaims
+
+
+@dataclass(frozen=True)
+class LincheckWitness:
+    """Private assignment witnessing a ``LincheckClaim``."""
+
+    assignment: Array
+
+
+@dataclass(frozen=True)
+class ColumnEvaluationClaim:
+    """Claimed matrix-times-assignment evaluation at the column point."""
+
+    point: Array
+    value: Array
+
+
+@dataclass(frozen=True)
+class InnerProof:
+    """The inner sumcheck reduction proof."""
+
+    sumcheck: Any
+
+
+class InnerProver(
+    ProverStage[LincheckClaim, LincheckWitness, ColumnEvaluationClaim, InnerProof]
+):
+    """Prove lincheck conditional on a column-evaluation claim."""
 
     def __init__(
-        self, instance: R1CS, z: Array, *, sumcheck: StageSumcheck | None = None
+        self,
+        *,
+        sumcheck: (
+            ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Any] | None
+        ) = None,
+        challenges: ChallengePolicy,
     ) -> None:
-        self.instance = instance
-        self.z = z
-        self.sumcheck = sumcheck or lincheck_engine()
-
-    def __call__(
-        self, carry: SpartanCarry, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, Array]:
-        r_x = _require(carry.r_x, "r_x", "outer")
-        r = _require(carry.r_batch, "r_batch", "RLC")
-        joint = _require(carry.joint_claim, "joint_claim", "RLC")
-        m = self.instance.combined_row_mle(r_x, r)
-        state = fnp.stack([m, self.z])
-        pre = transcript
-        _, transcript, msgs = fold_rounds(
-            self.sumcheck.prover_round, state, pre, self.instance.s_y
+        self.sumcheck = sumcheck or SumcheckProver(
+            StandardRound(ProductSummand(2), challenges=challenges),
+            SumcheckRound(2, challenges),
         )
-        round_polys = fnp.stack(msgs)
-        # Recover r_y by replaying the injected verifier round (point is
-        # independent of the claim value).
-        r_y, _, _, _ = verify(self.sumcheck.verifier_round, joint, round_polys, pre)
-        carry = replace(carry, r_y=r_y)
-        return carry, transcript, round_polys
 
-
-class InnerVerifier(Stage):
-    """Verifier for the lincheck sumcheck: reduce `joint_claim` to `(r_y,
-    inner_final)`. The terminal identity closes in the PCS glue."""
-
-    def __init__(self, *, sumcheck: StageSumcheck | None = None) -> None:
-        self.sumcheck = sumcheck or lincheck_engine()
-
-    def __call__(
-        self, carry: SpartanCarry, msg: Array, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, Array]:
-        joint = _require(carry.joint_claim, "joint_claim", "RLC")
-        r_y, inner_final, transcript, ok = verify(
-            self.sumcheck.verifier_round, joint, msg, transcript
+    def prove(
+        self,
+        claim: LincheckClaim,
+        witness: LincheckWitness,
+        transcript: Transcript,
+    ) -> ProveResult[ColumnEvaluationClaim, InnerProof]:
+        matrix = claim.instance.combined_row_mle(claim.row.point, claim.batch.challenge)
+        state = fnp.stack([matrix, witness.assignment])
+        reduced = self.sumcheck.prove(
+            SumClaim(claim.batch.joint, claim.instance.s_y),
+            SumcheckWitness(state),
+            transcript,
         )
-        carry = replace(carry, r_y=r_y, inner_final=inner_final)
-        return carry, transcript, ok
+        return ProveResult(
+            ColumnEvaluationClaim(
+                reduced.reduced_claim.point, reduced.reduced_claim.value
+            ),
+            InnerProof(reduced.reduction_proof),
+            reduced.transcript,
+        )
+
+
+class InnerVerifier(VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerProof]):
+    """Verify lincheck conditional on a column-evaluation claim."""
+
+    def __init__(
+        self,
+        *,
+        sumcheck: VerifierStage[SumClaim, EvaluationClaim, Any] | None = None,
+        challenges: ChallengePolicy,
+    ) -> None:
+        self.sumcheck = sumcheck or SumcheckVerifier(SumcheckRound(2, challenges))
+
+    def verify(
+        self,
+        claim: LincheckClaim,
+        reduction_proof: InnerProof,
+        transcript: Transcript,
+    ) -> VerifyResult[ColumnEvaluationClaim]:
+        reduced = self.sumcheck.verify(
+            SumClaim(claim.batch.joint, claim.instance.s_y),
+            reduction_proof.sumcheck,
+            transcript,
+        )
+        return VerifyResult(
+            ColumnEvaluationClaim(
+                reduced.reduced_claim.point, reduced.reduced_claim.value
+            ),
+            reduced.transcript,
+            reduced.ok,
+        )

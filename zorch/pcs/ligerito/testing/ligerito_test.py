@@ -3,7 +3,7 @@
 multiplicative Reed-Solomon code, against an independent multilinear evaluation
 (`eval_mle`) of the committed polynomial. Reed-Solomon is the de-risk vehicle for
 the code-generic recursion; the binary-field (GHASH) instantiation is deferred to
-the additive-NTT code (fractalyze/flock-zorch#11, #27).
+the additive-NTT code.
 """
 from __future__ import annotations
 
@@ -167,9 +167,9 @@ class LigeritoTest(parameterized.TestCase):
         )
         prover, verifier, root, f, pdata = _setup(cfg)
         z = _rand_ef(2, (cfg.num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
-        ok, _ = verifier.verify(root, [z], value, proof, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], value, proof, _transcript())
         self.assertTrue(bool(ok))
 
 
@@ -193,7 +193,7 @@ class LigeritoTamperTest(parameterized.TestCase):
     ]:
         prover, verifier, root, f, pdata = _setup(_TAMPER_CFG)
         z = _rand_ef(3, (_TAMPER_CFG.num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         return verifier, root, z, value, proof
 
     def _reject(
@@ -204,7 +204,7 @@ class LigeritoTamperTest(parameterized.TestCase):
         value: fnp.ndarray,
         proof: LigeritoProof,
     ) -> None:
-        ok, _ = verifier.verify(root, [z], value, proof, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], value, proof, _transcript())
         self.assertFalse(bool(ok))
 
     def test_rejects_tampered_recursive_root(self) -> None:
@@ -260,7 +260,7 @@ class LigeritoTamperTest(parameterized.TestCase):
     def test_rejects_missing_ood_value(self) -> None:
         verifier, root, z, value, proof = self._open()
         with self.assertRaisesRegex(ValueError, "OOD values"):
-            verifier.verify(
+            verifier._verify_opening(
                 root,
                 [z],
                 value,
@@ -276,7 +276,7 @@ class _FlockShapedChoreography(LigeritoChoreography):
     emission, tapered per-fold PoW, unconditional per-level query PoW (0 bits
     still advances the stream), rejection-sampled distinct sorted queries, and
     element-wise residual framing — the zorch-side rehearsal of the byte-fixed
-    consumer (fractalyze/flock-zorch#32), exercising every seam hook at once."""
+    consumer, exercising every seam hook at once."""
 
     fold_bits: tuple[int, ...] = ()
     query_bits: tuple[int, ...] = ()
@@ -346,12 +346,12 @@ class LigeritoChoreographyTest(parameterized.TestCase):
         f = _rand_ef(1, (1 << cfg.num_vars,))
         root, pdata = prover.commit([f])
         z = _rand_ef(2, (cfg.num_vars,))
-        value, proof, t_open = prover.open(pdata, [z], _transcript())
+        value, proof, t_open = prover._open(pdata, [z], _transcript())
         self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
         # The eager wire carries the extras: initial + post-fold + introduces.
         self.assertEqual(len(proof.sumcheck_messages), chor.num_messages(cfg))
         self.assertEqual(len(proof.pow_witnesses), chor.num_pow_witnesses(cfg))
-        ok, t_verify = verifier.verify(root, [z], value, proof, _transcript())
+        ok, t_verify = verifier._verify_opening(root, [z], value, proof, _transcript())
         self.assertTrue(bool(ok))
         _, s_open = t_open.sample()
         _, s_verify = t_verify.sample()
@@ -402,9 +402,11 @@ class LigeritoBasisConventionTest(parameterized.TestCase):
             )
         else:
             z = _rand_ef(4, (cfg.num_vars,))
-            value, proof, t_open = prover.open(pdata, [z], _transcript())
+            value, proof, t_open = prover._open(pdata, [z], _transcript())
             self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
-            ok, t_verify = verifier.verify(root, [z], value, proof, _transcript())
+            ok, t_verify = verifier._verify_opening(
+                root, [z], value, proof, _transcript()
+            )
         self.assertTrue(bool(ok))
         _, s_open = t_open.sample()
         _, s_verify = t_verify.sample()
@@ -450,7 +452,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         f = _rand_ef(1, (1 << _FLOCK_TAMPER_CFG.num_vars,))
         root, pdata = prover.commit([f])
         z = _rand_ef(3, (_FLOCK_TAMPER_CFG.num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         return verifier, root, z, value, proof
 
     def test_rejects_tampered_pow_witness(self) -> None:
@@ -459,7 +461,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         verifier, root, z, value, proof = self._open()
         wits = list(proof.pow_witnesses)
         wits[0] = wits[0] + fnp.array(1, F)
-        ok, _ = verifier.verify(
+        ok, _ = verifier._verify_opening(
             root,
             [z],
             value,
@@ -474,7 +476,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         verifier, root, z, value, proof = self._open()
         msgs = list(proof.sumcheck_messages)
         msgs[2] = msgs[2] + fnp.array(1, EF)
-        ok, _ = verifier.verify(
+        ok, _ = verifier._verify_opening(
             root,
             [z],
             value,
@@ -488,7 +490,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
         verifier, root, z, value, proof = self._open()
         msgs = list(proof.sumcheck_messages)
         msgs[-1] = msgs[-1] + fnp.array(1, EF)
-        ok, _ = verifier.verify(
+        ok, _ = verifier._verify_opening(
             root,
             [z],
             value,
@@ -500,7 +502,7 @@ class LigeritoChoreographyTamperTest(absltest.TestCase):
     def test_rejects_missing_pow_witness(self) -> None:
         verifier, root, z, value, proof = self._open()
         with self.assertRaisesRegex(ValueError, "proof-of-work"):
-            verifier.verify(
+            verifier._verify_opening(
                 root,
                 [z],
                 value,
@@ -544,8 +546,8 @@ class LigeritoWireGoldenTest(parameterized.TestCase):
         )
         prover, verifier, root, _, pdata = _setup(cfg)
         z = _rand_ef(2, (cfg.num_vars,))
-        value, proof, t_open = prover.open(pdata, [z], _transcript())
-        ok, t_verify = verifier.verify(root, [z], value, proof, _transcript())
+        value, proof, t_open = prover._open(pdata, [z], _transcript())
+        ok, t_verify = verifier._verify_opening(root, [z], value, proof, _transcript())
         self.assertTrue(bool(ok))
         _, s_open = t_open.sample()
         _, s_verify = t_verify.sample()

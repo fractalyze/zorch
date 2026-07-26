@@ -10,14 +10,22 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
-from zorch.spartan import spartan
-from zorch.spartan.pcs_glue import DensePcs
 from zorch.spartan.r1cs import R1CS
+from zorch.spartan.spartan import (
+    SpartanClaim,
+    SpartanProof,
+    SpartanProver,
+    SpartanWitness,
+)
 from zorch.spartan.summand import ZerocheckSummand
+from zorch.spartan.testing.dense_pcs import DensePcs
 from zorch.spartan.testing.reference import naive_round_polys, replay_challenges
 from zorch.spartan.testing.toy import toy_r1cs
+from zorch.sumcheck.domain import natural_domain
+from zorch.sumcheck.eq.eq_poly import EqPolyRound
 from zorch.sumcheck.prover import ProductSummand, StandardRound
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
@@ -25,21 +33,30 @@ from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
+
 
 def _prove(
     seed: int, s_x: int, nvp: int, num_io: int
-) -> tuple[R1CS, Array, Array, spartan.SpartanProof, dict[str, Array]]:
+) -> tuple[R1CS, Array, Array, SpartanProof, dict[str, Array]]:
     inst, z, _, io = toy_r1cs(
         seed, s_x=s_x, num_vars_padded=nvp, num_io=num_io, dtype=KB
     )
-    proof, _ = spartan.prove(inst, z, io, DensePcs(), cheap_transcript(KB))
+    pcs = DensePcs()
+    proof = (
+        SpartanProver(pcs, challenges=_CH)
+        .prove(SpartanClaim(inst, io), SpartanWitness(z), cheap_transcript(KB))
+        .reduction_proof
+    )
     ch = replay_challenges(
         cheap_transcript(KB),
+        inst,
         proof.commitment,
         io,
-        proof.messages[0][0],
-        proof.messages[0][1],
-        proof.messages[2],
+        proof.outer.sumcheck,
+        proof.outer.claims,
+        proof.inner.sumcheck,
         inst.s_x,
     )
     return inst, z, io, proof, ch
@@ -49,8 +66,8 @@ class StructuralCrossCheckTest(absltest.TestCase):
     def test_round_poly_degrees(self) -> None:
         # Hard invariant: outer degree 3 (4 evals), inner degree 2 (3 evals).
         inst, _, _, proof, _ = _prove(1, s_x=3, nvp=4, num_io=2)
-        outer_polys = proof.messages[0][0]
-        inner_polys = proof.messages[2]
+        outer_polys = proof.outer.sumcheck
+        inner_polys = proof.inner.sumcheck
         self.assertEqual(outer_polys.shape, (inst.s_x, 4))
         self.assertEqual(inner_polys.shape, (inst.s_y, 3))
 
@@ -61,11 +78,11 @@ class StructuralCrossCheckTest(absltest.TestCase):
         ref_polys, final = naive_round_polys(
             [e, az, bz, cz], lambda e, a, b, c: e * (a * b - c), 3, list(ch["r_x"])
         )
-        got = proof.messages[0][0]
+        got = proof.outer.sumcheck
         for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
             self.assertTrue(bool(fnp.all(g == ref)), f"outer round {j}")
         # final claimed evals == (Az,Bz,Cz)(r_x).
-        claims = proof.messages[0][1]
+        claims = proof.outer.claims
         self.assertTrue(
             bool(fnp.all(claims == fnp.stack([final[1][0], final[2][0], final[3][0]])))
         )
@@ -75,7 +92,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         from zorch.poly.univariate import eval_univariate
 
         inst, _, _, proof, ch = _prove(3, s_x=3, nvp=4, num_io=2)
-        polys = proof.messages[0][0]
+        polys = proof.outer.sumcheck
         claim = fnp.zeros((), KB)
         for j in range(inst.s_x):
             s = polys[j]
@@ -85,7 +102,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
     def test_batching_is_powers_of_r(self) -> None:
         # joint_claim == vA + r·vB + r²·vC (powers of one challenge).
         inst, z, _, proof, ch = _prove(4, s_x=3, nvp=4, num_io=2)
-        va, vb, vc = proof.messages[0][1]
+        va, vb, vc = proof.outer.claims
         r = ch["r_batch"]
         want = va + r * vb + r * r * vc
         # recompute joint via the reference: the inner sumcheck's claim_0.
@@ -97,7 +114,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
         inst, z, _, proof, ch = _prove(5, s_x=3, nvp=4, num_io=2)
         m = inst.combined_row_mle(ch["r_x"], ch["r_batch"])
         ref_polys, _ = naive_round_polys([m, z], lambda a, b: a * b, 2, list(ch["r_y"]))
-        got = proof.messages[2]
+        got = proof.inner.sumcheck
         for j, (g, ref) in enumerate(zip(got, ref_polys, strict=True)):
             self.assertTrue(bool(fnp.all(g == ref)), f"inner round {j}")
 
@@ -107,7 +124,7 @@ class StructuralCrossCheckTest(absltest.TestCase):
 
         inst, z, _, proof, ch = _prove(6, s_x=3, nvp=4, num_io=2)
         # inner_final = last inner round poly at r_y[-1].
-        inner_polys = proof.messages[2]
+        inner_polys = proof.inner.sumcheck
         claim = fnp.sum(inst.combined_row_mle(ch["r_x"], ch["r_batch"]) * z)
         for j in range(inst.s_y):
             claim = eval_univariate(inner_polys[j], ch["r_y"][j])
@@ -118,15 +135,22 @@ class StructuralCrossCheckTest(absltest.TestCase):
 
 class StageFusionTest(absltest.TestCase):
     def test_outer_round_body_fuses(self) -> None:
-        stacked = fnp.stack([rand_field(70 + i, (8,), KB) for i in range(4)])
+        stacked = fnp.stack([rand_field(70 + i, (8,), KB) for i in range(3)])
+        tau = rand_field(74, (3,), KB)
+        round_ = EqPolyRound(
+            ZerocheckSummand(), tau, natural_domain(3, KB), challenges=_CH
+        )
+        state = (stacked, fnp.ones(1, KB))
         assert_fusion_ready(
-            StandardRound(ZerocheckSummand())._round_poly, stacked, reduces=1
+            lambda value: round_._round_poly(value)[0], state, reduces=1
         )
 
     def test_inner_round_body_fuses(self) -> None:
         stacked = fnp.stack([rand_field(80 + i, (8,), KB) for i in range(2)])
         assert_fusion_ready(
-            StandardRound(ProductSummand(2))._round_poly, stacked, reduces=1
+            StandardRound(ProductSummand(2), challenges=_CH)._round_poly,
+            stacked,
+            reduces=1,
         )
 
 

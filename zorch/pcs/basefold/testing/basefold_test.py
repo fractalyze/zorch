@@ -27,6 +27,7 @@ from zorch.pcs.basefold.prover import (
     _open_batch_body,
 )
 from zorch.pcs.basefold.verifier import BasefoldVerifier, _verify_batch_body
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field
@@ -139,7 +140,7 @@ def _rand_ef(seed: int, shape: tuple[int, ...]) -> fnp.ndarray:
     return rand_ext_field(seed, shape, F, EF)
 
 
-# TODO(zorch#202): basefold open emits a multi-batch NTT the published nightly's
+# TODO: basefold open emits a multi-batch NTT the published nightly's
 # rewriter rejects (`Unsupported opcode: ntt`); the fix is in XLA,
 # not the published wheel.
 @unittest.skip("basefold open hits an unsupported multi-batch NTT; see zorch#202")
@@ -171,24 +172,37 @@ class BasefoldOpenTest(absltest.TestCase):
     def test_open_verify_round_trip_k1(self) -> None:
         prover, verifier, root, pdata, mle, log_s = self._commit(log_s=3, K=1)
         z = _rand_ef(2, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         self.assertEqual(values[0].tolist(), eval_mle(mle[:, 0], z).tolist())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, proof), _transcript()
+        ).ok
         self.assertTrue(bool(ok))
 
     def test_open_verify_round_trip_multi_column(self) -> None:
         prover, verifier, root, pdata, mle, log_s = self._commit(log_s=3, K=4)
         z = _rand_ef(5, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         for val, col in zip(values, mle.T, strict=True):
             self.assertEqual(val.tolist(), eval_mle(col, z).tolist())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, proof), _transcript()
+        ).ok
         self.assertTrue(bool(ok))
 
     def test_verify_rejects_tampered_univariate_message(self) -> None:
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
         z = _rand_ef(7, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         z0, o0 = proof.univariate_messages[0]
         bad = dataclasses.replace(
             proof,
@@ -197,19 +211,26 @@ class BasefoldOpenTest(absltest.TestCase):
                 *proof.univariate_messages[1:],
             ],
         )
-        ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, bad), _transcript()
+        ).ok
         self.assertFalse(bool(ok))
 
     def test_verify_rejects_tampered_query_opening(self) -> None:
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
         z = _rand_ef(8, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         comp = proof.component_openings[0]
         bad_comp = dataclasses.replace(comp, row=comp.row + fnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
-        ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, bad), _transcript()
+        ).ok
         self.assertFalse(bool(ok))
 
     def test_open_verify_round_trip_bit_reversed_code(self) -> None:
@@ -220,10 +241,15 @@ class BasefoldOpenTest(absltest.TestCase):
             log_s=3, K=2, code_cls=BitReversedReedSolomon
         )
         z = _rand_ef(13, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         for val, col in zip(values, mle.T, strict=True):
             self.assertEqual(val.tolist(), eval_mle(col, z).tolist())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, proof), _transcript()
+        ).ok
         self.assertTrue(bool(ok))
 
     def test_verify_rejects_tampered_opening_bit_reversed_code(self) -> None:
@@ -233,13 +259,18 @@ class BasefoldOpenTest(absltest.TestCase):
             log_s=3, K=2, code_cls=BitReversedReedSolomon
         )
         z = _rand_ef(15, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         comp = proof.component_openings[0]
         bad_comp = dataclasses.replace(comp, row=comp.row + fnp.array(1, F))
         bad = dataclasses.replace(
             proof, component_openings=[bad_comp, *proof.component_openings[1:]]
         )
-        ok, _ = verifier.verify(root, [z], values, bad, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, bad), _transcript()
+        ).ok
         self.assertFalse(bool(ok))
 
     def test_open_verify_round_trip_coset(self) -> None:
@@ -256,25 +287,41 @@ class BasefoldOpenTest(absltest.TestCase):
         mle = _rand_ef(11, (S, K))
         root, pdata = prover.commit([mle[:, k] for k in range(K)])
         z = _rand_ef(12, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
+        ok = verifier.verify(
+            OpeningClaim(root, [z]), OpeningProof(values, proof), _transcript()
+        ).ok
         self.assertTrue(bool(ok))
 
     def test_open_rejects_empty_point(self) -> None:
         # num_vars = 0 would skip every fold round and leave nothing to observe;
         # fail loud before the (also-wrong) MLE-height check can mask the cause.
-        prover, _, _, pdata, _, _ = self._commit(log_s=3, K=1)
+        prover, _, root, pdata, _, _ = self._commit(log_s=3, K=1)
         with self.assertRaisesRegex(ValueError, "at least one variable"):
-            prover.open(pdata, [_rand_ef(3, (0,))], _transcript())
+            prover.prove(
+                OpeningClaim(root, [_rand_ef(3, (0,))]),
+                OpeningWitness(pdata),
+                _transcript(),
+            )
 
     def test_verify_rejects_empty_point(self) -> None:
         # The verifier mirrors the prover's guard: with zero variables the fold
         # replay would index an empty layer list inside the jit zone.
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=1)
         z = _rand_ef(3, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         with self.assertRaisesRegex(ValueError, "at least one variable"):
-            verifier.verify(root, [_rand_ef(3, (0,))], values, proof, _transcript())
+            verifier.verify(
+                OpeningClaim(root, [_rand_ef(3, (0,))]),
+                OpeningProof(values, proof),
+                _transcript(),
+            )
 
     def test_verify_rejects_wrong_root(self) -> None:
         # Directly exercises the commitment-root binding: verifying a valid proof
@@ -282,9 +329,14 @@ class BasefoldOpenTest(absltest.TestCase):
         # Merkle root reconstruction mismatches).
         prover, verifier, root, pdata, _mle, log_s = self._commit(log_s=3, K=2)
         z = _rand_ef(9, (log_s,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         wrong_root = root + fnp.ones_like(root)
-        ok, _ = verifier.verify(wrong_root, [z], values, proof, _transcript())
+        ok = verifier.verify(
+            OpeningClaim(wrong_root, [z]), OpeningProof(values, proof), _transcript()
+        ).ok
         self.assertFalse(bool(ok))
 
     def _batch_commit(
@@ -357,7 +409,10 @@ class BasefoldOpenTest(absltest.TestCase):
         # the while.
         prover, verifier, root, pdata, _mle, _ = self._commit(log_s=4, K=2)
         z = _rand_ef(44, (4,))
-        values, proof, _ = prover.open(pdata, [z], _transcript())
+        _opened = prover.prove(
+            OpeningClaim(root, [z]), OpeningWitness(pdata), _transcript()
+        ).reduction_proof
+        values, proof = _opened.values, _opened.proof
         text = _verify_batch_body.lower(
             verifier, [root], z, [values], proof, _transcript()
         ).as_text()
@@ -374,9 +429,11 @@ class BasefoldOpenTest(absltest.TestCase):
         @functools.partial(frx.jit, static_argnums=())
         def run(mle: fnp.ndarray, z: fnp.ndarray) -> fnp.ndarray:
             cols = [mle[:, k] for k in range(K)]
-            _, pdata = prover.commit(cols)
-            values, proof, _ = prover.open(pdata, [z], t0)
-            return values
+            _root, pdata = prover.commit(cols)
+            opened = prover.prove(
+                OpeningClaim(_root, [z]), OpeningWitness(pdata), t0
+            ).reduction_proof
+            return opened.values
 
         for seed in (1, 2, 3):
             run(
@@ -396,7 +453,10 @@ class BasefoldOpenTest(absltest.TestCase):
             for seed in (2, 3, 4):
                 calls.append(
                     functools.partial(
-                        prover.open, pdata, [_rand_ef(seed, (log_s,))], _transcript()
+                        prover.open_batch,
+                        [pdata],
+                        [_rand_ef(seed, (log_s,))],
+                        _transcript(),
                     )
                 )
         assert_single_trace(self, _open_batch_body, calls)

@@ -108,7 +108,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
             cheap_transcript(KB)
         )
         self._assert_matches_reference(ref, got, "jit")
-        # The fixed-width route (xla#179 size-invariance): every round runs at
+        # The fixed-width, size-invariant route: every round runs at
         # the capped widths with the live prefix tracked by the `live` operand,
         # so one kernel shape serves all rounds/layers/shards. Both a slack cap
         # (real padding on every buffer) and the exact-fit cap (empty pads) must

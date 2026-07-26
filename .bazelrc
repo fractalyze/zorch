@@ -2,6 +2,15 @@
 build --announce_rc
 test --test_output=errors
 
+# Never synthesize `__init__.py`. rules_python otherwise generates an empty one
+# for any package in a target's closure whose srcs omit it, and the execroot
+# symlinks that write back onto the real source file — silently truncating
+# tracked `__init__.py` to zero bytes. `zorch/__init__.py` carries `__version__`,
+# so the damage only surfaces at wheel-build time; `zorch/testing:package_test`
+# guards the symptom, this flag removes the cause. Every package here ships a
+# real `__init__.py`, so nothing depends on the generated one.
+build --incompatible_default_to_explicit_init_py
+
 # Tests are backend-agnostic; CPU is the default (not a requirement) so plain
 # `bazel test` is deterministic on any machine. CI overrides it per matrix leg
 # via --test_env (the GPU leg pins FRX_PLATFORMS=cuda). Previously pinned

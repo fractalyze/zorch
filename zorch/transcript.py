@@ -63,6 +63,16 @@ def _require_uint32_field(field_dtype: Any) -> int:
 
 class Transcript(Protocol):
     @property
+    def field(self) -> Any:
+        """The field one `sample` word is drawn from.
+
+        A challenge in another field is packed from consecutive words of this
+        one, so how many words a challenge costs is a fact about the pair, not
+        about the challenge field alone -- an extension-native sponge already
+        yields an extension element per word.
+        """
+
+    @property
     def has_dedicated_fusion(self) -> bool: ...
     def observe(self, values: Array) -> Self: ...
     def sample(self, n: int = 1) -> tuple[Self, Array]: ...
@@ -138,8 +148,7 @@ def sample_challenge(
 class DuplexState:
     """Duplex-sponge state. Fixed-size buffers + position scalars: the buffers
     keep `observe`'s absorb a single `lax.scan` (compile size independent of input
-    length), and the constant shape makes the whole state a valid `lax.scan` carry
-    (issue #58)."""
+    length), and the constant shape makes the whole state a valid `lax.scan` carry."""
 
     input_buffer: Array  # (rate,) — valid prefix is [0:in_pos]
     output_buffer: Array  # (rate,) — valid prefix is [0:out_pos]
@@ -339,6 +348,10 @@ class DuplexTranscript:
 
     def sample(self, n: int = 1) -> tuple[DuplexTranscript, Array]:
         return self.fs.sample(self, n)
+
+    @property
+    def field(self) -> Any:
+        return self.state.sponge_state.dtype
 
     def observe_and_sample(
         self, values: Array, n: int = 1

@@ -27,40 +27,36 @@ from typing import TYPE_CHECKING
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.jagged_prover import JaggedLayerProof
-from zorch.logup_gkr.prover import Carry, fold_carry, logup_combine
+from zorch.logup_gkr.prover import LayerClaim, fold_carry, logup_combine
 from zorch.poly.eq import eval_eq
-from zorch.round import Round
+from zorch.round import VerifierRound
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
-from zorch.transcript import Transcript, sample_challenge
+from zorch.transcript import Transcript
 from zorch.verify import verify
-
-if TYPE_CHECKING:
-    from zorch.round import VerifierRound
 
 _DEGREE = 3  # LogUp combine round-polynomial degree (eq * deg-2 bracket).
 
 
-class JaggedGkrLayerRound(Round):
+class JaggedGkrLayerRound(VerifierRound):
     """Verify one jagged GKR layer; the chain of these is the jagged GKR
-    verifier. `challenge_limbs` must match the prover's -- every challenge in
-    the layer comes from the same squeeze rule."""
+    verifier. Its `ChallengePolicy` must match the prover's because every
+    challenge in the layer follows that one schedule."""
 
-    def __init__(self, challenge_limbs: int = 1) -> None:
-        self.challenge_limbs = challenge_limbs
+    def __init__(self, challenges: ChallengePolicy) -> None:
+        self.challenges = challenges
 
     def __call__(
-        self, carry: Carry, layer_proof: JaggedLayerProof, transcript: Transcript
-    ) -> tuple[Carry, Transcript, Array]:
-        num_eval, den_eval, eval_point = carry
+        self, claim: LayerClaim, transcript: Transcript, layer_proof: JaggedLayerProof
+    ) -> tuple[LayerClaim, Transcript, Array]:
+        num_eval, den_eval, eval_point = claim
         n0, n1 = layer_proof.numerator_0, layer_proof.numerator_1
         d0, d1 = layer_proof.denominator_0, layer_proof.denominator_1
-        transcript, lam = sample_challenge(
-            transcript, num_eval.dtype, self.challenge_limbs
-        )
+        transcript, lam = self.challenges.sample(transcript)
         claim = lam * num_eval + den_eval
         point, final_claim, transcript, ok_sc = verify(
-            CoeffsSumcheckRound(_DEGREE, self.challenge_limbs),
+            CoeffsSumcheckRound(_DEGREE, self.challenges),
             claim,
             layer_proof.round_polys,
             transcript,
@@ -73,7 +69,7 @@ class JaggedGkrLayerRound(Round):
         # broadcast silently against the bound point) -- reject, never broadcast.
         if eval_point.shape[0] != point.shape[0]:
             raise ValueError(
-                f"eq point mismatch: carry has {eval_point.shape[0]} coords, "
+                f"eq point mismatch: claim has {eval_point.shape[0]} coords, "
                 f"layer ran {point.shape[0]} rounds"
             )
         # LogUp oracle: the reduced claim equals the combine at the bound
@@ -82,9 +78,8 @@ class JaggedGkrLayerRound(Round):
         combined = logup_combine(lam, eq_eval, n0, d1, n1, d0)
         ok = ok_sc & (combined == final_claim)
 
-        transcript = transcript.observe(fnp.stack([n0, n1, d0, d1]))
-        transcript, r = sample_challenge(
-            transcript, num_eval.dtype, self.challenge_limbs
+        transcript, r = self.challenges.observe_and_sample(
+            transcript, fnp.stack([n0, n1, d0, d1])
         )
         num_eval, den_eval, eval_point = fold_carry(n0, n1, d0, d1, point, r)
         return (num_eval, den_eval, eval_point), transcript, ok

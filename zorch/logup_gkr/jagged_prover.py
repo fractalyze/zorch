@@ -43,6 +43,7 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr._jagged_composites import (
     _composite_fix_and_sum_boundary,
     _composite_fix_and_sum_dense,
@@ -53,8 +54,8 @@ from zorch.logup_gkr._jagged_composites import (
 from zorch.logup_gkr._jagged_rounds import _round_interp_constants
 from zorch.logup_gkr._jagged_types import _JaggedState, _Planes, _RoundScalars
 from zorch.logup_gkr.circuit import JaggedGkrLayer
-from zorch.logup_gkr.prover import Carry, fold_carry
-from zorch.round import Round
+from zorch.logup_gkr.prover import LayerClaim, fold_carry
+from zorch.round import ProverRound
 from zorch.sumcheck.jagged.buffers import (
     LayerBuffers,
     _pad_to_width,
@@ -128,7 +129,7 @@ def prove_jagged_layer(
     eval_point: Array,
     transcript: Transcript,
     *,
-    challenge_limbs: int = 1,
+    challenges: ChallengePolicy,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """Prove one jagged GKR layer's materialized sumcheck from an explicit
@@ -143,15 +144,15 @@ def prove_jagged_layer(
     virtual positions' values. Returns the bound point (MSB-first, i.e. the
     challenges reversed), the advanced transcript, and the proof.
 
-    `caps` is the fixed-width round layout (xla#179 size-invariance), and is
+    `caps` is the fixed-width, size-invariant round layout, and is
     mandatory: every round runs at one static operand shape per phase, live
     prefix tracked by the rounds' `live` operand, so one compiled round
     kernel serves every round -- and every layer and input proved under the
-    same caps. Row counts are traced, so an exact-layout fallback (static
-    per-round output widths) no longer exists; the zero-slack layout is the
-    capacity layout whose caps happen to be tight.
+    same caps. Row counts are traced, so there is no exact-layout fallback
+    with static per-round output widths; the zero-slack layout is the capacity
+    layout whose caps happen to be tight.
 
-    The device-derived schedule (xla#179): the per-round re-pad schedule is a
+    The device-derived schedule: the per-round re-pad schedule is a
     pure function of `row_counts` + the round index and derives inside the
     claimed kernels, so the loop carries only the tiny i32[nseg] `row_counts`
     operand plus per-round i32[3] live triples -- both ride as traced operands,
@@ -161,6 +162,7 @@ def prove_jagged_layer(
     """
     if caps is None:
         raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
+    challenge_limbs = challenges.limbs_over(transcript.field)
     niv = layer.num_batch_variables
     nrv = eval_point.shape[0] - niv
     if nrv < 1:
@@ -285,7 +287,7 @@ def _run_jagged_rounds(
     consts = sched.consts
     transcript = cast(DuplexTranscript, transcript)
 
-    # Fixed-width layout (xla#179): lay the state into the capped buffers once
+    # Fixed-width layout: lay the state into the capped buffers once
     # at layer entry; every round then runs at one static shape per phase with
     # the live prefix riding the `live` operand, so one compiled round kernel
     # serves every round/layer/shard under the caps. The dead tails are zeros
@@ -488,9 +490,9 @@ def _prove_jagged_layer_round(
     out_pairs: tuple[int, ...] | None,
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
-    carry: Carry,
+    claim: LayerClaim,
     transcript: Transcript,
-) -> tuple[Carry, Transcript, JaggedLayerProof]:
+) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
     """One jagged GKR layer's carry reduction: sample the batching `lam`, prove
     the layer, observe the openings, and fold the carry with the child selector.
 
@@ -500,7 +502,7 @@ def _prove_jagged_layer_round(
     implicit `self`) so the chain can drop a round -- and free its layer --
     the moment it builds the next (the one-live-layer release
     `ChainedJaggedProveTest` pins)."""
-    num_eval, den_eval, eval_point = carry
+    num_eval, den_eval, eval_point = claim
     dtype = num_eval.dtype
     transcript = cast(DuplexTranscript, transcript)
     # The per-layer carry brackets the round loop: sample lam + the batched claim
@@ -565,16 +567,16 @@ def _jagged_round_zone(
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
     out_pairs: tuple[int, ...] | None,
-    carry: Carry,
+    claim: LayerClaim,
     transcript: Transcript,
-) -> tuple[Carry, Transcript, JaggedLayerProof]:
+) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
     planes = _Planes(numerator_0, numerator_1, denominator_0, denominator_1)
     # Live triples derive INSIDE the zone: as a separate per-layer jit they
     # were one warm dispatch per layer (~21 launches per prove, pure
     # overhead); in here they join the whole-layer program for free. nrv is
     # a shape (the carry's eval_point length minus niv), so the derivation
     # stays a static unroll.
-    nrv = carry[2].shape[0] - niv
+    nrv = claim[2].shape[0] - niv
     live = _derive_live_meta(row_counts, nrv)
     return _prove_jagged_layer_round(
         planes,
@@ -584,7 +586,7 @@ def _jagged_round_zone(
         out_pairs,
         challenge_limbs,
         caps,
-        carry,
+        claim,
         transcript,
     )
 
@@ -594,9 +596,9 @@ def _jagged_round_via_zone(
     challenge_limbs: int,
     caps: RoundWidthCaps | None,
     layer_bufs: LayerBuffers | None,
-    carry: Carry,
+    claim: LayerClaim,
     transcript: Transcript,
-) -> tuple[Carry, Transcript, JaggedLayerProof]:
+) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
     """Dispatch through `_jagged_round_zone` with the planes + `row_counts`
     as traced operands -- the live triples derive from the traced counts
     inside the zone, so no host code reads a layout value and the
@@ -610,7 +612,7 @@ def _jagged_round_via_zone(
     if caps is None:
         raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
     niv = layer.num_batch_variables
-    eval_point = carry[2]
+    eval_point = claim[2]
     nrv = eval_point.shape[0] - niv
     if nrv < 1:
         raise ValueError(
@@ -646,21 +648,17 @@ def _jagged_round_via_zone(
         challenge_limbs,
         caps,
         None,
-        carry,
+        claim,
         transcript,
     )
 
 
-class JaggedGkrLayerRound(Round):
+class JaggedGkrLayerRound(ProverRound):
     """Prove one jagged GKR layer; the chain of these (floor outward) is the
     jagged GKR prover, threading the same `(num_eval, den_eval, eval_point)`
-    carry as the dense chain. `challenge_limbs` rides on the round because
-    every challenge in the layer -- lam, the per-variable folds, and the
-    child-selector r -- must come from the same squeeze rule.
-
-    The shared head `prover.bind_output` works unchanged for a jagged output
-    when `challenge_limbs == 1`; a consumer squeezing multi-limb challenges
-    owns its binding glue.
+    carry as the dense chain. One `ChallengePolicy` configures lam, every
+    per-variable fold, and the child selector; `prover.bind_output` consumes
+    that same policy at the chain head.
 
     The per-layer prove dispatches through the module-level `_jagged_round_zone`
     (one executable per layer): the schedule rides as a traced operand and the
@@ -676,7 +674,7 @@ class JaggedGkrLayerRound(Round):
     def __init__(
         self,
         layer: JaggedGkrLayer,
-        challenge_limbs: int = 1,
+        challenges: ChallengePolicy,
         *,
         caps: RoundWidthCaps | None = None,
         layer_bufs: LayerBuffers | None = None,
@@ -684,14 +682,16 @@ class JaggedGkrLayerRound(Round):
         # `partial` closes over the args, not `self`, so the chain frees the
         # round -- and its layer -- the moment it builds the next. Pass ONE
         # `layer_bufs` per chain (None materializes the cap pad fresh).
+        policy = challenges
+        challenge_limbs = policy.base_limbs
         self._call = partial(
             _jagged_round_via_zone, layer, challenge_limbs, caps, layer_bufs
         )
 
     def __call__(
-        self, carry: Carry, transcript: Transcript
-    ) -> tuple[Carry, Transcript, JaggedLayerProof]:
-        return self._call(carry, transcript)
+        self, claim: LayerClaim, transcript: Transcript
+    ) -> tuple[LayerClaim, Transcript, JaggedLayerProof]:
+        return self._call(claim, transcript)
 
 
 if TYPE_CHECKING:

@@ -22,9 +22,10 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import EvalDomain, split_halves, uhat_domain
 from zorch.sumcheck.prover import ProductSummand, SumcheckSummand
 from zorch.transcript import Transcript
@@ -97,17 +98,23 @@ def sumcheck_poly_from_t(t_evals: Array, l_evals: Array, domain: EvalDomain) -> 
     return finite
 
 
-class EqPolyRound(Round):
+class EqPolyRound(ProverRound):
     """One EqPoly variable-binding round, reused across all l rounds — it reads the
     round index off the state width, so one object drives the whole proof. Bound to a
     homogeneous SumcheckSummand (its combine weighted by eq); product by default."""
 
     def __init__(
-        self, summand: SumcheckSummand, w: Array, domain: EvalDomain | None = None
+        self,
+        summand: SumcheckSummand,
+        w: Array,
+        domain: EvalDomain | None = None,
+        *,
+        challenges: ChallengePolicy,
     ) -> None:
         self.summand = summand
         self.w = w
         self.domain = domain or uhat_domain(summand.degree, w.dtype)
+        self.challenges = challenges
         self.l = int(w.shape[0])
         self.l_half = self.l // 2
         self.eq_w_l_list = compute_eq_evaluations(w[: self.l_half])
@@ -169,8 +176,8 @@ class EqPolyRound(Round):
         self, state: EqPolyState, transcript: Transcript
     ) -> tuple[EqPolyState, Transcript, Array]:
         msg, cache = self._round_poly(state)
-        transcript, r = transcript.observe_and_sample(msg, 1)
-        return self._fold(cache, state[1], r[0]), transcript, msg
+        transcript, r = self.challenges.observe_and_sample(transcript, msg)
+        return self._fold(cache, state[1], r), transcript, msg
 
 
 def prove_eq_poly(
@@ -179,6 +186,8 @@ def prove_eq_poly(
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Fold all l variables; return the final factors (d, 1), the advanced
     transcript, and the per-round messages (each sᵢ over Û_d).
@@ -192,7 +201,12 @@ def prove_eq_poly(
         raise ValueError(
             f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
         )
-    rnd = EqPolyRound(summand or ProductSummand(degree=p_initial.shape[0]), w, domain)
+    rnd = EqPolyRound(
+        summand or ProductSummand(degree=p_initial.shape[0]),
+        w,
+        domain,
+        challenges=challenges,
+    )
     state: EqPolyState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
     (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
     return p_final, transcript, msgs

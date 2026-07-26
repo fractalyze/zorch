@@ -5,6 +5,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.sumcheck.domain import (
     EvalDomain,
     compressed_domain,
@@ -19,8 +20,12 @@ from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
+from zorch.verify import RunningClaim
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 
 
 class DomainTest(absltest.TestCase):
@@ -172,16 +177,16 @@ class DomainTest(absltest.TestCase):
         P = fnp.arange(1, m * (1 << l) + 1, dtype=KB).reshape(m, 1 << l)
         claim = fnp.sum(fnp.prod(P, axis=0))
         state = P
-        verifier = CoeffsSumcheckRound(degree=m)
+        verifier = CoeffsSumcheckRound(degree=m, challenges=_CH)
         transcript: Transcript = cheap_transcript(KB)
-        point = []
-        for _ in range(l):
+        running = RunningClaim(claim, fnp.zeros((l,), claim.dtype), fnp.int32(0))
+        for i in range(l):
             coeffs = product_round_coeffs(state)
             self.assertEqual(coeffs.shape, (m + 1,))
-            claim, transcript, r, ok = verifier(claim, coeffs, transcript)
+            running, transcript, ok = verifier(running, transcript, coeffs)
             self.assertTrue(bool(ok))
-            state = fold(state, r)
-            point.append(r)
+            state = fold(state, running.point[i])
+        claim = running.value
         self.assertTrue(bool(claim == fnp.prod(state[:, 0])))
 
     def test_product_coeffs_single_factor(self) -> None:

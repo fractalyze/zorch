@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """End-to-end self-verification of dense LogUp-GKR via the chained Rounds.
 
-Prove with a ProveChain of layer rounds, verify with a VerifyChain of layer
+Prove with a prove_rounds of layer rounds, verify with a verify_rounds of layer
 rounds over the same transcript, and confirm: the proof self-verifies, the prover
 and verifier thread the same reduction, the claim reduces onto the input leaf MLE
 (GKR completeness), and a tampered round polynomial is rejected.
@@ -16,8 +16,19 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.logup_gkr.circuit import GkrLayer, _interleave
+from zorch.logup_gkr.circuit import (
+    GkrLayer,
+    _interleave,
+    build_pyramid,
+    extract_outputs,
+)
+from zorch.logup_gkr.stage import (
+    LogUpGkrProver,
+    LogUpGkrVerifier,
+    LogUpOutputClaim,
+)
 from zorch.logup_gkr.testing import (
     prove_gkr,
     prove_gkr_with_transcript,
@@ -26,9 +37,13 @@ from zorch.logup_gkr.testing import (
     verify_gkr_with_transcript,
 )
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 
 # A poseidon2 permute is impractically slow to compile on the XLA CPU
 # backend, so
@@ -63,6 +78,41 @@ class GkrRoundtripTest(absltest.TestCase):
 
     def test_self_verifies_wider(self) -> None:
         self._roundtrip(random_first_layer(11, 2, 3), expected_layers=3)
+
+    def test_stage_roundtrips_and_transcripts_agree(self) -> None:
+        first = random_first_layer(17, 1, 2)
+        prover = LogUpGkrProver(challenges=_CH)
+        verifier = LogUpGkrVerifier(challenges=_CH)
+        claim = LogUpOutputClaim(
+            extract_outputs(build_pyramid(first)[-1]), first.num_row_variables
+        )
+        proved = prover.prove(claim, first, cheap_transcript(KB))
+        verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(KB))
+        self.assertTrue(bool(verified.ok))
+        self.assertTrue(
+            bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.numerator == verified.reduced_claim.numerator)
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.denominator == verified.reduced_claim.denominator)
+        )
+        _, prover_next = proved.transcript.sample(1)
+        _, verifier_next = verified.transcript.sample(1)
+        self.assertTrue(bool(fnp.all(prover_next == verifier_next)))
+
+    def test_stage_statement_owns_layer_count(self) -> None:
+        first = random_first_layer(19, 1, 2)
+        prover = LogUpGkrProver(challenges=_CH)
+        verifier = LogUpGkrVerifier(challenges=_CH)
+        claim = LogUpOutputClaim(
+            extract_outputs(build_pyramid(first)[-1]), first.num_row_variables
+        )
+        proved = prover.prove(claim, first, cheap_transcript(KB))
+        bad = replace(claim, layers=claim.layers + 1)
+        with self.assertRaises(ValueError):
+            verifier.verify(bad, proved.reduction_proof, cheap_transcript(KB))
 
     def test_rejects_tampered_round_poly(self) -> None:
         first = random_first_layer(7, 1, 2)

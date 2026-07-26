@@ -68,18 +68,22 @@ class FriRoundTripTest(absltest.TestCase):
 
     def _prove(self) -> tuple[Array, Array, list]:
         roots, data = self.prover.commit([self.coeffs])
-        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        values, proofs, _ = self.prover._open(data, [self.z], _transcript())
         return roots, values, proofs
 
     def test_honest_opening_verifies(self) -> None:
         roots, values, proofs = self._prove()
-        ok, _ = self.verifier.verify(roots, [self.z], values, proofs, _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], values, proofs, _transcript()
+        )
         self.assertTrue(bool(ok))
 
     def test_wrong_value_rejected(self) -> None:
         roots, values, proofs = self._prove()
         bad = values + fnp.array(1, dtype=KB)
-        ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], bad, proofs, _transcript()
+        )
         self.assertFalse(bool(ok))
 
     def test_tampered_final_layer_rejected(self) -> None:
@@ -88,16 +92,18 @@ class FriRoundTripTest(absltest.TestCase):
         tampered = dataclasses.replace(
             pf, final_layer=pf.final_layer.at[0].add(fnp.array(1, dtype=KB))
         )
-        ok, _ = self.verifier.verify(roots, [self.z], values, [tampered], _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], values, [tampered], _transcript()
+        )
         self.assertFalse(bool(ok))
 
     def test_batch_length_mismatch_raises(self) -> None:
         # A short batch must fail loud, not silently truncate to the common prefix.
         roots, data = self.prover.commit([self.coeffs])
         with self.assertRaises(ValueError):
-            self.prover.open(data, [self.z, self.z], _transcript())
+            self.prover._open(data, [self.z, self.z], _transcript())
         with self.assertRaises(ValueError):
-            self.verifier.verify(
+            self.verifier._verify_opening(
                 roots, [self.z, self.z], fnp.zeros(2, dtype=KB), [], _transcript()
             )
 
@@ -108,7 +114,9 @@ class FriRoundTripTest(absltest.TestCase):
         roots, values, proofs = self._prove()
         short = dataclasses.replace(proofs[0], fri_roots=[], query_openings=[])
         with self.assertRaises(ValueError):
-            self.verifier.verify(roots, [self.z], values, [short], _transcript())
+            self.verifier._verify_opening(
+                roots, [self.z], values, [short], _transcript()
+            )
 
 
 class FriBitReversedRoundTripTest(absltest.TestCase):
@@ -127,15 +135,19 @@ class FriBitReversedRoundTripTest(absltest.TestCase):
 
     def test_honest_opening_verifies(self) -> None:
         roots, data = self.prover.commit([self.coeffs])
-        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
-        ok, _ = self.verifier.verify(roots, [self.z], values, proofs, _transcript())
+        values, proofs, _ = self.prover._open(data, [self.z], _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], values, proofs, _transcript()
+        )
         self.assertTrue(bool(ok))
 
     def test_wrong_value_rejected(self) -> None:
         roots, data = self.prover.commit([self.coeffs])
-        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        values, proofs, _ = self.prover._open(data, [self.z], _transcript())
         bad = values + fnp.array(1, dtype=KB)
-        ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], bad, proofs, _transcript()
+        )
         self.assertFalse(bool(ok))
 
 
@@ -152,15 +164,19 @@ class FriCosetRoundTripTest(absltest.TestCase):
 
     def test_honest_opening_verifies(self) -> None:
         roots, data = self.prover.commit([self.coeffs])
-        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
-        ok, _ = self.verifier.verify(roots, [self.z], values, proofs, _transcript())
+        values, proofs, _ = self.prover._open(data, [self.z], _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], values, proofs, _transcript()
+        )
         self.assertTrue(bool(ok))
 
     def test_wrong_value_rejected(self) -> None:
         roots, data = self.prover.commit([self.coeffs])
-        values, proofs, _ = self.prover.open(data, [self.z], _transcript())
+        values, proofs, _ = self.prover._open(data, [self.z], _transcript())
         bad = values + fnp.array(1, dtype=KB)
-        ok, _ = self.verifier.verify(roots, [self.z], bad, proofs, _transcript())
+        ok, _ = self.verifier._verify_opening(
+            roots, [self.z], bad, proofs, _transcript()
+        )
         self.assertFalse(bool(ok))
 
 

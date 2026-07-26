@@ -21,7 +21,7 @@ here are IPA-specific:
 Both use the no-inverse form (`1 + u_j·X^…`, not `u_j⁻¹ + u_j·X^…`). That formula
 IS the contract; it matches arkworks' check polynomial (the `poly-commit` crate's
 `ipa_pc` succinct check, `compute_coeffs` / `evaluate`), pinned against that
-oracle at zorch#339 W3 (see docs/blocks/pcs.md) so the decider's final-key MSM
+oracle (see docs/blocks/pcs.md) so the decider's final-key MSM
 byte-matches it — treat the arkworks symbol names as a pointer that may move, the
 formula as the spec.
 

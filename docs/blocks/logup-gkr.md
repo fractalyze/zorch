@@ -15,16 +15,17 @@ pure data: a `GkrLayer` is four equal-length MLEs `(n0, n1, d0, d1)`,
 `logup_combine` over five factors `[eq, n0, d1, n1, d0]` — the direct sibling of
 the product `sumcheck.prover.SumcheckRound`. `GkrLayerRound` proves one layer (its
 per-variable sumcheck via `fold_rounds`, then the child-selector reduction), and
-the GKR prover is `ProveChain([GkrLayerRound(l) for l in reversed(layers[:-1])])`
-— the **heterogeneous-chain** case of the `Round` composition contract (distinct
-rounds in sequence; see [`sumcheck.md`](sumcheck.md)), one bound variable per
-layer, interaction floor outward to the input.
+the GKR prover is `prove_rounds([GkrLayerRound(l) for l in reversed(layers[:-1])])`
+— a round recurrence whose carry and message contract stays fixed while layer
+shapes vary, one bound variable per layer, interaction floor outward to the
+input. See [`sumcheck.md`](sumcheck.md) for how round recurrence differs from
+stage composition.
 
 **Prover and verifier share the summand and the head.** `logup_combine` and
 `bind_output` are module-level and reused by both sides: a drift between the
 prover's round body and the verifier's oracle would break soundness *silently*,
 so there is exactly one expression for each. The verifier is the dual
-`VerifyChain`, threading the same `(num_eval, den_eval, eval_point)` carry and
+`verify_rounds`, threading the same `(num_eval, den_eval, eval_point)` carry and
 ANDing each layer's check. Points are MSB-first (matching [`poly.eq`](poly.md))
 with the pyramid's child selector appended as the low bit, so the prover's and
 verifier's points align with no flip. The verifier evaluates `eq` with the
@@ -77,12 +78,22 @@ read it cannot check: truncation-safety and the virtual-row-space fit are
 the consumer's capacity-class obligations, discharged against class bounds
 that dominate every admitted input.
 
+**One stage seam, two layouts.** `stage.py` and `jagged_stage.py` reduce the
+same `LogUpOutputClaim` to the same `InputLayerClaim`, so a consumer chooses a
+layout at construction and nothing downstream moves; only the witness and the
+layer proofs are layout-shaped. The jagged witness carries the input layer plus
+the per-transition fold schedule because that follows the row counts, while the
+round width caps configure the prover role once per capacity class. The stage
+owns what the chain owns: it builds the pyramid, hands each layer to its round
+and drops it, and scopes one `LayerBuffers` to the prove, so the cap-wide planes
+die with it rather than pinning a card.
+
 ## Fusion by construction
 
 Inverted from a single fused `Round`: the pyramid is folded and proved *eagerly*
 (`build_pyramid` is a plain Python loop), **not** one fused program — the full
 pyramid does not fit one `@jit` at scale, and each transition's output feeds the
-next layer's per-variable sumcheck independently. `ProveChain` consumes its
+next layer's per-variable sumcheck independently. `prove_rounds` consumes its
 rounds lazily for the same scale reason: a generator-built chain releases each
 layer once its round is proved, so the pyramid's planes never need to be live
 together. Fusion-by-construction lives one

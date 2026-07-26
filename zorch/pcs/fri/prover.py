@@ -30,13 +30,17 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.commit.merkle import MerkleTree
-from zorch.pcs.fold import PreFoldPairCommitRound, open_rows, sample_positions
+from zorch.pcs.fold import (
+    FoldState,
+    PreFoldPairCommitRound,
+    open_rows,
+    sample_positions,
+)
 from zorch.pcs.fri.config import DeepFoldableCode, FriCommitment, FriParams, FriProof
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.prove import fold_rounds
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 
 def _eval_poly(coeffs: Array, z: Array) -> Array:
@@ -75,7 +79,14 @@ class FriProverData:
 
 
 @dataclass(frozen=True)
-class FriProver:
+class FriProver(
+    ProverStage[
+        OpeningClaim[FriCommitment],
+        OpeningWitness[FriProverData],
+        TrivialClaim,
+        OpeningProof[list[FriProof]],
+    ]
+):
     params: FriParams
 
     def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
@@ -87,7 +98,21 @@ class FriProver:
         roots = [poly.digest_layers[-1][0] for poly in committed]
         return fnp.stack(roots), FriProverData(tuple(committed))
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[FriCommitment],
+        witness: OpeningWitness[FriProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[list[FriProof]]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: FriProverData,
         points: Sequence[Array],
@@ -108,7 +133,7 @@ class FriProver:
         return fnp.stack(values), proofs, t
 
 
-# Jitted per-poly commit/open bodies (issue #140), like basefold's zones; one
+# Jitted per-poly commit/open bodies, like basefold's zones; one
 # compile serves the batch. Commit is keyed on code + tree, not the whole
 # FriParams: it never reads the open-side knobs (num_rounds / num_queries), so
 # params differing only there must not compile twice (static keys compare by
@@ -139,10 +164,10 @@ def _open_one(
     quotient = (committed.codeword - v) / (domain - z)
 
     t = t.observe(committed.digest_layers[-1][0])  # bind the f commitment root
-    cw, t, layers = fold_rounds(
-        PreFoldPairCommitRound(code, tree), quotient, t, params.num_rounds
+    state, t, roots = fold_rounds(
+        PreFoldPairCommitRound(code, tree), FoldState(quotient), t, params.num_rounds
     )
-    final_layer = cw
+    final_layer = state.codeword
     t = t.observe(final_layer)
 
     n = code.block_len
@@ -151,11 +176,11 @@ def _open_one(
     f_opening = open_rows(tree, committed.leaves, committed.digest_layers, a[0])
     query_openings = [
         open_rows(tree, layer.leaves, layer.digest_layers, a[i])
-        for i, layer in enumerate(layers)
+        for i, layer in enumerate(state.layers)
     ]
     return t, FriProof(
         v,
-        [layer.root for layer in layers],
+        roots,
         final_layer,
         f_opening,
         query_openings,
@@ -165,4 +190,11 @@ def _open_one(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver
+    _: type[
+        ProverStage[
+            OpeningClaim[FriCommitment],
+            OpeningWitness[FriProverData],
+            TrivialClaim,
+            OpeningProof[list[FriProof]],
+        ]
+    ] = FriProver

@@ -62,7 +62,7 @@ class TraceCommitData:
 # lives and dies here rather than crossing into the fold zone. ``code`` is
 # rebuilt per call, not passed in: it hashes by value, so a fresh instance
 # never forces a recompile. Commits COLUMN-major so a leaf is a column of the
-# native [K, N] encode (skips the codeword transpose, sp1-zorch#140).
+# native [K, N] encode (skips the codeword transpose).
 def _prologue(
     smcs: SingleMatrixCommitmentScheme, message: Array, *, log_blowup: int
 ) -> tuple[Array, Array]:

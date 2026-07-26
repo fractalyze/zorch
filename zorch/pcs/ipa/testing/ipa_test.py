@@ -58,7 +58,7 @@ class ChallengeMathTest(absltest.TestCase):
         # The dense coeffs are the check polynomial's coeffs:
         # h(X) = ∏(1 + u_j·X^{2^{k-1-j}}) (no inverses) — the descending-block
         # layout the decider's final-key MSM byte-matches arkworks ipa_pc over
-        # (zorch#339 W4; the formula is the contract). For k=2,
+        # (the formula is the contract). For k=2,
         # h(X) = (1 + u0·X²)(1 + u1·X) → [1, u1, u0, u0·u1].
         u = fnp.array([2, 3], dtype=SF)
         self.assertEqual([int(c) for c in challenge_vector(u)], [1, 3, 2, 6])
@@ -79,7 +79,7 @@ class TranscriptChallengerPytreeTest(absltest.TestCase):
     def test_two_instances_share_one_treedef(self) -> None:
         # `dtype` is an object-typed meta field, so independently built challengers
         # must share one treedef — else the fold's scan zone re-traces every call
-        # (conventions.md / issue #163).
+        # (conventions.md).
         a = TranscriptChallenger(cheap_transcript(SF), SF)
         b = TranscriptChallenger(cheap_transcript(SF), SF)
         self.assertEqual(
@@ -115,7 +115,7 @@ _ZK_CURVES = (*_CURVES, ("vesta", zk_dtypes.vesta_sf_mont, curves.VESTA))
 
 # Sizes that exercise the fold's `lax.scan` at several round counts k = log₂ n
 # (one binary per n; n=2 is the single-round edge), the recompile-free-compile
-# property zorch#344 lands the scan for.
+# property the scan exists for.
 _CURVE_SIZES = tuple(
     (f"{name}_n{n}", sf, curve, n)
     for (name, sf, curve) in _CURVES
@@ -136,7 +136,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         coeffs = fnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
         x = fnp.array(7, dtype=sf)
         commitment, data = IpaProver(key).commit([coeffs])
-        values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
+        values, proof, _ = IpaProver(key)._open(data, [x], _transcript(sf))
         return IpaVerifier(key), x, commitment, values, proof
 
     @parameterized.named_parameters(*_CURVES)
@@ -148,7 +148,9 @@ class IpaRoundTripTest(parameterized.TestCase):
     @parameterized.named_parameters(*_CURVES)
     def test_open_verifies(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
-        ok, _ = verifier.verify(commitment, [x], values, proof, _transcript(sf))
+        ok, _ = verifier._verify_opening(
+            commitment, [x], values, proof, _transcript(sf)
+        )
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(*_CURVE_SIZES)
@@ -156,21 +158,23 @@ class IpaRoundTripTest(parameterized.TestCase):
         self, sf: type, curve: curves.Curve, n: int
     ) -> None:
         # The fold's `lax.scan` runs k = log₂ n rounds; verify the commit -> open ->
-        # verify round trip closes at each size (and the single-round n=2 edge), so
-        # the scan fold byte-matches the shrinking fold it replaced (zorch#344).
+        # verify round trip closes at each size, including the single-round n=2
+        # edge where the scan degenerates.
         key = basis.toy_key(curve, n=n)
         coeffs = fnp.arange(1, n + 1, dtype=sf)
         x = fnp.array(7, dtype=sf)
         commitment, data = IpaProver(key).commit([coeffs])
-        values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
-        ok, _ = IpaVerifier(key).verify(commitment, [x], values, proof, _transcript(sf))
+        values, proof, _ = IpaProver(key)._open(data, [x], _transcript(sf))
+        ok, _ = IpaVerifier(key)._verify_opening(
+            commitment, [x], values, proof, _transcript(sf)
+        )
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)
     def test_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         bad = values + fnp.array(1, dtype=sf)
-        ok, _ = verifier.verify(commitment, [x], bad, proof, _transcript(sf))
+        ok, _ = verifier._verify_opening(commitment, [x], bad, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)
@@ -232,7 +236,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         # one rejects (statement binding the bare fold lacked).
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         bad = fnp.stack([verifier.key.u])  # U as a stand-in P ≠ the real commitment
-        ok, _ = verifier.verify(bad, [x], values, proof, _transcript(sf))
+        ok, _ = verifier._verify_opening(bad, [x], values, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
     # --- hiding / zk path ---------------------------------------------------
@@ -378,7 +382,7 @@ class IpaBatchValidationTest(absltest.TestCase):
         # commitments is never read — open raises on the length check first.
         dummy = fnp.zeros((1,), dtype=curves.BN254.g1)
         with self.assertRaises(ValueError):
-            IpaProver(key).open(
+            IpaProver(key)._open(
                 IpaProverData((coeffs,), dummy), [x, x], _transcript(sf)
             )
 

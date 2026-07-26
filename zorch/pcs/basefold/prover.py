@@ -49,15 +49,16 @@ from zorch.pcs.basefold.config import (
     CadenceProof,
 )
 from zorch.pcs.basefold.kernel import SumcheckKernel
-from zorch.pcs.fold import lane_combine, open_rows, to_base_field
+from zorch.pcs.fold import CommittedLayer, lane_combine, open_rows, to_base_field
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
     from zorch.round import ProverRound
 
 
@@ -85,17 +86,16 @@ class BasefoldProverData:
 # (codeword, opaque kernel round state, level) — the kernel owns the state's
 # shape (native: running MLE + claim + unbound z suffix); `level` counts the
 # round so the choreography's per-round grind schedule can key on it.
-_OpenCarry = tuple[Array, tuple, int]
+_OpenState = tuple[Array, tuple, int, tuple[CommittedLayer, ...]]
 
-# One round's collected artifacts: the raw sumcheck message components (proof
-# wire), the pre-fold commit root (proof wire), the committed pair-leaves +
-# digest layers (query phase), and this round's grind witness (None unless
-# scheduled).
-_RoundMsg = tuple[tuple, Array, Array, list[Array], "Array | None"]
+# What one round puts on the wire: the raw sumcheck message components, the
+# pre-fold commit root, and this round's grind witness (None unless scheduled).
+# The committed layer it commits to is the oracle, and rides the carry.
+_RoundMsg = tuple[tuple, Array, "Array | None"]
 
 
 @dataclass(frozen=True)
-class _SumcheckPairFoldRound(Round):
+class _SumcheckPairFoldRound(ProverRound):
     """One interleaved-sumcheck round of the batch open, driven by the kernel +
     choreography. Ask the kernel for the round-message components, frame them
     (`round_message`) and emit (`observe_message`), commit the pre-fold
@@ -115,11 +115,11 @@ class _SumcheckPairFoldRound(Round):
     kernel: SumcheckKernel
 
     def __call__(
-        self, carry: _OpenCarry, transcript: Transcript
-    ) -> tuple[_OpenCarry, Transcript, _RoundMsg]:
-        cw, state, level = carry
+        self, state: _OpenState, transcript: Transcript
+    ) -> tuple[_OpenState, Transcript, _RoundMsg]:
+        cw, kernel_state, level, layers = state
         chor = self.choreography
-        components = self.kernel.message(state)
+        components = self.kernel.message(kernel_state)
         msg = chor.round_message(*components)
         t = chor.observe_message(transcript, msg)
         # Pre-fold pair commit, decoupled so the root observe routes through the
@@ -136,17 +136,25 @@ class _SumcheckPairFoldRound(Round):
         t, beta = t.sample()
         beta = beta.reshape(())
         cw = self.code.fold(cw, beta)
-        state = self.kernel.fold(state, components, beta)
+        kernel_state = self.kernel.fold(kernel_state, components, beta)
+        layer = CommittedLayer(leaves, digest_layers)
         return (
-            (cw, state, level + 1),
+            (cw, kernel_state, level + 1, layers + (layer,)),
             t,
-            (components, root, leaves, digest_layers, witness),
+            (components, root, witness),
         )
 
 
 @dataclass(frozen=True)
-class BasefoldProver:
-    """BaseFold PCS prover (`PcsProver`). `code` fixes the per-column message
+class BasefoldProver(
+    ProverStage[
+        OpeningClaim[BasefoldCommitment],
+        OpeningWitness[BasefoldProverData],
+        TrivialClaim,
+        OpeningProof[BasefoldProof],
+    ]
+):
+    """BaseFold PCS prover. `code` fixes the per-column message
     length (= the MLE height `S`); `tree` commits the codeword rows;
     `choreography` fixes the Fiat-Shamir wire (share the instance with the
     verifier); `config` fixes the fold schedule. The defaults are zorch's native
@@ -179,17 +187,21 @@ class BasefoldProver:
     ) -> tuple[BasefoldCommitment, BasefoldProverData]:
         return _commit_body(self.code, self.tree, list(polys))
 
-    def open(
+    def prove(
         self,
-        prover_data: BasefoldProverData,
-        points: Sequence[Array],
+        claim: OpeningClaim[BasefoldCommitment],
+        witness: OpeningWitness[BasefoldProverData],
         transcript: Transcript,
-    ) -> tuple[Array, BasefoldProof, Transcript]:
-        """Open a single committed matrix — the degenerate one-round batch, the
-        `PcsProver` seam shape. Returns `(values, proof, transcript)` with
-        `values` the matrix's per-column evaluations `[K]`."""
-        values, proof, t = self.open_batch([prover_data], points, transcript)
-        return values[0], proof, t
+    ) -> ProveResult[TrivialClaim, OpeningProof[BasefoldProof]]:
+        """Open a single committed matrix — the degenerate one-round batch.
+
+        Terminal: an opening closes its claim rather than reducing it, so the
+        reduced claim is trivial. `values` is the matrix's per-column
+        evaluations `[K]`."""
+        values, proof, transcript = self.open_batch(
+            [witness.prover_data], claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values[0], proof), transcript)
 
     def open_batch(
         self,
@@ -479,18 +491,17 @@ def _fold_and_query(
     # `blowup`) is the cleartext final poly. The kernel owns the round state's
     # shape (native: the MLE + running claim + unbound point suffix).
     state = kernel.initial_state(mle, zs, claim)
-    carry: _OpenCarry = (cw, state, 0)
-    carry, t, msgs = fold_rounds(
+    open_state: _OpenState = (cw, state, 0, ())
+    open_state, t, msgs = fold_rounds(
         _SumcheckPairFoldRound(prover.code, prover.tree, chor, kernel),
-        carry,
+        open_state,
         transcript,
         num_vars,
     )
-    final_poly = carry[0]
+    final_poly = open_state[0]
     uni_msgs = [m[0] for m in msgs]
     fri_roots = [m[1] for m in msgs]
-    layer_leaves = [m[2] for m in msgs]
-    layer_digests = [m[3] for m in msgs]
+    fold_layers = open_state[3]
 
     # Bind the cleartext final codeword before sampling queries, so the query
     # positions depend on it (the IOPP terminal binding; `verify` mirrors).
@@ -507,7 +518,9 @@ def _fold_and_query(
         for pd in component_pds
     ]
     query_openings = [
-        open_rows(prover.tree, layer_leaves[i], layer_digests[i], a[i])
+        open_rows(
+            prover.tree, fold_layers[i].leaves, fold_layers[i].digest_layers, a[i]
+        )
         for i in range(num_vars)
     ]
     proof = BasefoldProof(
@@ -517,7 +530,7 @@ def _fold_and_query(
 
 
 # Jitted open body: an eager replay re-traces the per-round pair-leaf
-# `open_rows` vmaps per call (issue #186); unlike `commit` — which the jagged
+# `open_rows` vmaps per call; unlike `commit` — which the jagged
 # seam also reaches inside its enclosing jit — `open` is reached eagerly via
 # `stacked_open`. The prover is the static key (by value, #214), so its config
 # and choreography (both frozen, value-compared) fix the compiled zone.
@@ -599,6 +612,11 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
     _pcs_prover: type[
-        PcsProver[BasefoldCommitment, BasefoldProverData, BasefoldProof]
+        ProverStage[
+            OpeningClaim[BasefoldCommitment],
+            OpeningWitness[BasefoldProverData],
+            TrivialClaim,
+            OpeningProof[BasefoldProof],
+        ]
     ] = BasefoldProver
     _fold_round: type[ProverRound] = _SumcheckPairFoldRound

@@ -16,7 +16,7 @@ supplies only its summand `_combine`: `prover.SumcheckRound` multiplies a produc
 homogeneous scan driver, generic over that summand — it reads a round's `degree` +
 `_combine` (the `SumcheckSummand` seam in `prove.py`) and owns the split / fold /
 scan, so the product and LogUp per-variable loops share one driver; `verify` is the
-dual, generic over any `InnerVerifierRound`. The verifier is a single
+dual, generic over a `VerifierRound` that exports its challenge. The verifier is a single
 `verifier.SumcheckRound` that pairs with all of them: it sees only the round
 polynomials, so the summand is purely the prover's concern. Its observe→challenge
 order mirrors the prover's exactly — that shared ordering is the only thing keeping
@@ -28,13 +28,11 @@ the side by namespace, and the shared summand (e.g. `logup_combine`) plus the
 mirrored transcript order keep them from drifting rather than one fused
 description.
 
-**Composing rounds (nn.Sequential).** A composite protocol is itself a `Round`:
-`ProveChain` / `VerifyChain` (in `zorch/round.py`) sequence sub-rounds, threading
-the carry + transcript, so chains nest. `prove` / `verify` are the *homogeneous*
-case — one round repeated per variable, the sumcheck inner loop; the chains are
-the *heterogeneous* case — distinct rounds in sequence, e.g. one GKR layer per
-link. How a multi-stage prover composes from chains — the seam carry contract
-and bridges — is [`stage-composition.md`](../composition/stage-composition.md).
+**Composing rounds.** `prove` / `verify` repeat one round per variable.
+`prove_rounds` / `verify_rounds` sequence a homogeneous recurrence whose links share
+one carry contract, such as GKR layers. A heterogeneous proof system uses typed
+stages and an explicit pipeline; see
+[`stage-composition.md`](../composition/stage-composition.md).
 
 **The verifier reduces; the PCS closes.** `verify` stops at the point-claim
 `(point, final_claim)`. The final `final_claim == f(point)` check needs the

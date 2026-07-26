@@ -11,6 +11,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import (
     GkrLayer,
     JaggedGkrLayer,
@@ -19,16 +20,19 @@ from zorch.logup_gkr.circuit import (
     extract_outputs,
     jagged_layer_transition,
 )
-from zorch.logup_gkr.prover import Carry, LayerProof, bind_output
 from zorch.logup_gkr.prover import GkrLayerRound as _ProverLayer
+from zorch.logup_gkr.prover import LayerClaim, LayerProof, bind_output
 from zorch.logup_gkr.verifier import GkrLayerRound as _VerifierLayer
-from zorch.round import ProveChain, VerifyChain
+from zorch.round import prove_rounds, verify_rounds
 from zorch.sumcheck.jagged.types import RoundWidthCaps
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
 _KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_DEFAULT_CH = ChallengePolicy(_KB)
 _EF = zk_dtypes.koalabearx4_mont
 
 
@@ -117,14 +121,24 @@ def virtual_planes(
     return planes[0], planes[1], planes[2], planes[3]
 
 
+def jagged_fold_schedules(first: JaggedGkrLayer) -> tuple[tuple[int, ...], ...]:
+    """Per-transition fold schedules carrying `first` to the batch floor,
+    over-padding unsaturated segments to even counts -- saturated segments stay
+    at one row so the floor is reachable while the padding paths stay
+    exercised."""
+    schedules = []
+    counts = host_counts(first)
+    while max(counts) > 1:
+        folded = tuple((rc + 1) // 2 for rc in counts)
+        counts = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
+        schedules.append(counts)
+    return tuple(schedules)
+
+
 def build_jagged_pyramid(first: JaggedGkrLayer) -> list[JaggedGkrLayer]:
-    """Fold to the floor under a schedule that over-pads unsaturated segments
-    to even counts -- saturated segments stay at one row so the floor is
-    reachable while the padding paths stay exercised."""
+    """The layers `jagged_fold_schedules` folds `first` through, floor last."""
     layers = [first]
-    while max(host_counts(layers[-1])) > 1:
-        folded = tuple((rc + 1) // 2 for rc in host_counts(layers[-1]))
-        schedule = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
+    for schedule in jagged_fold_schedules(first):
         layers.append(jagged_layer_transition(layers[-1], schedule))
     return layers
 
@@ -158,8 +172,10 @@ def random_first_layer(
 
 
 def prove_gkr_with_transcript(
-    first: GkrLayer, transcript: Transcript
-) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], Carry]:
+    first: GkrLayer,
+    transcript: Transcript,
+    challenges: ChallengePolicy = _DEFAULT_CH,
+) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], LayerClaim]:
     """Run the GKR prover chain over `first`'s pyramid, drawing Fiat-Shamir
     challenges from `transcript` (a cheap test `DuplexTranscript` or the
     on-device poseidon2 one).
@@ -168,15 +184,18 @@ def prove_gkr_with_transcript(
     """
     layers = build_pyramid(first)
     output = extract_outputs(layers[-1])
-    carry, transcript = bind_output(output, transcript)
-    chain = ProveChain([_ProverLayer(layer) for layer in reversed(layers[:-1])])
-    final, _, proofs = chain(carry, transcript)
+    carry, transcript = bind_output(output, transcript, challenges)
+    final, _, proofs = prove_rounds(
+        [_ProverLayer(layer, challenges) for layer in reversed(layers[:-1])],
+        carry,
+        transcript,
+    )
     return layers, output, proofs, final
 
 
 def prove_gkr(
     first: GkrLayer,
-) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], Carry]:
+) -> tuple[list[GkrLayer], LogUpGkrOutput, list[LayerProof], LayerClaim]:
     """`prove_gkr_with_transcript` over a cheap deterministic test transcript."""
     return prove_gkr_with_transcript(first, cheap_transcript(_KB))
 
@@ -208,16 +227,22 @@ def prove_gkr_jitted(
 
 
 def verify_gkr_with_transcript(
-    output: LogUpGkrOutput, proofs: list[LayerProof], transcript: Transcript
-) -> tuple[Carry, Array]:
+    output: LogUpGkrOutput,
+    proofs: list[LayerProof],
+    transcript: Transcript,
+    challenges: ChallengePolicy = _DEFAULT_CH,
+) -> tuple[LayerClaim, Array]:
     """Run the GKR verifier chain, re-deriving challenges from `transcript` (the
     dual of `prove_gkr_with_transcript`). Returns (final_carry, ok)."""
-    carry, transcript = bind_output(output, transcript)
-    chain = VerifyChain([_VerifierLayer() for _ in proofs])
-    final, _, ok = chain(carry, proofs, transcript)
+    carry, transcript = bind_output(output, transcript, challenges)
+    final, _, ok = verify_rounds(
+        [_VerifierLayer(challenges) for _ in proofs], carry, proofs, transcript
+    )
     return final, ok
 
 
-def verify_gkr(output: LogUpGkrOutput, proofs: list[LayerProof]) -> tuple[Carry, Array]:
+def verify_gkr(
+    output: LogUpGkrOutput, proofs: list[LayerProof]
+) -> tuple[LayerClaim, Array]:
     """`verify_gkr_with_transcript` over a cheap deterministic test transcript."""
     return verify_gkr_with_transcript(output, proofs, cheap_transcript(_KB))

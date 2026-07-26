@@ -15,7 +15,7 @@ evidence the seam is not shaped after one family.
 
 ## Why the shape
 
-**Two protocols, `PcsProver` and `PcsVerifier`, not one `Pcs`.** `commit` / `open`
+**A committer plus an opening stage, not one `Pcs`.** `commit` / `open`
 are the prover's; `verify` is the verifier's. They are split for the same two
 reasons the [sumcheck](sumcheck.md) block splits prover and verifier: `open` is an
 interactive sub-protocol threading the [Fiat-Shamir transcript](hash.md), and the
@@ -84,12 +84,20 @@ verifier carries neither — is a *module boundary*, not just a type.
 
 **Conformance is mypy-enforced, not conventional** — the repo-wide seam pin
 ([conventions.md "Seam conformance pins"](../reference/conventions.md#seam-conformance-pins)).
-The seam is generic — `PcsProver[C, D, P]` / `PcsVerifier[C, P]` — so each
+The seam is generic — the opening stage roles over `OpeningClaim[C]` /
+`OpeningWitness[D]` / `OpeningProof[P]` — so each
 instance parameterizes its pin with the scheme's wire types:
 
 ```python
 if TYPE_CHECKING:
-    _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver
+    _: type[
+        ProverStage[
+            OpeningClaim[FriCommitment],
+            OpeningWitness[FriProverData],
+            TrivialClaim,
+            OpeningProof[list[FriProof]],
+        ]
+    ] = FriProver
 ```
 
 Because those wire types are zorch-owned nominal types, the PCS pins have full

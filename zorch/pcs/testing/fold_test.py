@@ -23,6 +23,7 @@ from frx import Array
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.fold import (
+    FoldState,
     PreFoldKGroupCommitRound,
     open_rows,
     sample_distinct_positions,
@@ -59,18 +60,20 @@ class KGroupFoldRoundTripTest(absltest.TestCase):
 
     def _prove(self) -> tuple[Array, list[Array], list]:
         t = _transcript()
-        cw, t, layers = fold_rounds(
-            PreFoldKGroupCommitRound(self.code, self.tree), self.f, t, self.num_rounds
+        state, t, roots = fold_rounds(
+            PreFoldKGroupCommitRound(self.code, self.tree),
+            FoldState(self.f),
+            t,
+            self.num_rounds,
         )
-        final = cw
+        final = state.codeword
         t = t.observe(final)
         t, positions = sample_positions(t, self.code.block_len, self.num_queries)
         a = self.code.group_layer_positions(positions, self.num_rounds)
         query_openings = [
             open_rows(self.tree, layer.leaves, layer.digest_layers, a[i])
-            for i, layer in enumerate(layers)
+            for i, layer in enumerate(state.layers)
         ]
-        roots = [layer.root for layer in layers]
         return final, roots, query_openings
 
     def _verify(self, final: Array, roots: list[Array], query_openings: list) -> Array:

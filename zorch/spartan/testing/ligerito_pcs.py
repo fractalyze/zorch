@@ -5,7 +5,7 @@ The toy R1CS runs over the base field, but Ligerito (a Reed-Solomon matrix code)
 commits over an extension. This adapter embeds the base witness and opening point
 into the extension for `LigeritoProver`/`Verifier` and projects the opened value
 back to the base field, so the `WitnessOpen*` glue stays field-pure and drives
-the real recursive PCS unchanged through the `zorch.pcs.protocol` seam. (A
+the real recursive PCS unchanged through the `zorch.pcs.stage` seam. (A
 production Spartan over the extension field would inject `LigeritoProver`/
 `Verifier` directly, without this bridge.)
 """
@@ -24,6 +24,12 @@ from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.ligerito.config import LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import LigeritoProver, LigeritoProverData
 from zorch.pcs.ligerito.verifier import LigeritoVerifier
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
+from zorch.stage import (
+    ProveResult,
+    TrivialClaim,
+    VerifyResult,
+)
 from zorch.transcript import Transcript
 
 _K = fnp.dtype(EF).itemsize // fnp.dtype(F).itemsize
@@ -46,7 +52,8 @@ def _make_code(message_len: int, log_inv_rate: int) -> ReedSolomon:
 
 
 class LigeritoSpartanProver:
-    """`PcsProver` bridging the base-field witness to `LigeritoProver`."""
+    """Committer + opening stage bridging the base-field witness to
+    `LigeritoProver`."""
 
     def __init__(self, config: LigeritoConfig) -> None:
         _, _, tree = koalabear16_merkle()
@@ -55,20 +62,24 @@ class LigeritoSpartanProver:
     def commit(self, polys: Sequence[Array]) -> tuple[Array, LigeritoProverData]:
         return self._inner.commit([embed(polys[0])])
 
-    def open(
+    def prove(
         self,
-        prover_data: LigeritoProverData,
-        points: Sequence[Array],
+        claim: OpeningClaim[Array],
+        witness: OpeningWitness[LigeritoProverData],
         transcript: Transcript,
-    ) -> tuple[Array, LigeritoProof, Transcript]:
-        value, proof, transcript = self._inner.open(
-            prover_data, [embed(points[0])], transcript
+    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof]]:
+        value, proof, transcript = self._inner._open(
+            witness.prover_data, [embed(claim.points[0])], transcript
         )
-        return project(fnp.reshape(value, (1,))), proof, transcript
+        return ProveResult(
+            TrivialClaim(),
+            OpeningProof(project(fnp.reshape(value, (1,))), proof),
+            transcript,
+        )
 
 
 class LigeritoSpartanVerifier:
-    """`PcsVerifier` dual of `LigeritoSpartanProver`."""
+    """Opening-stage dual of `LigeritoSpartanProver`."""
 
     def __init__(self, config: LigeritoConfig) -> None:
         _, _, tree = koalabear16_merkle()
@@ -76,12 +87,15 @@ class LigeritoSpartanVerifier:
 
     def verify(
         self,
-        commitment: Array,
-        points: Sequence[Array],
-        values: Array,
-        proof: LigeritoProof,
+        claim: OpeningClaim[Array],
+        reduction_proof: OpeningProof[LigeritoProof],
         transcript: Transcript,
-    ) -> tuple[Array, Transcript]:
-        return self._inner.verify(
-            commitment, [embed(points[0])], embed(values)[0], proof, transcript
+    ) -> VerifyResult[TrivialClaim]:
+        ok, transcript = self._inner._verify_opening(
+            claim.commitment,
+            [embed(claim.points[0])],
+            embed(reduction_proof.values)[0],
+            reduction_proof.proof,
+            transcript,
         )
+        return VerifyResult(TrivialClaim(), transcript, ok)

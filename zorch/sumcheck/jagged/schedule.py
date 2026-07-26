@@ -101,7 +101,7 @@ def _round_metadata(
     """The per-round row schedule: memoized for the exact layout, built fresh
     for capped layouts (`_round_metadata_impl` has the full story).
 
-    The device-derived schedule (xla#179) no longer carries these
+    The device-derived schedule carries no such
     arrays — the claimed kernels and the composite decompositions derive the
     schedule from `row_counts` + the round index (`_derive_row_schedule`).
     This host builder remains the independent oracle's source

@@ -483,7 +483,7 @@ def sha256_stream_finalize(state: Sha256State, extras: Array) -> Array:
 # ---------------------------------------------------------------------------
 # ByteHash seam implementations (SHA-256). Both hash to the identical FIPS 180-4
 # bytes and differ only in substrate — `has_dedicated_fusion` is the type-level
-# signal. Param-free, so value identity is by type (no jit re-trace, issue #163).
+# signal. Param-free, so value identity is by type (no jit re-trace).
 # ---------------------------------------------------------------------------
 class Sha256:
     """`ByteHash` for device SHA-256 — `digest` runs the batch on the

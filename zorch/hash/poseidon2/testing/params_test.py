@@ -54,7 +54,7 @@ class Poseidon2ParamsTest(absltest.TestCase):
 class Poseidon2ParamsValueEqualityTest(absltest.TestCase):
     """Params compare by value: the permutation rides pytree aux (meta_fields),
     so independently built equal params must be == and hash-equal — identity
-    equality re-traces every jit zone taking a transcript (issue #163)."""
+    equality re-traces every jit zone taking a transcript."""
 
     def test_equal_by_value_across_instances(self) -> None:
         a, b = _good(), _good()

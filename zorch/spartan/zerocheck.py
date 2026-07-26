@@ -1,98 +1,155 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Outer sumcheck (zerocheck) stage: `0 = Σ_x eq(τ,x)·(Az(x)·Bz(x) − Cz(x))`.
-
-Samples `τ`, runs a degree-3 sumcheck over `(E=eq(τ,·), Az, Bz, Cz)`, and hands
-`r_x` plus the claimed evals `(Az, Bz, Cz)(r_x)` down the chain. The per-variable
-sumcheck engine is injected (`StageSumcheck`, default `zerocheck_engine`), so a
-caller can swap the algorithm / domain / wire form; this stage adds only the `τ`
-sample and the terminal identity check.
-"""
+"""Outer Spartan zerocheck role implementations."""
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass
+from typing import Any
 
 import frx.numpy as fnp
 from frx import Array
 
-from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
+from zorch.challenge import ChallengePolicy
+from zorch.poly.eq import eval_eq
 from zorch.poly.multilinear import eval_mle
-from zorch.prove import fold_rounds
-from zorch.round import Stage
-from zorch.spartan.carry import SpartanCarry
-from zorch.spartan.engine import StageSumcheck, zerocheck_engine
+from zorch.spartan.summand import ZerocheckSummand
+from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
+from zorch.sumcheck.eq.stage import (
+    EqPolyProver,
+    EqPolyVerifier,
+    EqPolyWitness,
+    EqSumClaim,
+)
+from zorch.sumcheck.stage import EvaluationClaim
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
-from zorch.verify import verify
 
 
-class OuterProver(Stage):
-    """Prover for the zerocheck stage; holds the matvecs `Az, Bz, Cz` as
-    stage-local witness. Inject `sumcheck` to swap the per-variable engine."""
+@dataclass(frozen=True)
+class ZerocheckClaim:
+    """Public claim that the outer relation vanishes over this many variables."""
+
+    rounds: int
+
+
+@dataclass(frozen=True)
+class ZerocheckWitness:
+    """The three multilinear factor tables witnessing ``ZerocheckClaim``."""
+
+    az: Array
+    bz: Array
+    cz: Array
+
+
+@dataclass(frozen=True)
+class RowEvaluationClaim:
+    """Claimed ``(Az, Bz, Cz)`` evaluations at the reduced row point."""
+
+    point: Array
+    values: Array
+
+
+@dataclass(frozen=True)
+class OuterProof:
+    """The outer sumcheck messages and terminal ``(Az, Bz, Cz)`` values."""
+
+    sumcheck: Any
+    claims: Array
+
+
+def _sample_tau(
+    rounds: int, transcript: Transcript, challenges: ChallengePolicy
+) -> tuple[Array, Transcript]:
+    values = []
+    for _ in range(rounds):
+        transcript, challenge = challenges.sample(transcript)
+        values.append(challenge)
+    return fnp.stack(values), transcript
+
+
+class OuterProver(
+    ProverStage[ZerocheckClaim, ZerocheckWitness, RowEvaluationClaim, OuterProof]
+):
+    """Prove zerocheck conditional on a row-evaluation claim."""
 
     def __init__(
         self,
-        az: Array,
-        bz: Array,
-        cz: Array,
         *,
-        sumcheck: StageSumcheck | None = None,
+        sumcheck: (
+            ProverStage[EqSumClaim, EqPolyWitness, EvaluationClaim, Any] | None
+        ) = None,
+        challenges: ChallengePolicy,
     ) -> None:
-        self.az = az
-        self.bz = bz
-        self.cz = cz
-        self.s_x = log2_strict_usize(az.shape[0])
-        self.sumcheck = sumcheck or zerocheck_engine()
-
-    def __call__(
-        self, carry: SpartanCarry, transcript: Transcript
-    ) -> tuple[SpartanCarry, Transcript, tuple[Array, Array]]:
-        transcript, tau = transcript.sample(self.s_x)
-        pre = transcript
-        one = fnp.ones((), self.az.dtype)
-        e = expand_eq_to_hypercube(tau, one)
-        state = fnp.stack([e, self.az, self.bz, self.cz])
-        _, transcript, msgs = fold_rounds(
-            self.sumcheck.prover_round, state, pre, self.s_x
+        self.challenges = challenges
+        self.sumcheck = sumcheck or EqPolyProver(
+            ZerocheckSummand(), challenges=challenges
         )
-        round_polys = fnp.stack(msgs)
-        # Recover r_x by replaying the injected verifier round — wire-agnostic, so
-        # the claim value (0) does not affect the sampled point.
-        zero = fnp.zeros((), self.az.dtype)
-        r_x, _, _, _ = verify(self.sumcheck.verifier_round, zero, round_polys, pre)
-        # Claimed evals straight from the MLEs — independent of the engine's fold
-        # representation.
-        claims = fnp.stack(
-            [eval_mle(self.az, r_x), eval_mle(self.bz, r_x), eval_mle(self.cz, r_x)]
-        )
-        transcript = transcript.observe(claims)
-        carry = replace(carry, r_x=r_x, claims_outer=claims)
-        return carry, transcript, (round_polys, claims)
 
-
-class OuterVerifier(Stage):
-    """Verifier for the zerocheck stage: replay the sumcheck, then check the
-    terminal identity `eq(τ,r_x)·(vA·vB − vC) == reduced_claim`."""
-
-    def __init__(self, *, sumcheck: StageSumcheck | None = None) -> None:
-        self.sumcheck = sumcheck or zerocheck_engine()
-
-    def __call__(
+    def prove(
         self,
-        carry: SpartanCarry,
-        msg: tuple[Array, Array],
+        claim: ZerocheckClaim,
+        witness: ZerocheckWitness,
         transcript: Transcript,
-    ) -> tuple[SpartanCarry, Transcript, Array]:
-        round_polys, claims = msg
-        s_x = round_polys.shape[0]
-        transcript, tau = transcript.sample(s_x)
-        zero = fnp.zeros((), claims.dtype)
-        r_x, final_claim, transcript, ok = verify(
-            self.sumcheck.verifier_round, zero, round_polys, transcript
+    ) -> ProveResult[RowEvaluationClaim, OuterProof]:
+        az, bz, cz = witness.az, witness.bz, witness.cz
+        rounds = log2_strict_usize(az.shape[0])
+        if rounds != claim.rounds:
+            raise ValueError(
+                f"claim expects {claim.rounds} outer rounds, witness needs {rounds}"
+            )
+        tau, transcript = _sample_tau(claim.rounds, transcript, self.challenges)
+        factors = fnp.stack([az, bz, cz])
+        zero = fnp.zeros((), tau.dtype)
+        reduced = self.sumcheck.prove(
+            EqSumClaim(tau, zero, claim.rounds),
+            EqPolyWitness(factors),
+            transcript,
         )
-        transcript = transcript.observe(claims)
-        va, vb, vc = claims[0], claims[1], claims[2]
-        expected = eval_eq(tau, r_x) * (va * vb - vc)
-        ok = ok & (final_claim == expected)
-        carry = replace(carry, r_x=r_x, claims_outer=claims)
-        return carry, transcript, ok
+        point = reduced.reduced_claim.point
+        values = fnp.stack(
+            [eval_mle(az, point), eval_mle(bz, point), eval_mle(cz, point)]
+        )
+        transcript = reduced.transcript.observe(values)
+        return ProveResult(
+            RowEvaluationClaim(point, values),
+            OuterProof(reduced.reduction_proof, values),
+            transcript,
+        )
+
+
+class OuterVerifier(VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof]):
+    """Verify zerocheck conditional on a row-evaluation claim."""
+
+    def __init__(
+        self,
+        *,
+        sumcheck: VerifierStage[EqSumClaim, EvaluationClaim, Any] | None = None,
+        challenges: ChallengePolicy,
+    ) -> None:
+        self.challenges = challenges
+        self.sumcheck = sumcheck or EqPolyVerifier(
+            ZerocheckSummand(), challenges=challenges
+        )
+
+    def verify(
+        self,
+        claim: ZerocheckClaim,
+        reduction_proof: OuterProof,
+        transcript: Transcript,
+    ) -> VerifyResult[RowEvaluationClaim]:
+        tau, transcript = _sample_tau(claim.rounds, transcript, self.challenges)
+        # Both roles derive the source-claim field from the public challenge.
+        zero = fnp.zeros((), tau.dtype)
+        reduced = self.sumcheck.verify(
+            EqSumClaim(tau, zero, claim.rounds),
+            reduction_proof.sumcheck,
+            transcript,
+        )
+        point = reduced.reduced_claim.point
+        final_value = reduced.reduced_claim.value
+        transcript = reduced.transcript.observe(reduction_proof.claims)
+        va, vb, vc = reduction_proof.claims
+        ok = reduced.ok & (final_value == eval_eq(tau, point) * (va * vb - vc))
+        return VerifyResult(
+            RowEvaluationClaim(point, reduction_proof.claims), transcript, ok
+        )

@@ -5,6 +5,7 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.sumcheck.domain import product_round_poly
 from zorch.sumcheck.eq.eq_poly import (
@@ -17,8 +18,12 @@ from zorch.sumcheck.prover import ProductSummand
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
+from zorch.verify import RunningClaim
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 
 
 class EqPolyTest(absltest.TestCase):
@@ -34,7 +39,9 @@ class EqPolyTest(absltest.TestCase):
         # r=3 fold of P1 = 1..32: (P1[16+j] − P1[j])·3 + P1[j] = 49..64.
         P = fnp.stack([fnp.arange(1, 33, dtype=KB), fnp.arange(2, 34, dtype=KB)])
         rnd = EqPolyRound(
-            ProductSummand(degree=2), fnp.array([0, 1, 1, 0, 1], dtype=KB)
+            ProductSummand(degree=2),
+            fnp.array([0, 1, 1, 0, 1], dtype=KB),
+            challenges=_CH,
         )
         state = (P, fnp.ones(1, dtype=KB))
         _, cache = rnd._round_poly(state)
@@ -51,7 +58,7 @@ class EqPolyTest(absltest.TestCase):
         w = fnp.array([1, 0, 1, 0], dtype=KB)
         eq_w = compute_eq_evaluations(w)[-1]
 
-        rnd = EqPolyRound(ProductSummand(degree=d), w)
+        rnd = EqPolyRound(ProductSummand(degree=d), w, challenges=_CH)
         state = (P, fnp.ones(1, dtype=KB))
         ref = fnp.concatenate([P, eq_w[None, :]], axis=0)
 
@@ -66,7 +73,10 @@ class EqPolyTest(absltest.TestCase):
     def test_prove_folds_all_rounds(self) -> None:
         P = fnp.stack([fnp.arange(1, 33, dtype=KB), fnp.arange(2, 34, dtype=KB)])
         p_final, _, msgs = prove_eq_poly(
-            P, fnp.array([0, 1, 1, 0, 1], dtype=KB), cheap_transcript(KB)
+            P,
+            fnp.array([0, 1, 1, 0, 1], dtype=KB),
+            cheap_transcript(KB),
+            challenges=_CH,
         )
         self.assertLen(msgs, 5)
         self.assertEqual(p_final.shape, (2, 1))
@@ -84,19 +94,19 @@ class EqPolyTest(absltest.TestCase):
             expand_eq_to_hypercube(w, fnp.ones((), KB)) * fnp.prod(P, axis=0)
         )
 
-        rnd = EqPolyRound(ProductSummand(degree=d), w)
+        rnd = EqPolyRound(ProductSummand(degree=d), w, challenges=_CH)
         state = (P, fnp.ones(1, dtype=KB))
-        verifier = CoeffsSumcheckRound(degree=d + 1)
+        verifier = CoeffsSumcheckRound(degree=d + 1, challenges=_CH)
         transcript: Transcript = cheap_transcript(KB)
-        point = []
-        for _ in range(l):
+        running = RunningClaim(claim, fnp.zeros((l,), claim.dtype), fnp.int32(0))
+        for i in range(l):
             coeffs, cache = rnd._round_coeffs(state)
             self.assertEqual(coeffs.shape, (d + 2,))
-            claim, transcript, r, ok = verifier(claim, coeffs, transcript)
+            running, transcript, ok = verifier(running, transcript, coeffs)
             self.assertTrue(bool(ok))
-            state = rnd._fold(cache, state[1], r)
-            point.append(r)
-        expected = eval_eq(w, fnp.stack(point)) * fnp.prod(state[0][:, 0])
+            state = rnd._fold(cache, state[1], running.point[i])
+        claim = running.value
+        expected = eval_eq(w, running.point) * fnp.prod(state[0][:, 0])
         self.assertTrue(bool(claim == expected))
 
 

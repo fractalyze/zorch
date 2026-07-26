@@ -5,7 +5,7 @@ The reusable machinery for a fixed-width, size-invariant jagged sumcheck round
 engine, factored out of the LogUp-GKR prover so any jagged sumcheck consumer
 (e.g. a jagged zerocheck) can share it:
 
-- `buffers` — fixed-width cap buffers + the donated layer-entry pool (xla#179).
+- `buffers` — fixed-width cap buffers + the donated layer-entry pool.
 - `fs` — the per-round Fiat-Shamir hop (observe/squeeze/fold).
 - `layout` — the numpy segment-gather / even-prepad recurrences.
 - `schedule` — the `row_counts` -> gather/live/re-pad round schedule.

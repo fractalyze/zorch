@@ -21,10 +21,11 @@ from typing import Any
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_step
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProverRound
 from zorch.sumcheck.domain import fold, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
@@ -50,7 +51,7 @@ def _lagrange_over_round_domain(r: Array, d: int) -> Array:
     )
 
 
-class SmallValueRound(Round):
+class SmallValueRound(ProverRound):
     """The accumulator round: sᵢ = lᵢ · (Rᵢ · Aᵢ), then grow R by the round's Lagrange
     tensor and advance the eq mass + table. One object drives all l₀ rounds under
     fold_rounds — it reads the round index off the eq table (which doubles each round)
@@ -90,7 +91,7 @@ class SmallValueRound(Round):
         return new_state, transcript, msg
 
 
-class TransitionRound(Round):
+class TransitionRound(ProverRound):
     """The √-space→eq-poly handoff (round l₀+1): one product round over the d+1 factors
     [P₁..P_d, eq(w,·)] at Û_d, binding the variable and advancing the eq mass for the
     tail. Runs on the materialized factors — the boundary compute_folded_evaluations
@@ -137,7 +138,12 @@ def _precompute(p_initial: Array, w: Array, l_0: int) -> tuple[list[Array], Arra
 
 
 def prove_eq_poly_small_value(
-    p_initial: Array, w: Array, l_0: int, transcript: Transcript
+    p_initial: Array,
+    w: Array,
+    l_0: int,
+    transcript: Transcript,
+    *,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Prove the eq-weighted sumcheck with l₀ small-value rounds. Returns the final
     folded factors (d, 1), the transcript, and all l round messages (each over Û_d)."""
@@ -172,7 +178,7 @@ def prove_eq_poly_small_value(
     # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
     # unlike EqPolyRound / SqrtSpaceRound, it does not take a general summand.
     (p_final, _), transcript, tail = fold_rounds(
-        EqPolyRound(ProductSummand(degree=d), w),
+        EqPolyRound(ProductSummand(degree=d), w, challenges=challenges),
         (folded_p, eq_w_prev),
         transcript,
         l - l_0 - 1,

@@ -311,8 +311,8 @@ def _derive_transition_gathers(
     cum_out = fnp.cumsum(orc)
     q = fnp.arange(out_width, dtype=i32)
     # scan_unrolled: the default scan method lowers to a while whose carry is
-    # the full index array, an every-trip device copy (the sp1-zorch#284
-    # lesson); unrolling the log2(num_batches) steps is byte-identical.
+    # the full index array, an every-trip device copy; unrolling the
+    # log2(num_batches) steps is byte-identical.
     s = fnp.searchsorted(cum_out, q, side="right", method="scan_unrolled")
     s = fnp.minimum(s.astype(i32), i32(row_counts.shape[0] - 1))
     j = q - (cum_out[s] - orc[s])

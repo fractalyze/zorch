@@ -7,7 +7,7 @@ framing, grinding, query sampling) lives on the base; only ligerito's deltas
 live here — zorch's native wire as the default behavior, the `alpha_lsb_first`
 / `compressed_sumcheck_messages` config-knob philosophy (one definition, both
 sides derive) lifted from data to behavior, for a byte-fixed consumer like
-flock's `pcs::ligerito` (fractalyze/flock-zorch#32).
+flock's `pcs::ligerito`.
 
 `LigeritoProver` and `LigeritoVerifier` must share ONE choreography instance
 (the base's contract: every hook is side-neutral except the grind/check pair,

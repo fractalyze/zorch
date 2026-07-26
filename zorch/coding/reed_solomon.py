@@ -343,7 +343,7 @@ class ReedSolomon:
     # coset {p, p + n/k, ..., p + (k-1)n/k} (the natural-order generalization of
     # the (x, -x) conjugate pair) and Lagrange-interpolates them at beta via
     # `fri_fold_k`'s `points=` form; the binary pair keeps its cheaper closed-form
-    # butterfly (zorch#252).
+    # butterfly.
 
     def fold_group(self, codeword: Array, beta: Array) -> Array:
         """KFoldableCode fold: regroup the layer into k-th-root cosets and

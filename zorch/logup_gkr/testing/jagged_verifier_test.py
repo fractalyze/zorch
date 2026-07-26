@@ -11,13 +11,13 @@ production.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import (
     JaggedGkrLayer,
     LogUpGkrOutput,
@@ -25,66 +25,61 @@ from zorch.logup_gkr.circuit import (
     extract_jagged_outputs,
 )
 from zorch.logup_gkr.jagged_prover import JaggedGkrLayerRound, JaggedLayerProof
+from zorch.logup_gkr.jagged_stage import (
+    JaggedGkrWitness,
+    JaggedLogUpGkrProver,
+    JaggedLogUpGkrVerifier,
+)
 from zorch.logup_gkr.jagged_verifier import (
     JaggedGkrLayerRound as JaggedVerifierLayerRound,
 )
-from zorch.logup_gkr.prover import Carry, bind_output
+from zorch.logup_gkr.prover import LayerClaim, bind_output
+from zorch.logup_gkr.stage import LogUpOutputClaim
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
     caps_for,
     host_counts,
+    jagged_fold_schedules,
     random_jagged_layer,
     virtual_planes,
 )
 from zorch.poly.multilinear import eval_mle
-from zorch.round import ProveChain, VerifyChain
+from zorch.round import prove_rounds, verify_rounds
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import Transcript, sample_challenge
-from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 EF = zk_dtypes.koalabearx4_mont
 
 ROW_COUNTS = (3, 1, 5, 2)
 
 
-def _bind_multi_limb(
-    output: LogUpGkrOutput, transcript: Transcript, dtype: Any, limbs: int
-) -> tuple[Carry, Transcript]:
-    """`bind_output` with the multi-limb squeeze rule -- the binding glue a
-    consumer whose claims extend the transcript's field owns."""
-    num_vars = log2_strict_usize(output.numerator.shape[0])
-    transcript = transcript.observe(output.numerator)
-    transcript = transcript.observe(output.denominator)
-    coords = []
-    for _ in range(num_vars):
-        transcript, c = sample_challenge(transcript, dtype, limbs)
-        coords.append(c)
-    point = fnp.stack(coords)
-    num_eval = eval_mle(output.numerator, point)
-    den_eval = eval_mle(output.denominator, point)
-    return (num_eval, den_eval, point), transcript
-
-
 def _prove(
     layers: list[JaggedGkrLayer],
-) -> tuple[Carry, list[JaggedLayerProof], LogUpGkrOutput]:
+) -> tuple[LayerClaim, list[JaggedLayerProof], LogUpGkrOutput]:
     output = extract_jagged_outputs(layers[-1])
-    carry, transcript = bind_output(output, cheap_transcript(KB))
+    carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
     caps = caps_for(host_counts(layers[0]), len(layers) - 1)
-    chain = ProveChain(
-        [JaggedGkrLayerRound(layer, caps=caps) for layer in reversed(layers[:-1])]
+    final, _, proofs = prove_rounds(
+        [
+            JaggedGkrLayerRound(layer, caps=caps, challenges=_CH)
+            for layer in reversed(layers[:-1])
+        ],
+        carry,
+        transcript,
     )
-    final, _, proofs = chain(carry, transcript)
     return final, proofs, output
 
 
 def _verify(
     output: LogUpGkrOutput, proofs: list[JaggedLayerProof]
-) -> tuple[Carry, Array]:
-    carry, transcript = bind_output(output, cheap_transcript(KB))
-    chain = VerifyChain([JaggedVerifierLayerRound() for _ in proofs])
-    final, _, ok = chain(carry, proofs, transcript)
+) -> tuple[LayerClaim, Array]:
+    carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
+    final, _, ok = verify_rounds(
+        [JaggedVerifierLayerRound(_CH) for _ in proofs], carry, proofs, transcript
+    )
     return final, ok
 
 
@@ -128,27 +123,117 @@ class JaggedRoundtripTest(absltest.TestCase):
         # Extension-field claims over a base-field transcript: both sides
         # bind and squeeze through the same multi-limb rule.
         limbs = 4
+        challenges = ChallengePolicy(EF)
         layers = build_jagged_pyramid(random_jagged_layer(37, ROW_COUNTS))
         output = extract_jagged_outputs(layers[-1])
 
-        carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
-        chain = ProveChain(
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges)
+        prover_final, _, proofs = prove_rounds(
             [
                 JaggedGkrLayerRound(
-                    layer, limbs, caps=caps_for(ROW_COUNTS, len(layers) - 1)
+                    layer, challenges, caps=caps_for(ROW_COUNTS, len(layers) - 1)
                 )
                 for layer in reversed(layers[:-1])
-            ]
+            ],
+            carry,
+            transcript,
         )
-        prover_final, _, proofs = chain(carry, transcript)
 
-        carry, transcript = _bind_multi_limb(output, cheap_transcript(KB), EF, limbs)
-        vchain = VerifyChain([JaggedVerifierLayerRound(limbs) for _ in proofs])
-        verifier_final, _, ok = vchain(carry, proofs, transcript)
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges)
+        verifier_final, _, ok = verify_rounds(
+            [JaggedVerifierLayerRound(challenges) for _ in proofs],
+            carry,
+            proofs,
+            transcript,
+        )
         self.assertTrue(bool(ok))
         self.assertEqual(verifier_final[0].dtype, EF)
         for got, want in zip(verifier_final, prover_final, strict=True):
             self.assertTrue(bool(fnp.all(got == want)))
+
+
+class JaggedStageTest(absltest.TestCase):
+    """The jagged Stage pair over the same pyramid the round chain runs."""
+
+    def _fixture(self, seed: int) -> tuple[
+        JaggedLogUpGkrProver,
+        JaggedLogUpGkrVerifier,
+        LogUpOutputClaim,
+        JaggedGkrWitness,
+        list[JaggedGkrLayer],
+    ]:
+        first = random_jagged_layer(seed, ROW_COUNTS)
+        schedules = jagged_fold_schedules(first)
+        layers = build_jagged_pyramid(first)
+        claim = LogUpOutputClaim(extract_jagged_outputs(layers[-1]), len(schedules))
+        return (
+            JaggedLogUpGkrProver(
+                caps_for(host_counts(first), len(schedules)), challenges=_CH
+            ),
+            JaggedLogUpGkrVerifier(challenges=_CH),
+            claim,
+            JaggedGkrWitness(first, schedules),
+            layers,
+        )
+
+    def test_stage_roundtrips_and_transcripts_agree(self) -> None:
+        prover, verifier, claim, witness, _ = self._fixture(7)
+        proved = prover.prove(claim, witness, cheap_transcript(KB))
+        verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(KB))
+        self.assertTrue(bool(verified.ok))
+        self.assertEqual(len(proved.reduction_proof.layers), claim.layers)
+        self.assertTrue(
+            bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.numerator == verified.reduced_claim.numerator)
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.denominator == verified.reduced_claim.denominator)
+        )
+        _, prover_next = proved.transcript.sample(1)
+        _, verifier_next = verified.transcript.sample(1)
+        self.assertTrue(bool(fnp.all(prover_next == verifier_next)))
+
+    def test_stage_matches_the_hand_run_chain(self) -> None:
+        # The stage drives the same rounds, so its stream must match the hand
+        # chain byte for byte -- proofs, reduced claim, chain-owned buffers.
+        prover, _, claim, witness, layers = self._fixture(17)
+        hand_final, hand_proofs, _ = _prove(layers)
+        proved = prover.prove(claim, witness, cheap_transcript(KB))
+        for got, want in zip(proved.reduction_proof.layers, hand_proofs, strict=True):
+            for field in ("round_polys", "point", "numerator_0", "denominator_1"):
+                self.assertTrue(
+                    bool(fnp.all(getattr(got, field) == getattr(want, field)))
+                )
+        num_eval, den_eval, point = hand_final
+        self.assertTrue(bool(proved.reduced_claim.numerator == num_eval))
+        self.assertTrue(bool(proved.reduced_claim.denominator == den_eval))
+        self.assertTrue(bool(fnp.all(proved.reduced_claim.point == point)))
+
+    def test_stage_statement_owns_layer_count(self) -> None:
+        prover, verifier, claim, witness, _ = self._fixture(27)
+        proved = prover.prove(claim, witness, cheap_transcript(KB))
+        bad = replace(claim, layers=claim.layers + 1)
+        with self.assertRaises(ValueError):
+            verifier.verify(bad, proved.reduction_proof, cheap_transcript(KB))
+        with self.assertRaises(ValueError):
+            prover.prove(bad, witness, cheap_transcript(KB))
+
+    def test_stage_rejects_tampered_round_poly(self) -> None:
+        prover, verifier, claim, witness, _ = self._fixture(37)
+        proved = prover.prove(claim, witness, cheap_transcript(KB))
+        layer_proofs = list(proved.reduction_proof.layers)
+        bad = layer_proofs[1]
+        layer_proofs[1] = replace(
+            bad, round_polys=bad.round_polys.at[0, 0].add(fnp.array(1, KB))
+        )
+        verified = verifier.verify(
+            claim,
+            replace(proved.reduction_proof, layers=tuple(layer_proofs)),
+            cheap_transcript(KB),
+        )
+        self.assertFalse(bool(verified.ok))
 
 
 if __name__ == "__main__":

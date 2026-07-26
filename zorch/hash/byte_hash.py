@@ -24,7 +24,7 @@ surface — the same rule `Permutation` carries. The byte transcript itself is a
 host object (a `bytes` buffer, not a jit-traced pytree), so it does not depend on
 this; but the moment a `ByteHash` is carried as pytree aux (e.g. a byte Merkle
 threaded through `@jit`), identity equality would silently re-trace the enclosing
-zone on every freshly built instance (issue #163). Defining it is cheap and keeps
+zone on every freshly built instance. Defining it is cheap and keeps
 the seam re-trace-safe by construction (a param-free hash compares by type).
 """
 

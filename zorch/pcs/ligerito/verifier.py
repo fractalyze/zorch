@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Ligerito recursive-open verifier — the `PcsVerifier` half of the recursive
+"""Ligerito recursive-open verifier — the verifier half of the recursive
 matrix PCS. Replays the prover's continuous sumcheck and per-level Fiat-Shamir:
 it reconstructs the running basis `B` (from the value
 basis `eq(z)` plus each level's induced proximity basis, folded by the same
@@ -16,11 +16,13 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from functools import cache
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.coding.tensor_code import TensorCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.basefold.batching import sample_staggered_coeffs
@@ -29,25 +31,49 @@ from zorch.pcs.ligerito.basis import select_commit_basis
 from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import MakeCode
+from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.sumcheck import prover as sc_prover
 from zorch.sumcheck.domain import fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
 from zorch.transcript import Transcript
 
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
 
-_ROUND = SumcheckRound(degree=2)
-_COMPRESSED_ROUND = CompressedCoeffsSumcheckRound()
+# Cached per challenge field: one instance per field, identity-stable for the
+# jit closures these ride in.
+@cache
+def _round(dtype: Any) -> SumcheckRound:
+    return SumcheckRound(degree=2, challenges=ChallengePolicy(dtype))
+
+
+@cache
+def _compressed_round(dtype: Any) -> CompressedCoeffsSumcheckRound:
+    return CompressedCoeffsSumcheckRound(challenges=ChallengePolicy(dtype))
+
+
 # Prover-round duals, for the eager policy's terminal pin: the last emitted
 # message is the residual state's round poly, recomputable in the clear.
-_P_ROUND = sc_prover.StandardRound(sc_prover.ProductSummand(degree=2))
-_P_COMPRESSED_ROUND = sc_prover.CompressedProductRound()
+@cache
+def _p_round(dtype: Any) -> sc_prover.StandardRound:
+    return sc_prover.StandardRound(
+        sc_prover.ProductSummand(degree=2), challenges=ChallengePolicy(dtype)
+    )
+
+
+@cache
+def _p_compressed_round(dtype: Any) -> sc_prover.CompressedProductRound:
+    return sc_prover.CompressedProductRound(challenges=ChallengePolicy(dtype))
 
 
 @dataclass(frozen=True)
-class LigeritoVerifier:
+class LigeritoVerifier(
+    VerifierStage[
+        OpeningClaim[LigeritoCommitment],
+        TrivialClaim,
+        OpeningProof[LigeritoProof],
+    ]
+):
     """Ligerito recursive PCS verifier. Mirrors `LigeritoProver`'s `make_code` /
     `tree` / `config` / `choreography` (share the choreography instance with
     the prover — it fixes the Fiat-Shamir wire for both sides)."""
@@ -61,6 +87,22 @@ class LigeritoVerifier:
         return self.make_code(message_len, self.config.log_inv_rates[level])
 
     def verify(
+        self,
+        claim: OpeningClaim[LigeritoCommitment],
+        reduction_proof: OpeningProof[LigeritoProof],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: LigeritoCommitment,
         points: Sequence[Array],
@@ -153,7 +195,9 @@ def _verify(
     chor = verifier.choreography
     dtype = B.dtype
     one = fnp.ones((), dtype)
-    round_ = _COMPRESSED_ROUND if cfg.compressed_sumcheck_messages else _ROUND
+    round_ = (
+        _compressed_round(dtype) if cfg.compressed_sumcheck_messages else _round(dtype)
+    )
     basis = select_commit_basis(cfg.monomial_commit)
 
     claim = value
@@ -257,9 +301,9 @@ def _verify(
                 # The eager wire's terminal emission is the residual state's
                 # round poly — recompute it in the clear and pin it exactly.
                 p_round = (
-                    _P_COMPRESSED_ROUND
+                    _p_compressed_round(dtype)
                     if cfg.compressed_sumcheck_messages
-                    else _P_ROUND
+                    else _p_round(dtype)
                 )
                 ok = ok & fnp.all(cur == p_round._round_poly(fnp.stack([residual, B])))
             break
@@ -289,4 +333,10 @@ def _verify(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[LigeritoCommitment, LigeritoProof]] = LigeritoVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[LigeritoCommitment],
+            TrivialClaim,
+            OpeningProof[LigeritoProof],
+        ]
+    ] = LigeritoVerifier

@@ -5,13 +5,14 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy, challenge_limbs
 from zorch.sumcheck.domain import (
     fold,
     natural_domain,
     product_round_poly,
     summand_evals,
 )
-from zorch.sumcheck.prover import ProductSummand, challenge_limbs
+from zorch.sumcheck.prover import ProductSummand
 from zorch.sumcheck.sqrt_space import prove_sqrt_space
 from zorch.testkit.random_field import rand_ext_field
 from zorch.testkit.transcript import cheap_transcript
@@ -19,6 +20,9 @@ from zorch.transcript import Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 KBx4 = zk_dtypes.koalabearx4_mont
 
 
@@ -46,7 +50,7 @@ class SqrtSpaceTest(absltest.TestCase):
         for d, l in [(2, 4), (3, 4), (2, 5), (2, 6)]:
             p = _stacked(d, l)
             ref = _prove_product(p, cheap_transcript(KB))
-            _, _, got = prove_sqrt_space(p, cheap_transcript(KB))
+            _, _, got = prove_sqrt_space(p, cheap_transcript(KB), challenges=_CH)
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
@@ -54,12 +58,15 @@ class SqrtSpaceTest(absltest.TestCase):
                 )
 
     def test_prove_folds_to_scalar(self) -> None:
-        p_final, _, msgs = prove_sqrt_space(_stacked(3, 4), cheap_transcript(KB))
+        p_final, _, msgs = prove_sqrt_space(
+            _stacked(3, 4), cheap_transcript(KB), challenges=_CH
+        )
         self.assertEqual(p_final.shape, (3, 1))
         self.assertLen(msgs, 4)
 
     def test_matches_linear_time_prover_ext(self) -> None:
-        # With ext_dtype set, the √-space prover must still reproduce a linear-time
+        # With an extension challenge policy, the √-space prover must still
+        # reproduce a linear-time
         # prover that samples the SAME extension challenges — the memory trick is
         # transcript-neutral in the extension field too.
         def ref(p: fnp.ndarray, transcript: Transcript) -> list[fnp.ndarray]:
@@ -83,7 +90,7 @@ class SqrtSpaceTest(absltest.TestCase):
                 p,
                 cheap_transcript(KB),
                 domain=natural_domain(d, KBx4),
-                ext_dtype=KBx4,
+                challenges=ChallengePolicy(KBx4),
             )
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(want, got, strict=True)):

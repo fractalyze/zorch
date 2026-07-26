@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Byte-match the jagged-eval sumcheck Round against the SP1 pipeline dump.
 
-Drives ``JaggedEvalRound`` through ``ProveChain`` (the composition path) with a
+Drives ``prove_jagged_eval`` with a
 scripted transcript replaying the dumped outer + inner challenges, and
 byte-matches the full sumcheck half: the outer Hadamard sumcheck ``Σ D·J̃``
 (round polys, folded point, ``dense_eval``) and the inner branching-program
@@ -28,11 +28,10 @@ from zk_dtypes import koalabear_mont, koalabearx4_mont
 
 from zorch.pcs.jagged.prover import (
     JaggedEvalInputs,
-    JaggedEvalRound,
     _eval_inputs,
     assemble_columns,
+    prove_jagged_eval,
 )
-from zorch.round import ProveChain
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, sample_challenge
 
@@ -72,8 +71,8 @@ class _ScriptedTranscript:
     reference run's Fiat-Shamir outcomes rather than re-deriving them (the duplex
     encoding is the pipeline's concern, not this round's). Mirrors
     ``zerocheck/jagged_byte_match_test``: the sumchecks squeeze base limbs and
-    reassemble each EF challenge (the ``sample_challenge`` rule,
-    fractalyze/sp1-zorch#88), so the script holds one flat base-limb stream.
+    reassemble each EF challenge (the ``sample_challenge`` rule), so the script holds
+    one flat base-limb stream.
 
     A registered pytree with a traced ``pos``: ``inner_sumcheck_core`` threads the
     transcript through a ``lax.scan``, whose carry must be a JAX type (the prior
@@ -94,6 +93,10 @@ class _ScriptedTranscript:
     def observe(self, values: Array) -> _ScriptedTranscript:
         return self
 
+    @property
+    def field(self) -> Any:
+        return self.stream.dtype
+
     def sample(self, n: int = 1) -> tuple[_ScriptedTranscript, Array]:
         out = frx.lax.dynamic_slice(self.stream, (self.pos,), (n,))
         return replace(self, pos=self.pos + n), out
@@ -104,7 +107,7 @@ class _ScriptedTranscript:
         return self.sample(n)
 
 
-class JaggedEvalRoundByteMatchTest(absltest.TestCase):
+class JaggedEvalByteMatchTest(absltest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         meta = json.loads((_FIXTURE / "meta.json").read_text())
@@ -145,14 +148,13 @@ class JaggedEvalRoundByteMatchTest(absltest.TestCase):
             z_col=z_col,
             dense=dense,
         )
-        # Run via ProveChain — the round must compose, not just stand alone.
         # The outer sumcheck samples its 23 alphas first, then the inner its 48.
-        chain = ProveChain([JaggedEvalRound(dtype=EF)])
         script = fnp.concatenate([outer_alphas, inner_alphas])
         # _ScriptedTranscript is a replay-only test double that reproduces the
         # dumped Fiat-Shamir stream rather than re-deriving it.
-        _, _, msgs = chain(carry, _ScriptedTranscript.create(script))
-        cls.msg = msgs[0]
+        cls.msg, _ = prove_jagged_eval(
+            carry, _ScriptedTranscript.create(script), dtype=EF
+        )
 
     def _expect(self, name: str) -> np.ndarray:
         return np.load(_FIXTURE / "outputs" / name).reshape(-1)
@@ -191,7 +193,7 @@ class ChallengeRuleTest(absltest.TestCase):
     """Pin the squeeze rule on a real transcript: SP1 binds each outer and
     inner round with ``sample_ext_element`` — degree base squeezes
     reinterpreted as one extension element, the shared ``sample_challenge``
-    definition (fractalyze/sp1-zorch#88). The scripted byte-match above
+    definition. The scripted byte-match above
     bypasses the rule entirely, so it cannot catch a squeeze-count drift."""
 
     def test_outer_and_inner_rounds_sample_extension_challenges(self) -> None:
@@ -209,7 +211,7 @@ class ChallengeRuleTest(absltest.TestCase):
             z_col=rand_ef(3, (1,)),
             dense=fnp.array([3, 5, 7, 11], dtype=BF),
         )
-        _, _, msg = JaggedEvalRound(dtype=EF)(inputs, cheap_transcript(BF))
+        msg, _ = prove_jagged_eval(inputs, cheap_transcript(BF), dtype=EF)
 
         # Independent replay of the stage's whole challenge stream off the
         # message: observe each round poly, take one extension sample, and
@@ -232,7 +234,7 @@ class ChallengeRuleTest(absltest.TestCase):
             t, msg.outer_sumcheck_polys, msg.outer_sumcheck_point, "outer"
         )
         # SP1 absorbs the claimed J̃ value before the inner rounds
-        # (fractalyze/sp1-zorch#90).
+        # .
         t = t.observe(msg.inner_claimed_sum)
         replay_rounds(t, msg.inner_sumcheck_polys, msg.inner_point, "inner")
 

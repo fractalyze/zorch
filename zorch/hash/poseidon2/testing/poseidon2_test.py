@@ -65,7 +65,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         self.assertIn(f"version = {POSEIDON2_MARKER_VERSION}", composite_line)
         # Exactly the 5 ABI operands [state, ext_init_rc, int_rc, ext_term_rc,
         # diag]. The internal J scale rides as the `internal_j_scale` attribute,
-        # not a 6th operand (issue #440). A closed-over external matrix would be
+        # not a 6th operand. A closed-over external matrix would be
         # lifted to a leading 6th operand (frx.lax.composite prepends consts) and
         # break the Poseidon2Fusion operand ABI — the e2e GPU failure this guards.
         operands = composite_line.split(f'"{POSEIDON2_MARKER}"')[1].split("{")[0]
@@ -76,7 +76,7 @@ class Poseidon2Koalabear16Test(absltest.TestCase):
         # still emit exactly 5 operands (materialized in-trace, never lifted to a
         # 6th operand). koalabear16_scaled_perm's scale is R⁻¹: canonical
         # 1057030144, Montgomery STORAGE 1 — so the attribute must read 1057030144,
-        # not the storage 1 a raw-bits/canonical mixup would emit (fractalyze/xla#206).
+        # not the storage 1 a raw-bits/canonical mixup would emit.
         p = koalabear16_scaled_perm()
         txt = frx.jit(p.permute).lower(fnp.arange(16, dtype=F)).as_text()
         composite_line = next(

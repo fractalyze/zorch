@@ -19,7 +19,7 @@ ______________________________________________________________________
 | Fiat-Shamir transcripts — the device-algebraic vs host-byte (SHA-256) taxonomy              | [`transcript.md`](blocks/transcript.md) |
 | Merkle commitment — binary tree on Sponge + Compression                                     | [`commit.md`](blocks/commit.md)         |
 | Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT          | [`coding.md`](blocks/coding.md)         |
-| Polynomial commitment seam — `PcsProver`/`PcsVerifier`, with KZG / FRI / BaseFold instances | [`pcs.md`](blocks/pcs.md)               |
+| Polynomial commitment seam — a committer plus an opening stage, with KZG / FRI / BaseFold instances | [`pcs.md`](blocks/pcs.md)               |
 | Jagged Little Polynomial — verifier point-eval (branching program)                          | [`jagged.md`](blocks/jagged.md)         |
 | The sumcheck block — design rationale & gotchas                                             | [`sumcheck.md`](blocks/sumcheck.md)     |
 | LogUp-GKR — fractional-sum circuit, prover/verifier round duals                             | [`logup-gkr.md`](blocks/logup-gkr.md)   |
@@ -34,7 +34,7 @@ ______________________________________________________________________
 
 | Question                                                                                                                                     | Where                                                      |
 | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Stage composition & the consumer boundary — the seam contract between stages, what zorch owns vs the consumer, the injection points, bridges | [`stage-composition.md`](composition/stage-composition.md) |
+| Stage composition — typed phase duals, explicit pipelines, round boundaries, and the consumer split | [`stage-composition.md`](composition/stage-composition.md) |
 
 ## `reference/` — conventions, environment, learning
 

@@ -287,7 +287,7 @@ class JaggedEndToEndTest(absltest.TestCase):
 class BuildJaggedPyramidTest(absltest.TestCase):
     """`build_jagged_pyramid` folds the `jagged_layer_transition` chain into one
     unrolled traced region; every generated layer must be byte-identical to the
-    eager reference (`eager_jagged_pyramid`, sp1-zorch#55)."""
+    eager reference (`eager_jagged_pyramid`)."""
 
     def _assert_layers_equal(
         self, got: list[JaggedGkrLayer], want: list[JaggedGkrLayer]

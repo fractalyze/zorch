@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Single-shot Ligero verifier — the `PcsVerifier` half of the matrix PCS.
+"""Single-shot Ligero verifier — the verifier half of the matrix PCS.
 
 `verify` replays the prover's Fiat-Shamir order (bind root, value, sent `w`, then
 sample the query positions) and runs Ligero's two checks on the opened codeword
@@ -32,17 +32,22 @@ from zorch.coding.linear_code import LinearCode
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.fold import from_base_field, sample_positions, verify_openings
 from zorch.pcs.ligero.config import LigeroCommitment, LigeroProof
+from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
-
 
 @dataclass(frozen=True)
-class LigeroVerifier:
-    """Single-shot Ligero PCS verifier (`PcsVerifier`)."""
+class LigeroVerifier(
+    VerifierStage[
+        OpeningClaim[LigeroCommitment],
+        TrivialClaim,
+        OpeningProof[LigeroProof],
+    ]
+):
+    """Single-shot Ligero PCS verifier."""
 
     code: LinearCode
     tree: MerkleTree
@@ -50,6 +55,22 @@ class LigeroVerifier:
     num_queries: int = 4
 
     def verify(
+        self,
+        claim: OpeningClaim[LigeroCommitment],
+        reduction_proof: OpeningProof[LigeroProof],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: LigeroCommitment,
         points: Sequence[Array],
@@ -124,4 +145,10 @@ def _verify_body(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[LigeroCommitment, LigeroProof]] = LigeroVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[LigeroCommitment],
+            TrivialClaim,
+            OpeningProof[LigeroProof],
+        ]
+    ] = LigeroVerifier

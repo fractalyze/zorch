@@ -1,7 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """SP1 jagged-eval verifier: the zorch-native dual of the stage-5 prover.
 
-``verify_jagged_eval_msg`` replays the sumcheck half (``JaggedEvalRound``):
+``verify_jagged_eval_msg`` replays the sumcheck half (``prove_jagged_eval``):
 the outer Hadamard sumcheck against the column claim recomputed from the
 zerocheck openings, the inner branching-program sumcheck against the proof's
 claimed J̃, the succinct branching-program leaf check at the reduced point,
@@ -42,6 +42,7 @@ import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import efinfo
 
+from zorch.challenge import ChallengePolicy
 from zorch.coding.reed_solomon import BitReversedReedSolomon
 from zorch.commit.merkle import Opening
 from zorch.commit.smcs import SingleMatrixCommitmentScheme, VerifyCode
@@ -110,7 +111,7 @@ def verify_jagged_eval_msg(
     ok = fnp.array_equal(claim, msg.outer_sumcheck_claim)
 
     point, outer_final, transcript, ok_rounds = verify(
-        CoeffsSumcheckRound(_DEGREE, ef_limbs),
+        CoeffsSumcheckRound(_DEGREE, ChallengePolicy(dtype)),
         claim,
         msg.outer_sumcheck_polys,
         transcript,
@@ -119,10 +120,10 @@ def verify_jagged_eval_msg(
     ok = ok & ok_rounds & fnp.array_equal(z_final, msg.outer_sumcheck_point)
 
     # SP1 absorbs the claimed J̃ value before the inner rounds
-    # (fractalyze/sp1-zorch#90), then replays them with the same rule.
+    # , then replays them with the same rule.
     transcript = transcript.observe(msg.inner_claimed_sum)
     ipoint, inner_final, transcript, ok_inner = verify(
-        CoeffsSumcheckRound(_DEGREE, ef_limbs),
+        CoeffsSumcheckRound(_DEGREE, ChallengePolicy(dtype)),
         msg.inner_claimed_sum,
         msg.inner_sumcheck_polys,
         transcript,

@@ -1,8 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""zorch#327 (Z1 prototype): the FS-less `zorch.sumcheck.round` marker around the
+"""The FS-less `zorch.sumcheck.round` marker around the
 dense interaction fold+sum is byte-identical to the eager `_fix_and_sum_int`, and
 emits the composite with the pinned operand/attr ABI. This is the marker contract
-the xla `SumcheckRecognizer` extension (fractalyze/xla#179) must accept."""
+the xla `SumcheckRecognizer` extension must accept."""
 
 from __future__ import annotations
 
@@ -284,8 +284,8 @@ class RoundClaimStatusTest(absltest.TestCase):
     byte-identical by the marker contract), so a marker/recognizer drift
     between this checkout and the installed frxlib would otherwise surface
     only as a many-launch perf cliff at shard scale. GPU-only: the claim is
-    the register-resident GPU path's contract (fractalyze/xla#179 merge
-    gate); the fusion-config name `sumcheck_round` appears in the optimized
+    the register-resident GPU path's contract; the fusion-config name
+    `sumcheck_round` appears in the optimized
     HLO iff the recognizer claimed the round (the unclaimed decomposition
     inlines the composite away, marker attrs included)."""
 

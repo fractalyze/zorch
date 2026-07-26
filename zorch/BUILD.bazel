@@ -100,11 +100,32 @@ py_library(
 )
 
 py_library(
+    name = "challenge",
+    srcs = ["challenge.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":transcript",
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_library(
     name = "round",
     srcs = ["round.py"],
     visibility = ["//visibility:public"],
     deps = [
         ":transcript",  # also the package-init carrier for this dir
+        requirement("frx"),
+    ],
+)
+
+py_library(
+    name = "stage",
+    srcs = ["stage.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":transcript",
         requirement("frx"),
     ],
 )

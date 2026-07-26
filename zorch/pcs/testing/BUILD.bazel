@@ -23,11 +23,12 @@ py_test(
     # local_only tag from CI (full rationale there); local bazel runs it.
     tags = ["local_only"],
     deps = [
+        "//zorch:stage",
         "//zorch:transcript",
         "//zorch/coding:reed_solomon",
         "//zorch/commit/testing:koalabear16",
         "//zorch/hash/poseidon2/testing:koalabear16",
-        "//zorch/pcs:protocol",
+        "//zorch/pcs:stage",
         "//zorch/pcs/basefold",
         "//zorch/pcs/fri",
         "//zorch/pcs/kzg",

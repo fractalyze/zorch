@@ -19,7 +19,7 @@ inside are fine — `jit` unrolls them.
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
 - composes sub-rounds in a static Python loop over heterogeneous shapes — e.g.
-  `fold_rounds` and the GKR `ProveChain` / `VerifyChain` thread the carry +
+  `fold_rounds` and the GKR `prove_rounds` / `verify_rounds` thread the carry +
   transcript through rounds whose message shapes vary round to round. `@jit`
   would unroll the composition into one trace; the per-round numeric bodies are
   the fusion target, not the driver. (`prove` / `verify` are the deliberate
@@ -98,12 +98,12 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   `SumcheckRound` and the LogUp `LogupSumcheckRound` share one scan — a new
   sumcheck rides it by supplying a `_combine`, not by re-deriving the scan
   machinery. Only this per-variable inner loop scans; the heterogeneous chain over
-  it (`fold_rounds`, the GKR `ProveChain`) stays a Python `for` (next bullet).
+  it (`fold_rounds`, the GKR `prove_rounds`) stays a Python `for` (next bullet).
 
 - **Python `for` — heterogeneous / non-round-invariant per-round loop.** When the
   per-round message or committed artifact changes shape across rounds it is not
   `scan`-shaped — keep it a Python loop (`fold_rounds`, the FRI fold phase, the GKR
-  `ProveChain`). FRI's fold halves the codeword and commits a half-size Merkle
+  `prove_rounds`). FRI's fold halves the codeword and commits a half-size Merkle
   layer each round; the GKR pyramid halves each layer. This is safe as a
   **host-orchestrated** loop (separate dispatches, not one giant traced graph);
   the `DuplexTranscript` steps inside it are device ops either way.
@@ -119,7 +119,7 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   generation) rolls this way: O(1) in the layer count. The matching device-FS
   prove roll was retired — Fiat-Shamir now runs on the host between kernel
   launches, so the jagged prove is the unrolled
-  `ProveChain(JaggedGkrLayerRound(l) for l in layers)` on a host-FS transcript
+  `prove_rounds(JaggedGkrLayerRound(l) for l in layers)` on a host-FS transcript
   (the host-orchestrated `for` case below), not a `scan` roll. Reach for a
   fixed-width roll when the layer count drives compile time or eager-dispatch
   latency past the cost of the masking.
@@ -180,7 +180,7 @@ Do **not** pre-register what no transform threads yet — registration that buys
 capability is noise:
 
 - **Heterogeneous-chain rounds** — `logup_gkr`'s `GkrLayerRound` and the
-  `ProveChain` / `VerifyChain` wrappers. The GKR pyramid halves every layer, so
+  `prove_rounds` / `verify_rounds` drivers. The GKR pyramid halves every layer, so
   the layers carry different shapes and the chain is composed in plain Python by
   default. Where a transform does cross the pyramid — the generation roll
   (`scan_build_jagged_pyramid`, see the loops section) — it threads the planes as
@@ -262,10 +262,12 @@ Vocabulary:
 - `Any` for a field dtype — the core names no field and treats `dtype` as
   opaque, so `dtype: Any` is the honest type, not a placeholder.
 
-`Round.__call__(self, *args: Any) -> Any` is the one deliberately-loose
-signature. A prover round is `(state, transcript) -> (state, transcript, msg)`
-and its verifier dual `(claim, msg, transcript) -> (claim, transcript, r, ok)`,
-so the base can't name a single shape — the subclasses give the precise ones.
+`ProverRound[Carry, Message]` maps `(carry, transcript)` to
+`(carry, transcript, message)`. `VerifierRound[Carry, Message]` maps
+`(carry, transcript, message)` to `(carry, transcript, ok)`. Only the message
+crosses between the roles; a challenge both sides derive rides the carry.
+`Carry` is the protocol's type variable — a concrete carry is named for what it
+holds (`RunningClaim`, `LayerClaim`, `FoldState`), never `Carry`.
 
 mypy can't see through FRX (its shipped stubs don't parse) or
 `zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value

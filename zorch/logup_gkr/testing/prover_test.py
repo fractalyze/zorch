@@ -16,6 +16,7 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array, tree_util
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import build_pyramid, extract_outputs
 from zorch.logup_gkr.prover import (
     GkrLayerRound,
@@ -27,13 +28,16 @@ from zorch.logup_gkr.prover import (
 from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
 from zorch.prove import fold_rounds
-from zorch.round import ProveChain
+from zorch.round import prove_rounds
 from zorch.testkit.fusion import assert_fusion_ready
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 
 
 def _state(seed: int, width: int) -> Array:
@@ -65,7 +69,7 @@ class LogupSummandTest(absltest.TestCase):
 class LogupSumcheckRoundTest(absltest.TestCase):
     def test_round_poly_matches_naive_cubic(self) -> None:
         st = _state(20, 8)
-        rnd = LogupSumcheckRound(fnp.array(7, KB))
+        rnd = LogupSumcheckRound(fnp.array(7, KB), challenges=_CH)
         msg = rnd._round_poly(st)
         self.assertEqual(msg.shape, (4,))  # degree 3 -> 4 evals
         half = 4
@@ -77,14 +81,16 @@ class LogupSumcheckRoundTest(absltest.TestCase):
 
     def test_sumcheck_invariant_s0_plus_s1(self) -> None:
         st = _state(40, 16)
-        rnd = LogupSumcheckRound(fnp.array(9, KB))
+        rnd = LogupSumcheckRound(fnp.array(9, KB), challenges=_CH)
         msg = rnd._round_poly(st)
         # s(0)+s(1) == sum over the full hypercube of the combine (the claim)
         self.assertTrue(bool(msg[0] + msg[1] == fnp.sum(rnd._combine(*st))))
 
     def test_call_returns_round_msg_with_challenge(self) -> None:
         st = _state(50, 8)
-        state, _, msg = LogupSumcheckRound(fnp.array(2, KB))(st, cheap_transcript(KB))
+        state, _, msg = LogupSumcheckRound(fnp.array(2, KB), challenges=_CH)(
+            st, cheap_transcript(KB)
+        )
         self.assertEqual(msg.round_poly.shape, (4,))
         self.assertEqual(len(state), 5)
         self.assertEqual(state[0].shape, (4,))  # width halved — one round consumed
@@ -95,7 +101,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         width = 16
         st = _state(60, width)
         lam = fnp.array(11, KB)
-        rnd = LogupSumcheckRound(lam)
+        rnd = LogupSumcheckRound(lam, challenges=_CH)
         n = 4  # log2(16)
 
         # Replay round-by-round to check the per-round sumcheck identity, reducing
@@ -119,14 +125,16 @@ class LogupSumcheckRoundTest(absltest.TestCase):
 
     def test_round_poly_is_fusion_ready(self) -> None:
         # Straight-line element-wise field ops + the one inherent Sigma; see
-        # zorch.testkit.fusion (proxy for issue #21's ZorchRoundRewriter).
+        # zorch.testkit.fusion (proxy for the round rewriter).
         st = _state(80, 8)
         assert_fusion_ready(
-            LogupSumcheckRound(fnp.array(5, KB))._round_poly, st, reduces=1
+            LogupSumcheckRound(fnp.array(5, KB), challenges=_CH)._round_poly,
+            st,
+            reduces=1,
         )
 
     def test_state_must_have_five_factors(self) -> None:
-        rnd = LogupSumcheckRound(fnp.array(1, KB))
+        rnd = LogupSumcheckRound(fnp.array(1, KB), challenges=_CH)
         # The summand guards arity; the scan driver reaches _combine directly, so
         # the guard lives there and _round_poly inherits it by delegation.
         with self.assertRaises(ValueError):
@@ -141,7 +149,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         eq, n0, d1, n1, d0 = (fnp.array(v, KB) for v in (2, 3, 4, 5, 7))
         self.assertTrue(
             bool(
-                LogupSumcheckRound(lam)._combine(eq, n0, d1, n1, d0)
+                LogupSumcheckRound(lam, challenges=_CH)._combine(eq, n0, d1, n1, d0)
                 == logup_combine(lam, eq, n0, d1, n1, d0)
             )
         )
@@ -153,14 +161,14 @@ class LogupSumcheckRoundPytreeTest(absltest.TestCase):
     batching challenge be vmapped, which baking it into a constant cannot do."""
 
     def test_flatten_roundtrip(self) -> None:
-        rnd = LogupSumcheckRound(fnp.array(7, KB))
+        rnd = LogupSumcheckRound(fnp.array(7, KB), challenges=_CH)
         leaves, treedef = tree_util.tree_flatten(rnd)
         self.assertEqual(len(leaves), 1)  # lam is the only leaf
         self.assertTrue(bool(leaves[0] == fnp.array(7, KB)))
         self.assertTrue(bool(tree_util.tree_unflatten(treedef, leaves).lam == rnd.lam))
 
     def test_threads_through_jit_as_argument(self) -> None:
-        rnd = LogupSumcheckRound(fnp.array(7, KB))
+        rnd = LogupSumcheckRound(fnp.array(7, KB), challenges=_CH)
         st = _state(20, 8)
         got = frx.jit(lambda r, s: r._round_poly(s))(rnd, st)
         self.assertTrue(bool(fnp.all(got == rnd._round_poly(st))))
@@ -170,11 +178,11 @@ class LogupSumcheckRoundPytreeTest(absltest.TestCase):
         st = _state(30, 8)
         lams = rand_field(99, (4,), KB)
         got = frx.vmap(lambda r, s: r._round_poly(s), in_axes=(0, None))(
-            LogupSumcheckRound(lams), st
+            LogupSumcheckRound(lams, challenges=_CH), st
         )
         self.assertEqual(got.shape, (4, 4))  # (batch, degree+1)
         for i in range(4):
-            want = LogupSumcheckRound(lams[i])._round_poly(st)
+            want = LogupSumcheckRound(lams[i], challenges=_CH)._round_poly(st)
             self.assertTrue(bool(fnp.all(got[i] == want)))
 
 
@@ -182,7 +190,9 @@ class BindOutputTest(absltest.TestCase):
     def test_initial_carry_shapes(self) -> None:
         first = random_first_layer(7, 2, 3)
         output = extract_outputs(build_pyramid(first)[-1])
-        (num_eval, den_eval, point), _ = bind_output(output, cheap_transcript(KB))
+        (num_eval, den_eval, point), _ = bind_output(
+            output, cheap_transcript(KB), challenges=_CH
+        )
         self.assertEqual(num_eval.shape, ())
         self.assertEqual(den_eval.shape, ())
         # The output layer has num_batch_variables + 1 variables.
@@ -212,13 +222,16 @@ class GkrProverTest(absltest.TestCase):
         first = random_first_layer(13, 2, 2)
         layers = build_pyramid(first)
         output = extract_outputs(layers[-1])
-        carry, transcript = bind_output(output, cheap_transcript(KB))
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
         # The first layer round samples lam off this same transcript state; peeking
         # is non-destructive (sample returns a fresh transcript, leaving this one).
         _, lam = transcript.sample(1)
         claim = lam[0] * carry[0] + carry[1]
-        chain = ProveChain([GkrLayerRound(layer) for layer in reversed(layers[:-1])])
-        _, _, proofs = chain(carry, transcript)
+        _, _, proofs = prove_rounds(
+            [GkrLayerRound(layer, challenges=_CH) for layer in reversed(layers[:-1])],
+            carry,
+            transcript,
+        )
         first_round = proofs[0].round_polys[0]
         self.assertTrue(bool(first_round[0] + first_round[1] == claim))
 
@@ -229,8 +242,10 @@ class GkrProverTest(absltest.TestCase):
         first = random_first_layer(19, 2, 2)
         layers = build_pyramid(first)
         output = extract_outputs(layers[-1])
-        carry, transcript = bind_output(output, cheap_transcript(KB))
-        (_, _, new_point), _, proof = GkrLayerRound(layers[-2])(carry, transcript)
+        carry, transcript = bind_output(output, cheap_transcript(KB), challenges=_CH)
+        (_, _, new_point), _, proof = GkrLayerRound(layers[-2], challenges=_CH)(
+            carry, transcript
+        )
         self.assertEqual(proof.point.shape, (new_point.shape[0] - 1,))
         self.assertTrue(bool(fnp.all(proof.point == new_point[:-1])))
 

@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""WHIR verifier — the `PcsVerifier` half of the multilinear PCS.
+"""WHIR verifier — the verifier half of the multilinear PCS.
 
 `verify` replays the WHIR rounds from the transcript: it re-derives the folding,
 out-of-domain and query challenges in the prover's order, checks each round's
@@ -24,6 +24,7 @@ from zk_dtypes import efinfo
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.strided_merkle import StridedMerkleTree
+from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.pcs.whir._math import (
     binary_k_fold,
     interp_quadratic_012,
@@ -37,15 +38,19 @@ from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.poly.eq import eval_eq
 from zorch.poly.multilinear import mle_coeffs_to_evals
 from zorch.poly.univariate import eval_coeffs
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
 
 
 @dataclass(frozen=True)
-class WhirVerifier:
-    """WHIR PCS verifier (`PcsVerifier`). `code`/`tree`/`params`/`scheme` must
+class WhirVerifier(
+    VerifierStage[
+        OpeningClaim[WhirCommitment],
+        TrivialClaim,
+        OpeningProof[WhirProof],
+    ]
+):
+    """WHIR PCS verifier. `code`/`tree`/`params`/`scheme` must
     match the prover's."""
 
     code: ReedSolomon
@@ -54,6 +59,22 @@ class WhirVerifier:
     scheme: WhirScheme = EqWhirScheme()
 
     def verify(
+        self,
+        claim: OpeningClaim[WhirCommitment],
+        reduction_proof: OpeningProof[WhirProof],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: WhirCommitment,
         points: Sequence[Array],
@@ -279,4 +300,10 @@ def _verify_body(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[WhirCommitment, WhirProof]] = WhirVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[WhirCommitment],
+            TrivialClaim,
+            OpeningProof[WhirProof],
+        ]
+    ] = WhirVerifier

@@ -12,11 +12,12 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:prove",
+        "//zorch:stage",
         "//zorch:transcript",
         "//zorch/coding:foldable_code",
         "//zorch/commit:merkle",
         "//zorch/pcs:fold",
-        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
+        "//zorch/pcs:stage",
         requirement("frx"),
     ],
 )

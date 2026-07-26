@@ -20,11 +20,15 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
+from zorch.challenge import ChallengePolicy
 from zorch.sumcheck import verifier
 from zorch.testkit.transcript import cheap_transcript
 from zorch.verify import verify
 
 KB = zk_dtypes.koalabear_mont
+
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
+_CH = ChallengePolicy(KB)
 
 
 def _top_primitives(jaxpr: frx.core.ClosedJaxpr) -> list[str]:
@@ -33,9 +37,9 @@ def _top_primitives(jaxpr: frx.core.ClosedJaxpr) -> list[str]:
 
 def _verify_eqn_count(rounds: int) -> int:
     proof = fnp.ones((rounds, 2), KB)  # degree+1 = 2
-    jaxpr = frx.make_jaxpr(lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t))(
-        fnp.array(0, KB), proof, cheap_transcript(KB)
-    )
+    jaxpr = frx.make_jaxpr(
+        lambda c, p, t: verify(verifier.SumcheckRound(1, challenges=_CH), c, p, t)
+    )(fnp.array(0, KB), proof, cheap_transcript(KB))
     return len(jaxpr.jaxpr.eqns)
 
 
@@ -47,7 +51,7 @@ class VerifyScanShapeTest(absltest.TestCase):
     def test_verify_lowers_to_a_scan(self) -> None:
         proof = fnp.ones((4, 2), KB)
         jaxpr = frx.make_jaxpr(
-            lambda c, p, t: verify(verifier.SumcheckRound(1), c, p, t)
+            lambda c, p, t: verify(verifier.SumcheckRound(1, challenges=_CH), c, p, t)
         )(fnp.array(0, KB), proof, cheap_transcript(KB))
         self.assertIn("scan", _top_primitives(jaxpr))
 

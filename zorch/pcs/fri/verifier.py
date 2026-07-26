@@ -22,17 +22,38 @@ from frx import Array, lax
 
 from zorch.pcs.fold import sample_positions, verify_fold_chain, verify_openings
 from zorch.pcs.fri.config import FriCommitment, FriParams, FriProof
+from zorch.pcs.stage import OpeningClaim, OpeningProof
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
 
 
 @dataclass(frozen=True)
-class FriVerifier:
+class FriVerifier(
+    VerifierStage[
+        OpeningClaim[FriCommitment],
+        TrivialClaim,
+        OpeningProof[list[FriProof]],
+    ]
+):
     params: FriParams
 
     def verify(
+        self,
+        claim: OpeningClaim[FriCommitment],
+        reduction_proof: OpeningProof[list[FriProof]],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: FriCommitment,
         points: Sequence[Array],
@@ -64,7 +85,7 @@ class FriVerifier:
         return fnp.all(fnp.stack(oks)), t
 
 
-# Jitted per-poly verify body (issue #140); one compile serves the batch. The
+# Jitted per-poly verify body; one compile serves the batch. The
 # params are the static key (by value, #214).
 @partial(frx.jit, static_argnames=("params",))
 def _verify_one(
@@ -122,4 +143,10 @@ def _verify_one(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[FriCommitment, list[FriProof]]] = FriVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[FriCommitment],
+            TrivialClaim,
+            OpeningProof[list[FriProof]],
+        ]
+    ] = FriVerifier

@@ -7,12 +7,12 @@ directly. That indirection is what lets an accumulation consumer drive the fold
 with an **arkworks-faithful** Fiat-Shamir — a fresh domain-separated sponge per
 round, the previous challenge re-absorbed, a nonnative truncated squeeze — which
 does not fit zorch's running `Transcript` (`observe`/`sample`) shape at all (see
-the accumulation-zorch IPA-PC port and zorch#339). zorch ships the running-
+the accumulation-zorch IPA-PC port). zorch ships the running-
 transcript default below; the byte-exact arkworks challenger lives in the
-consumer, matching the scheme-agnostic split of zorch#295.
+consumer, matching the scheme-agnostic split.
 
-`IpaProver.open` / `IpaVerifier.verify` stay `Transcript`-typed `PcsProver` /
-`PcsVerifier` methods: they wrap the transcript in the default challenger here, so
+`IpaProver._open` / `IpaVerifier._verify_opening` stay `Transcript`-typed
+seam internals: they wrap the transcript in the default challenger here, so
 the public seam is unchanged and the injection point is the challenger-generic
 free functions (`reduce_opening`, the prover's `_open_one`).
 """

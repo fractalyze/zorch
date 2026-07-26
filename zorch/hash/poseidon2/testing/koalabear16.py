@@ -25,7 +25,7 @@ _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 # (Plonky3's circ(2,3,1,1)) flattened row-major, which the emitter applies per
 # 4-block.
 # The default (identity) internal_j_scale carries its canonical value (1); the
-# recognizer value-encodes it per field (issue #440).
+# recognizer value-encodes it per field.
 KOALABEAR16_POSEIDON2_ATTRS = (
     f"composite_attributes = {{alpha = {_ALPHA} : i64,"
     " external_m4 = dense<[2, 3, 1, 1, 1, 2, 3, 1, 1, 1, 2, 3, 3, 1, 1, 2]> :"
@@ -279,8 +279,8 @@ def koalabear16_scaled_perm() -> Poseidon2:
     lowering that silently substitutes identity for the J term's scale (or
     re-encodes its Montgomery storage) is byte-invisible when the true scale
     is already one. The value here is R⁻¹ mod p — its Montgomery STORAGE is
-    exactly 1, the trap a raw-bits/canonical mixup lands on
-    (fractalyze/xla#206, sp1-zorch#208) — and it mirrors a consumer folding
+    exactly 1, the trap a raw-bits/canonical mixup lands on — and it mirrors a
+    consumer folding
     R⁻¹ out of an `R⁻¹·M·state` internal layer.
     """
     return Poseidon2(
