@@ -11,8 +11,8 @@ the accumulation-zorch IPA-PC port). zorch ships the running-
 transcript default below; the byte-exact arkworks challenger lives in the
 consumer, matching the scheme-agnostic split.
 
-`IpaProver.open` / `IpaVerifier.verify` stay `Transcript`-typed `PcsProver` /
-`PcsVerifier` methods: they wrap the transcript in the default challenger here, so
+`IpaProver._open` / `IpaVerifier._verify_opening` stay `Transcript`-typed
+seam internals: they wrap the transcript in the default challenger here, so
 the public seam is unchanged and the injection point is the challenger-generic
 free functions (`reduce_opening`, the prover's `_open_one`).
 """

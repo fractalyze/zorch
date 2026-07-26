@@ -62,43 +62,43 @@ class LigeroTest(parameterized.TestCase):
     def test_open_verify_round_trip(self, log_rows: int, log_cols: int) -> None:
         prover, verifier, root, f, pdata, num_vars = _setup(log_rows, log_cols)
         z = _rand_ef(2, (num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         # KAT: the opened value is the committed poly's evaluation at z.
         self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
-        ok, _ = verifier.verify(root, [z], value, proof, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], value, proof, _transcript())
         self.assertTrue(bool(ok))
 
     def test_open_verify_round_trip_coset(self) -> None:
         prover, verifier, root, f, pdata, num_vars = _setup(2, 2, coset=True)
         z = _rand_ef(3, (num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         self.assertEqual(value.tolist(), eval_mle(f, z).tolist())
-        ok, _ = verifier.verify(root, [z], value, proof, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], value, proof, _transcript())
         self.assertTrue(bool(ok))
 
     def test_verify_rejects_tampered_w(self) -> None:
         prover, verifier, root, _f, pdata, num_vars = _setup(2, 2)
         z = _rand_ef(4, (num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         bad = dataclasses.replace(proof, w=proof.w + fnp.array(1, EF))
-        ok, _ = verifier.verify(root, [z], value, bad, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], value, bad, _transcript())
         self.assertFalse(bool(ok))
 
     def test_verify_rejects_tampered_component_opening(self) -> None:
         prover, verifier, root, _f, pdata, num_vars = _setup(2, 2)
         z = _rand_ef(5, (num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         co = proof.component_opening
         bad_co = dataclasses.replace(co, row=co.row + fnp.array(1, F))
         bad = dataclasses.replace(proof, component_opening=bad_co)
-        ok, _ = verifier.verify(root, [z], value, bad, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], value, bad, _transcript())
         self.assertFalse(bool(ok))
 
     def test_verify_rejects_tampered_value(self) -> None:
         prover, verifier, root, _f, pdata, num_vars = _setup(2, 2)
         z = _rand_ef(6, (num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
-        ok, _ = verifier.verify(
+        value, proof, _ = prover._open(pdata, [z], _transcript())
+        ok, _ = verifier._verify_opening(
             root, [z], value + fnp.array(1, EF), proof, _transcript()
         )
         self.assertFalse(bool(ok))
@@ -106,9 +106,9 @@ class LigeroTest(parameterized.TestCase):
     def test_verify_rejects_wrong_root(self) -> None:
         prover, verifier, root, _f, pdata, num_vars = _setup(2, 2)
         z = _rand_ef(7, (num_vars,))
-        value, proof, _ = prover.open(pdata, [z], _transcript())
+        value, proof, _ = prover._open(pdata, [z], _transcript())
         wrong = root + fnp.ones_like(root)
-        ok, _ = verifier.verify(wrong, [z], value, proof, _transcript())
+        ok, _ = verifier._verify_opening(wrong, [z], value, proof, _transcript())
         self.assertFalse(bool(ok))
 
     def test_commit_requires_single_poly(self) -> None:

@@ -136,7 +136,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         coeffs = fnp.array([3, 1, 4, 1], dtype=sf)  # p(x) = 3 + x + 4x² + x³
         x = fnp.array(7, dtype=sf)
         commitment, data = IpaProver(key).commit([coeffs])
-        values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
+        values, proof, _ = IpaProver(key)._open(data, [x], _transcript(sf))
         return IpaVerifier(key), x, commitment, values, proof
 
     @parameterized.named_parameters(*_CURVES)
@@ -148,7 +148,9 @@ class IpaRoundTripTest(parameterized.TestCase):
     @parameterized.named_parameters(*_CURVES)
     def test_open_verifies(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
-        ok, _ = verifier.verify(commitment, [x], values, proof, _transcript(sf))
+        ok, _ = verifier._verify_opening(
+            commitment, [x], values, proof, _transcript(sf)
+        )
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(*_CURVE_SIZES)
@@ -162,15 +164,17 @@ class IpaRoundTripTest(parameterized.TestCase):
         coeffs = fnp.arange(1, n + 1, dtype=sf)
         x = fnp.array(7, dtype=sf)
         commitment, data = IpaProver(key).commit([coeffs])
-        values, proof, _ = IpaProver(key).open(data, [x], _transcript(sf))
-        ok, _ = IpaVerifier(key).verify(commitment, [x], values, proof, _transcript(sf))
+        values, proof, _ = IpaProver(key)._open(data, [x], _transcript(sf))
+        ok, _ = IpaVerifier(key)._verify_opening(
+            commitment, [x], values, proof, _transcript(sf)
+        )
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)
     def test_wrong_value_rejected(self, sf: type, curve: curves.Curve) -> None:
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         bad = values + fnp.array(1, dtype=sf)
-        ok, _ = verifier.verify(commitment, [x], bad, proof, _transcript(sf))
+        ok, _ = verifier._verify_opening(commitment, [x], bad, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
     @parameterized.named_parameters(*_CURVES)
@@ -232,7 +236,7 @@ class IpaRoundTripTest(parameterized.TestCase):
         # one rejects (statement binding the bare fold lacked).
         verifier, x, commitment, values, proof = self._commit_open(sf, curve)
         bad = fnp.stack([verifier.key.u])  # U as a stand-in P ≠ the real commitment
-        ok, _ = verifier.verify(bad, [x], values, proof, _transcript(sf))
+        ok, _ = verifier._verify_opening(bad, [x], values, proof, _transcript(sf))
         self.assertFalse(bool(ok))
 
     # --- hiding / zk path ---------------------------------------------------
@@ -378,7 +382,7 @@ class IpaBatchValidationTest(absltest.TestCase):
         # commitments is never read — open raises on the length check first.
         dummy = fnp.zeros((1,), dtype=curves.BN254.g1)
         with self.assertRaises(ValueError):
-            IpaProver(key).open(
+            IpaProver(key)._open(
                 IpaProverData((coeffs,), dummy), [x, x], _transcript(sf)
             )
 

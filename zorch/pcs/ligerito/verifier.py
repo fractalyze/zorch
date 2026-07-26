@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Ligerito recursive-open verifier — the `PcsVerifier` half of the recursive
+"""Ligerito recursive-open verifier — the verifier half of the recursive
 matrix PCS. Replays the prover's continuous sumcheck and per-level Fiat-Shamir:
 it reconstructs the running basis `B` (from the value
 basis `eq(z)` plus each level's induced proximity basis, folded by the same
@@ -31,14 +31,13 @@ from zorch.pcs.ligerito.basis import select_commit_basis
 from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.ligerito.prover import MakeCode
+from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.sumcheck import prover as sc_prover
 from zorch.sumcheck.domain import fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
 
 
 # Cached per challenge field: one instance per field, identity-stable for the
@@ -68,7 +67,13 @@ def _p_compressed_round(dtype: Any) -> sc_prover.CompressedProductRound:
 
 
 @dataclass(frozen=True)
-class LigeritoVerifier:
+class LigeritoVerifier(
+    VerifierStage[
+        OpeningClaim[LigeritoCommitment],
+        TrivialClaim,
+        OpeningProof[LigeritoProof],
+    ]
+):
     """Ligerito recursive PCS verifier. Mirrors `LigeritoProver`'s `make_code` /
     `tree` / `config` / `choreography` (share the choreography instance with
     the prover — it fixes the Fiat-Shamir wire for both sides)."""
@@ -82,6 +87,22 @@ class LigeritoVerifier:
         return self.make_code(message_len, self.config.log_inv_rates[level])
 
     def verify(
+        self,
+        claim: OpeningClaim[LigeritoCommitment],
+        reduction_proof: OpeningProof[LigeritoProof],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: LigeritoCommitment,
         points: Sequence[Array],
@@ -312,4 +333,10 @@ def _verify(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[LigeritoCommitment, LigeritoProof]] = LigeritoVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[LigeritoCommitment],
+            TrivialClaim,
+            OpeningProof[LigeritoProof],
+        ]
+    ] = LigeritoVerifier

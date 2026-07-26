@@ -141,9 +141,9 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (1 << num_vars,), F) for i in range(num_polys)]
         z = rand_ext_field(99, (num_vars,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
         self.assertEqual(values.shape, (num_polys,))
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
     @parameterized.named_parameters(
@@ -167,8 +167,8 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (1 << num_vars,), F) for i in range(num_polys)]
         z = rand_ext_field(42, (num_vars,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
+        ok, _ = verifier._verify_opening(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
     def test_open_verify_roundtrip_with_grinds(self) -> None:
@@ -181,12 +181,12 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (16,), F) for i in range(3)]
         z = rand_ext_field(7, (4,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
+        ok, _ = verifier._verify_opening(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
         w = proof.mu_pow_witness
         tampered = dataclasses.replace(proof, mu_pow_witness=w + fnp.ones((), w.dtype))
-        ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], values, tampered, _transcript())
         self.assertFalse(bool(ok))
 
     def test_open_verify_roundtrip_no_bind_scheme(self) -> None:
@@ -196,8 +196,8 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (16,), F) for i in range(2)]
         z = rand_ext_field(11, (4,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
-        ok, _ = verifier.verify(root, [z], values, proof, _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
+        ok, _ = verifier._verify_opening(root, [z], values, proof, _transcript())
         self.assertTrue(bool(ok))
 
     def test_verify_rejects_tampered_final_poly(self) -> None:
@@ -205,11 +205,11 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (16,), F) for i in range(3)]
         z = rand_ext_field(3, (4,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
         tampered = dataclasses.replace(
             proof, final_poly=proof.final_poly.at[0].add(fnp.ones((), EF))
         )
-        ok, _ = verifier.verify(root, [z], values, tampered, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], values, tampered, _transcript())
         self.assertFalse(bool(ok))
 
     def test_verify_rejects_tampered_value(self) -> None:
@@ -218,9 +218,9 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (16,), F) for i in range(3)]
         z = rand_ext_field(3, (4,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
         bad = values.at[1].add(fnp.ones((), EF))
-        ok, _ = verifier.verify(root, [z], bad, proof, _transcript())
+        ok, _ = verifier._verify_opening(root, [z], bad, proof, _transcript())
         self.assertFalse(bool(ok))
 
     def test_verify_rejects_non_single_initial_openings(self) -> None:
@@ -231,12 +231,12 @@ class WhirTest(parameterized.TestCase):
         polys = [rand_field(i, (16,), F) for i in range(3)]
         z = rand_ext_field(3, (4,), F, EF)
         root, prover_data = prover.commit(polys)
-        values, proof, _ = prover.open(prover_data, [z], _transcript())
+        values, proof, _ = prover._open(prover_data, [z], _transcript())
         (one,) = proof.initial_openings
         for openings in ([], [one, one]):
             malformed = dataclasses.replace(proof, initial_openings=openings)
             with self.assertRaises(ValueError):
-                verifier.verify(root, [z], values, malformed, _transcript())
+                verifier._verify_opening(root, [z], values, malformed, _transcript())
 
 
 if __name__ == "__main__":

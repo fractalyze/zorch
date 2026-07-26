@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Ligerito recursive-open prover — the `PcsProver` half of the recursive matrix
+"""Ligerito recursive-open prover — the prover half of the recursive matrix
 PCS. Single-shot Ligero (`pcs/ligero`) sends the vector `w = X̃·r_col` in the
 clear, paying `sqrt(N)`. Ligerito instead *commits* `w` and discharges the
 proximity check as one continuous interleaved sumcheck that batches every level's
@@ -59,7 +59,9 @@ from zorch.pcs.ligerito.basis import EVAL_BASIS, CommitBasis, select_commit_basi
 from zorch.pcs.ligerito.choreography import LigeritoChoreography
 from zorch.pcs.ligerito.config import LigeritoCommitment, LigeritoConfig, LigeritoProof
 from zorch.pcs.matrix_commit import CommittedMatrix, commit_matrix
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.sumcheck.domain import fold
 from zorch.sumcheck.prover import (
     CompressedProductRound,
@@ -68,9 +70,6 @@ from zorch.sumcheck.prover import (
 )
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 # A code factory: (message_len, log_inv_rate) -> the level's TensorCode. Keeping
 # the code per-level (rate shrinks each level) and code-generic — RS is the
@@ -132,7 +131,14 @@ class LigeritoProverData:
 
 
 @dataclass(frozen=True)
-class LigeritoProver:
+class LigeritoProver(
+    ProverStage[
+        OpeningClaim[LigeritoCommitment],
+        OpeningWitness[LigeritoProverData],
+        TrivialClaim,
+        OpeningProof[LigeritoProof],
+    ]
+):
     """Ligerito recursive PCS prover. `make_code(message_len, log_inv_rate)`
     builds each level's `TensorCode`; `config` fixes the fold schedule; `tree`
     commits every level's codeword rows; `choreography` fixes the Fiat-Shamir
@@ -168,7 +174,21 @@ class LigeritoProver:
         initial = _commit(f, k0, code0, self.tree, basis=basis)
         return initial.root, LigeritoProverData(f=f, initial=initial)
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[LigeritoCommitment],
+        witness: OpeningWitness[LigeritoProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: LigeritoProverData,
         points: Sequence[Array],
@@ -380,5 +400,10 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
     _pcs_prover: type[
-        PcsProver[LigeritoCommitment, LigeritoProverData, LigeritoProof]
+        ProverStage[
+            OpeningClaim[LigeritoCommitment],
+            OpeningWitness[LigeritoProverData],
+            TrivialClaim,
+            OpeningProof[LigeritoProof],
+        ]
     ] = LigeritoProver

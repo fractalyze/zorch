@@ -22,7 +22,7 @@ py_library(
         "//zorch:stage",
         "//zorch:transcript",
         "//zorch:verify",
-        "//zorch/pcs:protocol",
+        "//zorch/pcs:stage",
         "//zorch/poly",
         "//zorch/sumcheck",
         "//zorch/sumcheck/eq",

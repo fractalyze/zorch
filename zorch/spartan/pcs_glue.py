@@ -8,7 +8,11 @@ from typing import Any
 
 from frx import Array
 
-from zorch.pcs.protocol import PcsProver, PcsVerifier
+from zorch.pcs.stage import (
+    OpeningClaim,
+    OpeningProof,
+    OpeningWitness,
+)
 from zorch.spartan.lincheck import BatchedClaims, ColumnEvaluationClaim
 from zorch.spartan.r1cs import R1CS, eval_public_half, recombine_z_eval
 from zorch.spartan.zerocheck import RowEvaluationClaim
@@ -79,7 +83,12 @@ class WitnessOpenProver(
 ):
     """Prove a committed-witness opening; owns only the PCS prover capability."""
 
-    def __init__(self, pcs_prover: PcsProver[Any, Any, Any]) -> None:
+    def __init__(
+        self,
+        pcs_prover: ProverStage[
+            OpeningClaim[Any], OpeningWitness[Any], TrivialClaim, OpeningProof[Any]
+        ],
+    ) -> None:
         self.pcs_prover = pcs_prover
 
     def prove(
@@ -88,11 +97,16 @@ class WitnessOpenProver(
         witness: WitnessOpeningWitness,
         transcript: Transcript,
     ) -> ProveResult[TrivialClaim, WitnessOpenProof]:
-        values, pcs_proof, transcript = self.pcs_prover.open(
-            witness.prover_data, [claim.point[1:]], transcript
+        opened = self.pcs_prover.prove(
+            OpeningClaim(claim.commitment, [claim.point[1:]]),
+            OpeningWitness(witness.prover_data),
+            transcript,
         )
+        inner = opened.reduction_proof
         return ProveResult(
-            TrivialClaim(), WitnessOpenProof(values, pcs_proof), transcript
+            TrivialClaim(),
+            WitnessOpenProof(inner.values, inner.proof),
+            opened.transcript,
         )
 
 
@@ -101,7 +115,10 @@ class WitnessOpenVerifier(
 ):
     """Verify a committed-witness opening; owns only the PCS verifier capability."""
 
-    def __init__(self, pcs_verifier: PcsVerifier[Any, Any]) -> None:
+    def __init__(
+        self,
+        pcs_verifier: VerifierStage[OpeningClaim[Any], TrivialClaim, OpeningProof[Any]],
+    ) -> None:
         self.pcs_verifier = pcs_verifier
 
     def verify(
@@ -110,13 +127,12 @@ class WitnessOpenVerifier(
         reduction_proof: WitnessOpenProof,
         transcript: Transcript,
     ) -> VerifyResult[TrivialClaim]:
-        ok_open, transcript = self.pcs_verifier.verify(
-            claim.commitment,
-            [claim.point[1:]],
-            reduction_proof.values,
-            reduction_proof.pcs_proof,
+        verified = self.pcs_verifier.verify(
+            OpeningClaim(claim.commitment, [claim.point[1:]]),
+            OpeningProof(reduction_proof.values, reduction_proof.pcs_proof),
             transcript,
         )
+        ok_open, transcript = verified.ok, verified.transcript
         eval_w = reduction_proof.values[0]
         z_eval = recombine_z_eval(eval_w, claim.public_value, claim.point[0])
         ok_final = claim.product_value == claim.matrix_value * z_eval

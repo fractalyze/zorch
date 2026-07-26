@@ -39,10 +39,9 @@ from zorch.pcs.ipa.challenger import (
 from zorch.pcs.ipa.config import IpaCommitment, IpaProof, IpaZkProof
 from zorch.pcs.ipa.math import challenge_vector, eval_challenge_poly
 from zorch.pcs.ipa.setup import IpaKey
+from zorch.pcs.stage import OpeningClaim, OpeningProof
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
 
 _Ch = TypeVar("_Ch", bound=IpaChallenger)
 _ZkCh = TypeVar("_ZkCh", bound=ZkIpaChallenger)
@@ -154,10 +153,32 @@ def settle(key: IpaKey, claim: IpaReducedClaim) -> Array:
 
 
 @dataclass(frozen=True)
-class IpaVerifier:
+class IpaVerifier(
+    VerifierStage[
+        OpeningClaim[IpaCommitment],
+        TrivialClaim,
+        OpeningProof[list[IpaProof]],
+    ]
+):
     key: IpaKey
 
     def verify(
+        self,
+        claim: OpeningClaim[IpaCommitment],
+        reduction_proof: OpeningProof[list[IpaProof]],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: IpaCommitment,
         points: Sequence[Array],
@@ -186,4 +207,10 @@ class IpaVerifier:
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[IpaCommitment, list[IpaProof]]] = IpaVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[IpaCommitment],
+            TrivialClaim,
+            OpeningProof[list[IpaProof]],
+        ]
+    ] = IpaVerifier

@@ -2,9 +2,9 @@
 """Seam-level round trip: every PCS instance through ONE generic driver.
 
 The per-scheme suites cover each instance's behavior; this test pins the
-*interchangeability* claim. `_round_trip` is typed against `PcsProver[C, D, P]` /
-`PcsVerifier[C, P]` only, so each case below is simultaneously a runtime
-commit→open→verify round trip and a mypy check that the pair's wire types agree.
+*interchangeability* claim. `_round_trip` is typed against the committer plus
+the opening stage roles only, so each case below is simultaneously a runtime
+commit→prove→verify round trip and a mypy check that the pair's wire types agree.
 """
 
 from __future__ import annotations
@@ -29,7 +29,13 @@ from zorch.pcs.fri.verifier import FriVerifier
 from zorch.pcs.kzg.prover import KzgProver
 from zorch.pcs.kzg.testing.srs import toy_srs
 from zorch.pcs.kzg.verifier import KzgVerifier
-from zorch.pcs.protocol import PcsProver, PcsVerifier
+from zorch.pcs.stage import (
+    CommittingOpener,
+    OpeningClaim,
+    OpeningProof,
+    OpeningWitness,
+)
+from zorch.stage import TrivialClaim, VerifierStage
 from zorch.testkit.random_field import rand_ext_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript, Transcript
@@ -46,17 +52,17 @@ P = TypeVar("P")
 
 
 def _round_trip(
-    prover: PcsProver[C, D, P],
-    verifier: PcsVerifier[C, P],
+    prover: CommittingOpener[C, D, P],
+    verifier: VerifierStage[OpeningClaim[C], TrivialClaim, OpeningProof[P]],
     polys: Sequence[Array],
     points: Sequence[Array],
     transcript: Callable[[], Transcript],
 ) -> Array:
-    """commit → open → verify through the seam types only."""
+    """commit → prove → verify through the seam types only."""
     commitment, prover_data = prover.commit(polys)
-    values, proof, _ = prover.open(prover_data, points, transcript())
-    ok, _ = verifier.verify(commitment, points, values, proof, transcript())
-    return ok
+    claim = OpeningClaim(commitment, points)
+    opened = prover.prove(claim, OpeningWitness(prover_data), transcript())
+    return verifier.verify(claim, opened.reduction_proof, transcript()).ok
 
 
 class SeamRoundTripTest(absltest.TestCase):

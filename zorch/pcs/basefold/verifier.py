@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""BaseFold verifier — the `PcsVerifier` half of the multilinear PCS.
+"""BaseFold verifier — the verifier half of the multilinear PCS.
 
 `verify` rebuilds the queried codeword leaves from the committed roots and checks
 the fold consistency of the batch open: the staggered RLC of the committed
@@ -50,16 +50,21 @@ from zorch.pcs.fold import (
     verify_fold_chain,
     verify_openings,
 )
+from zorch.pcs.stage import OpeningClaim, OpeningProof
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
-
 
 @dataclass(frozen=True)
-class BasefoldVerifier:
-    """BaseFold PCS verifier (`PcsVerifier`). `code` fixes the block geometry +
+class BasefoldVerifier(
+    VerifierStage[
+        OpeningClaim[BasefoldCommitment],
+        TrivialClaim,
+        OpeningProof[BasefoldProof],
+    ]
+):
+    """BaseFold PCS verifier. `code` fixes the block geometry +
     fold; `tree` the Merkle config; `choreography` the Fiat-Shamir wire (share
     the instance with the prover); `config` the fold schedule. The defaults are
     zorch's native wire — the plain `BasefoldVerifier(code, tree, num_queries=…)`
@@ -91,15 +96,19 @@ class BasefoldVerifier:
 
     def verify(
         self,
-        commitment: BasefoldCommitment,
-        points: Sequence[Array],
-        values: Array,
-        proof: BasefoldProof,
+        claim: OpeningClaim[BasefoldCommitment],
+        reduction_proof: OpeningProof[BasefoldProof],
         transcript: Transcript,
-    ) -> tuple[Array, Transcript]:
-        """Verify a single-matrix open — the degenerate one-round batch, the
-        `PcsVerifier` seam shape."""
-        return self.verify_batch([commitment], points, [values], proof, transcript)
+    ) -> VerifyResult[TrivialClaim]:
+        """Verify a single-matrix open — the degenerate one-round batch."""
+        ok, transcript = self.verify_batch(
+            [claim.commitment],
+            claim.points,
+            [reduction_proof.values],
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
 
     def verify_batch(
         self,
@@ -532,4 +541,10 @@ def _verify_batch_body(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[BasefoldCommitment, BasefoldProof]] = BasefoldVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[BasefoldCommitment],
+            TrivialClaim,
+            OpeningProof[BasefoldProof],
+        ]
+    ] = BasefoldVerifier

@@ -50,14 +50,15 @@ from zorch.pcs.basefold.config import (
 )
 from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.fold import CommittedLayer, lane_combine, open_rows, to_base_field
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
     from zorch.round import ProverRound
 
 
@@ -145,8 +146,15 @@ class _SumcheckPairFoldRound(ProverRound):
 
 
 @dataclass(frozen=True)
-class BasefoldProver:
-    """BaseFold PCS prover (`PcsProver`). `code` fixes the per-column message
+class BasefoldProver(
+    ProverStage[
+        OpeningClaim[BasefoldCommitment],
+        OpeningWitness[BasefoldProverData],
+        TrivialClaim,
+        OpeningProof[BasefoldProof],
+    ]
+):
+    """BaseFold PCS prover. `code` fixes the per-column message
     length (= the MLE height `S`); `tree` commits the codeword rows;
     `choreography` fixes the Fiat-Shamir wire (share the instance with the
     verifier); `config` fixes the fold schedule. The defaults are zorch's native
@@ -179,17 +187,21 @@ class BasefoldProver:
     ) -> tuple[BasefoldCommitment, BasefoldProverData]:
         return _commit_body(self.code, self.tree, list(polys))
 
-    def open(
+    def prove(
         self,
-        prover_data: BasefoldProverData,
-        points: Sequence[Array],
+        claim: OpeningClaim[BasefoldCommitment],
+        witness: OpeningWitness[BasefoldProverData],
         transcript: Transcript,
-    ) -> tuple[Array, BasefoldProof, Transcript]:
-        """Open a single committed matrix — the degenerate one-round batch, the
-        `PcsProver` seam shape. Returns `(values, proof, transcript)` with
-        `values` the matrix's per-column evaluations `[K]`."""
-        values, proof, t = self.open_batch([prover_data], points, transcript)
-        return values[0], proof, t
+    ) -> ProveResult[TrivialClaim, OpeningProof[BasefoldProof]]:
+        """Open a single committed matrix — the degenerate one-round batch.
+
+        Terminal: an opening closes its claim rather than reducing it, so the
+        reduced claim is trivial. `values` is the matrix's per-column
+        evaluations `[K]`."""
+        values, proof, transcript = self.open_batch(
+            [witness.prover_data], claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values[0], proof), transcript)
 
     def open_batch(
         self,
@@ -600,6 +612,11 @@ if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
     _pcs_prover: type[
-        PcsProver[BasefoldCommitment, BasefoldProverData, BasefoldProof]
+        ProverStage[
+            OpeningClaim[BasefoldCommitment],
+            OpeningWitness[BasefoldProverData],
+            TrivialClaim,
+            OpeningProof[BasefoldProof],
+        ]
     ] = BasefoldProver
     _fold_round: type[ProverRound] = _SumcheckPairFoldRound

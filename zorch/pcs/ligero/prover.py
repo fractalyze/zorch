@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Single-shot Ligero prover — the `PcsProver` half of the matrix-commitment PCS.
+"""Single-shot Ligero prover — the prover half of the matrix-commitment PCS.
 
 `commit` lays one multilinear `f` out as a `rows x cols` matrix `X̃`
 (`rows = code.message_len`, `cols = len(f) / rows`), low-degree-extends each
@@ -30,12 +30,11 @@ from zorch.commit.merkle import MerkleTree
 from zorch.pcs.fold import open_rows, sample_positions
 from zorch.pcs.ligero.config import LigeroCommitment, LigeroProof
 from zorch.pcs.matrix_commit import commit_matrix
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.eq import expand_eq_to_hypercube
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
 from zorch.utils.bits import is_power_of_two, log2_strict_usize
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 
 @partial(
@@ -58,8 +57,15 @@ class LigeroProverData:
 
 
 @dataclass(frozen=True)
-class LigeroProver:
-    """Single-shot Ligero PCS prover (`PcsProver`). `code` fixes the matrix row
+class LigeroProver(
+    ProverStage[
+        OpeningClaim[LigeroCommitment],
+        OpeningWitness[LigeroProverData],
+        TrivialClaim,
+        OpeningProof[LigeroProof],
+    ]
+):
+    """Single-shot Ligero PCS prover. `code` fixes the matrix row
     count (`= message_len`); `tree` commits the codeword rows."""
 
     code: LinearCode
@@ -86,7 +92,21 @@ class LigeroProver:
         cols = f.shape[0] // rows
         return _commit_body(self.code, self.tree, f, rows, cols)
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[LigeroCommitment],
+        witness: OpeningWitness[LigeroProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[LigeroProof]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: LigeroProverData,
         points: Sequence[Array],
@@ -170,6 +190,11 @@ def _open_body(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _pcs_prover: type[PcsProver[LigeroCommitment, LigeroProverData, LigeroProof]] = (
-        LigeroProver
-    )
+    _pcs_prover: type[
+        ProverStage[
+            OpeningClaim[LigeroCommitment],
+            OpeningWitness[LigeroProverData],
+            TrivialClaim,
+            OpeningProof[LigeroProof],
+        ]
+    ] = LigeroProver

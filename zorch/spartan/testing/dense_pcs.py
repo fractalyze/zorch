@@ -8,17 +8,44 @@ from collections.abc import Sequence
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
+from zorch.stage import (
+    ProveResult,
+    ProverStage,
+    TrivialClaim,
+    VerifierStage,
+    VerifyResult,
+)
 from zorch.transcript import Transcript
 
 
-class DensePcs:
+class DensePcs(
+    ProverStage[
+        OpeningClaim[Array],
+        OpeningWitness[tuple[Array, ...]],
+        TrivialClaim,
+        OpeningProof[Array],
+    ],
+    VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[Array]],
+):
     """A transparent test PCS whose commitment is the polynomial evaluation table."""
 
     def commit(self, polys: Sequence[Array]) -> tuple[Array, tuple[Array, ...]]:
         return polys[0], tuple(polys)
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[Array],
+        witness: OpeningWitness[tuple[Array, ...]],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[Array]]:
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: tuple[Array, ...],
         points: Sequence[Array],
@@ -29,6 +56,21 @@ class DensePcs:
         return values, None, transcript
 
     def verify(
+        self,
+        claim: OpeningClaim[Array],
+        reduction_proof: OpeningProof[Array],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: Array,
         points: Sequence[Array],

@@ -37,14 +37,13 @@ py_library(
 )
 
 py_library(
-    name = "protocol",
+    name = "stage",
     srcs = [
         "__init__.py",
-        "protocol.py",
+        "stage.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "//zorch:transcript",
         requirement("frx"),
     ],
 )

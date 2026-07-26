@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import frx.numpy as fnp
 from frx import Array
 
 from zorch.challenge import ChallengePolicy
-from zorch.pcs.protocol import PcsProver, PcsVerifier
+from zorch.pcs.stage import (
+    CommittingOpener,
+    OpeningClaim,
+    OpeningProof,
+    OpeningWitness,
+)
 from zorch.spartan.lincheck import (
     ColumnEvaluationClaim,
     InnerProof,
@@ -112,7 +117,7 @@ class SpartanProver(
 
     def __init__(
         self,
-        pcs_prover: PcsProver[Any, Any, Any],
+        pcs_prover: CommittingOpener[Any, Any, Any],
         *,
         outer: (
             ProverStage[
@@ -141,7 +146,17 @@ class SpartanProver(
         self.pcs_prover = pcs_prover
         self.outer = outer or OuterProver(challenges=challenges)
         self.inner = inner or InnerProver(challenges=challenges)
-        self.witness_open = witness_open or WitnessOpenProver(pcs_prover)
+        self.witness_open = witness_open or WitnessOpenProver(
+            cast(
+                ProverStage[
+                    OpeningClaim[Any],
+                    OpeningWitness[Any],
+                    TrivialClaim,
+                    OpeningProof[Any],
+                ],
+                pcs_prover,
+            )
+        )
 
     def prove(
         self,
@@ -204,7 +219,7 @@ class SpartanVerifier(VerifierStage[SpartanClaim, TrivialClaim, SpartanProof]):
 
     def __init__(
         self,
-        pcs_verifier: PcsVerifier[Any, Any],
+        pcs_verifier: VerifierStage[OpeningClaim[Any], TrivialClaim, OpeningProof[Any]],
         *,
         outer: (
             VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof] | None

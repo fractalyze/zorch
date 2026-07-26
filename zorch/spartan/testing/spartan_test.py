@@ -10,6 +10,7 @@ from absl.testing import absltest
 from frx import Array
 
 from zorch.challenge import ChallengePolicy
+from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.spartan.lincheck import InnerProver, InnerVerifier
 from zorch.spartan.pcs_glue import WitnessOpenProver, WitnessOpenVerifier
 from zorch.spartan.r1cs import R1CS
@@ -25,7 +26,7 @@ from zorch.spartan.spartan import (
 from zorch.spartan.testing.dense_pcs import DensePcs
 from zorch.spartan.testing.toy import toy_r1cs
 from zorch.spartan.zerocheck import OuterProver, OuterVerifier
-from zorch.stage import ProverStage, VerifierStage
+from zorch.stage import ProverStage, TrivialClaim, VerifierStage
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import Transcript
 
@@ -37,7 +38,9 @@ _CH = ChallengePolicy(KB)
 KBX4 = zk_dtypes.koalabearx4_mont
 
 
-class _VerifierOnlyPcs:
+class _VerifierOnlyPcs(
+    VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[Array]]
+):
     """Expose no commit/open capability to the deployed verifier."""
 
     def __init__(self, pcs: DensePcs) -> None:

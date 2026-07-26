@@ -37,11 +37,10 @@ from zorch.pcs.fold import (
     sample_positions,
 )
 from zorch.pcs.fri.config import DeepFoldableCode, FriCommitment, FriParams, FriProof
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.prove import fold_rounds
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 
 def _eval_poly(coeffs: Array, z: Array) -> Array:
@@ -80,7 +79,14 @@ class FriProverData:
 
 
 @dataclass(frozen=True)
-class FriProver:
+class FriProver(
+    ProverStage[
+        OpeningClaim[FriCommitment],
+        OpeningWitness[FriProverData],
+        TrivialClaim,
+        OpeningProof[list[FriProof]],
+    ]
+):
     params: FriParams
 
     def commit(self, polys: Sequence[Array]) -> tuple[FriCommitment, FriProverData]:
@@ -92,7 +98,21 @@ class FriProver:
         roots = [poly.digest_layers[-1][0] for poly in committed]
         return fnp.stack(roots), FriProverData(tuple(committed))
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[FriCommitment],
+        witness: OpeningWitness[FriProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[list[FriProof]]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: FriProverData,
         points: Sequence[Array],
@@ -170,4 +190,11 @@ def _open_one(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsProver[FriCommitment, FriProverData, list[FriProof]]] = FriProver
+    _: type[
+        ProverStage[
+            OpeningClaim[FriCommitment],
+            OpeningWitness[FriProverData],
+            TrivialClaim,
+            OpeningProof[list[FriProof]],
+        ]
+    ] = FriProver

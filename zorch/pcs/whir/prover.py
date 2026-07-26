@@ -1,5 +1,5 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""WHIR prover — the `PcsProver` half of the multilinear PCS.
+"""WHIR prover — the prover half of the multilinear PCS.
 
 `commit` Reed-Solomon-encodes the polynomial's hypercube evaluations and binds the
 codeword rows under a query-strided Merkle root. `open` runs the WHIR rounds: each
@@ -28,6 +28,7 @@ from zk_dtypes import efinfo
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.merkle import Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.pcs.whir._math import (
     eq_table,
     pow2_powers,
@@ -39,12 +40,10 @@ from zorch.pcs.whir.config import WhirCommitment, WhirParams, WhirProof
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.poly.univariate import eval_coeffs
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.sumcheck.domain import fold
 from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 
 @partial(
@@ -66,8 +65,15 @@ class WhirProverData:
 
 
 @dataclass(frozen=True)
-class WhirProver:
-    """WHIR PCS prover (`PcsProver`). `code` is the initial-round RS encoder (the
+class WhirProver(
+    ProverStage[
+        OpeningClaim[WhirCommitment],
+        OpeningWitness[WhirProverData],
+        TrivialClaim,
+        OpeningProof[WhirProof],
+    ]
+):
+    """WHIR PCS prover. `code` is the initial-round RS encoder (the
     round driver re-encodes at shrinking sizes); `tree` commits the codeword's
     `2^k_whir`-row query cosets; `params` carries the per-round knobs; `scheme`
     supplies the initial message + weight maps (default: a plain multilinear
@@ -96,14 +102,28 @@ class WhirProver:
                 )
         return _commit_body(self.code, self.tree, list(polys))
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[WhirCommitment],
+        witness: OpeningWitness[WhirProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[WhirProof]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: WhirProverData,
         points: Sequence[Array],
         transcript: Transcript,
     ) -> tuple[Array, WhirProof, Transcript]:
         """Open a single committed matrix at `points[0]` — the degenerate
-        one-commitment μ-batch, the `PcsProver` seam shape. Returns
+        one-commitment μ-batch. Returns
         `(values, proof, transcript)` with `values` the matrix's per-column
         evaluations `f̂ᵢ(z)` `(W,)`."""
         return self.open_batch([prover_data], points, transcript)
@@ -384,4 +404,11 @@ def _open_body(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _pcs_prover: type[PcsProver[WhirCommitment, WhirProverData, WhirProof]] = WhirProver
+    _pcs_prover: type[
+        ProverStage[
+            OpeningClaim[WhirCommitment],
+            OpeningWitness[WhirProverData],
+            TrivialClaim,
+            OpeningProof[WhirProof],
+        ]
+    ] = WhirProver

@@ -22,10 +22,9 @@ from frx import Array, lax
 
 from zorch.pcs.kzg.config import KzgCommitment, KzgProof
 from zorch.pcs.kzg.setup import KzgProvingKey
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 
 def _quotient_and_eval(coeffs: Array, z: Array) -> tuple[Array, Array]:
@@ -56,7 +55,14 @@ class KzgProverData:
 
 
 @dataclass(frozen=True)
-class KzgProver:
+class KzgProver(
+    ProverStage[
+        OpeningClaim[KzgCommitment],
+        OpeningWitness[KzgProverData],
+        TrivialClaim,
+        OpeningProof[KzgProof],
+    ]
+):
     pk: KzgProvingKey
 
     def commit(self, polys: Sequence[Array]) -> tuple[KzgCommitment, KzgProverData]:
@@ -65,7 +71,21 @@ class KzgProver:
         commitments = [lax.msm(c, self.pk.powers_g1[: c.shape[0]]) for c in polys]
         return fnp.stack(commitments), KzgProverData(tuple(polys))
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[KzgCommitment],
+        witness: OpeningWitness[KzgProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[KzgProof]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: KzgProverData,
         points: Sequence[Array],
@@ -91,4 +111,11 @@ class KzgProver:
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsProver[KzgCommitment, KzgProverData, KzgProof]] = KzgProver
+    _: type[
+        ProverStage[
+            OpeningClaim[KzgCommitment],
+            OpeningWitness[KzgProverData],
+            TrivialClaim,
+            OpeningProof[KzgProof],
+        ]
+    ] = KzgProver

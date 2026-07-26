@@ -34,9 +34,11 @@ class DensePcsTest(absltest.TestCase):
         point = rand_field(2, (3,), KB)
         pcs = DensePcs()
         commitment, data = pcs.commit([poly])
-        values, proof, _ = pcs.open(data, [point], cheap_transcript(KB))
+        values, proof, _ = pcs._open(data, [point], cheap_transcript(KB))
         self.assertTrue(bool(values[0] == eval_mle(poly, point)))
-        ok, _ = pcs.verify(commitment, [point], values, proof, cheap_transcript(KB))
+        ok, _ = pcs._verify_opening(
+            commitment, [point], values, proof, cheap_transcript(KB)
+        )
         self.assertTrue(bool(ok))
 
     def test_wrong_value_rejected(self) -> None:
@@ -45,7 +47,9 @@ class DensePcsTest(absltest.TestCase):
         pcs = DensePcs()
         commitment, _ = pcs.commit([poly])
         bad = fnp.stack([eval_mle(poly, point) + fnp.ones((), KB)])
-        ok, _ = pcs.verify(commitment, [point], bad, None, cheap_transcript(KB))
+        ok, _ = pcs._verify_opening(
+            commitment, [point], bad, None, cheap_transcript(KB)
+        )
         self.assertFalse(bool(ok))
 
 

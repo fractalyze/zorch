@@ -58,12 +58,11 @@ from zorch.pcs.ipa.challenger import (
 )
 from zorch.pcs.ipa.config import IpaCommitment, IpaProof, IpaZkProof
 from zorch.pcs.ipa.setup import IpaKey
+from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.univariate import powers
+from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsProver
 
 _Ch = TypeVar("_Ch", bound=IpaChallenger)
 _ZkCh = TypeVar("_ZkCh", bound=ZkIpaChallenger)
@@ -91,7 +90,14 @@ class IpaProverData:
 
 
 @dataclass(frozen=True)
-class IpaProver:
+class IpaProver(
+    ProverStage[
+        OpeningClaim[IpaCommitment],
+        OpeningWitness[IpaProverData],
+        TrivialClaim,
+        OpeningProof[list[IpaProof]],
+    ]
+):
     key: IpaKey
 
     def commit(self, polys: Sequence[Array]) -> tuple[IpaCommitment, IpaProverData]:
@@ -127,7 +133,21 @@ class IpaProver:
         )
         return commitments, IpaProverData(tuple(polys), commitments)
 
-    def open(
+    def prove(
+        self,
+        claim: OpeningClaim[IpaCommitment],
+        witness: OpeningWitness[IpaProverData],
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[list[IpaProof]]]:
+        """Open the committed polynomials at the claim's points.
+
+        Terminal: an opening closes its claim rather than reducing it."""
+        values, proof, transcript = self._open(
+            witness.prover_data, claim.points, transcript
+        )
+        return ProveResult(TrivialClaim(), OpeningProof(values, proof), transcript)
+
+    def _open(
         self,
         prover_data: IpaProverData,
         points: Sequence[Array],
@@ -316,4 +336,11 @@ def _open_one_zk(
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsProver[IpaCommitment, IpaProverData, list[IpaProof]]] = IpaProver
+    _: type[
+        ProverStage[
+            OpeningClaim[IpaCommitment],
+            OpeningWitness[IpaProverData],
+            TrivialClaim,
+            OpeningProof[list[IpaProof]],
+        ]
+    ] = IpaProver

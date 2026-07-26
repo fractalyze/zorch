@@ -22,7 +22,7 @@ its corresponding child roles and spells out the same non-linear dataflow:
 `SpartanClaim`; only the prover additionally accepts a private
 `SpartanWitness`. `SpartanProof` exposes named `outer`, `inner`, and
 `witness_open` sections. The role objects are deliberately separate: a deployed
-verifier is constructible with a `PcsVerifier` alone and never retains a PCS
+verifier is constructible with an opening-stage verifier alone and never retains a PCS
 proving key.
 
 ## Injection points
@@ -32,7 +32,7 @@ their recurrence schedule, proof assembly, transcript advancement, and wire
 format; configured `Round` objects remain internal recurrence kernels. Callers
 can replace one role without introducing an engine or chain abstraction.
 
-`PcsProver` is injected only into `SpartanProver`, and `PcsVerifier` only into
+The opening prover role is injected only into `SpartanProver`, and its verifier only into
 `SpartanVerifier`. They construct `WitnessOpenProver` and
 `WitnessOpenVerifier`, respectively, so role-specific keys remain static
 configuration without crossing the deployment boundary. Both the transparent

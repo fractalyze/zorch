@@ -75,18 +75,22 @@ class KzgRoundTripTest(absltest.TestCase):
 
     def _open(self) -> tuple[Array, Array, Array]:
         commitment, data = self.prover.commit([self.coeffs])
-        values, proof, _ = self.prover.open(data, [self.z], _transcript())
+        values, proof, _ = self.prover._open(data, [self.z], _transcript())
         return commitment, values, proof
 
     def test_open_verifies(self) -> None:
         commitment, values, proof = self._open()
-        ok, _ = self.verifier.verify(commitment, [self.z], values, proof, _transcript())
+        ok, _ = self.verifier._verify_opening(
+            commitment, [self.z], values, proof, _transcript()
+        )
         self.assertTrue(bool(ok))
 
     def test_wrong_value_rejected(self) -> None:
         commitment, values, proof = self._open()
         bad = values + fnp.array(1, dtype=SF)
-        ok, _ = self.verifier.verify(commitment, [self.z], bad, proof, _transcript())
+        ok, _ = self.verifier._verify_opening(
+            commitment, [self.z], bad, proof, _transcript()
+        )
         self.assertFalse(bool(ok))
 
 
@@ -97,14 +101,14 @@ class KzgBatchValidationTest(absltest.TestCase):
         coeffs = fnp.array([3, 1, 4, 1], dtype=SF)
         z = fnp.array(7, dtype=SF)
         with self.assertRaises(ValueError):
-            KzgProver(pk).open(KzgProverData((coeffs,)), [z, z], _transcript())
+            KzgProver(pk)._open(KzgProverData((coeffs,)), [z, z], _transcript())
 
     def test_verify_rejects_batch_mismatch(self) -> None:
         _, vk = toy_srs(tau=5, n=4)
         z = fnp.array(7, dtype=SF)
         one_commit = fnp.stack([fnp.asarray(G1((1, 2)))])
         with self.assertRaises(ValueError):
-            KzgVerifier(vk).verify(
+            KzgVerifier(vk)._verify_opening(
                 one_commit,
                 [z, z],
                 fnp.zeros(2, SF),

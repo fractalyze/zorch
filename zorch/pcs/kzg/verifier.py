@@ -29,10 +29,9 @@ from frx import Array, lax
 
 from zorch.pcs.kzg.config import KzgCommitment, KzgProof
 from zorch.pcs.kzg.setup import KzgVerifierKey
+from zorch.pcs.stage import OpeningClaim, OpeningProof
+from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
-
-if TYPE_CHECKING:
-    from zorch.pcs.protocol import PcsVerifier
 
 
 def _point_to_host(point: Array, cpu: frx.Device) -> Array:
@@ -45,10 +44,32 @@ def _point_to_host(point: Array, cpu: frx.Device) -> Array:
 
 
 @dataclass(frozen=True)
-class KzgVerifier:
+class KzgVerifier(
+    VerifierStage[
+        OpeningClaim[KzgCommitment],
+        TrivialClaim,
+        OpeningProof[KzgProof],
+    ]
+):
     vk: KzgVerifierKey
 
     def verify(
+        self,
+        claim: OpeningClaim[KzgCommitment],
+        reduction_proof: OpeningProof[KzgProof],
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim]:
+        """Check the claimed evaluations against the commitment."""
+        ok, transcript = self._verify_opening(
+            claim.commitment,
+            claim.points,
+            reduction_proof.values,
+            reduction_proof.proof,
+            transcript,
+        )
+        return VerifyResult(TrivialClaim(), transcript, ok)
+
+    def _verify_opening(
         self,
         commitment: KzgCommitment,
         points: Sequence[Array],
@@ -86,4 +107,10 @@ class KzgVerifier:
 if TYPE_CHECKING:
     # mypy-enforced seam conformance — docs/reference/conventions.md
     # "Seam conformance pins".
-    _: type[PcsVerifier[KzgCommitment, KzgProof]] = KzgVerifier
+    _: type[
+        VerifierStage[
+            OpeningClaim[KzgCommitment],
+            TrivialClaim,
+            OpeningProof[KzgProof],
+        ]
+    ] = KzgVerifier

@@ -14,8 +14,9 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:stage",
         "//zorch:transcript",
-        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
+        "//zorch/pcs:stage",
         "//zorch/poly",
         "//zorch/utils:bits",
         requirement("frx"),

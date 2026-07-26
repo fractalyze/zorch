@@ -13,12 +13,13 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:stage",
         "//zorch:transcript",
         "//zorch/coding:reed_solomon",
         "//zorch/commit:merkle",
         "//zorch/commit:strided_merkle",
         "//zorch/pcs:fold",
-        "//zorch/pcs:protocol",  # type-only (seam conformance pins)
+        "//zorch/pcs:stage",
         "//zorch/poly",
         "//zorch/sumcheck",
         "//zorch/utils:bits",
