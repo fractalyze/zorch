@@ -15,15 +15,22 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.11",
 ]
-# The frx (Field, Ring Accelerated) stack (frx / frxlib / frx-cuda12-* / zk-dtypes) is deliberately
-# NOT pinned here. It is a GPU-correctness-sensitive, continuously-bumped build
-# (see requirements.in + jax-update.yml) that the *consuming* workspace pins
-# exactly; declaring it in the wheel would only force resolver conflicts there.
-# Same convention as the riscv-witness wheel. Only the light, upstream-PyPI deps
-# that never conflict are declared.
+# `frx` is declared, so `pip install pyzorch` alone is usable: every zorch
+# submodule imports it, and without it the package imports but nothing in it
+# runs. frxlib and zk-dtypes are not listed because frx already requires them.
+#
+# The floor carries the `.dev0` sentinel rather than being a plain `>=0.10.0`
+# because a consuming workspace pins an exact continuously-bumped dev build and
+# `0.10.0.devN` sorts BELOW `0.10.0` — a plain floor would reject the very pin
+# requirements.in sets. The floor itself does not conflict with that pin;
+# sp1-zorch and groth16-zorch have shipped this combination.
+#
+# The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
+# platform choice, offered through frx's own `cuda12` extra.
 dependencies = [
     "absl-py",
     "numpy",
+    "frx>=0.10.0.dev0",
 ]
 
 [project.urls]

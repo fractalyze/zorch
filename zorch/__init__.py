@@ -4,4 +4,4 @@
 # release time; the 0.0.0 placeholder is what local / editable installs report.
 # Single source of truth for the packaged version: pyproject.toml derives it via
 # `attr =`, and release.yml refuses to publish a tag that disagrees with it.
-__version__ = "0.1.1"
+__version__ = "0.1.2"

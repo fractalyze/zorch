@@ -24,12 +24,11 @@ unrelated project.
 ### CPU
 
 ```sh
-pip install pyzorch frx frxlib
+pip install pyzorch
 ```
 
-`frx` is not a declared dependency of the wheel, deliberately: it is a
-GPU-correctness-sensitive, continuously bumped build that the consuming workspace
-has to pin exactly, so pinning it here would fight that.
+That is the whole CPU stack: `frx` is a declared dependency and brings `frxlib`
+and `zk-dtypes` with it.
 
 ### GPU (CUDA 12)
 
@@ -38,13 +37,8 @@ pip install pyzorch 'frx[cuda12]' \
     --extra-index-url https://fractalyze.github.io/pypi/simple/
 ```
 
-The extra index is required, and only for the GPU tier. `frx[cuda12]` pulls
-`frx-cuda12-plugin`, which depends on `frx-cuda12-pjrt` — 129 MB against PyPI's
-100 MiB per-file limit, so PyPI carries only a `0.0.0` name-reservation stub and
-the real wheel is served from the Fractalyze index. A limit increase has been
-requested; when it lands this tier collapses into the CPU command above and the
-extra index goes away. Everything else in the chain (`nvidia-cublas-cu12` and
-friends) already comes from PyPI.
+The extra index carries the CUDA plugin wheels, which are too large for PyPI's
+per-file limit. It is not needed for the CPU tier.
 
 ### Verify
 
