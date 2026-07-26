@@ -49,8 +49,7 @@ from zorch.testkit.transcript import cheap_transcript
 
 KB = zk_dtypes.koalabear_mont
 
-# The transcript's own field: the schedule these tests pinned before the
-# policy required an explicit field.
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
 _CH = ChallengePolicy(KB)
 EF = zk_dtypes.koalabearx4_mont
 
@@ -197,8 +196,8 @@ class JaggedStageTest(absltest.TestCase):
         self.assertTrue(bool(fnp.all(prover_next == verifier_next)))
 
     def test_stage_matches_the_hand_run_chain(self) -> None:
-        # The stage is a wrapper, so its stream must be the round chain's:
-        # same layer proofs, same reduced claim, chain-owned buffers and all.
+        # The stage drives the same rounds, so its stream must match the hand
+        # chain byte for byte -- proofs, reduced claim, chain-owned buffers.
         prover, _, claim, witness, layers = self._fixture(17)
         hand_final, hand_proofs, _ = _prove(layers)
         proved = prover.prove(claim, witness, cheap_transcript(KB))

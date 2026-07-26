@@ -1,23 +1,11 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """The polynomial-commitment seam as a committer plus a terminal stage.
 
-A PCS is two things wearing one name. `commit` runs *before any claim exists* —
-it creates the object later claims are about — so it is a committer, not a
-reduction. Opening is a reduction in everything but name: the claim is "the
-polynomials behind this commitment evaluate at these points", the witness is the
-retained prover data, and it reduces to `TrivialClaim` because an opening closes
-its claim rather than passing one on.
+A PCS is two things wearing one name: `commit` runs before any claim exists, so
+it reduces nothing, while opening is a claim reduction in everything but name.
 
-That split retires the separate `PcsProver`/`PcsVerifier` pair. Its stated reason
-was key asymmetry — a KZG prover key is O(degree) while the verifier key is O(1),
-so the roles must be separately constructible — and `ProverStage`/`VerifierStage`
-already encode exactly that isolation. What genuinely remained different was only
-`commit`, which is what `Committer` now names.
-
-The evaluations travel in the *proof*, not the claim: the prover computes them
-while opening, and the verifier learns them from the wire and checks them against
-the commitment. A claim carrying values the prover has not produced yet would be
-a claim neither role could construct.
+Keep the halves apart. Merging them would put a KZG prover key — O(degree),
+against an O(1) verifier key — within reach of a deployed verifier.
 """
 
 from __future__ import annotations
@@ -38,11 +26,8 @@ P_co = TypeVar("P_co", covariant=True)
 
 
 class Committer(Protocol[C_co, D_co]):
-    """Bind to a batch of polynomials.
-
-    Not a stage: no claim exists yet to reduce. Holds the (possibly O(degree))
-    proving material, so a deployed verifier never constructs one.
-    """
+    """Bind to a batch of polynomials, creating the object later claims are
+    about. Holds the proving material, so a verifier never constructs one."""
 
     def commit(self, polys: Sequence[Array]) -> tuple[C_co, D_co]:
         """Return the commitment sent to the verifier and the prover data
@@ -54,8 +39,8 @@ class Committer(Protocol[C_co, D_co]):
 class OpeningClaim(Generic[Commitment]):
     """The committed polynomials evaluate at `points`.
 
-    Both roles hold this before the opening runs; the evaluations themselves are
-    the prover's to supply and arrive in `OpeningProof`.
+    No values: the prover computes them while opening, so a claim naming them
+    would be one neither role could construct before the fact.
     """
 
     commitment: Commitment
@@ -64,8 +49,7 @@ class OpeningClaim(Generic[Commitment]):
 
 @dataclass(frozen=True)
 class OpeningWitness(Generic[ProverData]):
-    """The prover data `commit` retained — prover-only, so it never appears in
-    the claim."""
+    """The prover data `commit` retained; prover-only, hence not in the claim."""
 
     prover_data: ProverData
 

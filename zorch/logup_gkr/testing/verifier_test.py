@@ -42,8 +42,7 @@ from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
 
-# The transcript's own field: the schedule these tests pinned before the
-# policy required an explicit field.
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
 _CH = ChallengePolicy(KB)
 
 # A poseidon2 permute is impractically slow to compile on the XLA CPU

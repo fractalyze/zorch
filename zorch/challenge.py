@@ -25,29 +25,20 @@ def challenge_limbs(dtype: Any) -> int:
 class ChallengePolicy:
     """The field Fiat-Shamir challenges are drawn in.
 
-    One knob, always explicit. The field is a soundness parameter — an
-    extension challenge raises the soundness floor over a base-field one — so
-    it is stated at construction rather than inherited from whatever value a
-    round happens to hold. That also lets a claim be *promoted*: a policy over
-    an extension field draws extension challenges against a base-field claim,
-    which a rule reading the field off the running value cannot express.
+    Explicit because it is a soundness parameter: an extension challenge raises
+    the soundness floor over a base-field one. Naming it also *promotes* — an
+    extension policy draws extension challenges against a base-field claim.
 
-    The transcript squeezes base-field words; ``limbs`` is how many of them
-    make one challenge. ``reinterpret_challenge`` is the identity when
-    ``dtype`` is the transcript's own field, so a base-field policy costs
-    exactly the transcript-native one-squeeze schedule.
+    Naming the transcript's own field costs nothing: ``reinterpret_challenge``
+    is then the identity, so it is the one-squeeze schedule.
     """
 
     dtype: Any
 
     @property
     def base_limbs(self) -> int:
-        """Words per challenge over the challenge field's OWN base field.
-
-        For sites that must fix a static width before a transcript is in hand
-        (a jit-zone operand). Equivalent to ``limbs_over`` against a base-field
-        sponge, which is what every production transcript is.
-        """
+        """Words per challenge over the challenge field's own base field, for
+        sites fixing a static jit-zone width before a transcript is in hand."""
         return challenge_limbs(self.dtype)
 
     def limbs_over(self, transcript_field: Any) -> int:

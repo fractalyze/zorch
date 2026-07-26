@@ -158,8 +158,8 @@ class IpaRoundTripTest(parameterized.TestCase):
         self, sf: type, curve: curves.Curve, n: int
     ) -> None:
         # The fold's `lax.scan` runs k = log₂ n rounds; verify the commit -> open ->
-        # verify round trip closes at each size (and the single-round n=2 edge), so
-        # the scan fold byte-matches the shrinking fold it replaced.
+        # verify round trip closes at each size, including the single-round n=2
+        # edge where the scan degenerates.
         key = basis.toy_key(curve, n=n)
         coeffs = fnp.arange(1, n + 1, dtype=sf)
         x = fnp.array(7, dtype=sf)

@@ -21,8 +21,7 @@ from zorch.utils.bits import log2_strict_usize
 
 KB = zk_dtypes.koalabear_mont
 
-# The transcript's own field: the schedule these tests pinned before the
-# policy required an explicit field.
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
 _CH = ChallengePolicy(KB)
 KBx4 = zk_dtypes.koalabearx4_mont
 

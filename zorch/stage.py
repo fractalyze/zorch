@@ -6,8 +6,8 @@ are separate runtime objects so role-specific capabilities, especially proving
 and verification keys, never need to share an object.
 
 The roles are structural, like `ProverRound`/`VerifierRound` and `Transcript`:
-an adapter or a wrapper conforms by shape, without inheriting. They keep
-`@abstractmethod`, so a class that *does* subclass one still fails loudly at
+an adapter or a wrapper conforms by shape, without inheriting. Their members
+are `@abstractmethod`, so a class that *does* subclass one fails loudly at
 construction if it leaves a role method unimplemented — structural conformance
 for foreign types, nominal enforcement for its own implementers.
 """

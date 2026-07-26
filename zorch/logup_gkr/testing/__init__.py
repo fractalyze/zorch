@@ -31,8 +31,7 @@ from zorch.transcript import Transcript
 
 _KB = zk_dtypes.koalabear_mont
 
-# The transcript's own field -- what these fixtures sampled in before the
-# policy required an explicit one.
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
 _DEFAULT_CH = ChallengePolicy(_KB)
 _EF = zk_dtypes.koalabearx4_mont
 

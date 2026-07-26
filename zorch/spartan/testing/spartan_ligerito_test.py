@@ -27,8 +27,7 @@ from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont
 
-# The transcript's own field: the schedule this test pinned before the
-# policy required an explicit field.
+# Challenges in the transcript's own field: one squeeze, reinterpreted as itself.
 _CH = ChallengePolicy(KB)
 _CFG = LigeritoConfig(num_vars=4, fold_ks=(1, 1), log_inv_rates=(1, 1), queries=(4, 4))
 
