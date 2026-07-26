@@ -14,9 +14,7 @@ stacks **`Round`s** — the one composable unit the rest is threaded through.
 
 ## Installation
 
-**Python 3.11 on Linux x86_64.** `frxlib` publishes a single
-`cp311-cp311-manylinux_2_27_x86_64` wheel, so although its metadata says
-`>=3.11`, on 3.12 or on macOS pip finds nothing to install.
+**Python 3.11 on Linux x86_64 only.**
 
 Install as `pyzorch`, import as `zorch` — the `zorch` name on PyPI belongs to an
 unrelated project.
@@ -26,9 +24,6 @@ unrelated project.
 ```sh
 pip install pyzorch
 ```
-
-That is the whole CPU stack: `frx` is a declared dependency and brings `frxlib`
-and `zk-dtypes` with it.
 
 ### GPU (CUDA 12)
 
@@ -46,9 +41,7 @@ per-file limit. It is not needed for the CPU tier.
 python -c "import frx, zorch; print(frx.devices()); print(zorch.__version__)"
 ```
 
-`[CpuDevice(id=0)]` means the CPU tier. A CUDA install prints the GPU devices; if
-it prints `CpuDevice` with a warning that a CUDA-enabled jaxlib is missing, the
-GPU tier did not take effect.
+`[CpuDevice(id=0)]` means the CPU tier; a CUDA install prints the GPU devices.
 
 ## Design Philosophy
 
