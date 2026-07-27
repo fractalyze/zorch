@@ -103,26 +103,42 @@ is the usual terminal one.
 Spartan is that sequence end to end — R1CS satisfiability reduced, one stage at a
 time, until nothing is left to prove:
 
-```text
-SpartanClaim              (A·z)∘(B·z) = C·z
-    │   OuterProver / OuterVerifier              zerocheck, sumcheck rounds
-    ▼
-RowEvaluationClaim        (Az, Bz, Cz) at r_x
-    │   batch_claims()                           transcript only, no proof section
-    │   InnerProver / InnerVerifier              lincheck, sumcheck rounds
-    ▼
-ColumnEvaluationClaim     z̃ at r_y
-    │   WitnessOpenProver / WitnessOpenVerifier  PCS opening
-    ▼
-TrivialClaim              nothing left to prove
+```python
+# SpartanProver.prove, condensed: R1CS satisfiability down to nothing left to prove.
+commitment, prover_data = self.pcs_prover.commit([witness_poly])
+transcript = _absorb_claim(transcript, claim, commitment)
+
+# SpartanClaim -> RowEvaluationClaim: (Az, Bz, Cz) at r_x
+outer = self.outer.prove(
+    ZerocheckClaim(instance.s_x), ZerocheckWitness(az, bz, cz), transcript
+)
+# neither prover nor verifier proves anything here — it only samples and absorbs
+batch, transcript = batch_claims(
+    outer.reduced_claim.values, outer.transcript, self.challenges
+)
+# RowEvaluationClaim -> ColumnEvaluationClaim: z̃ at r_y
+inner = self.inner.prove(
+    LincheckClaim(instance, outer.reduced_claim, batch),
+    LincheckWitness(assignment),
+    transcript,
+)
+# ColumnEvaluationClaim -> TrivialClaim: the PCS opening closes the argument
+opening = self.witness_open.prove(
+    witness_opening_claim(commitment, instance, claim.public_inputs,
+                          outer.reduced_claim, batch, inner.reduced_claim),
+    WitnessOpeningWitness(prover_data),
+    inner.transcript,
+)
 ```
 
-Each arrow is a stage; the rounds live inside them. `batch_claims()` is neither —
-it samples a challenge and advances the transcript without owning a proof
-section, so both roles just call it. A parent writes this dataflow in ordinary
-Python, like a PyTorch module with a custom `forward`: there is no chain driver
-and no bridge object. And because the roles are separate, a deployed
-`SpartanVerifier` is constructible with only a PCS verification key.
+`verify` is the same program without the witnesses: it constructs the identical
+child claims, so both roles derive the same reduced claim at every boundary. Note
+what the parent does *not* have — a chain driver, a bridge, a context object. It
+just calls its children, like a PyTorch module with a custom `forward`, which is
+what lets the opening claim depend on almost everything upstream (commitment,
+row claim, batching challenge, column claim) instead of only its predecessor.
+`prover_data` is the prover's alone and never enters a claim, which is why a
+deployed `SpartanVerifier` needs only a PCS verification key.
 
 Contracts, ownership rules, the round-vs-stage-vs-committer decision table, and
 reuse guidance:
