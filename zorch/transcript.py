@@ -504,6 +504,13 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     return t._with_state(final_state), fnp.stack(outs)
 
 
+# Block-permutes unrolled per absorb scan trip (see `_observe_body`). Trades HLO
+# size for launch count, both linear in it. 8 keeps the body small enough that a
+# large observe still compiles quickly while cutting the trip count -- and so the
+# fixed per-trip launch cost -- by 8x.
+_ABSORB_CHUNK = 8
+
+
 @partial(jit, inline=True)
 def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     base_dtype = t.state.sponge_state.dtype
@@ -560,15 +567,35 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # needs no `arange`, one path for concrete and symbolic `num_blocks` (export).
     blocks = combined[: num_blocks * rate].reshape(num_blocks, rate)
 
+    # Absorb `chunk` blocks per scan trip. One block per trip leaves the chain
+    # launch-bound rather than permute-bound: a trip is a permute plus its carry
+    # glue -- several kernel launches -- against a permutation that computes for
+    # well under a microsecond, so on a message of thousands of blocks the fixed
+    # per-trip cost dominates. Unrolling `chunk` of them amortizes it while the
+    # HLO stays O(chunk), keeping the roll's whole point (a full unroll is O(M):
+    # a ~15 MB module for a large one-shot observe).
+    #
+    # `chunk` never exceeds `num_blocks`, so a short observe is unchanged; the
+    # last trip's up-to-`chunk - 1` padding blocks mask off exactly like the
+    # blocks between `active_blocks` and `num_blocks` already did.
+    chunk = min(_ABSORB_CHUNK, num_blocks) if isinstance(num_blocks, int) else 1
+    trips = -(-num_blocks // chunk)
+    if (pad := trips * chunk - num_blocks) > 0:
+        blocks = fnp.concatenate([blocks, fnp.zeros((pad, rate), dtype=base_dtype)])
+    groups = blocks.reshape(trips, chunk, rate)
+
     def _absorb(
-        carry: tuple[Array, Array], block: Array
+        carry: tuple[Array, Array], group: Array
     ) -> tuple[tuple[Array, Array], None]:
         sponge, k = carry
-        permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
-        # Blocks past the live count are padding-only: leave the sponge alone.
-        return (fnp.where(k < active_blocks, permuted, sponge), k + fnp.int32(1)), None
+        for i in range(chunk):
+            permuted = permutation.permute(fnp.concatenate([group[i], sponge[rate:]]))
+            # Blocks past the live count are padding-only: leave the sponge alone.
+            sponge = fnp.where(k < active_blocks, permuted, sponge)
+            k = k + fnp.int32(1)
+        return (sponge, k), None
 
-    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
+    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), groups)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode

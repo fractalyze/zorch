@@ -536,7 +536,13 @@ class RateBlockByteIdentityTest(absltest.TestCase):
     def test_observe_matches_reference_over_many_lengths(self) -> None:
         # Rate-boundary edges explicit: 7 (under), 8 (exact one block), 9 (one
         # block + tail), 16/17 (two blocks +/- tail), plus 0/1/40.
-        for mlen in (0, 1, 7, 8, 9, 16, 17, 40):
+        #
+        # 65/121/130 clear `_ABSORB_CHUNK` blocks, so they are the only lengths
+        # here that run the absorb scan for more than one trip: below the chunk
+        # the whole message unrolls into a single body. 65 and 130 leave a
+        # partial last trip (its padding blocks must mask off), 121 divides
+        # evenly.
+        for mlen in (0, 1, 7, 8, 9, 16, 17, 40, 65, 121, 130):
             v = rand_field(mlen + 1, (mlen,), F)
             new = _observe_body(self._new(), v)
             ref = _ref_observe(self._new(), v)
@@ -550,7 +556,7 @@ class RateBlockByteIdentityTest(absltest.TestCase):
             base_ref = _ref_observe(self._new(), rand_field(in_pos, (in_pos,), F))
             self._assert_state_eq(base_new, base_ref, f"seed in_pos={in_pos} diverged")
             self.assertEqual(int(base_new.state.in_pos), in_pos)
-            for mlen in (0, 1, 7, 8, 9, 16, 17):
+            for mlen in (0, 1, 7, 8, 9, 16, 17, 130):
                 v = rand_field(in_pos * 10 + mlen + 1, (mlen,), F)
                 new = _observe_body(base_new, v)
                 ref = _ref_observe(base_ref, v)
@@ -702,7 +708,9 @@ class CpuByteIdentityTest(absltest.TestCase):
             self.assertTrue(bool(fnp.all(x == y)), msg)
 
     def test_observe_matches_pure_reference(self) -> None:
-        for mlen in (1, 7, 8, 9, 16, 17, 37, 40):
+        # 130 spans several absorb-scan trips against the per-element oracle;
+        # everything below `_ABSORB_CHUNK` blocks runs as a single trip.
+        for mlen in (1, 7, 8, 9, 16, 17, 37, 40, 130):
             for seed, obs, smp in ((0, (), ()), (3, (5, 9), (2, 1))):
                 t = self._seeded(seed, obs, smp)
                 v = rand_field(seed * 1000 + mlen, (mlen,), F)
