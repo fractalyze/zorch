@@ -83,6 +83,23 @@ ProverStage.prove(claim, witness, transcript)      -> ProveResult
 VerifierStage.verify(claim, reduction_proof, ...)  -> VerifyResult
 ```
 
+The **claim** is the public assertion entering the stage; the **witness** is the
+prover's private evidence. Both roles derive the same **reduced claim**, and the
+reduction proof does not establish it — it establishes the source claim
+*conditional on* it:
+
+```text
+reduced claim is true  =>  source claim is true
+```
+
+That conditional is what lets stages chain: each one's reduced claim is the
+next one's source claim, so a proof system is a sequence of reductions ending at
+`TrivialClaim`, which holds by construction and leaves nothing left to prove. An
+argument of knowledge is exactly a reduction to the trivial claim.
+`SumcheckProver` / `SumcheckVerifier` are the worked pair — a sum claim reduced
+to an evaluation claim through internal per-variable rounds — and a PCS opening
+is the usual terminal one.
+
 | | **`Round`** | **`Stage`** | **Named protocol operation** |
 | --- | --- | --- | --- |
 | **Represents** | one step of a repeated recurrence | one conditional claim reduction with separate prover/verifier roles | shared framing, reduction, or security-amplification step without its own proof section |
