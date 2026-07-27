@@ -1,15 +1,17 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Mechanical documentation checks, run as a pre-commit hook.
+"""Check that documentation references resolve, as a pre-commit hook.
 
-A rule written as prose drifts silently; a rule that runs fails the commit that
-breaks it. Everything decidable from the tree lives here, and the tree is read
-rather than described, so a new block is covered the moment its directory lands.
-`.claude/skills/lint-zorch-docs` keeps only what needs judgment.
+Only the two questions the filesystem answers objectively: does a cited symbol
+exist anywhere in the tree, and does a relative link resolve from the page
+carrying it. Both catch what prose review misses, because a symbol that was
+renamed or never existed reads exactly like one that is real.
+
+Whether a page explains the right things is not decidable here and is not
+attempted — `.claude/skills/lint-zorch-docs` covers that, by reading.
 """
 
 from __future__ import annotations
 
-import ast
 import builtins
 import re
 import sys
@@ -47,200 +49,6 @@ def _docs() -> list[Path]:
         for path in sorted(REPO.glob(pattern)):
             seen[path] = None
     return list(seen)
-
-
-def _module_has_docstring(path: Path) -> bool:
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-    except (SyntaxError, UnicodeDecodeError):
-        return False
-    return ast.get_docstring(tree) is not None
-
-
-def _is_design_module(path: Path) -> bool:
-    """A module shipping a block, as opposed to scaffolding or a benchmark."""
-    name = path.name
-    if name == "__init__.py" or name.endswith("_test.py") or name.startswith("bench_"):
-        return False
-    return _module_has_docstring(path)
-
-
-# ---------------------------------------------------------------------------
-# subsystem-doc-parity
-# ---------------------------------------------------------------------------
-
-
-def _subsystems() -> list[Path]:
-    root = REPO / "zorch"
-    return [
-        d
-        for d in sorted(root.iterdir())
-        if d.is_dir()
-        and d.name not in SUPPORT_DIRS
-        and any(_is_design_module(p) for p in d.glob("*.py"))
-    ]
-
-
-def check_subsystem_doc_parity() -> Iterator[Finding]:
-    """Every subsystem has a page the hub links.
-
-    The name is derived, not listed (`logup_gkr` -> `logup-gkr.md`) and resolved
-    anywhere under `docs/`, so the layout moves without touching this file.
-    """
-    hub = REPO / "docs" / "README.md"
-    hub_text = hub.read_text(encoding="utf-8")
-    for subsystem in _subsystems():
-        stem = subsystem.name.replace("_", "-")
-        pages = sorted(REPO.glob(f"docs/**/{stem}.md"))
-        if not pages:
-            yield Finding(
-                "subsystem-doc-parity",
-                subsystem,
-                f"ships a design block but has no docs/**/{stem}.md",
-            )
-            continue
-        for page in pages:
-            link = page.relative_to(REPO / "docs").as_posix()
-            if link not in hub_text:
-                yield Finding(
-                    "subsystem-doc-parity",
-                    hub,
-                    f"hub table has no row linking {link}",
-                )
-
-
-# ---------------------------------------------------------------------------
-# module-doc-reachability
-# ---------------------------------------------------------------------------
-
-# Modules whose concept has no page yet. The reason states what a reader loses,
-# making this a debt list rather than a mute suppression; an entry that stops
-# applying fails, so the list cannot outlive what it excuses.
-UNREACHED_MODULES = {
-    "zorch/constraint_eval.py": (
-        "constraint evaluation has no page; its concepts (constraint folding, "
-        "the symbolic expression tree) are described only in the module docstring"
-    ),
-    "zorch/grind.py": (
-        "proof-of-work grinding is named in stage-composition.md as a shared "
-        "protocol operation, but has no page describing its security accounting"
-    ),
-}
-
-
-def check_module_doc_reachability() -> Iterator[Finding]:
-    """Every top-level module is cited by path from some page.
-
-    A module no page names is one a reader cannot navigate to. Citing the path
-    rather than a symbol is what makes a rename break the pointer loudly.
-    """
-    prose = "\n".join(p.read_text(encoding="utf-8") for p in _docs())
-    live = {
-        p.relative_to(REPO).as_posix()
-        for p in sorted((REPO / "zorch").glob("*.py"))
-        # A leading underscore marks a module the package does not export, so
-        # no page owes the reader a route to it.
-        if not p.name.startswith("_") and _is_design_module(p)
-    }
-    for rel in sorted(live):
-        if rel in prose or rel in UNREACHED_MODULES:
-            continue
-        yield Finding(
-            "module-doc-reachability",
-            REPO / rel,
-            "no page cites this path; add the citation or list it in "
-            "UNREACHED_MODULES with what a reader loses",
-        )
-    for rel in sorted(UNREACHED_MODULES):
-        if rel not in live:
-            yield Finding(
-                "module-doc-reachability",
-                REPO / "tools" / "lint_docs.py",
-                f"UNREACHED_MODULES lists {rel}, which no longer exists",
-            )
-        elif rel in prose:
-            yield Finding(
-                "module-doc-reachability",
-                REPO / "tools" / "lint_docs.py",
-                f"UNREACHED_MODULES lists {rel}, but a page now cites it — "
-                "drop the entry",
-            )
-
-
-# ---------------------------------------------------------------------------
-# canonical-claim
-# ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class CanonicalClaim:
-    """A claim stated in exactly one place and linked from everywhere else."""
-
-    name: str
-    pattern: re.Pattern[str]
-    home: str
-    anchor: str
-
-
-# Restating rather than linking is how copies drift into contradiction: the
-# fusion unit claim read "one fused kernel" in CLAUDE.md and README.md while the
-# measured page recorded two, and the prose lint pinned the wrong pair together.
-CANONICAL_CLAIMS = (
-    CanonicalClaim(
-        name="field-dtype-gotchas",
-        # A restated *limit* is the duplicate; naming the same op for another
-        # reason (the fusion op scan bans `jnp.tile` as a gather) is not.
-        pattern=re.compile(
-            r"\b(field|extension)\b[^.]{0,60}\b(unsupported|unimplemented|"
-            r"aborts|trips)\b"
-            r"|\b(unsupported|unimplemented|aborts|trips)\b[^.]{0,60}"
-            r"\b(field|extension)\b"
-            r"|\bno iota over an extension\b",
-            re.IGNORECASE,
-        ),
-        home="docs/blocks/poly.md",
-        anchor="poly.md#field-dtype-gotchas",
-    ),
-    CanonicalClaim(
-        name="fusion-unit",
-        pattern=re.compile(r"(single|one) fused kernel", re.IGNORECASE),
-        home="docs/README.md",
-        anchor="README.md#fusion-north-star",
-    ),
-)
-
-
-def check_canonical_claims() -> Iterator[Finding]:
-    for claim in CANONICAL_CLAIMS:
-        home = REPO / claim.home
-        if not home.exists():
-            yield Finding(
-                "canonical-claim",
-                REPO / "tools" / "lint_docs.py",
-                f"{claim.name} names a home that does not exist: {claim.home}",
-            )
-            continue
-        if not claim.pattern.search(home.read_text(encoding="utf-8")):
-            yield Finding(
-                "canonical-claim",
-                home,
-                f"is the home of {claim.name} but no longer states it",
-            )
-        for doc in _docs():
-            if doc == home:
-                continue
-            text = doc.read_text(encoding="utf-8")
-            for lineno, line in enumerate(text.splitlines(), start=1):
-                if not claim.pattern.search(line):
-                    continue
-                if claim.anchor in text:
-                    continue
-                yield Finding(
-                    "canonical-claim",
-                    doc,
-                    f"restates {claim.name}; link {claim.anchor} instead",
-                    lineno,
-                )
 
 
 # ---------------------------------------------------------------------------
@@ -443,13 +251,7 @@ def check_dangling_references() -> Iterator[Finding]:
         )
 
 
-CHECKS = (
-    check_subsystem_doc_parity,
-    check_link_targets,
-    check_module_doc_reachability,
-    check_canonical_claims,
-    check_dangling_references,
-)
+CHECKS = (check_dangling_references, check_link_targets)
 
 
 def main() -> int:

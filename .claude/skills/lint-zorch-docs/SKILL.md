@@ -2,13 +2,13 @@
 name: lint-zorch-docs
 description: |
   zorch-specific documentation review. `tools/lint_docs.py` runs as a
-  pre-commit hook and already decides everything the tree can answer —
-  subsystem/doc parity, module reachability, canonical-claim duplication,
-  dangling symbols and paths, link targets. This skill covers only what
-  needs judgment: whether a page answers why-this-shape, fusion-by-
-  construction, and where it sits in the composition vocabulary; whether
-  CLAUDE.md has stayed a pointer; and whether a scheme or zkVM is named as
-  anything but the consumer boundary. Wraps /workflow:lint-docs for the
+  pre-commit hook and settles the two questions the filesystem answers —
+  whether a cited symbol resolves, and whether a relative link does. This
+  skill covers everything else, all of which needs reading: subsystem page
+  coverage, whether a page answers why-this-shape, fusion-by-construction and
+  where it sits in the composition vocabulary; whether CLAUDE.md has stayed a
+  pointer; and whether a scheme or zkVM is named as anything but the consumer
+  boundary. Wraps /workflow:lint-docs for the
   universal checks.
   TRIGGER when: (1) /lint-zorch-docs, (2) after touching CLAUDE.md /
   README.md / docs/, (3) after adding a new subsystem, (4) before a docs PR.
@@ -20,16 +20,21 @@ allowed_tools: Read, Write, Edit, Glob, Grep, Bash, Skill
 
 # Lint zorch Docs
 
-The mechanical half is not here. `tools/lint_docs.py` owns every check the
-filesystem can settle, because a rule written as prose drifts silently while a
+The mechanical half is not here. `tools/lint_docs.py` settles whether a cited
+symbol or link resolves, because a rule written as prose drifts silently while a
 rule that runs fails the commit that breaks it — this file previously named
 `commit/jagged` as the one nested block earning its own page, a path that never
 existed. Nothing below restates a tree fact.
 
+It deliberately stops at resolution. Whether every subsystem has a page, whether
+a claim is stated once, whether a module is reachable from the docs at all — all
+real, none decidable from the filesystem without encoding an editorial rule as
+CI. They are checks J1-J3 below, read rather than run.
+
 Three stages:
 
-1. `python3 tools/lint_docs.py` — mechanical. Fix what it reports first; the
-   judgment checks read a moving target otherwise.
+1. `python3 tools/lint_docs.py` — reference resolution. Fix what it reports
+   first; the judgment checks read a moving target otherwise.
 1. `/workflow:lint-docs` — universal prose checks. Surface its report.
 1. J1–J3 below, merged into the same report.
 
@@ -45,7 +50,11 @@ stop and point the user at `/workflow:lint-docs`.
 
 ## Checks
 
-### J1. Subsystem skeleton (High)
+### J1. Subsystem coverage and skeleton (High)
+
+Every subsystem under `zorch/` should have a page under `docs/`, linked from the
+hub, and every top-level module should be reachable from some page — the lint no
+longer checks either, so check them here.
 
 Every block page must answer the three things `conventions.md` mandates: **why
 this shape** (the concept it factors, and how it stays proving-scheme- and
@@ -82,7 +91,7 @@ fine anywhere. Flag a mention that reads as a zorch dependency or feature.
    ```md
    # /lint-zorch-docs report
 
-   ## Mechanical (tools/lint_docs.py)
+   ## Reference resolution (tools/lint_docs.py)
    ...
 
    ## Universal (from /workflow:lint-docs)
