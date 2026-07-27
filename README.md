@@ -105,9 +105,16 @@ time, until nothing is left to prove:
 
 ```python
 # SpartanProver.prove, condensed: R1CS satisfiability down to nothing left to prove.
+instance, assignment = claim.instance, witness.assignment
+witness_poly = assignment[: instance.num_vars_padded]  # the private half of z
 commitment, prover_data = self.pcs_prover.commit([witness_poly])
+# A, B, C and the public inputs are public; this binds them to the transcript
 transcript = _absorb_claim(transcript, claim, commitment)
 
+# Computed here rather than inside outer.prove: the zerocheck stage takes three
+# tables and knows nothing about R1CS, which is what keeps it reusable. They are
+# products of the public matrices with the assignment, so they carry the witness.
+az, bz, cz = instance.matvecs(assignment)
 # SpartanClaim -> RowEvaluationClaim: (Az, Bz, Cz) at the reduced row point
 outer = self.outer.prove(
     ZerocheckClaim(instance.s_x), ZerocheckWitness(az, bz, cz), transcript
@@ -122,7 +129,9 @@ inner = self.inner.prove(
     LincheckWitness(assignment),
     transcript,
 )
-# ColumnEvaluationClaim -> TrivialClaim: the PCS opening closes the argument
+# ColumnEvaluationClaim -> TrivialClaim. Every check so far was conditional on a
+# claimed value; this is where the verifier evaluates the real A, B, C itself and
+# checks them against the opened witness, leaving nothing to prove
 opening = self.witness_open.prove(
     witness_opening_claim(commitment, instance, claim.public_inputs,
                           outer.reduced_claim, batch, inner.reduced_claim),
