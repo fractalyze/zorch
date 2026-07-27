@@ -695,6 +695,4 @@ class JaggedGkrLayerRound(ProverRound):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[ProverRound] = JaggedGkrLayerRound

@@ -848,7 +848,5 @@ def _check_witness_host(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[Transcript] = DuplexTranscript
     _grinding: type[GrindingTranscript] = DuplexTranscript

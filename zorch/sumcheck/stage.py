@@ -92,8 +92,6 @@ class SumcheckVerifier(VerifierStage[SumClaim, EvaluationClaim, Array]):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _p: type[ProverStage[(SumClaim, SumcheckWitness, EvaluationClaim, Array)]] = (
         SumcheckProver
     )

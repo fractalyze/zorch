@@ -151,8 +151,6 @@ class InnerVerifier(VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerPro
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _p: type[
         ProverStage[(LincheckClaim, LincheckWitness, ColumnEvaluationClaim, InnerProof)]
     ] = InnerProver

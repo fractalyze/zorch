@@ -275,8 +275,6 @@ class SpartanVerifier(VerifierStage[SpartanClaim, TrivialClaim, SpartanProof]):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _p: type[
         ProverStage[(SpartanClaim, SpartanWitness, TrivialClaim, SpartanProof)]
     ] = SpartanProver

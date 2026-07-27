@@ -397,8 +397,6 @@ def _open_jit(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _pcs_prover: type[
         ProverStage[
             OpeningClaim[LigeritoCommitment],

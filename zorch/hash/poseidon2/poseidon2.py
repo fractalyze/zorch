@@ -287,6 +287,4 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[Permutation] = Poseidon2

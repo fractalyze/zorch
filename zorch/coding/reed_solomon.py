@@ -605,8 +605,6 @@ def fri_fold(codeword: Array, beta: Array, *, shift: Array | None = None) -> Arr
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[FoldableCode] = ReedSolomon
     _bitrev: type[FoldableCode] = BitReversedReedSolomon
     _kary: type[KFoldableCode] = ReedSolomon

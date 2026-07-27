@@ -77,9 +77,6 @@ class DensePcs:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance -- docs/reference/conventions.md
-    # "Seam conformance pins". Structural conformers need this: nothing else
-    # checks them, since they deliberately do not inherit the roles.
     _p: type[
         ProverStage[
             OpeningClaim[Array],

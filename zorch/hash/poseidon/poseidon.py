@@ -182,6 +182,4 @@ def _poseidon_marker_attrs(perm: "Poseidon") -> dict[str, object]:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[Permutation] = Poseidon

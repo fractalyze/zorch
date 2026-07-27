@@ -129,8 +129,6 @@ class LogUpGkrVerifier(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _p: type[
         ProverStage[(LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof[LayerProof])]
     ] = LogUpGkrProver

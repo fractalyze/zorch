@@ -105,8 +105,6 @@ class LigeritoSpartanVerifier:
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance -- these adapters conform by shape, so a
-    # signature drift would otherwise surface only at a call site.
     _p: type[
         ProverStage[
             OpeningClaim[Array],

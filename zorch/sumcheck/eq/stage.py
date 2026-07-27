@@ -116,8 +116,6 @@ class EqPolyVerifier(VerifierStage[EqSumClaim, EvaluationClaim, Array]):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _p: type[ProverStage[(EqSumClaim, EqPolyWitness, EvaluationClaim, Array)]] = (
         EqPolyProver
     )
