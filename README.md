@@ -95,59 +95,48 @@ reduced claim is true  =>  source claim is true
 That conditional is what lets stages chain: each one's reduced claim is the
 next one's source claim, so a proof system is a sequence of reductions ending at
 `TrivialClaim`, which holds by construction and leaves nothing left to prove. An
-argument of knowledge is exactly a reduction to the trivial claim.
-`SumcheckProver` / `SumcheckVerifier` are the worked pair — a sum claim reduced
-to an evaluation claim through internal per-variable rounds — and a PCS opening
-is the usual terminal one.
+argument of knowledge is exactly a reduction to the trivial claim, and a PCS
+opening is the usual terminal one.
 
-Spartan is that sequence end to end — R1CS satisfiability reduced, one stage at a
-time, until nothing is left to prove:
+Dense sumcheck is the smallest complete stage, entire:
 
 ```python
-# SpartanProver.prove, condensed: R1CS satisfiability down to nothing left to prove.
-instance, assignment = claim.instance, witness.assignment
-witness_poly = assignment[: instance.num_vars_padded]  # the private half of z
-commitment, prover_data = self.pcs_prover.commit([witness_poly])
-# A, B, C and the public inputs are public; this binds them to the transcript
-transcript = _absorb_claim(transcript, claim, commitment)
+@dataclass(frozen=True)
+class SumClaim:         # public: this polynomial sums to `value` over the cube
+    value: Array
+    rounds: int
 
-# Computed here rather than inside outer.prove: the zerocheck stage takes three
-# tables and knows nothing about R1CS, which is what keeps it reusable. They are
-# products of the public matrices with the assignment, so they carry the witness.
-az, bz, cz = instance.matvecs(assignment)
-# SpartanClaim -> RowEvaluationClaim: (Az, Bz, Cz) at the reduced row point
-outer = self.outer.prove(
-    ZerocheckClaim(instance.s_x), ZerocheckWitness(az, bz, cz), transcript
-)
-# neither prover nor verifier proves anything here — it only samples and absorbs
-batch, transcript = batch_claims(
-    outer.reduced_claim.values, outer.transcript, self.challenges
-)
-# RowEvaluationClaim -> ColumnEvaluationClaim: z̃ at the reduced column point
-inner = self.inner.prove(
-    LincheckClaim(instance, outer.reduced_claim, batch),
-    LincheckWitness(assignment),
-    transcript,
-)
-# ColumnEvaluationClaim -> TrivialClaim. Every check so far was conditional on a
-# claimed value; this is where the verifier evaluates the real A, B, C itself and
-# checks them against the opened witness, leaving nothing to prove
-opening = self.witness_open.prove(
-    witness_opening_claim(commitment, instance, claim.public_inputs,
-                          outer.reduced_claim, batch, inner.reduced_claim),
-    WitnessOpeningWitness(prover_data),
-    inner.transcript,
-)
+
+@dataclass(frozen=True)
+class EvaluationClaim:  # reduced: ...provided it evaluates to `value` at `point`
+    point: Array
+    value: Array
+
+
+class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Array]):
+    def prove(self, claim, witness, transcript):
+        pre = transcript
+        # the rounds live inside the stage — one per variable, driven in a loop
+        _, _, messages = fold_rounds(
+            self.prover_round, witness.state, transcript, claim.rounds
+        )
+        reduction_proof = fnp.stack(messages)
+        # derive the reduced claim by replaying exactly what the verifier will do
+        point, value, replayed, _ = verify(
+            self.verifier_round, claim.value, reduction_proof, pre
+        )
+        return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
 ```
 
-`verify` is the same program without the witnesses: it constructs the identical
-child claims, so both roles derive the same reduced claim at every boundary. Note
-what the parent does *not* have — a chain driver, a bridge, a context object. It
-just calls its children, like a PyTorch module with a custom `forward`, which is
-what lets the opening claim depend on almost everything upstream (commitment,
-row claim, batching challenge, column claim) instead of only its predecessor.
-`prover_data` is the prover's alone and never enters a claim, which is why a
-deployed `SpartanVerifier` needs only a PCS verification key.
+`SumcheckVerifier.verify` runs that same replay against the proof alone, which is
+how both roles land on the same `EvaluationClaim` without either deriving it from
+the other. Nothing here knows where the sum came from: zerocheck, lincheck and
+LogUp-GKR each configure this stage and export their own claim type.
+
+A proof system is those reductions chained until the claim is trivial.
+`SpartanProver` / `SpartanVerifier` are the worked composite — four stages, a
+transcript-only batching step, and prover data that skips to the opening — in
+[`docs/schemes/spartan.md`](docs/schemes/spartan.md).
 
 Contracts, ownership rules, the round-vs-stage-vs-committer decision table, and
 reuse guidance:
