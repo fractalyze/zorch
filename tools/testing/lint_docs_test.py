@@ -55,18 +55,14 @@ class LintDocsTestCase(absltest.TestCase):
 class SubsystemDocParityTest(LintDocsTestCase):
     def test_subsystem_without_a_page_is_flagged(self) -> None:
         self._subsystem("sumcheck")
-
-        findings = lint_docs.check_subsystem_doc_parity()
-
+        findings = list(lint_docs.check_subsystem_doc_parity())
         self.assertLen(findings, 1)
         self.assertIn("no docs/**/sumcheck.md", findings[0].message)
 
     def test_page_missing_from_the_hub_is_flagged(self) -> None:
         self._subsystem("sumcheck")
         _write(self.repo / "docs" / "blocks" / "sumcheck.md", "# sumcheck\n")
-
-        findings = lint_docs.check_subsystem_doc_parity()
-
+        findings = list(lint_docs.check_subsystem_doc_parity())
         self.assertLen(findings, 1)
         self.assertIn("blocks/sumcheck.md", findings[0].message)
 
@@ -74,46 +70,38 @@ class SubsystemDocParityTest(LintDocsTestCase):
         self._subsystem("logup_gkr")
         _write(self.repo / "docs" / "blocks" / "logup-gkr.md", "# gkr\n")
         _write(self.repo / "docs" / "README.md", "[gkr](blocks/logup-gkr.md)\n")
-
-        self.assertEmpty(lint_docs.check_subsystem_doc_parity())
+        self.assertEmpty(list(lint_docs.check_subsystem_doc_parity()))
 
     def test_scaffolding_directory_is_not_a_subsystem(self) -> None:
         self._subsystem("testing")
-
-        self.assertEmpty(lint_docs.check_subsystem_doc_parity())
+        self.assertEmpty(list(lint_docs.check_subsystem_doc_parity()))
 
     def test_module_without_a_docstring_is_not_a_design_block(self) -> None:
         _write(self.repo / "zorch" / "scratch" / "scratch.py", "x = 1\n")
-
-        self.assertEmpty(lint_docs.check_subsystem_doc_parity())
+        self.assertEmpty(list(lint_docs.check_subsystem_doc_parity()))
 
 
 class ModuleDocReachabilityTest(LintDocsTestCase):
     def test_uncited_module_is_flagged(self) -> None:
         _write(self.repo / "zorch" / "stage.py", '"""Roles."""\n')
-
-        findings = lint_docs.check_module_doc_reachability()
-
+        findings = list(lint_docs.check_module_doc_reachability())
         self.assertLen(findings, 1)
         self.assertIn("no page cites this path", findings[0].message)
 
     def test_cited_module_passes(self) -> None:
         _write(self.repo / "zorch" / "stage.py", '"""Roles."""\n')
         _write(self.repo / "docs" / "README.md", "see `zorch/stage.py`\n")
-
-        self.assertEmpty(lint_docs.check_module_doc_reachability())
+        self.assertEmpty(list(lint_docs.check_module_doc_reachability()))
 
     def test_private_module_owes_no_route(self) -> None:
         _write(self.repo / "zorch" / "_composite.py", '"""Helper."""\n')
-
-        self.assertEmpty(lint_docs.check_module_doc_reachability())
+        self.assertEmpty(list(lint_docs.check_module_doc_reachability()))
 
     def test_excuse_for_a_deleted_module_is_flagged(self) -> None:
         with mock.patch.object(
             lint_docs, "UNREACHED_MODULES", {"zorch/gone.py": "a reason"}
         ):
-            findings = lint_docs.check_module_doc_reachability()
-
+            findings = list(lint_docs.check_module_doc_reachability())
         self.assertLen(findings, 1)
         self.assertIn("no longer exists", findings[0].message)
 
@@ -124,8 +112,7 @@ class ModuleDocReachabilityTest(LintDocsTestCase):
         with mock.patch.object(
             lint_docs, "UNREACHED_MODULES", {"zorch/grind.py": "a reason"}
         ):
-            findings = lint_docs.check_module_doc_reachability()
-
+            findings = list(lint_docs.check_module_doc_reachability())
         self.assertLen(findings, 1)
         self.assertIn("drop the entry", findings[0].message)
 
@@ -146,9 +133,7 @@ class CanonicalClaimTest(LintDocsTestCase):
     def test_restating_without_the_link_is_flagged(self) -> None:
         _write(self.repo / "docs" / "README.md", "not one fused kernel\n")
         _write(self.repo / "CLAUDE.md", "must be one fused kernel\n")
-
-        findings = lint_docs.check_canonical_claims()
-
+        findings = list(lint_docs.check_canonical_claims())
         self.assertLen(findings, 1)
         self.assertIn("restates fusion-unit", findings[0].message)
 
@@ -158,14 +143,11 @@ class CanonicalClaimTest(LintDocsTestCase):
             self.repo / "CLAUDE.md",
             "one fused kernel, see [north star](docs/README.md#fusion-north-star)\n",
         )
-
-        self.assertEmpty(lint_docs.check_canonical_claims())
+        self.assertEmpty(list(lint_docs.check_canonical_claims()))
 
     def test_home_that_stopped_stating_the_claim_is_flagged(self) -> None:
         _write(self.repo / "docs" / "README.md", "# hub\n")
-
-        findings = lint_docs.check_canonical_claims()
-
+        findings = list(lint_docs.check_canonical_claims())
         self.assertLen(findings, 1)
         self.assertIn("no longer states it", findings[0].message)
 
@@ -173,29 +155,23 @@ class CanonicalClaimTest(LintDocsTestCase):
 class DanglingReferenceTest(LintDocsTestCase):
     def test_symbol_named_nowhere_is_flagged(self) -> None:
         _write(self.repo / "docs" / "README.md", "the `JaggedLayout` type\n")
-
-        findings = lint_docs.check_dangling_references()
-
+        findings = list(lint_docs.check_dangling_references())
         self.assertLen(findings, 1)
         self.assertIn("JaggedLayout", findings[0].message)
 
     def test_symbol_in_a_string_literal_resolves(self) -> None:
         _write(self.repo / "zorch" / "m.py", 'NAME = "zorch.jagged_bp"\n')
         _write(self.repo / "docs" / "README.md", "the `zorch.jagged_bp` marker\n")
-
-        self.assertEmpty(lint_docs.check_dangling_references())
+        self.assertEmpty(list(lint_docs.check_dangling_references()))
 
     def test_path_resolves_from_the_page_that_cites_it(self) -> None:
         _write(self.repo / "docs" / "blocks" / "poly.md", "# poly\n")
         _write(self.repo / "docs" / "blocks" / "pcs.md", "see `poly.md`\n")
-
-        self.assertEmpty(lint_docs.check_dangling_references())
+        self.assertEmpty(list(lint_docs.check_dangling_references()))
 
     def test_missing_path_is_flagged(self) -> None:
         _write(self.repo / "docs" / "README.md", "see `zorch/commit/jagged/`\n")
-
-        findings = lint_docs.check_dangling_references()
-
+        findings = list(lint_docs.check_dangling_references())
         self.assertLen(findings, 1)
         self.assertIn("not in the tree", findings[0].message)
 
@@ -204,19 +180,16 @@ class DanglingReferenceTest(LintDocsTestCase):
             self.repo / "docs" / "README.md",
             "walk `zorch/*/` under `$DEVENV_ENVS_DIR/<workspace>/`\n",
         )
-
-        self.assertEmpty(lint_docs.check_dangling_references())
+        self.assertEmpty(list(lint_docs.check_dangling_references()))
 
     def test_foreign_symbol_prefix_is_not_checked(self) -> None:
         _write(self.repo / "docs" / "README.md", "`jnp.arange` raises\n")
-
-        self.assertEmpty(lint_docs.check_dangling_references())
+        self.assertEmpty(list(lint_docs.check_dangling_references()))
 
     def test_link_label_is_checked_as_a_target_not_a_symbol(self) -> None:
         _write(self.repo / "docs" / "blocks" / "poly.md", "# poly\n")
         _write(self.repo / "docs" / "README.md", "[`poly.md`](blocks/poly.md)\n")
-
-        self.assertEmpty(lint_docs.check_dangling_references())
+        self.assertEmpty(list(lint_docs.check_dangling_references()))
 
     def test_stale_excuse_is_flagged(self) -> None:
         with mock.patch.object(
@@ -224,8 +197,7 @@ class DanglingReferenceTest(LintDocsTestCase):
             "FOREIGN_CITATIONS",
             {("docs/README.md", "PolynomialSpace"): "a reason"},
         ):
-            findings = lint_docs.check_dangling_references()
-
+            findings = list(lint_docs.check_dangling_references())
         self.assertLen(findings, 1)
         self.assertIn("no longer cites it", findings[0].message)
 
@@ -233,9 +205,7 @@ class DanglingReferenceTest(LintDocsTestCase):
 class LinkTargetTest(LintDocsTestCase):
     def test_broken_relative_link_is_flagged(self) -> None:
         _write(self.repo / "docs" / "blocks" / "pcs.md", "[c](../conventions.md)\n")
-
-        findings = lint_docs.check_link_targets()
-
+        findings = list(lint_docs.check_link_targets())
         self.assertLen(findings, 1)
         self.assertIn("does not resolve", findings[0].message)
 
@@ -244,8 +214,7 @@ class LinkTargetTest(LintDocsTestCase):
             self.repo / "docs" / "README.md",
             "[a](#section) and [b](https://example.invalid/x)\n",
         )
-
-        self.assertEmpty(lint_docs.check_link_targets())
+        self.assertEmpty(list(lint_docs.check_link_targets()))
 
 
 class RepositoryTest(absltest.TestCase):

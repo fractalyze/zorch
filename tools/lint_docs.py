@@ -1,15 +1,10 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Mechanical documentation checks, run as a pre-commit hook.
 
-Prose can only be read, so a rule written as prose drifts silently; a rule that
-runs fails the commit that breaks it. Everything decidable from the tree lives
-here. What remains in `.claude/skills/lint-zorch-docs` is the part that needs
-judgment — whether a page answers *why this shape* — and it stays short because
-prose is the part that rots.
-
-The tree is never described in prose here either. Subsystems, module paths, and
-symbols are read from the filesystem, so a new block is covered the moment its
-directory lands.
+A rule written as prose drifts silently; a rule that runs fails the commit that
+breaks it. Everything decidable from the tree lives here, and the tree is read
+rather than described, so a new block is covered the moment its directory lands.
+`.claude/skills/lint-zorch-docs` keeps only what needs judgment.
 """
 
 from __future__ import annotations
@@ -18,25 +13,22 @@ import ast
 import builtins
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Support trees ship no design block of their own: `testing`/`testkit` are test
-# scaffolding, `utils` is leaf helpers documented where they are used.
+# Test scaffolding and leaf helpers ship no design block of their own.
 SUPPORT_DIRS = frozenset({"testing", "testkit", "utils", "__pycache__"})
 
-# Every page whose claims this file governs. Skill files are in scope because a
-# lint written as prose rots exactly like the docs it polices — the check that
-# found `commit/jagged`, a path that never existed, had to read the skill.
+# Skill files are in scope because a lint written as prose rots exactly like the
+# docs it polices: `commit/jagged` was a path one of them invented.
 DOC_GLOBS = ("docs/**/*.md", "README.md", "CLAUDE.md", ".claude/skills/**/*.md")
 
 
 @dataclass(frozen=True)
 class Finding:
-    """One failure, addressed to whoever has to fix it."""
-
     check: str
     path: Path
     message: str
@@ -66,7 +58,7 @@ def _module_has_docstring(path: Path) -> bool:
 
 
 def _is_design_module(path: Path) -> bool:
-    """A module that ships a block, as opposed to scaffolding or a benchmark."""
+    """A module shipping a block, as opposed to scaffolding or a benchmark."""
     name = path.name
     if name == "__init__.py" or name.endswith("_test.py") or name.startswith("bench_"):
         return False
@@ -89,48 +81,41 @@ def _subsystems() -> list[Path]:
     ]
 
 
-def check_subsystem_doc_parity() -> list[Finding]:
-    """Every subsystem has a page, and the hub links it.
+def check_subsystem_doc_parity() -> Iterator[Finding]:
+    """Every subsystem has a page the hub links.
 
-    The doc name is derived, not listed: `logup_gkr` -> `logup-gkr.md`, resolved
-    anywhere under `docs/` so the layout can move without touching this file.
+    The name is derived, not listed (`logup_gkr` -> `logup-gkr.md`) and resolved
+    anywhere under `docs/`, so the layout moves without touching this file.
     """
-    findings: list[Finding] = []
     hub = REPO / "docs" / "README.md"
     hub_text = hub.read_text(encoding="utf-8")
     for subsystem in _subsystems():
         stem = subsystem.name.replace("_", "-")
         pages = sorted(REPO.glob(f"docs/**/{stem}.md"))
         if not pages:
-            findings.append(
-                Finding(
-                    "subsystem-doc-parity",
-                    subsystem,
-                    f"ships a design block but has no docs/**/{stem}.md",
-                )
+            yield Finding(
+                "subsystem-doc-parity",
+                subsystem,
+                f"ships a design block but has no docs/**/{stem}.md",
             )
             continue
         for page in pages:
             link = page.relative_to(REPO / "docs").as_posix()
             if link not in hub_text:
-                findings.append(
-                    Finding(
-                        "subsystem-doc-parity",
-                        hub,
-                        f"hub table has no row linking {link}",
-                    )
+                yield Finding(
+                    "subsystem-doc-parity",
+                    hub,
+                    f"hub table has no row linking {link}",
                 )
-    return findings
 
 
 # ---------------------------------------------------------------------------
 # module-doc-reachability
 # ---------------------------------------------------------------------------
 
-# A module whose concept has no page yet. The reason is required: an entry
-# states what a reader loses, so the list reads as a debt list rather than a
-# mute suppression. An entry naming a module that no longer exists fails, so
-# the list cannot outlive what it excuses.
+# Modules whose concept has no page yet. The reason states what a reader loses,
+# making this a debt list rather than a mute suppression; an entry that stops
+# applying fails, so the list cannot outlive what it excuses.
 UNREACHED_MODULES = {
     "zorch/constraint_eval.py": (
         "constraint evaluation has no page; its concepts (constraint folding, "
@@ -143,14 +128,12 @@ UNREACHED_MODULES = {
 }
 
 
-def check_module_doc_reachability() -> list[Finding]:
+def check_module_doc_reachability() -> Iterator[Finding]:
     """Every top-level module is cited by path from some page.
 
-    A module a page never names is a module a reader cannot navigate to from the
-    docs. Citing the path (rather than a symbol) is what keeps the pointer
-    checkable: a rename breaks the citation loudly.
+    A module no page names is one a reader cannot navigate to. Citing the path
+    rather than a symbol is what makes a rename break the pointer loudly.
     """
-    findings: list[Finding] = []
     prose = "\n".join(p.read_text(encoding="utf-8") for p in _docs())
     live = {
         p.relative_to(REPO).as_posix()
@@ -162,33 +145,26 @@ def check_module_doc_reachability() -> list[Finding]:
     for rel in sorted(live):
         if rel in prose or rel in UNREACHED_MODULES:
             continue
-        findings.append(
-            Finding(
-                "module-doc-reachability",
-                REPO / rel,
-                "no page cites this path; add the citation or list it in "
-                "UNREACHED_MODULES with what a reader loses",
-            )
+        yield Finding(
+            "module-doc-reachability",
+            REPO / rel,
+            "no page cites this path; add the citation or list it in "
+            "UNREACHED_MODULES with what a reader loses",
         )
     for rel in sorted(UNREACHED_MODULES):
         if rel not in live:
-            findings.append(
-                Finding(
-                    "module-doc-reachability",
-                    REPO / "tools" / "lint_docs.py",
-                    f"UNREACHED_MODULES lists {rel}, which no longer exists",
-                )
+            yield Finding(
+                "module-doc-reachability",
+                REPO / "tools" / "lint_docs.py",
+                f"UNREACHED_MODULES lists {rel}, which no longer exists",
             )
         elif rel in prose:
-            findings.append(
-                Finding(
-                    "module-doc-reachability",
-                    REPO / "tools" / "lint_docs.py",
-                    f"UNREACHED_MODULES lists {rel}, but a page now cites it — "
-                    "drop the entry",
-                )
+            yield Finding(
+                "module-doc-reachability",
+                REPO / "tools" / "lint_docs.py",
+                f"UNREACHED_MODULES lists {rel}, but a page now cites it — "
+                "drop the entry",
             )
-    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -198,7 +174,7 @@ def check_module_doc_reachability() -> list[Finding]:
 
 @dataclass(frozen=True)
 class CanonicalClaim:
-    """A claim that must be stated in exactly one place and linked elsewhere."""
+    """A claim stated in exactly one place and linked from everywhere else."""
 
     name: str
     pattern: re.Pattern[str]
@@ -206,10 +182,9 @@ class CanonicalClaim:
     anchor: str
 
 
-# Restating a claim rather than linking it is how two copies drift into
-# contradiction: the fusion unit claim stood as "one fused kernel" in CLAUDE.md
-# and README.md while the measured page said a round is two kernels, and the
-# prose lint pinned the two wrong copies to each other.
+# Restating rather than linking is how copies drift into contradiction: the
+# fusion unit claim read "one fused kernel" in CLAUDE.md and README.md while the
+# measured page recorded two, and the prose lint pinned the wrong pair together.
 CANONICAL_CLAIMS = (
     CanonicalClaim(
         name="field-dtype-gotchas",
@@ -235,26 +210,21 @@ CANONICAL_CLAIMS = (
 )
 
 
-def check_canonical_claims() -> list[Finding]:
-    findings: list[Finding] = []
+def check_canonical_claims() -> Iterator[Finding]:
     for claim in CANONICAL_CLAIMS:
         home = REPO / claim.home
         if not home.exists():
-            findings.append(
-                Finding(
-                    "canonical-claim",
-                    REPO / "tools" / "lint_docs.py",
-                    f"{claim.name} names a home that does not exist: {claim.home}",
-                )
+            yield Finding(
+                "canonical-claim",
+                REPO / "tools" / "lint_docs.py",
+                f"{claim.name} names a home that does not exist: {claim.home}",
             )
             continue
         if not claim.pattern.search(home.read_text(encoding="utf-8")):
-            findings.append(
-                Finding(
-                    "canonical-claim",
-                    home,
-                    f"is the home of {claim.name} but no longer states it",
-                )
+            yield Finding(
+                "canonical-claim",
+                home,
+                f"is the home of {claim.name} but no longer states it",
             )
         for doc in _docs():
             if doc == home:
@@ -265,24 +235,19 @@ def check_canonical_claims() -> list[Finding]:
                     continue
                 if claim.anchor in text:
                     continue
-                findings.append(
-                    Finding(
-                        "canonical-claim",
-                        doc,
-                        f"restates {claim.name}; link {claim.anchor} instead",
-                        lineno,
-                    )
+                yield Finding(
+                    "canonical-claim",
+                    doc,
+                    f"restates {claim.name}; link {claim.anchor} instead",
+                    lineno,
                 )
-    return findings
 
 
 # ---------------------------------------------------------------------------
 # dangling-reference
 # ---------------------------------------------------------------------------
 
-# Symbols owned by another project. Their spelling is that project's to change,
-# so this tree cannot resolve them; docs cite them by concept, and these are the
-# few whose literal spelling is load-bearing prose.
+# Owned by another project, so this tree cannot resolve their spelling.
 EXTERNAL_PREFIXES = (
     "jnp.",
     "lax.",
@@ -312,10 +277,9 @@ EXTERNAL_NAMES = frozenset(
     }
 )
 
-# A backtick that is deliberately not a citation: a name shown as an example of
-# what not to write, or a path in another project's tree. Keyed by page so an
-# alibi cannot travel, and required to carry its reason. An entry whose token
-# has left the page fails, so the list cannot outlive what it excuses.
+# Backticks that are deliberately not citations: a name shown as an example of
+# what not to write, or a path in another project. Keyed by page so an alibi
+# cannot travel, and expiring once the page stops citing the token.
 FOREIGN_CITATIONS = {
     ("docs/reference/conventions.md", "_sp1_input_hash"): (
         "an invented name, shown as the downstream-leaking spelling to avoid"
@@ -354,13 +318,11 @@ SOURCE_GLOBS = (
 
 
 def _source_words() -> set[str]:
-    """Every identifier-shaped token the source tree contains.
+    """Every identifier-shaped token in the source tree.
 
-    Deliberately coarser than a definition table: a composite marker name lives
-    in a string literal, and a symbol adapted from another project is often
-    named in a comment before it is defined. What this still catches is the
-    failure that matters — a page describing a symbol that appears nowhere at
-    all.
+    Coarser than a definition table on purpose — a composite marker name lives in
+    a string literal — but it still catches the failure that matters: a page
+    describing a symbol that appears nowhere at all.
     """
     words = set(dir(builtins))
     for pattern in SOURCE_GLOBS:
@@ -399,10 +361,9 @@ def _candidate(token: str) -> str | None:
 def _resolves_as_path(doc: Path, token: str) -> bool:
     """A citation reads from where it is written, or from a tree root.
 
-    Pages cite siblings relatively (`development.md` from the hub) and source
-    subsystems by their package-relative path (`hash/sha256.py`), so both
-    origins count. A bare filename carrying no directory is a shorthand for the
-    one file of that name, which still fails loudly once the file is renamed.
+    Pages cite siblings relatively and source subsystems by package-relative
+    path, so both origins count; a bare filename is shorthand for the one file of
+    that name, which still fails once that file is renamed.
     """
     bases = (doc.parent, REPO, REPO / "zorch", REPO / "docs")
     if any((base / token).exists() for base in bases):
@@ -410,14 +371,12 @@ def _resolves_as_path(doc: Path, token: str) -> bool:
     return "/" not in token and any(REPO.glob(f"**/{token}"))
 
 
-def check_link_targets() -> list[Finding]:
-    """Every relative markdown link resolves from the page that carries it.
+def check_link_targets() -> Iterator[Finding]:
+    """Every relative markdown link resolves from the page carrying it.
 
     A moved page leaves the label reading correctly while the target points at
-    nothing, which is why the hub survived a docs reorganization with live text
-    and dead links.
+    nothing — live text over dead links.
     """
-    findings: list[Finding] = []
     for doc in _docs():
         for lineno, line in enumerate(
             doc.read_text(encoding="utf-8").splitlines(), start=1
@@ -428,25 +387,20 @@ def check_link_targets() -> list[Finding]:
                 path = target.split("#", 1)[0]
                 if not path or (doc.parent / path).exists():
                     continue
-                findings.append(
-                    Finding(
-                        "link-target",
-                        doc,
-                        f"links {target}, which does not resolve from this page",
-                        lineno,
-                    )
+                yield Finding(
+                    "link-target",
+                    doc,
+                    f"links {target}, which does not resolve from this page",
+                    lineno,
                 )
-    return findings
 
 
-def check_dangling_references() -> list[Finding]:
+def check_dangling_references() -> Iterator[Finding]:
     """Every path and symbol a page cites resolves in the tree.
 
-    This is the check that catches a page describing code that was renamed or
-    never existed — the failure prose review misses because a plausible symbol
-    reads exactly like a real one.
+    Catches a page describing code that was renamed or never existed — what prose
+    review misses, because a plausible symbol reads exactly like a real one.
     """
-    findings: list[Finding] = []
     words = _source_words()
     cited_foreign = set(FOREIGN_CITATIONS)
     seen_foreign: set[tuple[str, str]] = set()
@@ -467,33 +421,26 @@ def check_dangling_references() -> list[Finding]:
                 if token.endswith("/") or _PATH_LIKE.match(token):
                     if _resolves_as_path(doc, token):
                         continue
-                    findings.append(
-                        Finding(
-                            "dangling-reference",
-                            doc,
-                            f"cites `{raw}`, which is not in the tree",
-                            lineno,
-                        )
+                    yield Finding(
+                        "dangling-reference",
+                        doc,
+                        f"cites `{raw}`, which is not in the tree",
+                        lineno,
                     )
                 elif token not in words:
-                    findings.append(
-                        Finding(
-                            "dangling-reference",
-                            doc,
-                            f"cites `{raw}`, which this tree names nowhere",
-                            lineno,
-                        )
+                    yield Finding(
+                        "dangling-reference",
+                        doc,
+                        f"cites `{raw}`, which this tree names nowhere",
+                        lineno,
                     )
     for key in sorted(cited_foreign - seen_foreign):
-        findings.append(
-            Finding(
-                "dangling-reference",
-                REPO / "tools" / "lint_docs.py",
-                f"FOREIGN_CITATIONS excuses `{key[1]}` in {key[0]}, which no "
-                "longer cites it — drop the entry",
-            )
+        yield Finding(
+            "dangling-reference",
+            REPO / "tools" / "lint_docs.py",
+            f"FOREIGN_CITATIONS excuses `{key[1]}` in {key[0]}, which no "
+            "longer cites it — drop the entry",
         )
-    return findings
 
 
 CHECKS = (

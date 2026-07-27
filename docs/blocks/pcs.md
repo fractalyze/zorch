@@ -32,61 +32,55 @@ them during the opening — a claim carrying them would be unconstructible.
 
 ## Why the shape
 
-**A committer plus an opening stage, not one `Pcs`.** `commit` / `open`
-are the prover's; `verify` is the verifier's. They are split for the same two
-reasons the [sumcheck](sumcheck.md) block splits prover and verifier: `open` is an
-interactive sub-protocol threading the [Fiat-Shamir transcript](hash.md), and the
-two sides hold **asymmetric keys** — a KZG prover key is O(degree) (the SRS
-powers) while its verifier key is three fixed group elements. A deployed verifier
-must never carry the prover's key, so the boundary is a type. A static commitment
-primitive like the Merkle [`commit`](commit.md) has neither property and stays a
-single unified building block; the split lives in the PCS layer that *uses* it.
+**A committer plus an opening stage, not one `Pcs`.** `commit` / `open` are the
+prover's, `verify` the verifier's, split for the two reasons
+[sumcheck](sumcheck.md) splits its roles: `open` is an interactive sub-protocol
+threading the [Fiat-Shamir transcript](hash.md), and the sides hold **asymmetric
+keys** — a KZG prover key is O(degree), its verifier key three group elements. A
+deployed verifier must never carry the prover's, so the boundary is a type. The
+Merkle [`commit`](commit.md) has neither property and stays unified; the split
+belongs to the PCS layer *using* it.
 
-**Representation is the scheme's business.** The seam takes polynomials in whatever
-form the scheme needs — KZG the coefficient basis (a powers-of-τ MSM), the FRI
-family evaluations over a domain. No `PolynomialSpace` and no AIR/quotient
-commitment index lives on the seam; those are FRI-implementation or consumer
-concerns, kept out so no scheme's shape ossifies into the interface. A scheme is
-named only on its instance (`kzg`, `fri`, `basefold`), never on the seam — the
-agnostic non-negotiable, the same way `poseidon2` names a `Permutation` instance.
+**Representation is the scheme's business.** The seam takes polynomials in
+whatever form the scheme needs — KZG the coefficient basis, the FRI family
+evaluations over a domain. No `PolynomialSpace` and no AIR/quotient index lives
+on it, so no scheme's shape ossifies into the interface. A scheme is named on its
+instance, never on the seam.
 
 ### kzg (pairing-based)
 
-`commit` is `C = Σ aᵢ·[τⁱ]₁`, one `lax.msm`; `open` at `z` is the same MSM over the
-quotient `(f(x) − f(z))/(x − z)`, with `f(z)` the division remainder. There are no
-fold rounds — KZG's single-point opening is non-interactive — so the transcript
-only feeds a batching challenge when more than one opening is bundled. The SRS is
-split by `setup` into the O(degree) `KzgProvingKey` and the O(1) `KzgVerifierKey`,
-both from one `τ`; that shared `τ` is the soundness invariant binding the two.
+`commit` is `C = Σ aᵢ·[τⁱ]₁`, one `lax.msm`; `open` at `z` is the same MSM over
+the quotient `(f(x) − f(z))/(x − z)`, with `f(z)` the remainder. No fold rounds —
+the single-point opening is non-interactive — so the transcript only feeds a
+batching challenge when openings are bundled. `setup` splits the SRS into the
+O(degree) `KzgProvingKey` and O(1) `KzgVerifierKey` from one `τ`, and that shared
+`τ` is the soundness invariant binding them.
 
 ### fri (transparent)
 
 The DEEP quotient trick turns a point opening into a low-degree test: to open `f`
 at `z` with claim `v`, show `g(x) = (f(x) − v)/(x − z)` is low degree, which holds
 exactly when `v = f(z)`. `g` is never committed — the verifier rebuilds its
-codeword from the already-committed `f` at queried points — so `open` Merkle-commits
-only the folded layers and threads the transcript through the fold challenges.
-Structurally the opposite of KZG on the same seam: interactive, Merkle-backed
-([commit](commit.md) + [coding](coding.md)'s RS encode and FRI fold), no trusted
-setup, all field/NTT arithmetic.
+codeword from the committed `f` at queried points — so `open` Merkle-commits only
+the folded layers. Structurally the opposite of KZG on one seam: interactive,
+Merkle-backed ([commit](commit.md) + [coding](coding.md)), no trusted setup, all
+field and NTT arithmetic.
 
 ### basefold (transparent, multilinear)
 
-The multilinear-evaluation PCS. `commit` is the RS low-degree extension of each
-column followed by a Merkle commit of the codeword rows. `open` opens the matrix
-at one shared point `z ∈ F^{log S}` — returning the `K` per-column evals — by
-RLC-batching the columns into a single codeword and running an interleaved sumcheck
-that folds the MLE and the codeword by the same per-round challenge, then a
-natural-order FRI query phase whose layer 0 is the RLC of the opened original rows
-(reusing [`fri`](#fri-transparent)'s machinery); `verify` is the dual. Fidelity is
-mathematical (prover↔verifier round-trip); the query phase carries no proof-of-work
-grind yet — a known soundness gap shared with [`fri`](#fri-transparent).
-The one structural difference from `kzg`/`fri` is that BaseFold is a **matrix
-commitment** — the columns of an MLE `[2^v, w]` share one RS domain and the Merkle
-leaves are codeword *rows* spanning every column, so the whole batch binds under a
-**single** root, where `kzg`/`fri` return one root per polynomial. The seam permits
-this because `commitment` is scheme-defined; the input convention stays uniform
-(`commit` takes a `Sequence` of 1D column MLEs, like the other instances).
+`commit` is the RS low-degree extension of each column then a Merkle commit of
+the codeword rows. `open` opens the matrix at one shared `z ∈ F^{log S}` by
+RLC-batching the columns into a single codeword, running an interleaved sumcheck
+that folds MLE and codeword by the same challenge, then a natural-order FRI query
+phase whose layer 0 is the RLC of the opened rows; `verify` is the dual. The
+query phase carries no proof-of-work grind yet — a soundness gap shared with
+[`fri`](#fri-transparent).
+
+Structurally it differs from `kzg`/`fri` by being a **matrix commitment**: the
+columns of an MLE `[2^v, w]` share one RS domain and the Merkle leaves are
+codeword *rows*, so the whole batch binds under a **single** root where the
+others return one per polynomial. The seam permits this because `commitment` is
+scheme-defined, and the input convention stays uniform.
 
 ## Instance anatomy
 

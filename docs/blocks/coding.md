@@ -82,35 +82,26 @@ binary round the same additive way.
 
 ## Design rules
 
-- **A code is an object, not a call.** `ReedSolomon` is a class, not a function,
-  because the seam is polymorphic and introspectable: a consumer accepts any
-  `LinearCode`, reads `block_len` / `message_len` / `dtype` (to size a Merkle
-  tree, to reason about rate and soundness), and calls `.encode()` without
-  knowing which code it holds. A bare function carries none of those attributes
-  and satisfies no `isinstance(x, LinearCode)`. Construction is also where the
-  code's parameters are fixed once and the coset ramp is precomputed. This
-  mirrors `Poseidon2` (a configured operator), not a free function.
+- **A code is an object, not a call.** `ReedSolomon` is a class because the seam
+  is polymorphic and introspectable: a consumer accepts any `LinearCode`, reads
+  `block_len` / `message_len` / `dtype` to size a Merkle tree or reason about
+  rate, and calls `.encode()` without knowing which code it holds. A bare
+  function carries none of that. Construction is also where parameters are fixed
+  once and the coset ramp precomputed — a configured operator, like `Poseidon2`.
 
-- **Not a pytree.** `ReedSolomon` holds an FRX array (`_coset_powers`) but is a
-  configured *operator*, not threaded carry state — so, like `Poseidon2`, it is
-  not registered as a pytree. The "register state containers as pytrees" rule is
-  about immutably-threaded state (the `Transcript`), not operators constructed
-  host-side and invoked. `vmap(rs.encode)` captures the array as a closure
-  constant and needs no registration; register only if a consumer ever threads
-  an instance through a transform.
+- **Not a pytree.** It holds an FRX array (`_coset_powers`) but is an operator
+  rather than threaded carry state, so like `Poseidon2` it is unregistered.
+  `vmap(rs.encode)` captures the array as a closure constant; register only if a
+  consumer ever threads an instance through a transform.
 
-- **Coset shift is the caller's, not the code's.** `coset_shift` is a field
-  element passed in, defaulting to `None` (the plain two-adic subgroup). The
-  code keeps no per-field generator table: `zk_dtypes.pfinfo` exposes
-  two-adicity but no multiplicative generator, and it is the scheme (FRI/STARK)
-  that knows which coset it needs disjoint from the trace domain. Domain policy
-  lives with the consumer that has the context to choose it — the code exposes
-  `coset_shift` and `domain()` so the scheme can thread the same shift through
-  its folds.
+- **Coset shift is the caller's.** `coset_shift` is passed in, defaulting to the
+  plain two-adic subgroup. The code keeps no per-field generator table —
+  `zk_dtypes.pfinfo` exposes two-adicity but no multiplicative generator — and it
+  is the scheme that knows which coset it needs disjoint from the trace domain.
+  Domain policy lives with the consumer that has the context to choose it.
 
 - **`encode` acts on the last axis.** Leading batch axes ride through untouched,
-  so many polynomials — or a matrix of rows — encode in one call. This is part
-  of the seam contract, and it keeps one `encode` lowering to one fused
+  so many polynomials encode in one call, and one `encode` lowers to one fused
   transform.
 
 ## Gotcha

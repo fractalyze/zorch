@@ -79,28 +79,19 @@ stays the one shared definition — and the jagged verifier replays through the
 same agnostic `zorch.verify` scan via `sumcheck.verifier.CoeffsSumcheckRound`.
 
 A jagged layer is a *capacity* layer: the four MLEs sit in a static
-`width >= sum(row_counts)` buffer (dead-zero tail) and the counts ride as
-one traced i32 vector, so a consumer whose per-segment counts vary per
-input — while the total stays under one shared bound — reuses every compile
-across inputs; the zero-slack layer is just the tight case. Transitions
-derive their gathers in-trace (the transition twin of the round side's
-schedule derivation, byte-identical to the host-built fold), rounds are
-caps-mandatory with the schedule as traced operands (any same-caps layer
-shares the zone executable), and the output extract gates on the static
-`width == num_batches` dual of the all-ones floor. What a host guard cannot
-read it cannot check: truncation-safety and the virtual-row-space fit are
-the consumer's capacity-class obligations, discharged against class bounds
-that dominate every admitted input.
+`width >= sum(row_counts)` buffer with a dead-zero tail and the counts ride as
+one traced i32 vector, so a consumer whose per-segment counts vary per input —
+total staying under one shared bound — reuses every compile across inputs, and
+the zero-slack layer is just the tight case. Transitions derive their gathers
+in-trace, byte-identical to the host-built fold; rounds are caps-mandatory with
+the schedule as traced operands, so any same-caps layer shares the zone
+executable. What a host guard cannot read it cannot check: truncation-safety and
+the virtual-row-space fit are the consumer's capacity-class obligations,
+discharged against class bounds dominating every admitted input.
 
-**One stage seam, two layouts.** `stage.py` and `jagged_stage.py` reduce the
-same `LogUpOutputClaim` to the same `InputLayerClaim`, so a consumer chooses a
-layout at construction and nothing downstream moves; only the witness and the
-layer proofs are layout-shaped. The jagged witness carries the input layer plus
-the per-transition fold schedule because that follows the row counts, while the
-round width caps configure the prover role once per capacity class. The stage
-owns what the chain owns: it builds the pyramid, hands each layer to its round
-and drops it, and scopes one `LayerBuffers` to the prove, so the cap-wide planes
-die with it rather than pinning a card.
+The stage owns what a chain would: it builds the pyramid, hands each layer to its
+round and drops it, scoping one `LayerBuffers` to the prove so the cap-wide
+planes die with it rather than pinning a card.
 
 ## Fusion by construction
 

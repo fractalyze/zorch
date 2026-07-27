@@ -70,21 +70,16 @@ single-dispatching the whole loop is the real win, and that is
 
 ## Status / ratification
 
-The SHA-256 Fiat-Shamir family is **device-first**: `Sha256FieldTranscript` is the
-prover path (device-resident, scan-threadable), and the host `ByteHashTranscript`
-is a **shrinking** surface — the correctness oracle
-(`test_device_substrate_matches_host` pins the device marker to stdlib `hashlib`),
-the verifier-side replay, and flock's legacy host challenger. That host surface is
-being **retired incrementally** as consumers move on-device: flock's prover
-challenger goes first (flock-zorch#9), the verifier later; `HostSha256` / `hashlib`
-stays at least as the correctness oracle. The grind is `grind`/`check_witness`
-with `DuplexTranscript`'s exact semantics, running the shared `zorch.grind`
-windowed device search — there is no host path anywhere in the field
-transcript.
+The SHA-256 family is **device-first**: `Sha256FieldTranscript` is the prover
+path, and the host `ByteHashTranscript` is a **shrinking** surface — correctness
+oracle (`test_device_substrate_matches_host` pins the device marker to stdlib
+`hashlib`), verifier-side replay, and flock's legacy challenger — retired
+incrementally as consumers move on-device. Its grind runs the shared
+`zorch.grind` windowed device search with `DuplexTranscript`'s exact semantics,
+with no host path anywhere in the field transcript.
 
-Admitting this SHA-256 family at all widens zorch's remit beyond "algebraic,
-device-resident Fiat-Shamir"; that scope decision is **flagged for ratification on
-epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).** If
-declined, `byte_transcript.py` + `hash/byte_hash.py` + `hash/sha256.py` +
-`sha256_field_transcript.py` move to the consumer with ~no rework (no
-zorch-internal dependencies beyond each other).
+Admitting this family widens zorch's remit beyond algebraic device-resident
+Fiat-Shamir; that scope decision is **flagged for ratification on epic
+[fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1)**. If declined,
+the four modules move to the consumer with no rework — they depend on nothing in
+zorch beyond each other.

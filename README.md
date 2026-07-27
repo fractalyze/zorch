@@ -73,144 +73,15 @@ The two units differ in kind, not size. A **round** is *directional and
 repeated*: one step of a homogeneous recurrence, driven in a loop. A **stage**
 is *paired and whole*: a claim reduction with a prover role and a verifier role
 that can be deployed separately. A whole sumcheck stage may be cheaper than one
-GKR round — what separates them is repetition versus pairing, so the question
-"is this a round or a stage?" is answered by shape, never by scale.
-
-### Round: repeat one recurrence
-
-A **round** is one step of a homogeneous recurrence, such as eliminating one
-sumcheck variable, folding one polynomial dimension, or reducing one GKR layer.
-The two roles have different shapes, so they are separate protocols:
+GKR round — repetition versus pairing decides, never scale.
 
 ```text
-ProverRound:    (carry, transcript)          → (carry, transcript, message)
-VerifierRound:  (carry, transcript, message) → (carry, transcript, ok)
+ProverRound:    (carry, transcript)          -> (carry, transcript, message)
+VerifierRound:  (carry, transcript, message) -> (carry, transcript, ok)
+
+ProverStage.prove(claim, witness, transcript)      -> ProveResult
+VerifierStage.verify(claim, reduction_proof, ...)  -> VerifyResult
 ```
-
-Only the message crosses between the roles, so only the message gets a position
-of its own. Anything a round derives rather than receives — a sumcheck round's
-challenge, a fold challenge — belongs in the carry, squeezed from the transcript
-by both sides and never sent. `prove_rounds()` and `verify_rounds()` drive any
-recurrence whose steps agree on what the carry and message mean.
-
-### Stage: reduce one claim
-
-A **stage** is a paired proof-reduction contract with separately deployable
-roles:
-
-```python
-ProverStage.prove(claim, witness, transcript)
-    -> ProveResult[reduced_claim, reduction_proof]
-VerifierStage.verify(claim, reduction_proof, transcript)
-    -> VerifyResult[reduced_claim]
-```
-
-The two roles are structural protocols, so an adapter conforms by shape without
-inheriting and deployed code depends only on the role it runs — a verifier never
-constructs or retains a proving key.
-
-The claim is the public assertion entering the stage; the witness is the
-prover's private evidence. Both roles derive the same reduced claim, and the
-reduction proof establishes the source claim conditional on it:
-
-```text
-reduced claim is true  =>  source claim is true
-```
-
-A later stage proves the reduced claim; a terminal stage reduces to
-`TrivialClaim` and closes the argument. `SumcheckProver` and `SumcheckVerifier`
-are the worked pair — they reduce a sum claim to an evaluation claim through
-internal per-variable rounds.
-
-### Example: a composite proof-system stage
-
-`SpartanProver` and `SpartanVerifier` are the two roles of a composite stage.
-Their execution order is linear, but their dataflow is not a simple
-`reduced claim → next claim` chain. The terminal opening claim
-depends on the root claim, commitment, outer reduced claim, batching challenge,
-and inner reduced claim. Prover-only PCS data follows a private skip edge.
-
-```mermaid
-flowchart LR
-    input["SpartanClaim<br/>+ SpartanWitness (P)"]
-    commit["commit witness"]
-    outer["OuterProver / OuterVerifier<br/>zerocheck<br/>sumcheck roles → Round × n"]
-    batch["batch_claims()<br/>named transcript operation"]
-    inner["InnerProver / InnerVerifier<br/>lincheck<br/>sumcheck roles → Round × m"]
-    opening["WitnessOpenProver / WitnessOpenVerifier"]
-
-    input --> commit
-    input --> outer
-    commit -->|absorbed commitment| outer
-    outer -->|row-evaluation claim| batch
-    input -->|instance + assignment P| inner
-    outer -->|row-evaluation claim| inner
-    batch --> inner
-    commit -->|commitment + PCS data P| opening
-    input -->|instance + public inputs| opening
-    outer -->|row-evaluation claim| opening
-    batch -->|batched value| opening
-    inner -->|column-evaluation claim| opening
-```
-
-Each composite role writes this dataflow with ordinary Python, like a PyTorch
-module with a custom `forward`. Prover and verifier construct the same child
-claims; only the prover supplies witnesses:
-
-```python
-# prove()
-outer_claim = ZerocheckClaim(instance.s_x)
-outer = self.outer.prove(
-    outer_claim,
-    ZerocheckWitness(az, bz, cz),
-    transcript,
-)
-batch, transcript = batch_claims(outer.reduced_claim.values, outer.transcript)
-inner_claim = LincheckClaim(instance, outer.reduced_claim, batch)
-inner = self.inner.prove(
-    inner_claim,
-    LincheckWitness(assignment),
-    transcript,
-)
-opening_claim = witness_opening_claim(
-    commitment,
-    instance,
-    root_claim.public_inputs,
-    outer.reduced_claim,
-    batch,
-    inner.reduced_claim,
-)
-opening = self.witness_open.prove(
-    opening_claim,
-    WitnessOpeningWitness(prover_data),
-    inner.transcript,
-)
-
-# verify()
-outer_claim = ZerocheckClaim(instance.s_x)
-outer = self.outer.verify(outer_claim, proof.outer, transcript)
-batch, transcript = batch_claims(outer.reduced_claim.values, outer.transcript)
-inner_claim = LincheckClaim(instance, outer.reduced_claim, batch)
-inner = self.inner.verify(inner_claim, proof.inner, transcript)
-opening_claim = witness_opening_claim(
-    proof.commitment,
-    instance,
-    root_claim.public_inputs,
-    outer.reduced_claim,
-    batch,
-    inner.reduced_claim,
-)
-opening = self.witness_open.verify(
-    opening_claim,
-    proof.witness_open,
-    inner.transcript,
-)
-```
-
-The opening claim is derived from almost the entire preceding pipeline on both
-sides. The prover additionally supplies the PCS opening witness. This explicit
-parent orchestration preserves fan-out and skip-level dependencies without a
-universal context object or adapter stage.
 
 | | **`Round`** | **`Stage`** | **Named protocol operation** |
 | --- | --- | --- | --- |
@@ -219,33 +90,13 @@ universal context object or adapter stage.
 | **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
 | **Composed by** | a recurrence driver inside a stage role | an explicit parent role implementation | the parent whose transcript and soundness accounting require it |
 
-There is deliberately no separate “bridge” component. A domain separator,
-grind, framed observation, or sampled batching challenge does not prove or
-verify an independently reusable claim, even when it changes soundness. It is a
-named function called at the same point by the owning prover and verifier, with
-its preconditions and security contribution documented there.
+A composite stage writes its own dataflow in ordinary Python, like a PyTorch
+module with a custom `forward`; there is no chain driver and no bridge.
+`SpartanProver` / `SpartanVerifier` are the reference pair, and a deployed
+`SpartanVerifier` is constructible with only a PCS verification key.
 
-### Where the classic pieces fit
-
-- **Fiat-Shamir, `Polynomial`, folds, codes, hashing, and commitments** are
-  reusable materials used by rounds and stages.
-- **Sumcheck** is a `Stage` because it is a paired reduction; its
-  per-variable steps are rounds.
-- **Univariate-skip sumcheck** is also an ordinary stage, but exports a distinct
-  prism-point reduction. A parent expecting an ordinary multilinear evaluation
-  point cannot accidentally substitute it.
-- **Zerocheck and lincheck** are stages that configure sumcheck and add their
-  protocol-specific setup, terminal checks, and exported claims.
-- **LogUp-GKR** reduces a public output-and-layer-count claim to an input-layer
-  evaluation claim for a consumer's PCS opening.
-- **A PCS is a committer plus a terminal stage.** `commit` runs before any
-  claim exists, so it reduces nothing; the opening is a claim reduction and
-  every PCS implements the stage roles for it. Keeping the halves apart is what
-  keeps an O(degree) proving key out of a deployed verifier.
-- **A full proof system** can expose composite prover and verifier roles.
-  `SpartanVerifier` is constructible with only a PCS verification key.
-
-The full contracts, ownership rules, and reuse guidance live in
+Contracts, ownership rules, the round-vs-stage-vs-committer decision table, and
+reuse guidance:
 [`docs/composition/stage-composition.md`](docs/composition/stage-composition.md).
 
 ## Development

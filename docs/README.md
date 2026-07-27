@@ -52,32 +52,28 @@ ______________________________________________________________________
 ## Fusion north star
 
 A `Round` must lower to **one replayable GPU unit, by construction** — never by a
-per-primitive compiler pattern-match. The realistic target is a **single CUDA
-graph** that captures the round's full launch sequence (`round_poly` → absorb →
-squeeze → fold), **not necessarily a single fused kernel**: an XLA command buffer
-replays the captured graph with no per-launch overhead, even if it is internally
-several kernels. "One fused kernel" is the ideal limit of the same idea, not a
-separate goal.
+per-primitive compiler pattern-match. The target is a **single CUDA graph**
+capturing the round's launch sequence (`round_poly` → absorb → squeeze → fold),
+**not necessarily a single fused kernel**: a command buffer replays the captured
+graph with no per-launch overhead even when it is internally several kernels.
 
-Two enablers make a round capturable: (1) the **whole round body in one traced
-region** with a **device-side** transcript (so `observe`/`sample` are device
-ops, not host steps that break the capture), and (2) a `stablehlo.composite`
-marker the emitter lowers as one unit. Enabler (1) is in place
-(`DuplexTranscript`). Until (2) lands — the marker + generic XLA emitter,
-Phase 3 — round bodies are written **fusion-ready**: element-wise field ops
-plus the one inherent `Σ`, no gratuitous `reduce`/`gather`, so they drop into
-that path unchanged. See [`sumcheck.md`](blocks/sumcheck.md).
+Two enablers make a round capturable: the **whole body in one traced region**
+with a **device-side** transcript, so `observe`/`sample` are device ops rather
+than host steps that break the capture; and a `stablehlo.composite` marker the
+emitter lowers as one unit. The first is in place (`DuplexTranscript`). Until the
+second lands, bodies are written **fusion-ready** — element-wise field ops plus
+the one inherent `Σ`, no gratuitous `reduce`/`gather` — so they drop into that
+path unchanged.
 
-**Measured (Fractalyze XLA GPU).** The bodies already lower as intended: `prover.SumcheckRound._round_poly`
-compiles to a single reduction (`kInput`) kernel — the integrand fuses into the inherent
-`Σ`, no marker needed — and `_fold` to a single element-wise (`kLoop`) kernel. A full round
-(`_round_poly` + `_fold`) is **two** kernels (its message and folded state are disjoint
-outputs), and with a host-side transcript it is not one traced region at all. So "one round
-= one unit" means **one replayed CUDA graph** over those kernels (enablers (1)+(2)), not one
-mega-fused kernel: a single giant extension-field kernel fights the compiler's field-aware
-fusion splitting, and graph capture alone does not move warm time — the bottleneck is per-op
-device latency, not host launch. The actual perf lever (register-resident fused kernels) is
-a separate axis; rationale on epic #1.
+**Measured (Fractalyze XLA GPU).** `_round_poly` compiles to a single reduction
+(`kInput`) kernel and `_fold` to a single element-wise (`kLoop`) kernel, so a full
+round is **two** kernels — its message and folded state are disjoint outputs —
+and with a host-side transcript it is not one traced region at all. Hence "one
+round = one unit" means one replayed graph, not one mega-kernel: a giant
+extension-field kernel fights the compiler's field-aware fusion splitting, and
+capture alone does not move warm time, where the bottleneck is per-op device
+latency rather than host launch. Register-resident fused kernels are a separate
+axis; rationale on epic #1.
 
 ______________________________________________________________________
 

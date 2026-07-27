@@ -25,14 +25,12 @@ rather than materializing a hypercube.
 *empty* range (`t_c = t_{c+1} = t_L`), never zero bits — a zero-bit pad injects a
 phantom range `[0, t_0)` that corrupts `J̃`.
 
-**Static config carries the tiers, names no field.** `JaggedStaticConfig` (frozen,
-so it hashes as a `jit` static arg) fixes `l_max` (compiled-max column count),
-`n_c` / `n_r` / `n_d` (column / row / layer bit-widths), and the field `dtype`.
-The real-chip layout that *produces* the column heights (per-interaction row
-counts, gather-pad) is the consumer's trace concern; here it is just the agnostic
-eval, recast to AOT-clean form — a static
-`l_max` column axis and a `lax.fori_loop` layer loop in place of host-driven
-shapes.
+**Static config carries the tiers, names no field.** `JaggedStaticConfig` is
+frozen, so it hashes as a `jit` static arg, and fixes `l_max` (compiled-max
+column count), the column / row / layer bit-widths, and the field `dtype`. The
+real-chip layout *producing* the column heights is the consumer's trace concern;
+here it is the agnostic eval in AOT-clean form — a static `l_max` column axis and
+a `lax.fori_loop` layer loop instead of host-driven shapes.
 
 ## Opening
 
