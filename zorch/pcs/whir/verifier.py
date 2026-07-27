@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import frx
 import frx.numpy as fnp
@@ -42,7 +42,6 @@ from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.transcript import (
     GrindingTranscript,
     GrindingTranscriptT,
-    Transcript,
     sample_challenge,
 )
 
@@ -151,8 +150,8 @@ def _verify_body(
     z: Array,
     values: Array,
     proof: WhirProof,
-    transcript: Transcript,
-) -> tuple[Array, Transcript]:
+    transcript: GrindingTranscriptT,
+) -> tuple[Array, GrindingTranscriptT]:
     code, tree, params = verifier.code, verifier.tree, verifier.params
     k = params.k_whir
     num_rounds = len(params.num_queries)
@@ -164,9 +163,7 @@ def _verify_body(
     # Mirror the prover: bind commitment + per-column values, sample μ, and take
     # the running claim as the μ-power combine of the columns' claimed evals.
     t = verifier.scheme.bind(transcript, commitment, values)
-    t, ok = cast(GrindingTranscript, t).check_witness(
-        params.mu_pow_bits, proof.mu_pow_witness
-    )
+    t, ok = t.check_witness(params.mu_pow_bits, proof.mu_pow_witness)
     t, mu = sample_challenge(t, ef, limbs)
     claim = eval_coeffs(values, mu)
 
@@ -184,7 +181,7 @@ def _verify_body(
         for _ in range(k):
             s = proof.sumcheck_polys[sc_idx]
             t = t.observe(s)
-            t, okw = cast(GrindingTranscript, t).check_witness(
+            t, okw = t.check_witness(
                 params.folding_pow_bits, proof.folding_pow_witnesses[sc_idx]
             )
             ok = ok & okw
@@ -204,9 +201,7 @@ def _verify_body(
         else:
             t = t.observe(proof.final_poly)
 
-        t, okw = cast(GrindingTranscript, t).check_witness(
-            params.query_pow_bits, proof.query_pow_witnesses[r]
-        )
+        t, okw = t.check_witness(params.query_pow_bits, proof.query_pow_witnesses[r])
         ok = ok & okw
         stride = cur_code.block_len >> k
         t, positions = sample_query_positions(

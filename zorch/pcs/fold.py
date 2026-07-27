@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Generic, cast
 
 import frx
 import frx.numpy as fnp
@@ -214,7 +214,7 @@ def sample_distinct_positions(
 
 
 @dataclass(frozen=True)
-class FoldChoreography:
+class FoldChoreography(Generic[TranscriptT]):
     """The Fiat-Shamir choreography shared by the fold-recursion schemes built
     on this module's rounds: the seam that fixes WHEN a recursive open touches
     the transcript, decoupled from WHAT the recursion computes and from
