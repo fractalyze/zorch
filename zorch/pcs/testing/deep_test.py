@@ -126,6 +126,43 @@ class OpenColumnsTest(absltest.TestCase):
             want = fnp.sum(weights[:, pos[m]] * column)
             self.assertEqual(_coeffs(got[m]), _coeffs(want), f"column {m}")
 
+    def test_single_field_block(self) -> None:
+        # One block empty (all columns cubic, or all base): the empty side's
+        # column-index gather must stay integer-typed, and the opening still
+        # recovers the direct dot. The wired DEEP opens an all-cubic quotient
+        # column with no base block, so this is a real shape, not a corner.
+        n, stride = 1 << _N_BITS, 2
+        weights = rand_ext_field(7, (n,), KB, EF)[:, None]  # (N, 1)
+
+        def _base_block(count: int) -> Array:
+            if count == 0:
+                return fnp.zeros((n * stride, 0), KB)
+            return fnp.stack(
+                [rand_field(80 + i, (n * stride,), KB) for i in range(count)], axis=1
+            )
+
+        def _ext_block(count: int) -> Array:
+            if count == 0:
+                return fnp.zeros((n * stride, 0), EF)
+            return fnp.stack(
+                [rand_ext_field(90 + i, (n * stride,), KB, EF) for i in range(count)],
+                axis=1,
+            )
+
+        for base_c, ext_c in ((0, 3), (3, 0)):
+            base_cols = _base_block(base_c)
+            ext_cols = _ext_block(ext_c)
+            m = base_c + ext_c
+            got = open_columns(base_cols, ext_cols, weights, [0] * m, stride=stride)
+            for col in range(m):
+                column = (
+                    base_cols[::stride, col]
+                    if col < base_c
+                    else ext_cols[::stride, col - base_c]
+                )
+                want = fnp.sum(weights[:, 0] * column)
+                self.assertEqual(_coeffs(got[col]), _coeffs(want), f"column {col}")
+
     def test_recovers_direct_eval(self) -> None:
         # Barycentric round trip: Σ_i L_i(z)·p(domain[i]) == p(z), one base + one
         # extension column, split as the composition consumes them.
