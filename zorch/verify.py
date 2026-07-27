@@ -20,8 +20,9 @@ crosses the XLA PTX cliff.
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 import frx.numpy as fnp
 from frx import Array, lax
@@ -31,6 +32,9 @@ from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import VerifierRound
+
+_StepOut: TypeAlias = "tuple[tuple[RunningClaim, Transcript], Array]"
+_Step: TypeAlias = "Callable[[tuple[RunningClaim, Transcript], Array], _StepOut]"
 
 
 @register_dataclass
@@ -57,6 +61,30 @@ class RunningClaim:
         )
 
 
+# Memoized per round so the body handed to `lax.scan` keeps one identity.
+# `lax.scan` keys its trace cache on that identity and does not see through a
+# `functools.partial` the way `jit` does, so a body defined inside `verify` is a
+# fresh object per call that re-traces an identical graph — measured at ~400x
+# the cost of the replay it performs. Rounds are frozen dataclasses of static
+# config, so a freshly built equal round hits this cache too.
+_SCAN_STEPS: dict[Any, _Step] = {}
+
+
+def _scan_step(verifier: VerifierRound[RunningClaim, Array]) -> _Step:
+    """The scan body for `verifier`, built once."""
+    cached = _SCAN_STEPS.get(verifier)
+    if cached is not None:
+        return cached
+
+    def step(carry: tuple[RunningClaim, Transcript], msg: Array) -> _StepOut:
+        state, transcript = carry
+        state, transcript, ok = verifier(state, transcript, msg)
+        return (state, transcript), ok
+
+    _SCAN_STEPS[verifier] = step
+    return step
+
+
 def verify(
     verifier: VerifierRound[RunningClaim, Array],
     claim: Array,
@@ -71,13 +99,5 @@ def verify(
         raise ValueError("proof must be a non-empty 2-D array (one row per round)")
 
     init = RunningClaim(claim, fnp.zeros((proof.shape[0],), claim.dtype), fnp.int32(0))
-
-    def step(
-        carry: tuple[RunningClaim, Transcript], msg: Array
-    ) -> tuple[tuple[RunningClaim, Transcript], Array]:
-        state, transcript = carry
-        state, transcript, ok = verifier(state, transcript, msg)
-        return (state, transcript), ok
-
-    (state, transcript), oks = lax.scan(step, (init, transcript), proof)
+    (state, transcript), oks = lax.scan(_scan_step(verifier), (init, transcript), proof)
     return state.point, state.value, transcript, fnp.all(oks)

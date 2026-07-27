@@ -23,7 +23,7 @@ from absl.testing import absltest
 from zorch.challenge import ChallengePolicy
 from zorch.sumcheck import verifier
 from zorch.testkit.transcript import cheap_transcript
-from zorch.verify import verify
+from zorch.verify import _scan_step, verify
 
 KB = zk_dtypes.koalabear_mont
 
@@ -54,6 +54,31 @@ class VerifyScanShapeTest(absltest.TestCase):
             lambda c, p, t: verify(verifier.SumcheckRound(1, challenges=_CH), c, p, t)
         )(fnp.array(0, KB), proof, cheap_transcript(KB))
         self.assertIn("scan", _top_primitives(jaxpr))
+
+
+class ScanBodyIdentityTest(absltest.TestCase):
+    """The scan body is memoized, so a warm trace cache survives repeated calls.
+
+    `lax.scan` keys its cache on the identity of the function it is handed, and
+    does not see through a `functools.partial`. A body built per call therefore
+    re-traces an identical graph every time — invisible in results, ~285x the
+    cost of the replay. Pinning identity is the deterministic form of "it does
+    not recompile"; a timing assertion would be flaky and the scan exposes no
+    cache-size handle for `testkit.jit_cache`.
+    """
+
+    def test_equal_rounds_share_one_scan_body(self) -> None:
+        first = verifier.SumcheckRound(2, challenges=_CH)
+        second = verifier.SumcheckRound(2, challenges=_CH)
+
+        self.assertIsNot(first, second)
+        self.assertIs(_scan_step(first), _scan_step(second))
+
+    def test_rounds_that_trace_differently_get_their_own_body(self) -> None:
+        degree_two = _scan_step(verifier.SumcheckRound(2, challenges=_CH))
+        degree_three = _scan_step(verifier.SumcheckRound(3, challenges=_CH))
+
+        self.assertIsNot(degree_two, degree_three)
 
 
 if __name__ == "__main__":
