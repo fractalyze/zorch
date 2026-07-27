@@ -121,9 +121,11 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
             self.prover_round, witness.state, transcript, claim.rounds
         )
         reduction_proof = fnp.stack(messages)
-        # The reduced claim has one definition, the verifier's replay, so the
-        # prover discards its own and replays too. Two roles agreeing by
-        # construction, rather than two implementations that could drift.
+        # The prover's carry is the folded tables: each round squeezes its
+        # challenge, folds with it, and drops it. The point and running value
+        # accumulate in the verifier's carry instead, so replaying is how the
+        # prover obtains a reduced claim it never built. The transcript comes
+        # back with it and matches the one fold_rounds discarded.
         point, value, replayed, _ = verify(
             self.verifier_round, claim.value, reduction_proof, pre
         )
