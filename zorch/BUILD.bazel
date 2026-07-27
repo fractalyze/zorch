@@ -141,6 +141,12 @@ py_library(
 )
 
 py_library(
+    name = "scan_body",
+    srcs = ["scan_body.py"],
+    visibility = ["//visibility:public"],
+)
+
+py_library(
     name = "verify",
     srcs = ["verify.py"],
     visibility = ["//visibility:public"],

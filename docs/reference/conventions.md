@@ -89,6 +89,12 @@ The **shape of the per-iteration output** picks the tool.
   artifact changes shape (`fold_rounds`, the FRI fold phase, the GKR
   `prove_rounds`). Safe as a host-orchestrated loop of separate dispatches.
 
+A `lax.scan` reached from eager code needs a **stable body**: the trace cache is
+keyed on the body's identity, so one built per call recompiles an identical
+graph every time — orders of magnitude over the work being scanned, and silent.
+`zorch/scan_body.py` memoizes a body factory for that; a scan inside a `@jit`
+zone needs nothing, since the jit cache absorbs it.
+
 The **fixed-width-mask exception** reaches one level up when the shrink is
 *predictable*: pad every layer to the max width with the fold-neutral fraction,
 carry the live count as a traced threshold (`poly.geq.VirtualGeq`), and on a
