@@ -100,16 +100,28 @@ argument of knowledge is exactly a reduction to the trivial claim.
 to an evaluation claim through internal per-variable rounds — and a PCS opening
 is the usual terminal one.
 
-| | **`Round`** | **`Stage`** | **Named protocol operation** |
-| --- | --- | --- | --- |
-| **Represents** | one step of a repeated recurrence | one conditional claim reduction with separate prover/verifier roles | shared framing, reduction, or security-amplification step without its own proof section |
-| **Owns** | the recurrence carry and the message on the wire | shared claim/proof contract; each role owns only its capabilities | no proof section |
-| **Examples** | one sumcheck variable, one GKR layer | sumcheck, zerocheck, lincheck, LogUp-GKR, a PCS opening, Spartan | framed observation, domain separation, grinding, claim batching |
-| **Composed by** | a recurrence driver inside a stage role | an explicit parent role implementation | the parent whose transcript and soundness accounting require it |
+Spartan is that sequence end to end — R1CS satisfiability reduced, one stage at a
+time, until nothing is left to prove:
 
-A composite stage writes its own dataflow in ordinary Python, like a PyTorch
-module with a custom `forward`; there is no chain driver and no bridge.
-`SpartanProver` / `SpartanVerifier` are the reference pair, and a deployed
+```text
+SpartanClaim              (A·z)∘(B·z) = C·z
+    │   OuterProver / OuterVerifier              zerocheck, sumcheck rounds
+    ▼
+RowEvaluationClaim        (Az, Bz, Cz) at r_x
+    │   batch_claims()                           transcript only, no proof section
+    │   InnerProver / InnerVerifier              lincheck, sumcheck rounds
+    ▼
+ColumnEvaluationClaim     z̃ at r_y
+    │   WitnessOpenProver / WitnessOpenVerifier  PCS opening
+    ▼
+TrivialClaim              nothing left to prove
+```
+
+Each arrow is a stage; the rounds live inside them. `batch_claims()` is neither —
+it samples a challenge and advances the transcript without owning a proof
+section, so both roles just call it. A parent writes this dataflow in ordinary
+Python, like a PyTorch module with a custom `forward`: there is no chain driver
+and no bridge object. And because the roles are separate, a deployed
 `SpartanVerifier` is constructible with only a PCS verification key.
 
 Contracts, ownership rules, the round-vs-stage-vs-committer decision table, and
