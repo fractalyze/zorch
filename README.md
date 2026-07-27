@@ -108,7 +108,7 @@ time, until nothing is left to prove:
 commitment, prover_data = self.pcs_prover.commit([witness_poly])
 transcript = _absorb_claim(transcript, claim, commitment)
 
-# SpartanClaim -> RowEvaluationClaim: (Az, Bz, Cz) at r_x
+# SpartanClaim -> RowEvaluationClaim: (Az, Bz, Cz) at the reduced row point
 outer = self.outer.prove(
     ZerocheckClaim(instance.s_x), ZerocheckWitness(az, bz, cz), transcript
 )
@@ -116,7 +116,7 @@ outer = self.outer.prove(
 batch, transcript = batch_claims(
     outer.reduced_claim.values, outer.transcript, self.challenges
 )
-# RowEvaluationClaim -> ColumnEvaluationClaim: z̃ at r_y
+# RowEvaluationClaim -> ColumnEvaluationClaim: z̃ at the reduced column point
 inner = self.inner.prove(
     LincheckClaim(instance, outer.reduced_claim, batch),
     LincheckWitness(assignment),
