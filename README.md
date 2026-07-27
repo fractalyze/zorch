@@ -19,7 +19,8 @@ verifier roles.
 
 ## Installation
 
-**Python 3.11 on Linux x86_64 only.**
+**Python 3.11 on Linux x86_64, or macOS on Apple Silicon.** (`frxlib` ships a
+cp311 wheel for those two platforms only — not 3.12/3.13, not Intel Macs.)
 
 Install as `pyzorch`, import as `zorch` — the `zorch` name on PyPI belongs to an
 unrelated project.
