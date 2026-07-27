@@ -179,13 +179,8 @@ class EqPolyRound(ProverRound):
         msg, cache = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
         reduced, _ = reduce_domain(carry.claim.value, msg, r, self.domain)
-        return (
-            FoldingClaim(
-                self._fold(cache, carry.state[1], r), carry.claim.bind(reduced, r)
-            ),
-            transcript,
-            msg,
-        )
+        folded = self._fold(cache, carry.state[1], r)
+        return carry.advance(folded, reduced, r), transcript, msg
 
 
 def prove_eq_poly(

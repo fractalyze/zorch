@@ -90,11 +90,7 @@ class SmallValueRound(ProverRound):
             eq_w_prev * eq_factor(r[0], self.w[i]),
             expand_hypercube_step(eq_evals, r[0]),
         )
-        return (
-            FoldingClaim(new_state, carry.claim.bind(reduced, r[0])),
-            transcript,
-            msg,
-        )
+        return carry.advance(new_state, reduced, r[0]), transcript, msg
 
 
 class TransitionRound(ProverRound):
@@ -115,14 +111,8 @@ class TransitionRound(ProverRound):
         msg = summand_evals(folded, self.summand._combine, self.domain)
         transcript, r = transcript.observe_and_sample(msg, 1)
         reduced, _ = reduce_domain(carry.claim.value, msg, r[0], self.domain)
-        return (
-            FoldingClaim(
-                (fold(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
-                carry.claim.bind(reduced, r[0]),
-            ),
-            transcript,
-            msg,
-        )
+        new_state = (fold(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0))
+        return carry.advance(new_state, reduced, r[0]), transcript, msg
 
 
 def _precompute(p_initial: Array, w: Array, l_0: int) -> tuple[list[Array], Array]:

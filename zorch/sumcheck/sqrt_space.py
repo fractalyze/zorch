@@ -85,14 +85,8 @@ class SqrtSpaceRound(ProverRound):
         msg = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
         reduced, _ = reduce_domain(carry.claim.value, msg, r, self.domain)
-        return (
-            FoldingClaim(
-                (p_stacked, expand_hypercube_step(eq_evals, r)),
-                carry.claim.bind(reduced, r),
-            ),
-            transcript,
-            msg,
-        )
+        folded = (p_stacked, expand_hypercube_step(eq_evals, r))
+        return carry.advance(folded, reduced, r), transcript, msg
 
 
 def prove_sqrt_space(

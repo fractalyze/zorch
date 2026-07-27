@@ -73,19 +73,19 @@ class FoldingClaim:
     state: Any
     claim: RunningClaim
 
+    def advance(self, state: Any, reduced: Array, challenge: Array) -> FoldingClaim:
+        """The folded state beside the claim this round reduced it to."""
+        return FoldingClaim(state, self.claim.bind(reduced, challenge))
+
 
 @partial(frx.jit, static_argnames=("degree",))
 def _fold_and_advance(
     carry: FoldingClaim, msg: Array, r: Array, degree: int
 ) -> FoldingClaim:
-    """Fold the tables and reduce the claim in one compiled step.
-
-    Separately these are two launches, and the claim half computes a handful of
-    field ops for the price of a launch. Together the scalar work rides the
-    fold's program, which the round is paying for regardless.
-    """
+    """Fold and reduce in one compiled step, so the claim's handful of field ops
+    ride the fold's program rather than paying for a launch of their own."""
     reduced, _ = reduce_evals(carry.claim.value, msg, r, degree)
-    return FoldingClaim(fold(carry.state, r), carry.claim.bind(reduced, r))
+    return carry.advance(fold(carry.state, r), reduced, r)
 
 
 def initial_claim(state: Any, value: Array, rounds: int) -> FoldingClaim:
@@ -166,8 +166,6 @@ class StandardRound(ProverRound):
         msg = summand_evals(carry.state, self.summand._combine, domain)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
         if self.domain is None:
-            # The claim update rides the fold's program: on its own it is a
-            # launch whose scalar work costs far less than launching it.
             return (
                 _fold_and_advance(carry, msg, r, self.summand.degree),
                 transcript,
@@ -178,11 +176,7 @@ class StandardRound(ProverRound):
         # value→coefficient map instead would rebuild an (n, n) Lagrange matrix
         # every round, which costs more than the fold it rides along with.
         reduced, _ = reduce_domain(carry.claim.value, msg, r, domain)
-        return (
-            FoldingClaim(fold(carry.state, r), carry.claim.bind(reduced, r)),
-            transcript,
-            msg,
-        )
+        return carry.advance(fold(carry.state, r), reduced, r), transcript, msg
 
 
 class CompressedProductRound(ProverRound):
@@ -218,11 +212,7 @@ class CompressedProductRound(ProverRound):
         msg = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
         reduced, _ = reduce_compressed(carry.claim.value, msg, r)
-        return (
-            FoldingClaim(fold(carry.state, r), carry.claim.bind(reduced, r)),
-            transcript,
-            msg,
-        )
+        return carry.advance(fold(carry.state, r), reduced, r), transcript, msg
 
 
 @partial(
