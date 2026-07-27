@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
@@ -148,3 +148,14 @@ class InnerVerifier(VerifierStage[LincheckClaim, ColumnEvaluationClaim, InnerPro
             reduced.transcript,
             reduced.ok,
         )
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[
+        ProverStage[(LincheckClaim, LincheckWitness, ColumnEvaluationClaim, InnerProof)]
+    ] = InnerProver
+    _v: type[VerifierStage[(LincheckClaim, ColumnEvaluationClaim, InnerProof)]] = (
+        InnerVerifier
+    )

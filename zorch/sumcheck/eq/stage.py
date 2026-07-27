@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import frx.numpy as fnp
 from frx import Array
@@ -112,3 +113,12 @@ class EqPolyVerifier(VerifierStage[EqSumClaim, EvaluationClaim, Array]):
             self.verifier_round, claim.value, reduction_proof, transcript
         )
         return VerifyResult(EvaluationClaim(point, value), transcript, ok)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[ProverStage[(EqSumClaim, EqPolyWitness, EvaluationClaim, Array)]] = (
+        EqPolyProver
+    )
+    _v: type[VerifierStage[(EqSumClaim, EvaluationClaim, Array)]] = EqPolyVerifier

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
@@ -153,3 +153,14 @@ class OuterVerifier(VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof
         return VerifyResult(
             RowEvaluationClaim(point, reduction_proof.claims), transcript, ok
         )
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[
+        ProverStage[(ZerocheckClaim, ZerocheckWitness, RowEvaluationClaim, OuterProof)]
+    ] = OuterProver
+    _v: type[VerifierStage[(ZerocheckClaim, RowEvaluationClaim, OuterProof)]] = (
+        OuterVerifier
+    )

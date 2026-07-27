@@ -9,7 +9,7 @@ roles (`jagged_stage`) reduce the same `LogUpOutputClaim` to the same
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 from frx import Array
 
@@ -126,3 +126,14 @@ class LogUpGkrVerifier(
             transcript,
         )
         return VerifyResult(_input_claim(carry), transcript, ok)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[
+        ProverStage[(LogUpOutputClaim, GkrLayer, InputLayerClaim, GkrProof[LayerProof])]
+    ] = LogUpGkrProver
+    _v: type[
+        VerifierStage[(LogUpOutputClaim, InputLayerClaim, GkrProof[LayerProof])]
+    ] = LogUpGkrVerifier

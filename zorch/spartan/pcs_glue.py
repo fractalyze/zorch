@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from frx import Array
 
@@ -137,3 +137,16 @@ class WitnessOpenVerifier(
         z_eval = recombine_z_eval(eval_w, claim.public_value, claim.point[0])
         ok_final = claim.product_value == claim.matrix_value * z_eval
         return VerifyResult(TrivialClaim(), transcript, ok_open & ok_final)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[
+        ProverStage[
+            (WitnessOpeningClaim, WitnessOpeningWitness, TrivialClaim, WitnessOpenProof)
+        ]
+    ] = WitnessOpenProver
+    _v: type[VerifierStage[(WitnessOpeningClaim, TrivialClaim, WitnessOpenProof)]] = (
+        WitnessOpenVerifier
+    )

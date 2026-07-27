@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
+from typing import TYPE_CHECKING
 
 import frx
 import frx.numpy as fnp
@@ -307,3 +308,16 @@ class UnivariateSkipVerifier(
             challenges=self.challenges,
         )
         return VerifyResult(PrismEvaluationClaim(point, value), transcript, ok)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[
+        ProverStage[
+            (SumClaim, SumcheckWitness, PrismEvaluationClaim, UnivariateSkipProof)
+        ]
+    ] = UnivariateSkipProver
+    _v: type[VerifierStage[(SumClaim, PrismEvaluationClaim, UnivariateSkipProof)]] = (
+        UnivariateSkipVerifier
+    )

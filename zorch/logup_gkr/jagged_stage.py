@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from frx import Array
 
@@ -137,3 +138,21 @@ class JaggedLogUpGkrVerifier(
             transcript,
         )
         return VerifyResult(_input_claim(carry), transcript, ok)
+
+
+if TYPE_CHECKING:
+    # mypy-enforced seam conformance — docs/reference/conventions.md
+    # "Seam conformance pins".
+    _p: type[
+        ProverStage[
+            (
+                LogUpOutputClaim,
+                JaggedGkrWitness,
+                InputLayerClaim,
+                GkrProof[JaggedLayerProof],
+            )
+        ]
+    ] = JaggedLogUpGkrProver
+    _v: type[
+        VerifierStage[(LogUpOutputClaim, InputLayerClaim, GkrProof[JaggedLayerProof])]
+    ] = JaggedLogUpGkrVerifier
