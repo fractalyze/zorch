@@ -49,6 +49,14 @@ repos:
       - id: actionlint
 -   repo: local
     hooks:
+      - id: lint-docs
+        # Runs on a source change too, not just a docs change: renaming a
+        # symbol is how a page starts describing code that no longer exists.
+        name: docs cite code that exists
+        language: system
+        entry: python3 tools/lint_docs.py
+        pass_filenames: false
+        files: '(\.md$|^zorch/.*\.py$|^tools/lint_docs\.py$)'
       - id: mont-test-dtypes
         # Tests draw field and curve-point elements as the Montgomery-form
         # dtypes — the production encoding (docs/reference/conventions.md "Testing").

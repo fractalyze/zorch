@@ -50,14 +50,14 @@ exclude = ["zorch.testing", "zorch.testing.*", "zorch.*.testing", "zorch.*.testi
 # configure pytest, which runs the `*_test.py` module tests (the bazel side
 # covers the toolchain smoke test + the requirements-lock check).
 [tool.pytest.ini_options]
-testpaths = ["zorch"]
+testpaths = ["zorch", "tools"]
 python_files = ["*_test.py", "test_*.py"]
 
 # Every def carries full type annotations (see docs/reference/conventions.md); mypy's
 # disallow_untyped_defs is what enforces it. Run: `mypy` (uses the files below).
 [tool.mypy]
 python_version = "3.11"
-files = ["zorch"]
+files = ["zorch", "tools"]
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
 warn_unused_ignores = true

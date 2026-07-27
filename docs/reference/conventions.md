@@ -115,7 +115,7 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   the max width with the fold-neutral fraction, carry the live count as a traced
   threshold (`poly.geq.VirtualGeq`), and on a short layer's padding rounds select
   the unchanged carry — the transcript's sponge leaves included — so Fiat-Shamir
-  never over-advances. `logup_gkr.circuit.scan_build_jagged_pyramid` (the
+  never over-advances. `logup_gkr.circuit.build_jagged_pyramid` (the
   generation) rolls this way: O(1) in the layer count. The matching device-FS
   prove roll was retired — Fiat-Shamir now runs on the host between kernel
   launches, so the jagged prove is the unrolled
@@ -183,7 +183,7 @@ capability is noise:
   `prove_rounds` / `verify_rounds` drivers. The GKR pyramid halves every layer, so
   the layers carry different shapes and the chain is composed in plain Python by
   default. Where a transform does cross the pyramid — the generation roll
-  (`scan_build_jagged_pyramid`, see the loops section) — it threads the planes as
+  (`build_jagged_pyramid`, see the loops section) — it threads the planes as
   `Array`s, not the layer object, so `GkrLayer` / `JaggedGkrLayer` still need no
   registration. Register only if a transform later threads one directly.
 - **Plain data records** — `LayerProof`, `GkrLayer`, `LogUpGkrOutput`. They pass
@@ -227,6 +227,15 @@ non-negotiables, so its doc must make both explicit:
   proving-scheme- and implementation-agnostic.
 - **Fusion by construction** — the load-bearing rule that keeps the block one
   fused unit by design, not by a compiler pattern-match.
+- **Where it sits in the composition vocabulary** — which of the block's
+  components are stage roles and which are rounds, the claim a role reduces and
+  what it reduces to, and the module path each lives at. A block with no stage
+  role says so; that is an answer, not an omission. Two pages describing the
+  same protocol in different vocabularies is how a reader ends up believing they
+  are different protocols, and citing the path is what makes the pointer break
+  loudly when the module moves. Contracts live in
+  [`stage-composition.md`](../composition/stage-composition.md); a block page
+  names its own instances rather than re-deriving the model.
 
 Everything else is optional, added only when the block has it — design decisions
 and their rationale, gotchas, what's deliberately out of scope. Don't pad a doc to

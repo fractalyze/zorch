@@ -12,10 +12,10 @@ which code owns a proof boundary, and where proof-system dataflow belongs.
 
 ## Round: repeat one contract
 
-The two roles are separate protocols, because they carry different data.
-`ProverRound` maps `(carry, transcript)` to `(carry, transcript, message)`.
-`VerifierRound` maps `(carry, transcript, message)` to
-`(carry, transcript, ok)`.
+The two roles are separate protocols (`zorch/round.py`), because they carry
+different data. `ProverRound` maps `(carry, transcript)` to
+`(carry, transcript, message)`. `VerifierRound` maps
+`(carry, transcript, message)` to `(carry, transcript, ok)`.
 
 Only the message crosses between the roles, so only the message gets a position
 of its own. A value both sides can derive — any challenge squeezed from the
@@ -44,7 +44,7 @@ prover and verifier recurrences and packages their messages into its proof type.
 ## Stage: reduce one claim
 
 A stage is one mathematical proof-reduction contract implemented by two
-separately deployable role interfaces:
+separately deployable role interfaces (`zorch/stage.py`):
 
 ```python
 ProverStage.prove(claim, witness, transcript)
@@ -73,9 +73,19 @@ and a terminal stage closes the final claim. “Statement” is useful prose for
 proof system's root claim, but is not a separate code concept. “Reduction”
 names the operation performed by a stage, not a generic result object.
 
-`ProveResult.reduced_claim` is an execution result used to continue the prover;
-it is not serialized separately. The verifier independently reconstructs the
-same value from the source claim, reduction proof, and transcript.
+`ProveResult` carries the reduced claim, its reduction proof, and the advanced
+transcript; `VerifyResult` carries the verifier's own reduced claim, transcript,
+and verdict. `ProveResult.reduced_claim` is an execution result used to continue
+the prover; it is not serialized separately. The verifier independently
+reconstructs the same value from the source claim, reduction proof, and
+transcript.
+
+A stage closes the argument by reducing to `TrivialClaim`, which holds by
+construction and so leaves nothing for a later stage to prove. That is the
+terminal case named as a type rather than left as prose or spelled `None`: an
+argument of knowledge is exactly a reduction to the trivial claim, and a PCS
+opening is the usual one. A parent reading `TrivialClaim` back knows the chain
+ends there, and a role that reduces to anything else knows it does not.
 
 The stage contract owns:
 
@@ -89,6 +99,29 @@ A role implementation may drive round recurrences, perform PCS operations, or
 own child role implementations. Compilation boundaries are an independent
 performance decision. A prover-only helper, transcript schedule, or performance region is an ordinary
 function or class rather than an incomplete stage with a placeholder verifier.
+
+## Which one is it?
+
+The recurring question is not what a stage is, but which of four things a new
+step is. Answer it by what the step *does to a claim*, never by how big it is:
+
+| The step… | is a | because |
+| --- | --- | --- |
+| takes a claim and produces a weaker one both roles can derive | **stage** | it owns a reduction, so it owns a proof section and a role pair |
+| repeats one transition, carrying the same meaning each time | **round** | its contract is the carry and the message, not a claim boundary |
+| runs before any claim exists and produces prover-only data | **committer** | its output cannot ride a reduced claim; it reaches later roles through their witness |
+| only advances the transcript | **shared function** | it proves nothing independently, so both roles call the same named function |
+
+The last two are the ones mistaken for stages. A commitment is the object a
+later claim is *about*, so it precedes the first claim rather than reducing one;
+it stays a local in the composite and enters a later role as witness. A domain
+separator, a grind, a framed observation, or a sampled batching challenge changes
+the transcript and can change soundness, but owns no independently reusable proof
+section — so it is a function both roles call at the same point, with its
+security contribution documented there.
+
+One shape is mistaken for a round: a step whose carry comes out unchanged. If the
+carry is the same on the way out, nothing recurred, and the step is a function.
 
 ## Composition is explicit
 

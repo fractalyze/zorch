@@ -2,6 +2,14 @@
 
 A Fiat-Shamir transcript turns prover messages into verifier challenges. zorch
 carries **three** kinds, by construction-and-substrate, not by scheme:
+`zorch/transcript.py`, `zorch/byte_transcript.py`, and
+`zorch/sha256_field_transcript.py`, with the squeeze width policy in
+`zorch/challenge.py`.
+
+A transcript is neither a stage nor a round: it reduces no claim and repeats no
+recurrence. It is the state both roles thread — explicit in every round call and
+every stage result — which is why it appears in each signature rather than being
+reached through a context object.
 
 |                        | `transcript.py` — `DuplexTranscript`                                                          | `byte_transcript.py` — `ByteHashTranscript(ByteHash)`                                      | `sha256_field_transcript.py` — `Sha256FieldTranscript`                             |
 | ---------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
@@ -28,9 +36,10 @@ the byte surface, made scan-threadable.
 
 ## Device fusion: which transcripts meet it, and the host exemption
 
-The fusion non-negotiable (CLAUDE.md) reads: "an `absorb`/`squeeze` … must each
-lower to **one fused kernel**." It governs **device-lowered** Fiat-Shamir — the
-per-round `observe`/`sample` that thread the round body's `@jit` region.
+The fusion non-negotiable (CLAUDE.md) puts `absorb`/`squeeze` under the same
+one-unit rule as a round body ([fusion north star](../README.md#fusion-north-star)).
+It governs **device-lowered** Fiat-Shamir — the per-round `observe`/`sample`
+that thread the round body's `@jit` region.
 
 Two of the three transcripts are device and **meet it**:
 
@@ -50,7 +59,7 @@ The **exemption is only `ByteHashTranscript`** — the *host* byte transcript. I
 holds a growing `bytes` buffer and orchestrates the chain per-op on the host (one
 dispatch per squeeze), so it does not lower to a device kernel and must not be held
 to a clause about device kernels. It is in the same family as the host steps
-`docs/conventions.md` sanctions between round kernels (a one-shot `grind`, an
+`docs/reference/conventions.md` sanctions between round kernels (a one-shot `grind`, an
 `int(...)` query index, the heterogeneous Python driver). `has_dedicated_fusion`
 delegates to the injected `ByteHash`: `HostSha256` reports `False` (the type-level
 signal of a host orchestrator); injecting `Sha256` reports `True` — the squeeze

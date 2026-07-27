@@ -68,7 +68,7 @@ the k-ary mirror of a pair method. In natural order a group is the k-th-root
 coset `{p, p+n/k, …, p+(k-1)·n/k}` (the conjugate pair is exactly `k = 2`), a
 slice, so the same fusion-friendly layout holds. The single-group fold is the
 degree-`(k-1)` interpolant through the group's points evaluated at `β`
-(`fri_fold_k_values`); for `(x, −x)` it reduces to the conjugate butterfly.
+(`fold_group_values`); for `(x, −x)` it reduces to the conjugate butterfly.
 
 The two seams **coexist rather than collapse**. The binary `fold` is a
 closed-form butterfly; the k-ary fold is Lagrange interpolation, which at `k = 2`

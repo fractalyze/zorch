@@ -60,8 +60,10 @@ python -c "import frx, zorch; print(frx.devices()); print(zorch.__version__)"
   in as a *consumer*; nothing implementation-specific leaks into a block.
 - **Fusion-first.** Each `Round` — and each `commit`/`open`, each
   `absorb`/`squeeze`, each fold step, and a hash permutation's internal rounds —
-  must lower to a **single fused kernel**. We get there by *construction*, not
-  by a per-primitive pattern-matcher in the compiler.
+  must lower to **one replayable device unit**. We get there by *construction*,
+  not by a per-primitive pattern-matcher in the compiler. The
+  [fusion north star](docs/README.md#fusion-north-star) is where that unit is
+  defined and measured.
 - **Easy to assemble.** These are building blocks; the API optimizes for snapping
   them together.
 
@@ -87,25 +89,9 @@ VerifierRound:  (carry, transcript, message) → (carry, transcript, ok)
 
 Only the message crosses between the roles, so only the message gets a position
 of its own. Anything a round derives rather than receives — a sumcheck round's
-challenge, a fold challenge — belongs in the carry: both sides squeeze it from
-the transcript, so it never needs to be sent. A sumcheck round records its
-challenge into the point it is building; a GKR layer folds its own into the
-running claim. Both then report the same thing, a verdict, which is why one
-verifier protocol serves every recurrence shape.
-
-The carry is named for what it holds, never `carry` — `RunningClaim` for
-sumcheck's replay, `LayerClaim` for a GKR layer, `FoldState` for a commit-and-
-fold recurrence.
-
-Use `prove_rounds()` and `verify_rounds()` when every step has the same meaning
-for its carry and message. The concrete round objects and message shapes may
-vary; the invariant is the recurrence contract. Specialized drivers such as
-sumcheck folding can impose stronger shape or fusion rules.
-
-A sequence is not a round recurrence merely because it executes in order.
-Setup, a special first interaction, a repeated sumcheck, and terminal claim
-derivation have different contracts. Their owning stage should spell out that
-orchestration directly.
+challenge, a fold challenge — belongs in the carry, squeezed from the transcript
+by both sides and never sent. `prove_rounds()` and `verify_rounds()` drive any
+recurrence whose steps agree on what the carry and message mean.
 
 ### Stage: reduce one claim
 
@@ -120,27 +106,21 @@ VerifierStage.verify(claim, reduction_proof, transcript)
 ```
 
 The two roles are structural protocols, so an adapter conforms by shape without
-inheriting, and deployed code depends only on the role it runs. A verifier
-therefore never has to construct or retain a prover object or proving key.
+inheriting and deployed code depends only on the role it runs — a verifier never
+constructs or retains a proving key.
 
 The claim is the public assertion entering the stage; the witness is the
-prover's private evidence. Both roles derive the same reduced claim. The
-reduction proof establishes the source claim conditional on that reduced claim:
+prover's private evidence. Both roles derive the same reduced claim, and the
+reduction proof establishes the source claim conditional on it:
 
 ```text
 reduced claim is true  =>  source claim is true
 ```
 
-A later stage proves the reduced claim, and a terminal stage closes the final
-claim. The reduced claim in `ProveResult` is an execution value for continuing
-the prover, not separately serialized proof data. The verifier reconstructs it
-from the source claim, reduction proof, and transcript.
-
-A role implementation may run a recurrence of rounds, perform a PCS operation,
-or contain child role implementations. `SumcheckProver` and `SumcheckVerifier`,
-for example, implement the two roles that reduce a sum claim to an evaluation
-claim through internal per-variable rounds. Compilation boundaries are a
-separate performance choice; one stage may contain several compiled regions.
+A later stage proves the reduced claim; a terminal stage reduces to
+`TrivialClaim` and closes the argument. `SumcheckProver` and `SumcheckVerifier`
+are the worked pair — they reduce a sum claim to an evaluation claim through
+internal per-variable rounds.
 
 ### Example: a composite proof-system stage
 

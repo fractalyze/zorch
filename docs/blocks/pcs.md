@@ -5,13 +5,30 @@ design and open decisions: epic issue
 [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 A Modern SNARK is IOP + PCS, and the PCS is the axis schemes vary on. `pcs` is the
-one seam every scheme's commitment plugs into, with three concrete instances
-spanning the design space: [`kzg`](#kzg-pairing-based) (pairing, trusted setup),
+one seam every scheme's commitment plugs into. Three instances anchor the ends of
+the design space: [`kzg`](#kzg-pairing-based) (pairing, trusted setup),
 [`fri`](#fri-transparent) (transparent, hash-based), and
 [`basefold`](#basefold-transparent-multilinear) (transparent, the multilinear
 *matrix* commitment the [jagged PCS](#jagged-a-consumer-on-the-seam) builds on).
 That schemes at opposite ends of the space satisfy the same two protocols is the
-evidence the seam is not shaped after one family.
+evidence the seam is not shaped after one family; the families beside them live
+in `zorch/pcs/` rather than in a list here, which would go stale the next time
+one lands.
+
+## Roles and claims
+
+A PCS is **a committer plus a terminal stage**, and the two halves are different
+kinds of thing. `commit` runs before any claim exists — it creates the object a
+later claim is *about* — so it is a `Committer` (`zorch/pcs/stage.py`), not a
+stage role. The opening is a claim reduction, and every family implements the
+stage roles for it: `OpeningClaim` (the commitment plus the points) reduces to
+`TrivialClaim`, the claim that holds by construction, with `OpeningProof`
+carrying the values the prover computed while opening.
+
+Reducing to `TrivialClaim` is what makes an opening *terminal*: nothing remains
+for a later stage to prove, which is the shape of a complete argument rather than
+one link. Values ride the proof and not the claim, because the prover computes
+them during the opening — a claim carrying them would be unconstructible.
 
 ## Why the shape
 
@@ -73,7 +90,7 @@ this because `commitment` is scheme-defined; the input convention stays uniform
 
 ## Instance anatomy
 
-Every *instance* (`kzg`, `fri`, `basefold`) follows one shape — shared wire types,
+Every *instance* follows one shape — shared wire types,
 a prover, and a verifier in separate modules — so the instances stay
 interchangeable and a new one has a template to fill. (`jagged` is exempt: it is a
 [consumer on the seam](#jagged-a-consumer-on-the-seam), not an instance.) One part
@@ -113,12 +130,13 @@ wrapper dataclass — a wrapper would cost an unwrap at every observe site and a
 pytree registration for nothing. Promote an alias to a dataclass only when a
 commitment gains real structure.
 
-The seam-level round-trip test (`zorch/pcs/testing/protocol_test.py`) drives all
-three instances through one generic `commit → open → verify` driver typed
-against the protocols alone — the behavioral proof that the instances are
-interchangeable. (`JaggedPcsProver` is deliberately *not* pinned: it is a
+The seam-level round-trip test (`zorch/pcs/testing/protocol_test.py`) drives the
+three design-space anchors through one generic `commit → open → verify` driver
+typed against the protocols alone — the behavioral proof that the instances are
+interchangeable. (Jagged is deliberately *not* pinned: it is a
 [consumer on the seam](#jagged-a-consumer-on-the-seam), not an instance — its
-`commit` takes blocks plus a stacking height, not a `Sequence` of polynomials.)
+`commit_region` takes blocks plus a stacking height, not a `Sequence` of
+polynomials, and `prove_jagged_eval` opens against SP1's shard layout.)
 
 ## Jagged: a consumer on the seam
 

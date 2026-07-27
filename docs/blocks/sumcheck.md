@@ -7,10 +7,26 @@ every commit. This file carries only what neither can. Full design and open
 decisions: epic issue
 [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
+## Roles and claims
+
+`SumcheckProver` / `SumcheckVerifier` (`zorch/sumcheck/stage.py`) are the stage
+roles: they reduce a `SumClaim` — that a summand sums to a claimed value over the
+hypercube — to an `EvaluationClaim` at the sampled point. `prover.SumcheckRound`
+and `verifier.SumcheckRound` are the rounds inside them, one per variable, and
+stay internal: a caller composes the stage, not the recurrence.
+
+`UnivariateSkipProver` / `UnivariateSkipVerifier` (`zorch/sumcheck/univariate_skip.py`)
+are a second pair over the same `SumClaim`, reducing instead to a prism-evaluation
+claim whose first coordinate binds a subgroup interpolation of several Boolean
+variables. A parent expecting an ordinary multilinear point cannot substitute it —
+the reduced claim is part of the contract, not an implementation detail.
+`EqPolyProver` / `EqPolyVerifier` (`zorch/sumcheck/eq/stage.py`) are the
+eq-factored pair.
+
 ## Why the shape
 
 **One summand seam, many summands, one verifier.** The folding skeleton is shared
-as free functions — `split_halves` / `factors_on_domain` / `fold` — and each round
+as free functions — `split_halves` / `summand_evals` / `fold` — and each round
 supplies only its summand `_combine`: `prover.SumcheckRound` multiplies a product,
 `logup_gkr.prover.LogupSumcheckRound` evaluates the LogUp combine. `prove` is the
 homogeneous scan driver, generic over that summand — it reads a round's `degree` +
@@ -30,8 +46,9 @@ description.
 
 **Composing rounds.** `prove` / `verify` repeat one round per variable.
 `prove_rounds` / `verify_rounds` sequence a homogeneous recurrence whose links share
-one carry contract, such as GKR layers. A heterogeneous proof system uses typed
-stages and an explicit pipeline; see
+one carry contract, such as GKR layers. A heterogeneous proof system composes
+stage roles whose dataflow its parent writes out explicitly — there is no chain
+driver for a sequence of stages; see
 [`stage-composition.md`](../composition/stage-composition.md).
 
 **The verifier reduces; the PCS closes.** `verify` stops at the point-claim

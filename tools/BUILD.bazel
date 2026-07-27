@@ -1,0 +1,10 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+py_library(
+    name = "lint_docs",
+    srcs = [
+        "__init__.py",
+        "lint_docs.py",
+    ],
+    visibility = ["//tools:__subpackages__"],
+)
