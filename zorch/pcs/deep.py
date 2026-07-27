@@ -98,8 +98,8 @@ def open_columns(
     b = base_cols.shape[1]
     base_sub = base_cols[::stride]
     ext_sub = ext_cols[::stride]
-    base_w = weights[:, np.array(opening_pos[:b])]  # (N, B)
-    ext_w = weights[:, np.array(opening_pos[b:])]  # (N, C)
+    base_w = weights[:, np.array(opening_pos[:b], dtype=np.intp)]  # (N, B)
+    ext_w = weights[:, np.array(opening_pos[b:], dtype=np.intp)]  # (N, C)
     base_openings = fnp.sum(base_w * base_sub, axis=0)
     ext_openings = fnp.sum(ext_w * ext_sub, axis=0)
     return fnp.concatenate([base_openings, ext_openings])
