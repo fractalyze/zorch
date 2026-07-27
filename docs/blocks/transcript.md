@@ -2,6 +2,14 @@
 
 A Fiat-Shamir transcript turns prover messages into verifier challenges. zorch
 carries **three** kinds, by construction-and-substrate, not by scheme:
+`zorch/transcript.py`, `zorch/byte_transcript.py`, and
+`zorch/sha256_field_transcript.py`, with the squeeze width policy in
+`zorch/challenge.py`.
+
+A transcript is neither a stage nor a round: it reduces no claim and repeats no
+recurrence. It is the state both roles thread — explicit in every round call and
+every stage result — which is why it appears in each signature rather than being
+reached through a context object.
 
 |                        | `transcript.py` — `DuplexTranscript`                                                          | `byte_transcript.py` — `ByteHashTranscript(ByteHash)`                                      | `sha256_field_transcript.py` — `Sha256FieldTranscript`                             |
 | ---------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
@@ -28,9 +36,10 @@ the byte surface, made scan-threadable.
 
 ## Device fusion: which transcripts meet it, and the host exemption
 
-The fusion non-negotiable (CLAUDE.md) reads: "an `absorb`/`squeeze` … must each
-lower to **one fused kernel**." It governs **device-lowered** Fiat-Shamir — the
-per-round `observe`/`sample` that thread the round body's `@jit` region.
+The fusion non-negotiable (CLAUDE.md) puts `absorb`/`squeeze` under the same
+one-unit rule as a round body ([fusion north star](../README.md#fusion-north-star)).
+It governs **device-lowered** Fiat-Shamir — the per-round `observe`/`sample`
+that thread the round body's `@jit` region.
 
 Two of the three transcripts are device and **meet it**:
 
@@ -50,7 +59,7 @@ The **exemption is only `ByteHashTranscript`** — the *host* byte transcript. I
 holds a growing `bytes` buffer and orchestrates the chain per-op on the host (one
 dispatch per squeeze), so it does not lower to a device kernel and must not be held
 to a clause about device kernels. It is in the same family as the host steps
-`docs/conventions.md` sanctions between round kernels (a one-shot `grind`, an
+`docs/reference/conventions.md` sanctions between round kernels (a one-shot `grind`, an
 `int(...)` query index, the heterogeneous Python driver). `has_dedicated_fusion`
 delegates to the injected `ByteHash`: `HostSha256` reports `False` (the type-level
 signal of a host orchestrator); injecting `Sha256` reports `True` — the squeeze
@@ -61,21 +70,16 @@ single-dispatching the whole loop is the real win, and that is
 
 ## Status / ratification
 
-The SHA-256 Fiat-Shamir family is **device-first**: `Sha256FieldTranscript` is the
-prover path (device-resident, scan-threadable), and the host `ByteHashTranscript`
-is a **shrinking** surface — the correctness oracle
-(`test_device_substrate_matches_host` pins the device marker to stdlib `hashlib`),
-the verifier-side replay, and flock's legacy host challenger. That host surface is
-being **retired incrementally** as consumers move on-device: flock's prover
-challenger goes first (flock-zorch#9), the verifier later; `HostSha256` / `hashlib`
-stays at least as the correctness oracle. The grind is `grind`/`check_witness`
-with `DuplexTranscript`'s exact semantics, running the shared `zorch.grind`
-windowed device search — there is no host path anywhere in the field
-transcript.
+The SHA-256 family is **device-first**: `Sha256FieldTranscript` is the prover
+path, and the host `ByteHashTranscript` is a **shrinking** surface — correctness
+oracle (`test_device_substrate_matches_host` pins the device marker to stdlib
+`hashlib`), verifier-side replay, and flock's legacy challenger — retired
+incrementally as consumers move on-device. Its grind runs the shared
+`zorch.grind` windowed device search with `DuplexTranscript`'s exact semantics,
+with no host path anywhere in the field transcript.
 
-Admitting this SHA-256 family at all widens zorch's remit beyond "algebraic,
-device-resident Fiat-Shamir"; that scope decision is **flagged for ratification on
-epic [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).** If
-declined, `byte_transcript.py` + `hash/byte_hash.py` + `hash/sha256.py` +
-`sha256_field_transcript.py` move to the consumer with ~no rework (no
-zorch-internal dependencies beyond each other).
+Admitting this family widens zorch's remit beyond algebraic device-resident
+Fiat-Shamir; that scope decision is **flagged for ratification on epic
+[fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1)**. If declined,
+the four modules move to the consumer with no rework — they depend on nothing in
+zorch beyond each other.

@@ -12,10 +12,10 @@ which code owns a proof boundary, and where proof-system dataflow belongs.
 
 ## Round: repeat one contract
 
-The two roles are separate protocols, because they carry different data.
-`ProverRound` maps `(carry, transcript)` to `(carry, transcript, message)`.
-`VerifierRound` maps `(carry, transcript, message)` to
-`(carry, transcript, ok)`.
+The two roles are separate protocols (`zorch/round.py`), because they carry
+different data. `ProverRound` maps `(carry, transcript)` to
+`(carry, transcript, message)`. `VerifierRound` maps
+`(carry, transcript, message)` to `(carry, transcript, ok)`.
 
 Only the message crosses between the roles, so only the message gets a position
 of its own. A value both sides can derive — any challenge squeezed from the
@@ -43,8 +43,8 @@ prover and verifier recurrences and packages their messages into its proof type.
 
 ## Stage: reduce one claim
 
-A stage is one mathematical proof-reduction contract implemented by two
-separately deployable role interfaces:
+A stage is one proof-reduction contract implemented by two separately deployable
+role interfaces (`zorch/stage.py`):
 
 ```python
 ProverStage.prove(claim, witness, transcript)
@@ -53,177 +53,162 @@ VerifierStage.verify(claim, reduction_proof, transcript)
     -> VerifyResult[reduced_claim]
 ```
 
-There is deliberately no paired handle bundling the two roles. Prover and
-verifier objects may hold asymmetric capabilities, so code constructs only the
-role it deploys — load-bearing for preprocessing schemes whose PCS proving key
-is large while the verification key is small. A test that needs both simply
-builds both.
+No paired handle bundles the two. Roles hold asymmetric capabilities, so code
+constructs only the one it deploys — load-bearing where a PCS proving key is
+large and the verification key small. A test needing both builds both.
 
-A **claim** is the public assertion entering the stage. A **witness** is the
-private evidence used by the prover. Both sides derive the same **reduced
-claim**. The reduction proof does not normally establish that reduced claim;
-it establishes the source claim *conditional on* the reduced claim:
+The **claim** is the public assertion entering the stage, the **witness** the
+prover's private evidence. Both sides derive the same **reduced claim**, and the
+reduction proof establishes the source claim *conditional on* it:
 
 ```text
 reduced claim is true  =>  source claim is true
 ```
 
-up to the reduction's soundness error. A later stage proves the reduced claim,
-and a terminal stage closes the final claim. “Statement” is useful prose for a
-proof system's root claim, but is not a separate code concept. “Reduction”
-names the operation performed by a stage, not a generic result object.
+up to the reduction's soundness error. A later stage proves the reduced claim; a
+terminal stage reduces to `TrivialClaim`, which holds by construction, so an
+argument of knowledge is exactly a reduction to the trivial claim. Naming the
+terminal case as a type rather than `None` is what lets a parent read back that
+the chain ends there.
 
-`ProveResult.reduced_claim` is an execution result used to continue the prover;
-it is not serialized separately. The verifier independently reconstructs the
-same value from the source claim, reduction proof, and transcript.
+`ProveResult` carries the reduced claim, its proof, and the advanced transcript;
+`VerifyResult` carries the verifier's own reduced claim, transcript, and verdict.
+The reduced claim is an execution value, never serialized — the verifier
+reconstructs it from the source claim, proof, and transcript.
 
-The stage contract owns:
+The stage contract owns the pairing between its role types, one proof type, one
+source- and reduced-claim contract shared by both roles, reusable static
+configuration, and an independently testable protocol boundary. A role may drive
+round recurrences, perform PCS operations, or own child roles; compilation
+boundaries are an independent performance decision. A prover-only helper or
+transcript schedule is an ordinary function, not an incomplete stage with a
+placeholder verifier.
 
-- the pairing between its prover and verifier role types;
-- one proof type;
-- one source-claim and reduced-claim contract shared by both roles;
-- reusable static configuration;
-- an independently testable protocol boundary.
+## Which one is it?
 
-A role implementation may drive round recurrences, perform PCS operations, or
-own child role implementations. Compilation boundaries are an independent
-performance decision. A prover-only helper, transcript schedule, or performance region is an ordinary
-function or class rather than an incomplete stage with a placeholder verifier.
+The recurring question is not what a stage is, but which of four things a new
+step is. Answer it by what the step *does to a claim*, never by how big it is:
+
+| The step… | is a | because |
+| --- | --- | --- |
+| takes a claim and produces a weaker one both roles can derive | **stage** | it owns a reduction, so it owns a proof section and a role pair |
+| repeats one transition, carrying the same meaning each time | **round** | its contract is the carry and the message, not a claim boundary |
+| runs before any claim exists and produces prover-only data | **committer** | its output cannot ride a reduced claim; it reaches later roles through their witness |
+| only advances the transcript | **shared function** | it proves nothing independently, so both roles call the same named function |
+
+The last two are the ones mistaken for stages. A commitment is the object a
+later claim is *about*, so it precedes the first claim rather than reducing one;
+it stays a local in the composite and enters a later role as witness. A domain
+separator, a grind, a framed observation, or a sampled batching challenge changes
+the transcript and can change soundness, but owns no independently reusable proof
+section — so it is a function both roles call at the same point, with its
+security contribution documented there.
+
+One shape is mistaken for a round: a step whose carry comes out unchanged. If the
+carry is the same on the way out, nothing recurred, and the step is a function.
 
 ## Composition is explicit
 
-A composite prover and verifier own only their corresponding child roles and
-write their dataflow in ordinary `prove` and `verify` methods, like PyTorch
-modules with custom `forward` methods:
+A composite prover and verifier own only their child roles and write their
+dataflow in ordinary `prove` and `verify` methods, like PyTorch modules with
+custom `forward` methods:
 
 ```text
 claim + witness --------+---- outer ---- batch ---- inner ----+
                         +---- commitment / PCS data -----------+---- opening
 ```
 
-This is the default composition model, not an exceptional DAG escape hatch.
-Execution order is often linear while dataflow is not: commitments survive to a
-later opening, claims feed more than one consumer, and root-claim or witness
-data remains live across several phases.
-
-The parent constructs each child's claim and witness from named values:
+This is the default model, not a DAG escape hatch: execution order is often
+linear while dataflow is not — commitments survive to a later opening, claims
+feed more than one consumer, and root-claim data stays live across phases. The
+parent builds each child's claim and witness from named values, so a child's
+reduced claim need not be the next child's complete source claim, and private
+skip-level values stay parent locals that reach a later witness without entering
+any public claim.
 
 ```python
 outer = self.outer.prove(outer_claim, outer_witness, transcript)
 batch, transcript = batch_claims(outer.reduced_claim.values, outer.transcript)
 inner_claim = LincheckClaim(instance, outer.reduced_claim, batch)
-inner = self.inner.prove(
-    inner_claim,
-    LincheckWitness(assignment),
-    transcript,
-)
+inner = self.inner.prove(inner_claim, LincheckWitness(assignment), transcript)
 ```
 
-A child reduced claim therefore need not be the next child's complete source
-claim. The parent can combine it with root-claim data or another earlier claim.
-Private skip-level values remain explicit parent locals and can contribute to a
-later witness without entering the public claim.
+`SpartanProver` / `SpartanVerifier` are the reference composite roles: the outer
+reduced claim feeds both the inner role and the terminal opening claim, while the
+commitment and PCS prover data skip straight to the prover's opening role.
+`LogUpGkrProver` / `LogUpGkrVerifier` are the second production pair, reducing a
+public output-and-layer-count claim to an input-layer claim for a consumer's PCS
+opening.
 
-`SpartanProver` and `SpartanVerifier` are the reference composite roles. Their
-outer reduced claim feeds both the inner role and the terminal opening claim,
-while the witness commitment and PCS prover data skip directly to the prover's
-opening role. `LogUpGkrProver` and `LogUpGkrVerifier` are the second production
-pair: their source claim owns the public output and layer count, while their
-reduced claim is the input-layer claim for a consumer's PCS opening. Both proofs use frozen dataclasses with named sections.
-
-`JaggedLogUpGkrProver` and `JaggedLogUpGkrVerifier` reduce those same claim
-types over the jagged layout, so a consumer picks a layout by construction and
-the stage seam does not move. Only the witness and the layer proofs differ: the
-jagged witness carries the input layer plus the per-transition fold schedule
-(the layout is per-input), while the round width caps are a capacity class the
-prover role is configured with once. That split is the general rule for a
-layout-specific stage — per-input structure is witness, per-class structure is
-role configuration.
+`JaggedLogUpGkrProver` / `JaggedLogUpGkrVerifier` reduce those same claim types
+over the jagged layout, so a consumer picks a layout by construction and the seam
+does not move. Only the witness and layer proofs differ, which generalizes:
+**per-input structure is witness, per-class structure is role configuration** —
+the jagged fold schedule rides the witness, the round width caps configure the
+role once.
 
 ## State and ownership rules
 
 - The transcript is explicit in every round call and stage result.
-- Shared static configuration belongs on corresponding role instances.
-- Role-specific capabilities belong only on that role: proving keys never enter
-  verifier objects, and verification keys never enter prover objects.
-- Per-proof claims and witnesses are separate semantic input dataclasses.
-- Prover and verifier produce the same reduced-claim type.
-- Reduction proofs are conditional proofs of their source claims; they do not
-  establish their reduced claims.
-- Prover-only state and transmitted proof data remain distinct.
-- Skip-level values remain named locals in a composite stage.
-- Transcript-only schedule operations are shared named functions called by both
-  prover and verifier paths.
-- Stages do not derive transcript domain separators from class or display
-  names. The owning protocol specifies stable tags and framing as part of its
-  wire format; reusable framing belongs upstream only once that encoding is
-  shared by more than one protocol.
-- Proof serialization is separate from execution and follows the named proof
-  structure.
-- There is no shared bridge or universal protocol context to populate over time.
+- Role-specific capabilities stay on that role: proving keys never enter verifier
+  objects, verification keys never enter prover objects.
+- Claims and witnesses are separate per-proof dataclasses; both roles produce the
+  same reduced-claim type.
+- Prover-only state and transmitted proof data stay distinct, and skip-level
+  values stay named locals in the composite.
+- Transcript-only operations are shared named functions both paths call.
+- Domain separators are never derived from class or display names — the owning
+  protocol specifies stable tags as part of its wire format, and reusable framing
+  moves upstream only once two protocols share the encoding.
+- Serialization is separate from execution and follows the named proof structure.
+- There is no shared bridge or universal context populated over time.
 
-“No bridge” does not mean these operations are security-neutral. Claim batching
-is a randomized reduction and grinding amplifies security; both belong in the
-parent's soundness accounting. They are functions rather than stages because
-they do not own an independently reusable paired proof section.
+"No bridge" is not a claim of security-neutrality: claim batching is a randomized
+reduction and grinding amplifies security, so both belong in the parent's
+soundness accounting. They are functions because they own no independently
+reusable paired proof section.
 
 ## Verification failures
 
-Verification distinguishes structure from cryptographic validity:
-
-- malformed inputs whose static proof shape cannot represent the configured
-  protocol raise `ValueError`;
-- well-formed proofs that fail an algebraic, transcript, or opening check return
-  `VerifyResult(ok=False)`.
-
-Wire-facing callers must validate/decode untrusted bytes into the expected
-static proof shape and translate structural exceptions into their external
-rejection response. Stage methods operate on typed in-memory proofs rather than
-serving as a non-throwing byte parser.
+A malformed input whose static proof shape cannot represent the configured
+protocol raises `ValueError`; a well-formed proof failing an algebraic,
+transcript, or opening check returns `VerifyResult(ok=False)`. Stage methods take
+typed in-memory proofs and are not non-throwing byte parsers, so a wire-facing
+caller decodes untrusted bytes into the expected shape and translates structural
+exceptions into its own rejection response.
 
 ## Reuse boundaries
 
-Reuse the exact stage when the cryptographic subprotocol and transcript schedule
-match. Reuse rounds and recurrence drivers when the repeated transition matches
-but the surrounding framing differs. Reuse lower mathematical, transcript, and
-PCS primitives when even the recurrence is protocol-specific.
+Reuse the exact stage when the subprotocol and transcript schedule match; reuse
+rounds and drivers when the transition matches but the framing differs; reuse the
+mathematical, transcript, and PCS primitives when even the recurrence is
+protocol-specific.
 
-A component should expose only its intrinsic dependencies. It should not know
-which sibling runs before it or carry unrelated values merely because another
-component needs them later. Consumer-specific schedules remain in consumer
-composite stages; reusable protocol components remain in zorch.
-
-Univariate skip illustrates why the reduced claim is part of that contract.
-It is an ordinary sumcheck stage, but its first reduced coordinate binds a
-subgroup interpolation of several Boolean variables. It therefore exports a
-prism-evaluation claim, not an ordinary multilinear evaluation claim. A parent
-expecting an ordinary MLE claim cannot silently substitute it.
-
-A stage can also be applied recurrently. A folding parent threads its
-accumulator through repeated calls to one fold stage, and the stage's semantic
-input can contain a k-ary batch of instances. Recurrence is a use of the paired
-component, not a second inheritance relationship.
+A component exposes only its intrinsic dependencies — it does not know which
+sibling ran before it, nor carry values only a later component needs. Univariate
+skip shows why the reduced claim is part of that contract: an ordinary sumcheck
+stage, but its first reduced coordinate binds a subgroup interpolation, so it
+exports a prism-evaluation claim that a parent expecting an ordinary MLE claim
+cannot silently substitute. A stage may also be applied recurrently — a folding
+parent threading its accumulator through repeated calls — which is a use of the
+paired component, not a second inheritance relationship.
 
 ## Testing the pairing
 
-Tests should pin the properties the abstractions cannot enforce themselves:
+Pin what the abstractions cannot enforce: that both roles' transcripts agree and
+both derive the same reduced claim at every boundary; that honest proofs verify
+and mutating each named proof section rejects; that an alternate injected round
+or PCS preserves the contract; that a verifier constructs with no prover
+capability; and that compile count, runtime, and peak memory do not regress.
 
-- prover and verifier transcripts agree at every component boundary;
-- prover and verifier derive the same reduced claim at every boundary;
-- honest proofs verify;
-- mutating each named proof section rejects;
-- alternate injected round or PCS implementations preserve the role contract;
-- a verifier role can be constructed without any prover capability;
-- compile count, runtime, and peak memory do not regress.
-
-The parent prover and verifier remain two explicit programs; one is not derived
-from the other. This keeps their knowledge boundaries honest, while making
-transcript-boundary and structural-proof tests mandatory.
+Parent prover and verifier stay two explicit programs, neither derived from the
+other — which keeps their knowledge boundaries honest and makes those
+transcript-boundary and structural tests mandatory.
 
 ## Consumer boundary
 
 zorch supplies reusable stages, round drivers, transcripts, PCS protocols, and
-mathematical blocks. A consumer owns its concrete protocol schedule, root-claim
-layout, transcript framing, and proof serialization. A component belongs in
-zorch when another proof system can reuse it without inheriting one consumer's
-private orchestration.
+mathematical blocks. A consumer owns its protocol schedule, root-claim layout,
+transcript framing, and serialization. A component belongs in zorch when another
+proof system can reuse it without inheriting one consumer's private
+orchestration.

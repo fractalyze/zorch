@@ -25,14 +25,12 @@ rather than materializing a hypercube.
 *empty* range (`t_c = t_{c+1} = t_L`), never zero bits — a zero-bit pad injects a
 phantom range `[0, t_0)` that corrupts `J̃`.
 
-**Static config carries the tiers, names no field.** `JaggedStaticConfig` (frozen,
-so it hashes as a `jit` static arg) fixes `l_max` (compiled-max column count),
-`n_c` / `n_r` / `n_d` (column / row / layer bit-widths), and the field `dtype`.
-The real-chip layout that *produces* the column heights (per-interaction row
-counts, gather-pad) is the consumer's trace concern; here it is just the agnostic
-eval, recast to AOT-clean form — a static
-`l_max` column axis and a `lax.fori_loop` layer loop in place of host-driven
-shapes.
+**Static config carries the tiers, names no field.** `JaggedStaticConfig` is
+frozen, so it hashes as a `jit` static arg, and fixes `l_max` (compiled-max
+column count), the column / row / layer bit-widths, and the field `dtype`. The
+real-chip layout *producing* the column heights is the consumer's trace concern;
+here it is the agnostic eval in AOT-clean form — a static `l_max` column axis and
+a `lax.fori_loop` layer loop instead of host-driven shapes.
 
 ## Opening
 
@@ -62,23 +60,28 @@ to the commitment.
 
 ### Verifier input contract
 
-The verifier consumes the `JaggedLayout` from an untrusted statement, so
-`validate_layout` (invoked on every indicator derivation, prover and verifier
-alike) rejects malformed counts before any arithmetic reads them: negative or
-oversized heights/widths, zero total area, a log-area tier past the safe bound
-(`2^tier` must stay below every supported field prime for the canonical
-structure-hash embedding, and within int32 for the prefix-sum decode), and
-`log_s > log_m`. Per-count capacity is checked individually — block count
-included — because the area bounds only `h·w` products: a zero-width block
-would otherwise smuggle an arbitrary height into the structure hash (where it
-aliases a small one mod p), and zero-area blocks would grow the hash's leading
-block-count element without bound the same way.
+The column heights arrive with the statement, and what the verifier checks about
+them today is **shape, not magnitude**. `build_jagged_layout` rejects only more
+real columns than the capacity `l_max`; `verify_jagged_eval_msg` and
+`stacked_basefold_verify` then reject a proof whose static shape cannot represent
+the configured protocol — one degree-`_DEGREE` polynomial per merged prefix bit,
+agreement between component commitments / round widths / batch evals / component
+openings, at least one stacking variable and one query, one committed fold layer
+per stacking variable, and a folded point wide enough to carry them.
 
 Booleanity and monotonicity of the prefix-sum bits need **no** runtime check:
-prover and verifier both *rebuild* the bits from the validated non-negative
-counts, so they hold by construction. (A verifier that instead consumed
-prover-supplied prefix sums would have to check both — that is a design
-property of this layout-recomputing shape, worth preserving.)
+prover and verifier both *rebuild* the bits from the supplied counts, so they
+hold by construction. (A verifier that instead consumed prover-supplied prefix
+sums would have to check both — a design property of this layout-recomputing
+shape, worth preserving.)
+
+**The magnitude bounds are a gap, not a guarantee.** Nothing rejects a negative
+or oversized height, a zero-area layout, or a log-area tier past the point where
+`2^tier` still embeds canonically below every supported field prime and decodes
+within int32. A caller handing this verifier heights from an untrusted statement
+is relying on its own validation, because this block performs none. Closing it
+is a trust-model decision — which side owns statement validation — rather than a
+missing line.
 
 **Composite fusion is deferred.** The opening is a procedural composition of `@jit`
 device zones; folding the whole protocol into one fused kernel (the

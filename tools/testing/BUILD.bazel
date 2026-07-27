@@ -1,0 +1,12 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "lint_docs_test",
+    size = "small",
+    srcs = ["lint_docs_test.py"],
+    deps = [
+        "//tools:lint_docs",
+        requirement("absl_py"),
+    ],
+)

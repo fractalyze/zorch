@@ -70,76 +70,45 @@ enclosing shape.
 
 ## Loops: `for` vs `lax.scan` vs `vmap`
 
-Three ways to repeat work; the **shape of the per-iteration output** picks one.
+The **shape of the per-iteration output** picks the tool.
 
-- **`frx.vmap` — independent items, no carry.** A batch whose elements are
-  independent (open N FRI queries' Merkle paths, hash N rows) is one `vmap` over
-  the batch axis — on device, no Python loop and no `scan`. What is mapped must be
-  a registered pytree (see [Pytree registration](#pytree-registration)): `Opening`
-  is registered so `tree.open` / `reconstruct_root` `vmap` over a query batch.
+- **`frx.vmap`** — independent items, no carry (N FRI queries' Merkle paths, N
+  row hashes). What is mapped must be a registered pytree.
+- **Python `for`, straight-line** — a compile-time-known count of pure field ops
+  (Horner, synthetic division, a permutation's rounds). It traces to element-wise
+  IR that fuses, where `lax.scan` would lower to a `stablehlo.while` boundary
+  that breaks fusion for a tiny trip count.
+- **`lax.scan`** — a homogeneous carry with a round-invariant output shape inside
+  one traced region; unrolling many rounds inflates the graph past the XLA PTX
+  cliff. A carry must keep a fixed shape, so a halving MLE state rides a
+  full-width buffer with the live prefix packed at the front and the dead tail
+  masked (see [`prove.py`](../../zorch/prove.py)). `prove` is generic over the
+  round's summand — it reads `degree` + `_combine` and owns the buffer, mask,
+  fold and scan, so a new sumcheck rides it by supplying a `_combine`.
+- **Python `for`, heterogeneous** — when the per-round message or committed
+  artifact changes shape (`fold_rounds`, the FRI fold phase, the GKR
+  `prove_rounds`). Safe as a host-orchestrated loop of separate dispatches.
 
-- **Python `for` — static-size straight-line arithmetic.** A small,
-  compile-time-known count of pure field ops (Horner, synthetic division, a
-  permutation's rounds, a Merkle fold's layers) is unrolled with a Python `for`.
-  It traces to straight-line element-wise IR that fuses; `lax.scan` would lower to
-  `stablehlo.while`, a GPU control-flow boundary that breaks fusion and adds loop
-  overhead for a tiny trip count.
+A `lax.scan` reached from eager code needs a **stable body**: the trace cache is
+keyed on the body's identity, so one built per call recompiles an identical
+graph every time — orders of magnitude over the work being scanned, and silent.
+`zorch/scan_body.py` memoizes a body factory for that; a scan inside a `@jit`
+zone needs nothing, since the jit cache absorbs it.
 
-- **`lax.scan` — homogeneous per-round loop inside one traced region.** When a
-  round repeats with a **round-invariant output shape** and the loop is (or will
-  be) one `jit`'d region, scan it: unrolling many rounds inflates the graph past
-  the XLA PTX cliff (#58). `prove` / `verify` are the case — every variable's
-  round poly has the same shape. A `scan` carry must keep a **fixed shape**, so a
-  halving MLE state rides in a full-width buffer with the live prefix packed at the
-  front and the dead tail masked (see [`prove.py`](../../zorch/prove.py)). The round
-  is the carry, so it must be a registered pytree. `prove` is **generic over the
-  round's summand**: it reads only `degree` + `_combine` (the `SumcheckSummand`
-  Protocol in `prove.py`) and owns the buffer / mask / fold / scan, so the product
-  `SumcheckRound` and the LogUp `LogupSumcheckRound` share one scan — a new
-  sumcheck rides it by supplying a `_combine`, not by re-deriving the scan
-  machinery. Only this per-variable inner loop scans; the heterogeneous chain over
-  it (`fold_rounds`, the GKR `prove_rounds`) stays a Python `for` (next bullet).
-
-- **Python `for` — heterogeneous / non-round-invariant per-round loop.** When the
-  per-round message or committed artifact changes shape across rounds it is not
-  `scan`-shaped — keep it a Python loop (`fold_rounds`, the FRI fold phase, the GKR
-  `prove_rounds`). FRI's fold halves the codeword and commits a half-size Merkle
-  layer each round; the GKR pyramid halves each layer. This is safe as a
-  **host-orchestrated** loop (separate dispatches, not one giant traced graph);
-  the `DuplexTranscript` steps inside it are device ops either way.
-
-  The **fixed-width-mask exception** reaches one level up when the shrink is
-  *predictable*: the jagged GKR pyramid halves each layer, so the layer chain —
-  heterogeneous though it is — still rolls into one `lax.scan` by the same
-  buffer-plus-mask trick `prove` / `verify` use per variable. Pad every layer to
-  the max width with the fold-neutral fraction, carry the live count as a traced
-  threshold (`poly.geq.VirtualGeq`), and on a short layer's padding rounds select
-  the unchanged carry — the transcript's sponge leaves included — so Fiat-Shamir
-  never over-advances. `logup_gkr.circuit.scan_build_jagged_pyramid` (the
-  generation) rolls this way: O(1) in the layer count. The matching device-FS
-  prove roll was retired — Fiat-Shamir now runs on the host between kernel
-  launches, so the jagged prove is the unrolled
-  `prove_rounds(JaggedGkrLayerRound(l) for l in layers)` on a host-FS transcript
-  (the host-orchestrated `for` case below), not a `scan` roll. Reach for a
-  fixed-width roll when the layer count drives compile time or eager-dispatch
-  latency past the cost of the masking.
-
-The per-round Fiat-Shamir `observe` / `sample` is wrapped in a `Round` (the
-composable unit) by design, so a round loop is one of the two `Round` forms above:
-`fold_rounds` (heterogeneous → Python `for`) or `prove` / `verify` (homogeneous →
-`lax.scan`).
-
-Decision, in order: independent with no carry → `vmap`; static small straight-line
-arithmetic → `for`; sequential carry with a round-invariant shape in one traced
-region → `lax.scan`; sequential carry whose per-round shape varies, or that is
-host-orchestrated → `for` (or a fixed-width-mask `lax.scan` when the shrink is
-predictable and the step count drives cost — the jagged GKR roll above).
+The **fixed-width-mask exception** reaches one level up when the shrink is
+*predictable*: pad every layer to the max width with the fold-neutral fraction,
+carry the live count as a traced threshold (`poly.geq.VirtualGeq`), and on a
+padding round select the unchanged carry — sponge leaves included — so
+Fiat-Shamir never over-advances. `logup_gkr.circuit.build_jagged_pyramid` rolls
+this way, O(1) in the layer count. Reach for it only when the step count drives
+compile time or dispatch latency past the cost of the masking; the jagged prove
+does not, and stays an unrolled `prove_rounds` on a host-FS transcript.
 
 ## Pytree registration
 
-A `Round` — or any object — that crosses a `frx` transform boundary (passed to or
-returned from `jit` / `vmap` / `scan`, or threaded as a `scan` carry) must be a
-registered FRX **pytree**. Register the concrete class as a frozen dataclass:
+Any object crossing a `frx` transform boundary — passed to or returned from
+`jit` / `vmap` / `scan`, or threaded as a `scan` carry — must be a registered
+FRX pytree, as a frozen dataclass:
 
 ```python
 @partial(frx.tree_util.register_dataclass, data_fields=["lam"], meta_fields=[])
@@ -148,159 +117,109 @@ class LogupSumcheckRound(Round):
     lam: Array
 ```
 
-- **`data_fields`** are the `Array` leaves the transform traces over (a round's
-  challenge `lam`). **`meta_fields`** are static config the trace bakes in
-  (`degree`, a permutation instance) — they must be hashable and compare by value.
-  Identity equality here does not error — it silently re-traces the enclosing
-  jit zone on every freshly built instance (issue #163: ~2 min/call on a replay
-  whose kernels run in 20 ms). An object-typed meta field needs explicit value
-  `__eq__`/`__hash__`, and its `*PytreeTest` should assert two independently
-  built instances share one treedef.
-- Validate in `__post_init__`, never `__init__`, and only on shapes / static
-  fields — `__post_init__` reruns on **tracers** during `unflatten`, so branching
-  on an `Array` *value* there breaks under `jit`/`vmap`.
-- Every registered class gets a `*PytreeTest`: a `tree_flatten`/`unflatten`
-  round-trip that asserts the **leaf count** (so a field misclassified as
-  meta-vs-data is caught), plus a "threads through `jit` as an argument" check.
-  The `vmap`-over-a-leaf case (one `vmap` over a batch of `lam`s) is the
-  capability registration buys that closing the object into a constant cannot —
-  test it where it applies.
+- **`data_fields`** are the `Array` leaves the transform traces over;
+  **`meta_fields`** are static config baked into the trace, and must be hashable
+  and **compare by value**. Identity equality does not error — it silently
+  re-traces the enclosing jit zone per freshly built instance (~2 min/call on a
+  replay whose kernels run in 20 ms). An object-typed meta field needs explicit
+  `__eq__`/`__hash__`.
+- Validate in `__post_init__`, never `__init__`, and only on shapes and static
+  fields — it reruns on **tracers** during `unflatten`, so branching on an
+  `Array` value there breaks under `jit`/`vmap`.
+- Every registered class gets a `*PytreeTest`: a flatten/unflatten round-trip
+  asserting the **leaf count** (catching a meta-vs-data misclassification), plus
+  a threads-through-`jit` check, plus the `vmap`-over-a-leaf case where it
+  applies — the capability registration buys that a closed-over constant cannot.
 
-**Which classes.** The per-variable sumcheck rounds —
-`sumcheck.prover.SumcheckRound`, `sumcheck.verifier.SumcheckRound`,
-`logup_gkr.prover.LogupSumcheckRound` — are registered: `fold_rounds` loops them,
-`prove` / `verify` carry them through a `lax.scan` (the per-variable loop is one
-traced region), and they are `vmap`-able over their config. `DuplexTranscript`
-is registered for the same reason: the `scan` threads the transcript as part of
-its carry. `prove.RoundMsg`
-(round poly + challenge) is registered too — `prove` returns it as the `lax.scan`'s
-stacked per-round output.
-
-Do **not** pre-register what no transform threads yet — registration that buys no
-capability is noise:
-
-- **Heterogeneous-chain rounds** — `logup_gkr`'s `GkrLayerRound` and the
-  `prove_rounds` / `verify_rounds` drivers. The GKR pyramid halves every layer, so
-  the layers carry different shapes and the chain is composed in plain Python by
-  default. Where a transform does cross the pyramid — the generation roll
-  (`scan_build_jagged_pyramid`, see the loops section) — it threads the planes as
-  `Array`s, not the layer object, so `GkrLayer` / `JaggedGkrLayer` still need no
-  registration. Register only if a transform later threads one directly.
-- **Plain data records** — `LayerProof`, `GkrLayer`, `LogUpGkrOutput`. They pass
-  between un-`jit`-ed calls today. Register the moment one becomes `jit`/`scan`
-  I/O, not before — as `prove.RoundMsg` now is.
+**Register what a transform threads, nothing else.** The per-variable sumcheck
+rounds and `DuplexTranscript` are registered because `prove` / `verify` carry
+them through a `lax.scan`; `prove.RoundMsg` because it is that scan's stacked
+output. Heterogeneous-chain rounds (`GkrLayerRound`, the `prove_rounds` drivers)
+and plain data records (`LayerProof`, `GkrLayer`) are not: the pyramid roll
+threads planes as `Array`s rather than layer objects. Registration that buys no
+capability is noise; register the moment one becomes `jit`/`scan` I/O.
 
 ## Comments & documentation
 
-Comments and `docs/` prose carry only what the code can't: **WHY** — the rationale
-for a non-obvious choice, a hidden constraint or invariant, a principle, an
-external reference. They never restate **WHAT** the code does. The *what* already
-has two drift-proof homes: the code itself (names, types) and the tests, which are
-the executable usage and run on every commit. A prose "usage guide" duplicates the
-tests and goes stale the first time the API moves — so we don't write one.
+Comments and `docs/` prose carry only what the code can't: the rationale for a
+non-obvious choice, a hidden constraint or invariant, an external reference.
+Never **WHAT** the code does — that has two drift-proof homes already, the code
+and the tests. A prose usage guide duplicates the tests and rots at the first API
+move, so we don't write one.
 
-- **WHY, not WHAT.** `# loop over factors` above a `for` is noise; `# direct Lagrange, not barycentric, so a challenge on a node doesn't divide by zero`
-  earns its line. If a name already says it, the comment is redundant.
-- **Temporally neutral.** State the current permanent rule, not the journey. No
-  "used to", "before this commit", "lands in a follow-up" — `git log` / `git blame` carry the chronology; in-tree narration rots within a commit or two.
-- **Self-contained.** A reader has only the source tree and history. No
-  session/spec labels (`Q1:A`, `Approach D`), no references to uncommitted files,
-  no home/scratch paths. Link rationale in a tracked file by its repo-relative
-  path.
-- **No bare external symbol names.** A symbol from another project (a crate's
-  `ck.s`/`svk.s`, `h_prime`, `ipa_pc::open`) rots silently when that project
-  renames it — the reader can't grep it here to notice. Name the durable *concept*
-  ("the blinding generator", "the hiding fold") and, when the exact source matters,
-  a **permalink to the pinned line**, never the bare identifier. The project name
-  alone ("byte-exact with arkworks") is fine — it's the moving symbol that rots.
-  Same rule for the spec: cite the formula, not the function that computes it.
-- **A `docs/` page is design notes**, not an API tour — the *why* behind the
-  shape, the principles, the non-obvious gotchas. [`sumcheck.md`](../blocks/sumcheck.md) is
-  the intended shape.
+- **WHY, not WHAT.** `# loop over factors` is noise; `# direct Lagrange, not
+  barycentric, so a challenge on a node doesn't divide by zero` earns its line.
+- **Temporally neutral.** No "used to", "before this commit", "lands in a
+  follow-up" — `git blame` carries the chronology and in-tree narration rots
+  within a commit or two.
+- **Self-contained.** A reader has only the source tree and history: no
+  session/spec labels, no uncommitted files, no scratch paths.
+- **No bare external symbol names.** Another project's symbol rots silently when
+  it renames — the reader can't grep it here to notice. Name the durable concept
+  and permalink the pinned line. The project name alone is fine.
+- **A `docs/` page is design notes**, not an API tour.
 
 ### Subsystem doc skeleton
 
-"Design notes" still has a spine. Every block in zorch has to answer the two
-non-negotiables, so its doc must make both explicit:
+Every block page answers three things, and everything else is optional — don't
+pad to fill a template. [`sumcheck.md`](../blocks/sumcheck.md) and
+[`coding.md`](../blocks/coding.md) are the worked shapes.
 
 - **Why this shape** — the concept the block factors, and how it stays
   proving-scheme- and implementation-agnostic.
-- **Fusion by construction** — the load-bearing rule that keeps the block one
-  fused unit by design, not by a compiler pattern-match.
-
-Everything else is optional, added only when the block has it — design decisions
-and their rationale, gotchas, what's deliberately out of scope. Don't pad a doc to
-fill a template. [`sumcheck.md`](../blocks/sumcheck.md) and [`coding.md`](../blocks/coding.md) are the
-two worked shapes — copy whichever fits.
+- **Fusion by construction** — the rule keeping the block one unit by design,
+  not by a compiler pattern-match.
+- **Where it sits in the composition vocabulary** — which components are stage
+  roles, which are rounds, the claim each reduces and to what, and the module
+  path. A block with no stage role says so; silence is not an answer. Two pages
+  describing one protocol in two vocabularies is how a reader concludes they are
+  two protocols. Contracts live in
+  [`stage-composition.md`](../composition/stage-composition.md); a page names its
+  own instances rather than re-deriving the model.
 
 ## Naming
 
 A leading underscore marks non-public surface. A `Round`'s only public entry is
-`__call__` (plus `__init__`); its internal steps are `_`-prefixed (`_split`,
-`_round_poly`, `_fold`, `_combine`). Same-package tests may still reach in and
-exercise them by name — the prefix marks intent, it doesn't lock the door.
-`_combine` (a per-variable round's summand) is the one such step the `prove` scan
-driver also reads — the `_` marks it internal to the sumcheck machinery, not that
-only the class itself may call it.
+`__call__`; its steps are `_`-prefixed (`_split`, `_round_poly`, `_fold`,
+`_combine`). The prefix marks intent, not access — same-package tests reach in by
+name, and the `prove` scan driver reads `_combine`.
 
 ## Type annotations
 
-Every `def` carries a full signature — annotate each parameter and the return,
-on tests and nested closures too, `-> None` included (`__init__`,
-`__post_init__`, `test_*`). mypy's `disallow_untyped_defs` is the gate (it runs
-in pre-commit); a bare parameter or a missing return fails the hook.
+Every `def` carries a full signature, `-> None` included, on tests and closures
+too; mypy's `disallow_untyped_defs` is the gate. Vocabulary: `frx.Array` for any
+field element (a scalar challenge is a 0-d `Array`, not a Python number);
+`Sequence[Array]` where MLE state is read and `list[Array]` where it is owned;
+the `Transcript` Protocol rather than an implementation; `Any` for a field dtype,
+which is honest rather than a placeholder — the core names no field.
 
-Vocabulary:
+`Carry` is a type variable; a concrete carry is named for what it holds
+(`RunningClaim`, `LayerClaim`, `FoldState`), never `Carry`.
 
-- `frx.Array` for any field element or array — a scalar challenge is a 0-d
-  `Array`, not a Python number.
-- The per-factor MLE state threaded through a `Round` is `Sequence[Array]` where
-  it is only read, `list[Array]` where it is owned or returned.
-- `Transcript` (the Protocol in `transcript.py`) for the threaded transcript,
-  never a concrete implementation. A test that reaches an implementation-only
-  field narrows first with `if not isinstance(t, DuplexTranscript): raise AssertionError(...)`, not a bare `assert` ([Testing](#testing)).
-- `Any` for a field dtype — the core names no field and treats `dtype` as
-  opaque, so `dtype: Any` is the honest type, not a placeholder.
-
-`ProverRound[Carry, Message]` maps `(carry, transcript)` to
-`(carry, transcript, message)`. `VerifierRound[Carry, Message]` maps
-`(carry, transcript, message)` to `(carry, transcript, ok)`. Only the message
-crosses between the roles; a challenge both sides derive rides the carry.
-`Carry` is the protocol's type variable — a concrete carry is named for what it
-holds (`RunningClaim`, `LayerClaim`, `FoldState`), never `Carry`.
-
-mypy can't see through FRX (its shipped stubs don't parse) or
-`zk_dtypes`/`zkbench`, so to the checker `Array` collapses to `Any`. The value
-is catching a missing or malformed annotation, not deep array-shape checking —
-write the precise type regardless; it is documentation that outlives the stubs.
+mypy cannot see through FRX (its stubs don't parse) or `zk_dtypes`/`zkbench`, so
+`Array` collapses to `Any`. The value is catching a missing or malformed
+annotation; write the precise type anyway, as documentation outliving the stubs.
 
 ## Seam conformance pins
 
 A `Protocol` seam's conformance is mypy-enforced, not conventional: every
-instance module (`testkit` included) ends with a one-line pin
+instance module ends with a one-line pin
 
 ```python
 if TYPE_CHECKING:
     _: type[Permutation] = Poseidon2
 ```
 
-so signature drift — a renamed method, wrong arity, an added parameter — fails
-pre-commit mypy at the instance, instead of surfacing at a consumer call site
-(or never, while the instance still has no in-tree consumer). A generic seam
-parameterizes the pin with the instance's concrete types — the PCS pins are the
-worked example ([pcs.md "Instance anatomy"](../blocks/pcs.md#instance-anatomy)). A module
-pinning more than one seam names each pin (`_summand`, `_prover_round`, ...):
-mypy rejects re-annotating `_`.
+so signature drift fails pre-commit at the instance rather than at a consumer
+call site — or never, while the instance has no in-tree consumer. A generic seam
+parameterizes the pin with concrete types
+([pcs.md](../blocks/pcs.md#instance-anatomy) is the worked example); a module
+pinning two seams names each, since mypy rejects re-annotating `_`.
 
-A `@runtime_checkable` `assertIsInstance` test is not a substitute: it checks
-member *presence* on a live object, never signatures. The two are complementary
-— the pin for instance modules, the runtime check for a test-local duck-typed
-fixture that lives and dies inside its test.
-
-With `frx.Array` collapsed to `Any` ([Type annotations](#type-annotations)), a
-pin checks names, arity, and parameter count — not coordinate types. It bites
-fully only where the signature carries zorch-owned nominal types, an argument
-for named-dataclass wire types.
+A `@runtime_checkable` `assertIsInstance` is complementary, not a substitute: it
+checks member presence on a live object, never signatures. With `Array` collapsed
+to `Any` a pin checks names and arity, biting fully only where the signature
+carries zorch-owned nominal types — an argument for named-dataclass wire types.
 
 ## Testing
 

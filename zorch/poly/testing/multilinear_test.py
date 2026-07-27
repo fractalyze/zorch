@@ -8,6 +8,9 @@ from absl.testing import absltest
 from frx import Array
 
 from zorch.poly.multilinear import (
+    _level,
+    _mobius_combine,
+    _zeta_combine,
     eval_mle,
     mle_coeffs_to_evals,
     mle_evals_to_coeffs,
@@ -124,6 +127,39 @@ class MleCoeffEvalTransformTest(absltest.TestCase):
         small, large = lowered(3), lowered(10)
         self.assertIn("while", small)
         self.assertEqual(small.count("subtract"), large.count("subtract"))
+
+
+class ButterflyScanBodyIdentityTest(absltest.TestCase):
+    """The scan body is memoized, so repeated transforms reuse one trace.
+
+    `lax.scan` keys its trace cache on the identity of the body it is handed, so
+    a body built per call re-traces an identical graph every time — invisible in
+    results, ~180x the cost of the transform. The wrappers pass module-level
+    combines for the same reason: a fresh lambda per call is a fresh key.
+    """
+
+    def test_same_combine_and_shape_share_one_body(self) -> None:
+        first = _level(_zeta_combine, (), 8)
+        second = _level(_zeta_combine, (), 8)
+
+        self.assertIs(first, second)
+
+    def test_shape_and_combine_each_get_their_own_body(self) -> None:
+        base = _level(_zeta_combine, (), 8)
+
+        self.assertIsNot(base, _level(_zeta_combine, (), 16))
+        self.assertIsNot(base, _level(_zeta_combine, (3,), 8))
+        self.assertIsNot(base, _level(_mobius_combine, (), 8))
+
+    def test_wrappers_reuse_one_body_across_calls(self) -> None:
+        table = fnp.arange(8, dtype=F)
+        mle_coeffs_to_evals(table)
+        body = _level(_zeta_combine, (), 8)
+
+        mle_coeffs_to_evals(table)
+
+        # A repeat call reuses that body rather than building a second one.
+        self.assertIs(_level(_zeta_combine, (), 8), body)
 
 
 if __name__ == "__main__":

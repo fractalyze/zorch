@@ -1,16 +1,15 @@
 ---
 name: lint-zorch-docs
 description: |
-  zorch-specific documentation lint. Wraps /workflow:lint-docs for the
-  universal checks, then layers zorch's two non-negotiables on top:
-  subsystem doc-coverage parity (every zorch/<subsystem>/ has a
-  docs/**/<subsystem>.md and a hub row), the two-section subsystem skeleton
-  (why-the-shape/agnostic + fusion-by-construction), Fractalyze XLA field-dtype gotcha
-  dedup (stated canonically only in poly.md), the CLAUDE.md = pointer +
-  two-non-negotiables + dev-env rule, and agnostic naming (a scheme/zkVM is
-  named only as the consumer boundary). The subsystem list is auto-detected
-  from zorch/, so a new block inherits every check the moment its directory
-  lands.
+  zorch-specific documentation review. `tools/lint_docs.py` runs as a
+  pre-commit hook and settles the two questions the filesystem answers —
+  whether a cited symbol resolves, and whether a relative link does. This
+  skill covers everything else, all of which needs reading: subsystem page
+  coverage, whether a page answers why-this-shape, fusion-by-construction and
+  where it sits in the composition vocabulary; whether CLAUDE.md has stayed a
+  pointer; and whether a scheme or zkVM is named as anything but the consumer
+  boundary. Wraps /workflow:lint-docs for the
+  universal checks.
   TRIGGER when: (1) /lint-zorch-docs, (2) after touching CLAUDE.md /
   README.md / docs/, (3) after adding a new subsystem, (4) before a docs PR.
   SKIP when: outside the zorch repo; the universal pass already ran clean and
@@ -21,118 +20,92 @@ allowed_tools: Read, Write, Edit, Glob, Grep, Bash, Skill
 
 # Lint zorch Docs
 
-Two-stage lint on top of `/workflow:lint-docs`:
+The mechanical half is not here. `tools/lint_docs.py` settles whether a cited
+symbol or link resolves, because a rule written as prose drifts silently while a
+rule that runs fails the commit that breaks it — this file previously named
+`commit/jagged` as the one nested block earning its own page, a path that never
+existed. Nothing below restates a tree fact.
 
-1. Universal pass — invoke `/workflow:lint-docs`, surface its report.
-1. zorch-specific pass — checks Z1–Z5 below, merged into the same report.
+It deliberately stops at resolution. Whether every subsystem has a page, whether
+a claim is stated once, whether a module is reachable from the docs at all — all
+real, none decidable from the filesystem without encoding an editorial rule as
+CI. They are checks J1-J3 below, read rather than run.
 
-The conventions enforced here live in `docs/reference/conventions.md` (the "subsystem doc
-skeleton" + WHY-not-WHAT rules) and the **two non-negotiables** in `CLAUDE.md` /
-`README.md` (proving-scheme- & implementation-agnostic; fusion by construction). When a
-rule drifts, fix the convention doc and re-run.
+Three stages:
+
+1. `python3 tools/lint_docs.py` — reference resolution. Fix what it reports
+   first; the judgment checks read a moving target otherwise.
+1. `/workflow:lint-docs` — universal prose checks. Surface its report.
+1. J1–J3 below, merged into the same report.
+
+The conventions these enforce live in `docs/reference/conventions.md` (the
+subsystem doc skeleton and the WHY-not-WHAT rule) and the **two non-negotiables**
+in `CLAUDE.md` / `README.md`. When a rule drifts, fix the convention doc and
+re-run.
 
 ## Bail-out
 
 If `$(basename $(git rev-parse --show-toplevel))` does not start with `zorch`,
 stop and point the user at `/workflow:lint-docs`.
 
-## Auto-detect the subsystem list
-
-A *subsystem* is a top-level directory under `zorch/` that ships a design block —
-it holds a non-`__init__`, non-`_test`, non-`bench_*` `.py` with a module
-docstring (a benchmark script is not a primitive). Exclude the support dirs
-`testing/`, `testkit/`, `utils/`, and every `__pycache__`. Walk
-`zorch/*/` — never hard-code that set, so a new block is checked the moment it
-lands. Map a subsystem to its doc by replacing `_` with `-`, then resolving it
-under the layout subdirs with a `docs/**/<name>.md` glob (never assume a flat
-`docs/`): building blocks live in `docs/blocks/` (`logup_gkr` →
-`docs/blocks/logup-gkr.md`), full SNARKs in `docs/schemes/` (`spartan` →
-`docs/schemes/spartan.md`).
-
-A *nested* block earns its own page only when its concern stands alone — an
-editorial call, not a tree fact. Today that is just `commit/jagged`;
-`hash/poseidon2`, by contrast, is documented inside `hash.md`. A fully-recursive
-walk would over-detect these sub-components, so this short own-page list stays
-explicit with its rationale, separate from the auto-walked top-level set.
-
 ## Checks
 
-### Z1. Subsystem doc-coverage parity (High)
+### J1. Subsystem coverage and skeleton (High)
 
-For every detected subsystem, verify both:
+Every subsystem under `zorch/` should have a page under `docs/`, linked from the
+hub, and every top-level module should be reachable from some page — the lint no
+longer checks either, so check them here.
 
-- a doc exists at `docs/**/<subsystem>.md` (a building block under
-  `docs/blocks/`, a full SNARK under `docs/schemes/`).
-- `docs/README.md`'s hub table has a row linking it.
+Every block page must answer the three things `conventions.md` mandates: **why
+this shape** (the concept it factors, and how it stays proving-scheme- and
+implementation-agnostic), **fusion by construction**, and **where it sits in the
+composition vocabulary** (which components are stage roles, which are rounds, the
+claim each role reduces and to what).
 
-Flag a subsystem missing either. Softer (Medium): a non-`bench_*` source module
-that grew a module docstring but is named in no `docs/**/*.md` — a new primitive
-landed without a doc home (e.g. a fold helper added beside an encoder). Name it;
-the user decides the home.
+Headings are a hint, not the test — `coding.md` covers the first two under
+different titles and is conventions-blessed. Read for the ideas. A block with no
+stage role passes the third by saying so; silence does not.
 
-### Z2. Subsystem skeleton (High)
+### J2. CLAUDE.md shape (Medium)
 
-Every block doc must answer the two non-negotiables `conventions.md` mandates: a
-section on **why this shape** (the concept it factors, how it stays
-proving-scheme- and implementation-agnostic) and a section on **fusion by construction**.
-Heuristic: the doc has a `## …why…` heading and a `## …fusion…` heading
-(case-insensitive). `coding.md` is the conventions-blessed alternate shape — its
-"Why this module exists" + "don't hand-roll the NTT" cover both ideas under
-different titles — so treat a near-miss as a prompt to confirm both ideas are
-present, not an automatic failure.
+zorch's CLAUDE.md is a pointer to README.md and docs/, plus exactly two content
+sections: **Two non-negotiables** and **Development environment**. Flag any other
+content section. The non-negotiables must agree with README.md's Design
+Philosophy — but agreement by *linking the same canonical statement*, not by
+carrying a second copy of it, which is how the fusion claim drifted into
+contradiction with what the north star measured.
 
-### Z3. Fractalyze XLA field-dtype gotcha dedup (Medium)
+### J3. Agnostic naming (Low)
 
-The Fractalyze XLA field-dtype limits are stated canonically in
-`blocks/poly.md#field-dtype-gotchas`. Any other doc that re-explains a limit instead
-of linking that anchor is a duplicate. Detection: grep the other docs for the limit keywords poly.md's gotcha
-bullets use (`iota`, `reduce_sum`, `lax.shift`, `jnp.tile`, `arange`, …) and check
-the surrounding lines link `poly.md` — seed the set from those bullets so a new
-limit is covered when poly.md gains it. A block-specific *consequence* (jagged's
-trace growing with `l_max`) is fine; a restated *rule* is the dup.
-
-### Z4. CLAUDE.md shape (Medium)
-
-zorch's CLAUDE.md is a pointer to README.md + docs/, plus exactly two allowed
-content sections: **Two non-negotiables** (agnostic + fusion) and **Development
-environment**. Flag any other content section, or non-negotiables prose that has
-drifted from `README.md`'s Design Philosophy. (Looser than the universal
-pointer-only rule — the two-non-negotiables section is deliberate.)
-
-### Z5. Agnostic naming in docs (Low)
-
-A zkVM name (`sp1`, `openvm`, `zisk`, `risc0`, `jolt`) or the consumer
-(`whir-zorch`) may appear only as the **consumer boundary** ("lives in the
-consumer", "the consumer's concern", "adapted from whir-zorch"). Generic scheme
-names (FRI, Basefold, WHIR, STARK, GKR, sumcheck) are fine anywhere. Flag a
-mention that reads as a zorch dependency or feature rather than a boundary, for
-review.
+A zkVM name (`sp1`, `openvm`, `zisk`, `risc0`, `jolt`) or a consumer repository
+may appear only as the **consumer boundary** ("lives in the consumer", "adapted
+from …"). Generic scheme names (FRI, Basefold, WHIR, STARK, GKR, sumcheck) are
+fine anywhere. Flag a mention that reads as a zorch dependency or feature.
 
 ## Procedure
 
 1. Bail-out check.
-1. Auto-detect subsystems from `zorch/`.
-1. Invoke `/workflow:lint-docs`; capture its report.
-1. Run Z1–Z5 against the detected set.
+1. Run the three stages above.
 1. Merge into one report:
 
    ```md
    # /lint-zorch-docs report
 
+   ## Reference resolution (tools/lint_docs.py)
+   ...
+
    ## Universal (from /workflow:lint-docs)
    ...
 
-   ## zorch-specific
+   ## zorch-specific judgment
    ### High / Medium / Low
-   - Z<n> — <finding>. Suggested fix: <action>.
+   - J<n> — <finding>. Suggested fix: <action>.
 
    ## Summary
    <combined counts; --fix pointer if applicable>
    ```
 
-1. With `--fix`: defer mechanical fixes to the upstream skill. For a Z1 missing
-   doc, offer to scaffold `docs/blocks/<subsystem>.md` (or `docs/schemes/` for a
-   full SNARK) from the skeleton (copy the
-   nearest worked shape, fill the headings) and add the hub row — but draft the
-   WHY prose for user review, never invent it. For Z2 / Z4 prompt per finding via
-   `AskUserQuestion`; the rest report-only.
+1. With `--fix`: defer mechanical fixes to `tools/lint_docs.py`'s own messages
+   and to the upstream skill. For a J1 gap, offer to draft the missing section
+   from the nearest worked shape — but put the WHY prose up for review, never
+   invent it. Prompt per finding via `AskUserQuestion`; the rest report-only.
