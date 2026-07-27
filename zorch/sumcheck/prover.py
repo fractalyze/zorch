@@ -57,17 +57,12 @@ from zorch.transcript import Transcript
 )
 @dataclass(frozen=True)
 class FoldingClaim:
-    """What a sumcheck round threads: the engine's folding state and the claim
-    built so far.
+    """What a sumcheck round threads: the engine's folding state and the claim.
 
-    `state` is whatever the engine folds — stacked factor tables for the
-    materialized rounds, a deferred `(factors, eq)` pair for the √-space one.
-
-    The claim half is why the prover can export a reduced claim at all. A round
-    squeezes its challenge, folds with it, and would otherwise drop it — and the
-    point and running value live nowhere else. Carrying them is the round
-    contract\'s own rule, that derived state belongs in the carry, applied to the
-    role that derives them first.
+    `state` is whatever the engine folds — stacked factor tables, or the √-space
+    engine's deferred `(factors, eq)` pair. The claim rides beside it because a
+    round's challenge is derived rather than received, and the point and running
+    value it builds live nowhere else.
     """
 
     state: Any

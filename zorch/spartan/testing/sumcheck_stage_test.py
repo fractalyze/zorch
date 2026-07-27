@@ -48,11 +48,11 @@ def _compressed_inner() -> tuple[SumcheckProver, SumcheckVerifier]:
 
 
 class ChildStageTest(absltest.TestCase):
-    def test_prover_and_verifier_agree_without_the_prover_replaying(self) -> None:
-        # The prover reduces its own claim as it folds rather than replaying its
-        # proof, so agreement is no longer true by construction — both roles now
-        # derive the point, the value and the transcript independently, through
-        # the one reduction in `sumcheck.reduce`.
+    def test_both_roles_derive_the_same_reduction_independently(self) -> None:
+        # Each role runs its own program over the same wire messages: the prover
+        # reduces as it folds, the verifier as it replays. Point, value and
+        # transcript must agree across that seam, which is what `sumcheck.reduce`
+        # having one definition per wire form buys.
         state = rand_field(20, (2, 8), KB)
         claim = fnp.sum(state[0] * state[1])
         prover = SumcheckProver(StandardRound(ProductSummand(2), challenges=_CH))

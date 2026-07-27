@@ -137,8 +137,8 @@ def prove_univariate_skip(
     product over the factors; `challenges` configures the subgroup round and every
     tail round together. Returns the final folded factors
     (m, 1) beside the reduced claim, the transcript, and all 1+n round messages
-    (the round-0 coefficient message first). The claim is reduced round by round
-    here rather than replayed afterwards, so the prover never runs the verifier.
+    (the round-0 coefficient message first). Each round reduces the claim as it
+    folds, so the caller gets the reduced claim without a second pass.
 
     `skip_rounds == 0` delegates to the plain StandardRound run — byte-identical to a
     sumcheck without the skip."""
