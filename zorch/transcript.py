@@ -91,22 +91,14 @@ class GrindingTranscript(Transcript, Protocol):
     def grind(self, pow_bits: int) -> tuple[Self, Array]: ...
 
 
-# Generic over the transcript flavor so the free Fiat-Shamir helpers
-# (`sample_challenge`, the open/verifier's `sample_*`) and the composition roles
-# preserve a `GrindingTranscript` rather than widening it to the base
-# `Transcript`.
-#
-# The default is what keeps the flavor optional: a role that needs nothing beyond
-# the base seam omits the parameter and reads exactly as before, while one that
-# grinds names `GrindingTranscript` and is held to it. `typing.TypeVar` gains
-# defaults only in 3.13, and the roles are subscripted in real base-class
-# position, so the default has to exist at runtime — hence `typing_extensions`.
+# Preserves a `GrindingTranscript` through the FS helpers and the composition
+# roles instead of widening it to the base seam. The default keeps the parameter
+# optional; it comes from `typing_extensions` because these are subscripted in
+# base-class position, so it must exist at runtime (`typing` gains it in 3.13).
 TranscriptT = TypeVarWithDefault("TranscriptT", bound=Transcript, default=Transcript)
 
-# The same idea one seam up: a block that grinds needs the PoW half, so it binds
-# here rather than to the base seam and keeps the caller's exact flavor. Without
-# it such a block has to `cast` its way to `grind`, which is an assertion the
-# checker cannot hold anyone to.
+# For blocks that grind: binding here keeps the caller's flavor instead of
+# casting to reach `grind`.
 GrindingTranscriptT = TypeVarWithDefault(
     "GrindingTranscriptT", bound=GrindingTranscript, default=GrindingTranscript
 )

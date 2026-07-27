@@ -50,11 +50,7 @@ class RunningClaim:
 
 
 class ProverRound(Protocol[Carry, Message_co, TranscriptT]):
-    """One prover recurrence step: fold the carry and emit a proof message.
-
-    The trailing transcript parameter names the seam this round needs, as on
-    `ProverStage`; omit it for the base `Transcript`.
-    """
+    """One prover recurrence step: fold the carry and emit a proof message."""
 
     def __call__(
         self,

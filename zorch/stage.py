@@ -47,11 +47,7 @@ class TrivialClaim:
 
 @dataclass(frozen=True)
 class ProveResult(Generic[ReducedClaim, ReductionProof, TranscriptT]):
-    """A reduced claim, its conditional reduction proof, and the transcript.
-
-    Generic in the transcript flavor so a grinding role hands back a
-    `GrindingTranscript`; omit the parameter and it is the base `Transcript`.
-    """
+    """A reduced claim, its conditional reduction proof, and the transcript."""
 
     reduced_claim: ReducedClaim
     reduction_proof: ReductionProof
@@ -60,10 +56,7 @@ class ProveResult(Generic[ReducedClaim, ReductionProof, TranscriptT]):
 
 @dataclass(frozen=True)
 class VerifyResult(Generic[ReducedClaim, TranscriptT]):
-    """The verifier-derived reduced claim, advanced transcript, and verdict.
-
-    Generic in the transcript flavor, like `ProveResult`.
-    """
+    """The verifier-derived reduced claim, advanced transcript, and verdict."""
 
     reduced_claim: ReducedClaim
     transcript: TranscriptT
@@ -75,9 +68,8 @@ class ProverStage(
 ):
     """The prover role of one conditional claim reduction.
 
-    The trailing transcript parameter names the seam this role needs. A role
-    that grinds declares `GrindingTranscript` and is held to it; one that needs
-    only the base seam omits the parameter entirely.
+    A role that grinds declares `GrindingTranscript` as its transcript
+    parameter; one needing only the base seam omits it.
     """
 
     @abstractmethod
