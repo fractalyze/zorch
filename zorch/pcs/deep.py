@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import frx.numpy as fnp
+import numpy as np
 from frx import Array
 
 from zorch.poly.univariate import powers
@@ -89,13 +90,16 @@ def open_columns(
     ``opening_pos[m]`` picks column ``m``'s weights. Returns the ``(M,)`` openings,
     base first.
 
-    ``M`` is static, so each column's dot uses a per-column static weight slice —
-    no ``(N, M)`` gather — and a base column's dot keeps its native-width reads."""
-    b, c = base_cols.shape[1], ext_cols.shape[1]
+    Each opening is ``Σ_k weights[k]·col[k]`` over the domain. ``opening_pos`` is
+    static, so gathering each column's weight vector is a compile-time column
+    select; the whole base block then reduces at once and the extension block at
+    once — a couple of block dots, not one launch per column. Base and extension
+    stay in separate blocks so a base column keeps native-width reads."""
+    b = base_cols.shape[1]
     base_sub = base_cols[::stride]
     ext_sub = ext_cols[::stride]
-    opened: list[Array] = []
-    for col in range(b + c):
-        column = base_sub[:, col] if col < b else ext_sub[:, col - b]
-        opened.append(fnp.sum(weights[:, opening_pos[col]] * column))
-    return fnp.stack(opened)
+    base_w = weights[:, np.array(opening_pos[:b])]  # (N, B)
+    ext_w = weights[:, np.array(opening_pos[b:])]  # (N, C)
+    base_openings = fnp.sum(base_w * base_sub, axis=0)
+    ext_openings = fnp.sum(ext_w * ext_sub, axis=0)
+    return fnp.concatenate([base_openings, ext_openings])
