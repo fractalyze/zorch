@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
@@ -89,3 +89,10 @@ class SumcheckVerifier(VerifierStage[SumClaim, EvaluationClaim, Array]):
             self.verifier_round, claim.value, reduction_proof, transcript
         )
         return VerifyResult(EvaluationClaim(point, value), transcript, ok)
+
+
+if TYPE_CHECKING:
+    _p: type[ProverStage[(SumClaim, SumcheckWitness, EvaluationClaim, Array)]] = (
+        SumcheckProver
+    )
+    _v: type[VerifierStage[(SumClaim, EvaluationClaim, Array)]] = SumcheckVerifier

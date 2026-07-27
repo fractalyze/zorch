@@ -70,6 +70,4 @@ def cheap_transcript(dtype: Any, *, width: int = 8, rate: int = 4) -> DuplexTran
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[Permutation] = CheapPermutation

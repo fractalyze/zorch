@@ -281,7 +281,6 @@ instance module (`testkit` included) ends with a one-line pin
 
 ```python
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/conventions.md "Seam conformance pins".
     _: type[Permutation] = Poseidon2
 ```
 

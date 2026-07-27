@@ -187,8 +187,6 @@ class UnivariateSkipRound(VerifierRound):
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _SumcheckWire = VerifierRound[RunningClaim, Array]
 
     _eval_form: type[_SumcheckWire] = SumcheckRound

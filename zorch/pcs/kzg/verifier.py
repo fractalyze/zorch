@@ -105,8 +105,6 @@ class KzgVerifier(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _: type[
         VerifierStage[
             OpeningClaim[KzgCommitment],

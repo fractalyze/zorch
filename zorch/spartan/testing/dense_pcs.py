@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import frx.numpy as fnp
 from frx import Array
@@ -12,7 +13,9 @@ from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
 from zorch.stage import (
     ProveResult,
+    ProverStage,
     TrivialClaim,
+    VerifierStage,
     VerifyResult,
 )
 from zorch.transcript import Transcript
@@ -71,3 +74,17 @@ class DensePcs:
         del proof
         recomputed = fnp.stack([eval_mle(commitment, point) for point in points])
         return fnp.all(recomputed == values), transcript
+
+
+if TYPE_CHECKING:
+    _p: type[
+        ProverStage[
+            OpeningClaim[Array],
+            OpeningWitness[tuple[Array, ...]],
+            TrivialClaim,
+            OpeningProof[Array],
+        ]
+    ] = DensePcs
+    _v: type[VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[Array]]] = (
+        DensePcs
+    )

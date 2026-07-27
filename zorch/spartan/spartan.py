@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import frx.numpy as fnp
 from frx import Array
@@ -272,3 +272,12 @@ class SpartanVerifier(VerifierStage[SpartanClaim, TrivialClaim, SpartanProof]):
         return VerifyResult(
             TrivialClaim(), opening.transcript, outer.ok & inner.ok & opening.ok
         )
+
+
+if TYPE_CHECKING:
+    _p: type[
+        ProverStage[(SpartanClaim, SpartanWitness, TrivialClaim, SpartanProof)]
+    ] = SpartanProver
+    _v: type[VerifierStage[(SpartanClaim, TrivialClaim, SpartanProof)]] = (
+        SpartanVerifier
+    )

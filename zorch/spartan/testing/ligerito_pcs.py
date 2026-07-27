@@ -13,6 +13,7 @@ production Spartan over the extension field would inject `LigeritoProver`/
 from __future__ import annotations
 
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 import frx.numpy as fnp
 from frx import Array
@@ -27,7 +28,9 @@ from zorch.pcs.ligerito.verifier import LigeritoVerifier
 from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.stage import (
     ProveResult,
+    ProverStage,
     TrivialClaim,
+    VerifierStage,
     VerifyResult,
 )
 from zorch.transcript import Transcript
@@ -99,3 +102,17 @@ class LigeritoSpartanVerifier:
             transcript,
         )
         return VerifyResult(TrivialClaim(), transcript, ok)
+
+
+if TYPE_CHECKING:
+    _p: type[
+        ProverStage[
+            OpeningClaim[Array],
+            OpeningWitness[LigeritoProverData],
+            TrivialClaim,
+            OpeningProof[LigeritoProof],
+        ]
+    ] = LigeritoSpartanProver
+    _v: type[
+        VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[LigeritoProof]]
+    ] = LigeritoSpartanVerifier

@@ -402,8 +402,6 @@ def _open_body(
 
 
 if TYPE_CHECKING:
-    # mypy-enforced seam conformance — docs/reference/conventions.md
-    # "Seam conformance pins".
     _pcs_prover: type[
         ProverStage[
             OpeningClaim[WhirCommitment],
