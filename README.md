@@ -121,17 +121,18 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
             self.prover_round, witness.state, transcript, claim.rounds
         )
         reduction_proof = fnp.stack(messages)
-        # derive the reduced claim by replaying exactly what the verifier will do
+        # The reduced claim has one definition, the verifier's replay, so the
+        # prover discards its own and replays too. Two roles agreeing by
+        # construction, rather than two implementations that could drift.
         point, value, replayed, _ = verify(
             self.verifier_round, claim.value, reduction_proof, pre
         )
         return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
 ```
 
-`SumcheckVerifier.verify` runs that same replay against the proof alone, which is
-how both roles land on the same `EvaluationClaim` without either deriving it from
-the other. Nothing here knows where the sum came from: zerocheck, lincheck and
-LogUp-GKR each configure this stage and export their own claim type.
+`SumcheckVerifier.verify` is that same replay against the proof alone. Nothing
+here knows where the sum came from: zerocheck, lincheck and LogUp-GKR each
+configure this stage and export their own claim type.
 
 A proof system is those reductions chained until the claim is trivial.
 `SpartanProver` / `SpartanVerifier` are the worked composite — four stages, a
