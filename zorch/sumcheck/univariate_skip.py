@@ -39,6 +39,7 @@ from frx import Array
 from zorch.challenge import ChallengePolicy
 from zorch.poly.univariate import eval_coeffs
 from zorch.prove import fold_rounds
+from zorch.round import RunningClaim
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.domain import subgroup_evals, subgroup_to_coeffs
 from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
@@ -46,7 +47,6 @@ from zorch.sumcheck.stage import SumcheckWitness, SumClaim
 from zorch.sumcheck.verifier import SumcheckRound, UnivariateSkipRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
-from zorch.verify import RunningClaim
 
 
 def _next_power_of_two(x: int) -> int:

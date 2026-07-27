@@ -10,10 +10,10 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.prove import fold_rounds
-from zorch.round import ProverRound, VerifierRound
+from zorch.round import ProverRound, RunningClaim, VerifierRound
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.transcript import Transcript
-from zorch.verify import RunningClaim, verify
+from zorch.verify import verify
 
 
 @dataclass(frozen=True)

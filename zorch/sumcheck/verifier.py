@@ -27,10 +27,9 @@ from frx import Array
 
 from zorch.challenge import ChallengePolicy
 from zorch.poly.univariate import eval_coeffs, eval_univariate
-from zorch.round import VerifierRound
+from zorch.round import RunningClaim, VerifierRound
 from zorch.sumcheck.domain import subgroup_sum
 from zorch.transcript import Transcript
-from zorch.verify import RunningClaim
 
 
 @partial(

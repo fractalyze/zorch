@@ -21,13 +21,12 @@ crosses the XLA PTX cliff.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeAlias
 
 import frx.numpy as fnp
 from frx import Array, lax
-from frx.tree_util import register_dataclass
 
+from zorch.round import RunningClaim
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -35,30 +34,6 @@ if TYPE_CHECKING:
 
 _StepOut: TypeAlias = "tuple[tuple[RunningClaim, Transcript], Array]"
 _Step: TypeAlias = "Callable[[tuple[RunningClaim, Transcript], Array], _StepOut]"
-
-
-@register_dataclass
-@dataclass(frozen=True)
-class RunningClaim:
-    """A partially built evaluation claim: the value after the rounds bound so far.
-
-    `index` is the write cursor into `point`; both are fixed-shape so the whole
-    carry is a valid `lax.scan` carry.
-    """
-
-    value: Array
-    point: Array
-    index: Array
-
-    def bind(self, value: Array, challenge: Array) -> RunningClaim:
-        """Advance to the reduced claim, recording this round's challenge.
-
-        The single definition of the write, so every wire form records its
-        challenge identically and a new one cannot get the bookkeeping wrong.
-        """
-        return RunningClaim(
-            value, self.point.at[self.index].set(challenge), self.index + 1
-        )
 
 
 # Memoized per round so the body handed to `lax.scan` keeps one identity.
