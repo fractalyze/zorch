@@ -28,7 +28,7 @@ from zorch.pcs.ligerito.prover import LigeritoProver, LigeritoProverData
 from zorch.pcs.ligerito.verifier import LigeritoVerifier
 from zorch.poly.multilinear import eval_mle
 from zorch.testkit.random_field import rand_ext_field
-from zorch.transcript import DuplexTranscript, TranscriptT
+from zorch.transcript import DuplexTranscript, GrindingTranscript, TranscriptT
 
 
 def _transcript() -> DuplexTranscript:
@@ -270,7 +270,7 @@ class LigeritoTamperTest(parameterized.TestCase):
 
 
 @dataclasses.dataclass(frozen=True)
-class _FlockShapedChoreography(LigeritoChoreography):
+class _FlockShapedChoreography(LigeritoChoreography[GrindingTranscript]):
     """flock `pcs::ligerito`'s FS shape over the generic transcript: claim+root
     statement binding (the point rides the outer basis), eager message
     emission, tapered per-fold PoW, unconditional per-level query PoW (0 bits
@@ -341,8 +341,12 @@ class LigeritoChoreographyTest(parameterized.TestCase):
         )
         chor = _FlockShapedChoreography(fold_bits=(2, 1, 0), query_bits=(1, 0, 2))
         _, _, tree = koalabear16_merkle()
-        prover = LigeritoProver(_make_code, tree, cfg, chor)
-        verifier = LigeritoVerifier(_make_code, tree, cfg, chor)
+        prover: LigeritoProver[GrindingTranscript] = LigeritoProver(
+            _make_code, tree, cfg, chor
+        )
+        verifier: LigeritoVerifier[GrindingTranscript] = LigeritoVerifier(
+            _make_code, tree, cfg, chor
+        )
         f = _rand_ef(1, (1 << cfg.num_vars,))
         root, pdata = prover.commit([f])
         z = _rand_ef(2, (cfg.num_vars,))
@@ -381,14 +385,18 @@ class LigeritoBasisConventionTest(parameterized.TestCase):
             compressed_sumcheck_messages=True,
             monomial_commit=monomial,
         )
-        chor = (
+        chor: LigeritoChoreography[GrindingTranscript] = (
             _FlockShapedChoreography(fold_bits=(1, 0), query_bits=(0, 1))
             if basis_entry
             else LigeritoChoreography()
         )
         _, _, tree = koalabear16_merkle()
-        prover = LigeritoProver(_make_code, tree, cfg, chor)
-        verifier = LigeritoVerifier(_make_code, tree, cfg, chor)
+        prover: LigeritoProver[GrindingTranscript] = LigeritoProver(
+            _make_code, tree, cfg, chor
+        )
+        verifier: LigeritoVerifier[GrindingTranscript] = LigeritoVerifier(
+            _make_code, tree, cfg, chor
+        )
         f = _rand_ef(3, (1 << cfg.num_vars,))
         root, pdata = prover.commit([f])
         if basis_entry:

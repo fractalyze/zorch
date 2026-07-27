@@ -36,7 +36,7 @@ from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
 from zorch.pcs.basefold.verifier import BasefoldVerifier
 from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import DuplexTranscript, TranscriptT
+from zorch.transcript import DuplexTranscript, GrindingTranscript, TranscriptT
 
 
 def _transcript() -> DuplexTranscript:
@@ -90,7 +90,7 @@ class _ProductKernel(SumcheckKernel):
 
 
 @dataclass(frozen=True)
-class _CadenceChoreography(BasefoldChoreography):
+class _CadenceChoreography(BasefoldChoreography[GrindingTranscript]):
     """The flock-shaped basis-entry wire: no opening point (bind root + value),
     eager `(u0, u2)` emission, bare fold-challenge sample. Drops flock's byte
     deltas (root_to_f128, masked queries) — those are consumer serialization, not

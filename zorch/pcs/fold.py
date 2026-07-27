@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Generic, cast
+from typing import TYPE_CHECKING, Any, Generic
 
 import frx
 import frx.numpy as fnp
@@ -30,7 +30,11 @@ from frx import Array, lax
 from zorch.coding.foldable_code import FoldableCode, KFoldableCode
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.round import ProverRound
-from zorch.transcript import GrindingTranscript, Transcript, TranscriptT
+from zorch.transcript import (
+    GrindingTranscriptT,
+    Transcript,
+    TranscriptT,
+)
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
@@ -310,23 +314,21 @@ class FoldChoreography(Generic[TranscriptT]):
         del level
         return None
 
-    def grind(self, transcript: TranscriptT, bits: int) -> tuple[TranscriptT, Array]:
+    def grind(
+        self, transcript: GrindingTranscriptT, bits: int
+    ) -> tuple[GrindingTranscriptT, Array]:
         """Prover-side grind (called only when the bits schedule says so).
         Default is the `GrindingTranscript` seam, so a zorch-native consumer
         adds grinding by overriding only the bits methods; a byte-wire consumer
         overrides the mechanism too."""
-        grinding = cast(GrindingTranscript, transcript)
-        advanced, witness = grinding.grind(bits)
-        return cast(TranscriptT, advanced), witness
+        return transcript.grind(bits)
 
     def check_grind(
-        self, transcript: TranscriptT, bits: int, witness: Array
-    ) -> tuple[TranscriptT, Array]:
+        self, transcript: GrindingTranscriptT, bits: int, witness: Array
+    ) -> tuple[GrindingTranscriptT, Array]:
         """Verifier-side dual of `grind`: replay the witness, return
         `(transcript, ok)` with the transcript advanced identically."""
-        grinding = cast(GrindingTranscript, transcript)
-        advanced, ok = grinding.check_witness(bits, witness)
-        return cast(TranscriptT, advanced), ok
+        return transcript.check_witness(bits, witness)
 
     def sample_queries(
         self, transcript: TranscriptT, block_len: int, count: int
