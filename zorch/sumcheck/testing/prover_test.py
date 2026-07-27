@@ -47,9 +47,12 @@ class StandardRoundTest(absltest.TestCase):
 
     def test_call_threads_state_transcript_msg(self) -> None:
         f = rand_field(15, (8,), KB)
-        state, _, msg = _product_round(1)(f[None], cheap_transcript(KB))
+        carry = prover.initial_carry(f[None], fnp.sum(f), rounds=3)
+        (state, claim), _, msg = _product_round(1)(carry, cheap_transcript(KB))
         self.assertEqual(msg.shape, (2,))
         self.assertEqual(state.shape, (1, 4))  # width halved — one round consumed
+        # The round binds its own challenge: the claim advances with the fold.
+        self.assertEqual(int(claim.index), 1)
 
     def test_round_poly_is_fusion_ready(self) -> None:
         a = rand_field(16, (8,), KB)
@@ -83,11 +86,14 @@ class CompressedProductRoundTest(absltest.TestCase):
     def test_call_threads_state_transcript_msg(self) -> None:
         a = rand_field(32, (8,), KB)
         b = rand_field(33, (8,), KB)
-        state, _, msg = prover.CompressedProductRound(challenges=_CH)(
-            fnp.stack([a, b]), cheap_transcript(KB)
+        stacked = fnp.stack([a, b])
+        carry = prover.initial_carry(stacked, fnp.sum(a * b), rounds=3)
+        (state, claim), _, msg = prover.CompressedProductRound(challenges=_CH)(
+            carry, cheap_transcript(KB)
         )
         self.assertEqual(msg.shape, (2,))
         self.assertEqual(state.shape, (2, 4))  # width halved — one round consumed
+        self.assertEqual(int(claim.index), 1)
 
     def test_round_poly_is_fusion_ready(self) -> None:
         a = rand_field(34, (8,), KB)

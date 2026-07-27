@@ -32,24 +32,36 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 import frx
 import frx.numpy as fnp
 from frx import Array
 
 from zorch.challenge import ChallengePolicy
-from zorch.round import ProverRound
+from zorch.round import ProverRound, RunningClaim
 from zorch.sumcheck.domain import (
     EvalDomain,
     fold,
     natural_domain,
     summand_evals,
 )
+from zorch.sumcheck.reduce import reduce_compressed, reduce_evals
 from zorch.transcript import Transcript
 
+# What a materialized sumcheck round threads: the folded factor tables plus the
+# claim built so far. The claim half is what makes the reduced claim a product
+# of the prover's own loop rather than something recovered afterwards.
+SumcheckCarry: TypeAlias = "tuple[Array, RunningClaim]"
+
+
+def initial_carry(state: Array, claim: Array, rounds: int) -> SumcheckCarry:
+    """Start a fold from `state` with nothing yet bound into `claim`."""
+    return state, RunningClaim(claim, fnp.zeros((rounds,), claim.dtype), fnp.int32(0))
+
+
 if TYPE_CHECKING:
-    from zorch.round import ProverRound
+    from zorch.round import ProverRound, RunningClaim
 
 
 @dataclass(frozen=True)
@@ -113,11 +125,17 @@ class StandardRound(ProverRound):
         return summand_evals(folded, self.summand._combine, domain)
 
     def __call__(
-        self, folded: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array]:
+        self, carry: SumcheckCarry, transcript: Transcript
+    ) -> tuple[SumcheckCarry, Transcript, Array]:
+        folded, claim = carry
         msg = self._round_poly(folded)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return fold(folded, r), transcript, msg
+        # The challenge is derived, not received, so it rides the carry — and
+        # the claim reduces through the same definition the verifier round
+        # uses, which is what lets the prover export a reduced claim without
+        # replaying one.
+        reduced, _ = reduce_evals(claim.value, msg, r, self.summand.degree)
+        return (fold(folded, r), claim.bind(reduced, r)), transcript, msg
 
 
 class CompressedProductRound(ProverRound):
@@ -148,11 +166,13 @@ class CompressedProductRound(ProverRound):
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
-        self, folded: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array]:
+        self, carry: SumcheckCarry, transcript: Transcript
+    ) -> tuple[SumcheckCarry, Transcript, Array]:
+        folded, claim = carry
         msg = self._round_poly(folded)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return fold(folded, r), transcript, msg
+        reduced, _ = reduce_compressed(claim.value, msg, r)
+        return (fold(folded, r), claim.bind(reduced, r)), transcript, msg
 
 
 @partial(

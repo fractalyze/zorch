@@ -12,6 +12,7 @@ from frx import Array
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound, RunningClaim, VerifierRound
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
+from zorch.sumcheck.prover import initial_carry
 from zorch.transcript import Transcript
 from zorch.verify import verify
 
@@ -48,7 +49,7 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
         verifier_round: VerifierRound[RunningClaim, Array],
     ) -> None:
         self.prover_round = prover_round
-        # Public replay logic derives the canonical reduced claim and transcript.
+        # Kept for the pairing, not for proving: the prover reduces its own claim.
         self.verifier_round = verifier_round
 
     def prove(
@@ -57,15 +58,17 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
         witness: SumcheckWitness,
         transcript: Transcript,
     ) -> ProveResult[EvaluationClaim, Array]:
-        pre = transcript
-        _, _, messages = fold_rounds(
-            self.prover_round, witness.state, transcript, claim.rounds
+        (_, reduced), transcript, messages = fold_rounds(
+            self.prover_round,
+            initial_carry(witness.state, claim.value, claim.rounds),
+            transcript,
+            claim.rounds,
         )
-        reduction_proof = fnp.stack(messages)
-        point, value, replayed, _ = verify(
-            self.verifier_round, claim.value, reduction_proof, pre
+        return ProveResult(
+            EvaluationClaim(reduced.point, reduced.value),
+            fnp.stack(messages),
+            transcript,
         )
-        return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
 
 
 class SumcheckVerifier(VerifierStage[SumClaim, EvaluationClaim, Array]):
