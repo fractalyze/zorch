@@ -20,7 +20,7 @@ from typing import Generic, Protocol, TypeVar
 
 from frx import Array
 
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 
 Claim = TypeVar("Claim")
 Witness = TypeVar("Witness")
@@ -46,36 +46,52 @@ class TrivialClaim:
 
 
 @dataclass(frozen=True)
-class ProveResult(Generic[ReducedClaim, ReductionProof]):
-    """A reduced claim, its conditional reduction proof, and the transcript."""
+class ProveResult(Generic[ReducedClaim, ReductionProof, TranscriptT]):
+    """A reduced claim, its conditional reduction proof, and the transcript.
+
+    Generic in the transcript flavor so a grinding role hands back a
+    `GrindingTranscript`; omit the parameter and it is the base `Transcript`.
+    """
 
     reduced_claim: ReducedClaim
     reduction_proof: ReductionProof
-    transcript: Transcript
+    transcript: TranscriptT
 
 
 @dataclass(frozen=True)
-class VerifyResult(Generic[ReducedClaim]):
-    """The verifier-derived reduced claim, advanced transcript, and verdict."""
+class VerifyResult(Generic[ReducedClaim, TranscriptT]):
+    """The verifier-derived reduced claim, advanced transcript, and verdict.
+
+    Generic in the transcript flavor, like `ProveResult`.
+    """
 
     reduced_claim: ReducedClaim
-    transcript: Transcript
+    transcript: TranscriptT
     ok: Array
 
 
-class ProverStage(Protocol[Claim_contra, Witness_contra, ReducedClaim, ReductionProof]):
-    """The prover role of one conditional claim reduction."""
+class ProverStage(
+    Protocol[Claim_contra, Witness_contra, ReducedClaim, ReductionProof, TranscriptT]
+):
+    """The prover role of one conditional claim reduction.
+
+    The trailing transcript parameter names the seam this role needs. A role
+    that grinds declares `GrindingTranscript` and is held to it; one that needs
+    only the base seam omits the parameter entirely.
+    """
 
     @abstractmethod
     def prove(
         self,
         claim: Claim_contra,
         witness: Witness_contra,
-        transcript: Transcript,
-    ) -> ProveResult[ReducedClaim, ReductionProof]: ...
+        transcript: TranscriptT,
+    ) -> ProveResult[ReducedClaim, ReductionProof, TranscriptT]: ...
 
 
-class VerifierStage(Protocol[Claim_contra, ReducedClaim, ReductionProof_contra]):
+class VerifierStage(
+    Protocol[Claim_contra, ReducedClaim, ReductionProof_contra, TranscriptT]
+):
     """The verifier role of the same conditional claim reduction."""
 
     @abstractmethod
@@ -83,5 +99,5 @@ class VerifierStage(Protocol[Claim_contra, ReducedClaim, ReductionProof_contra])
         self,
         claim: Claim_contra,
         reduction_proof: ReductionProof_contra,
-        transcript: Transcript,
-    ) -> VerifyResult[ReducedClaim]: ...
+        transcript: TranscriptT,
+    ) -> VerifyResult[ReducedClaim, TranscriptT]: ...

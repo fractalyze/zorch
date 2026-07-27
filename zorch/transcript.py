@@ -11,12 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import cache, partial
-from typing import TYPE_CHECKING, Any, Protocol, Self, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import frx
 import frx.numpy as fnp
 from frx import Array, jit, lax, vmap
 from frx.tree_util import register_dataclass, tree_map
+from typing_extensions import TypeVar as TypeVarWithDefault
 from zk_dtypes import pfinfo
 
 from zorch.fusion import fused_region
@@ -91,9 +92,24 @@ class GrindingTranscript(Transcript, Protocol):
 
 
 # Generic over the transcript flavor so the free Fiat-Shamir helpers
-# (`sample_challenge`, the open/verifier's `sample_*`) preserve a
-# `GrindingTranscript` rather than widening it to the base `Transcript`.
-TranscriptT = TypeVar("TranscriptT", bound=Transcript)
+# (`sample_challenge`, the open/verifier's `sample_*`) and the composition roles
+# preserve a `GrindingTranscript` rather than widening it to the base
+# `Transcript`.
+#
+# The default is what keeps the flavor optional: a role that needs nothing beyond
+# the base seam omits the parameter and reads exactly as before, while one that
+# grinds names `GrindingTranscript` and is held to it. `typing.TypeVar` gains
+# defaults only in 3.13, and the roles are subscripted in real base-class
+# position, so the default has to exist at runtime — hence `typing_extensions`.
+TranscriptT = TypeVarWithDefault("TranscriptT", bound=Transcript, default=Transcript)
+
+# The same idea one seam up: a block that grinds needs the PoW half, so it binds
+# here rather than to the base seam and keeps the caller's exact flavor. Without
+# it such a block has to `cast` its way to `grind`, which is an assertion the
+# checker cannot hold anyone to.
+GrindingTranscriptT = TypeVarWithDefault(
+    "GrindingTranscriptT", bound=GrindingTranscript, default=GrindingTranscript
+)
 
 
 @partial(jit, static_argnums=(1,))

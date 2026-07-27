@@ -32,7 +32,7 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Generic, Protocol
 
 import frx
 import frx.numpy as fnp
@@ -47,7 +47,7 @@ from zorch.sumcheck.domain import (
     summand_evals,
 )
 from zorch.sumcheck.reduce import reduce_compressed, reduce_domain, reduce_evals
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 
 
 @partial(
@@ -124,7 +124,7 @@ class ProductSummand:
         return self.combine(self.combine_scalars(), *factors)
 
 
-class StandardRound(ProverRound):
+class StandardRound(ProverRound[Any, Array, TranscriptT], Generic[TranscriptT]):
     """The plain materialized sumcheck round: send the summand's round poly over
     `domain`, sample the challenge, fold the stacked `(m, N)` state. Bound to a
     `SumcheckSummand` (product by default) and an `EvalDomain` (the natural
@@ -155,8 +155,8 @@ class StandardRound(ProverRound):
         return summand_evals(folded, self.summand._combine, domain)
 
     def __call__(
-        self, carry: FoldingClaim, transcript: Transcript
-    ) -> tuple[FoldingClaim, Transcript, Array]:
+        self, carry: FoldingClaim, transcript: TranscriptT
+    ) -> tuple[FoldingClaim, TranscriptT, Array]:
         domain = self.domain or natural_domain(self.summand.degree, carry.state.dtype)
         msg = summand_evals(carry.state, self.summand._combine, domain)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
@@ -174,7 +174,9 @@ class StandardRound(ProverRound):
         return carry.advance(fold(carry.state, r), reduced, r), transcript, msg
 
 
-class CompressedProductRound(ProverRound):
+class CompressedProductRound(
+    ProverRound[Any, Array, TranscriptT], Generic[TranscriptT]
+):
     """Two-factor product round with the compressed coefficient wire: the message
     is `[c_0, c_2]` — the degree-2 round polynomial's constant and leading
     coefficients — and the linear coefficient stays off the wire (the verifier
@@ -202,8 +204,8 @@ class CompressedProductRound(ProverRound):
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
-        self, carry: FoldingClaim, transcript: Transcript
-    ) -> tuple[FoldingClaim, Transcript, Array]:
+        self, carry: FoldingClaim, transcript: TranscriptT
+    ) -> tuple[FoldingClaim, TranscriptT, Array]:
         msg = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
         reduced, _ = reduce_compressed(carry.claim.value, msg, r)

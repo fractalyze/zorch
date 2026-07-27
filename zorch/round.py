@@ -18,7 +18,7 @@ from typing import Any, Protocol, TypeVar
 from frx import Array
 from frx.tree_util import register_dataclass
 
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 
 Carry = TypeVar("Carry")
 Message_co = TypeVar("Message_co", covariant=True)
@@ -49,18 +49,22 @@ class RunningClaim:
         )
 
 
-class ProverRound(Protocol[Carry, Message_co]):
-    """One prover recurrence step: fold the carry and emit a proof message."""
+class ProverRound(Protocol[Carry, Message_co, TranscriptT]):
+    """One prover recurrence step: fold the carry and emit a proof message.
+
+    The trailing transcript parameter names the seam this round needs, as on
+    `ProverStage`; omit it for the base `Transcript`.
+    """
 
     def __call__(
         self,
         carry: Carry,
-        transcript: Transcript,
+        transcript: TranscriptT,
         /,
-    ) -> tuple[Carry, Transcript, Message_co]: ...
+    ) -> tuple[Carry, TranscriptT, Message_co]: ...
 
 
-class VerifierRound(Protocol[Carry, Message_contra]):
+class VerifierRound(Protocol[Carry, Message_contra, TranscriptT]):
     """The dual step: consume the message, fold the carry, report a verdict.
 
     Anything the round derives rather than receives — a sumcheck round's
@@ -72,15 +76,17 @@ class VerifierRound(Protocol[Carry, Message_contra]):
     def __call__(
         self,
         carry: Carry,
-        transcript: Transcript,
+        transcript: TranscriptT,
         message: Message_contra,
         /,
-    ) -> tuple[Carry, Transcript, Array]: ...
+    ) -> tuple[Carry, TranscriptT, Array]: ...
 
 
 def prove_rounds(
-    rounds: Iterable[ProverRound[Any, Any]], carry: Any, transcript: Transcript
-) -> tuple[Any, Transcript, list[Any]]:
+    rounds: Iterable[ProverRound[Any, Any, TranscriptT]],
+    carry: Any,
+    transcript: TranscriptT,
+) -> tuple[Any, TranscriptT, list[Any]]:
     """Run prover rounds, collecting each step's message."""
     msgs = []
     for rnd in rounds:
@@ -90,11 +96,11 @@ def prove_rounds(
 
 
 def verify_rounds(
-    rounds: Iterable[VerifierRound[Any, Any]],
+    rounds: Iterable[VerifierRound[Any, Any, TranscriptT]],
     carry: Any,
     msgs: Sequence[Any],
-    transcript: Transcript,
-) -> tuple[Any, Transcript, Array]:
+    transcript: TranscriptT,
+) -> tuple[Any, TranscriptT, Array]:
     """Replay verifier rounds over a heterogeneous message list, ANDing verdicts.
 
     The sibling of `zorch.verify.verify`, which scans one round over a dense

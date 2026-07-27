@@ -39,7 +39,12 @@ from zorch.poly.eq import eval_eq
 from zorch.poly.multilinear import mle_coeffs_to_evals
 from zorch.poly.univariate import eval_coeffs
 from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
-from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
+from zorch.transcript import (
+    GrindingTranscript,
+    GrindingTranscriptT,
+    Transcript,
+    sample_challenge,
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,7 @@ class WhirVerifier(
         OpeningClaim[WhirCommitment],
         TrivialClaim,
         OpeningProof[WhirProof],
+        GrindingTranscript,
     ]
 ):
     """WHIR PCS verifier. `code`/`tree`/`params`/`scheme` must
@@ -62,8 +68,8 @@ class WhirVerifier(
         self,
         claim: OpeningClaim[WhirCommitment],
         reduction_proof: OpeningProof[WhirProof],
-        transcript: Transcript,
-    ) -> VerifyResult[TrivialClaim]:
+        transcript: GrindingTranscriptT,
+    ) -> VerifyResult[TrivialClaim, GrindingTranscriptT]:
         """Check the claimed evaluations against the commitment."""
         ok, transcript = self._verify_opening(
             claim.commitment,
@@ -80,8 +86,8 @@ class WhirVerifier(
         points: Sequence[Array],
         values: Array,
         proof: WhirProof,
-        transcript: Transcript,
-    ) -> tuple[Array, Transcript]:
+        transcript: GrindingTranscriptT,
+    ) -> tuple[Array, GrindingTranscriptT]:
         """Return `(ok, transcript)` where `ok` is a scalar boolean array."""
         if len(points) != 1:
             raise ValueError(f"WHIR opens at one point, got {len(points)}")
@@ -303,5 +309,6 @@ if TYPE_CHECKING:
             OpeningClaim[WhirCommitment],
             TrivialClaim,
             OpeningProof[WhirProof],
+            GrindingTranscript,
         ]
     ] = WhirVerifier

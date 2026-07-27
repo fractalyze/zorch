@@ -29,7 +29,7 @@ from zorch.pcs.whir.prover import WhirProver
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.pcs.whir.verifier import WhirVerifier
 from zorch.testkit.random_field import rand_ext_field, rand_field
-from zorch.transcript import DuplexTranscript, Transcript
+from zorch.transcript import DuplexTranscript, TranscriptT
 
 
 @dataclasses.dataclass(frozen=True)
@@ -73,8 +73,8 @@ class _NoBindEqScheme(EqWhirScheme):
     symmetrically; proves the `bind` seam is threaded on both sides."""
 
     def bind(
-        self, transcript: Transcript, commitment: Array, values: Array
-    ) -> Transcript:
+        self, transcript: TranscriptT, commitment: Array, values: Array
+    ) -> TranscriptT:
         return transcript
 
 

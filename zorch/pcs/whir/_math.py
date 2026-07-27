@@ -17,12 +17,12 @@ from frx.typing import DTypeLike
 from zorch.coding.reed_solomon import ReedSolomon, fri_fold_values
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import powers
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 
 
 def sample_query_positions(
-    transcript: Transcript, stride: int, count: int, dtype: DTypeLike
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT, stride: int, count: int, dtype: DTypeLike
+) -> tuple[TranscriptT, Array]:
     """Sample `count` WHIR query coset indices in `[0, stride)` — `count`
     consecutive squeezes, each reduced on its CANONICAL low limb.
 
