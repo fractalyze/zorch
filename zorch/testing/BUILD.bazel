@@ -136,12 +136,13 @@ py_test(
 )
 
 py_test(
-    name = "scan_test",
+    name = "verify_test",
     size = "small",
-    srcs = ["scan_test.py"],
+    srcs = ["verify_test.py"],
     deps = [
         "//zorch:verify",
         "//zorch/sumcheck",
+        "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("frx"),
