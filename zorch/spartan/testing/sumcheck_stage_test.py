@@ -42,19 +42,20 @@ def _compressed_inner() -> tuple[SumcheckProver, SumcheckVerifier]:
     """Matching roles for the compressed `[c_0, c_2]` coefficient wire."""
     verifier_round = CompressedCoeffsSumcheckRound(challenges=_CH)
     return (
-        SumcheckProver(CompressedProductRound(challenges=_CH), verifier_round),
+        SumcheckProver(CompressedProductRound(challenges=_CH)),
         SumcheckVerifier(CompressedCoeffsSumcheckRound(challenges=_CH)),
     )
 
 
 class ChildStageTest(absltest.TestCase):
-    def test_prove_returns_the_verifier_replayed_transcript(self) -> None:
+    def test_prover_and_verifier_agree_without_the_prover_replaying(self) -> None:
+        # The prover reduces its own claim as it folds rather than replaying its
+        # proof, so agreement is no longer true by construction — both roles now
+        # derive the point, the value and the transcript independently, through
+        # the one reduction in `sumcheck.reduce`.
         state = rand_field(20, (2, 8), KB)
         claim = fnp.sum(state[0] * state[1])
-        prover = SumcheckProver(
-            StandardRound(ProductSummand(2), challenges=_CH),
-            SumcheckRound(2, challenges=_CH),
-        )
+        prover = SumcheckProver(StandardRound(ProductSummand(2), challenges=_CH))
         verifier = SumcheckVerifier(SumcheckRound(2, challenges=_CH))
         source_claim = SumClaim(claim, 3)
         proved = prover.prove(
@@ -62,6 +63,13 @@ class ChildStageTest(absltest.TestCase):
         )
         verified = verifier.verify(
             source_claim, proved.reduction_proof, cheap_transcript(KB)
+        )
+        self.assertTrue(bool(verified.ok))
+        self.assertTrue(
+            bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
+        )
+        self.assertTrue(
+            bool(proved.reduced_claim.value == verified.reduced_claim.value)
         )
         _, prover_next = proved.transcript.sample(1)
         _, verifier_next = verified.transcript.sample(1)

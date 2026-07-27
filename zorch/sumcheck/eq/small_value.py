@@ -25,11 +25,12 @@ from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_eq_to_hypercube, expand_hypercube_step
 from zorch.poly.univariate import compute_lagrange_basis
 from zorch.prove import fold_rounds
-from zorch.round import ProverRound
+from zorch.round import ProverRound, RunningClaim
 from zorch.sumcheck.domain import fold, summand_evals, uhat_domain
 from zorch.sumcheck.eq.accumulators import precompute_accumulators
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, sumcheck_poly_from_t
-from zorch.sumcheck.prover import ProductSummand
+from zorch.sumcheck.prover import FoldingClaim, ProductSummand
+from zorch.sumcheck.reduce import reduce_domain
 from zorch.sumcheck.sqrt_space import compute_folded_evaluations
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
@@ -74,12 +75,13 @@ class SmallValueRound(ProverRound):
         return sumcheck_poly_from_t(t_evals, l_evals, self.domain)
 
     def __call__(
-        self, state: SmallValueState, transcript: Transcript
-    ) -> tuple[SmallValueState, Transcript, Array]:
-        r_tensor, eq_w_prev, eq_evals = state
+        self, carry: FoldingClaim, transcript: Transcript
+    ) -> tuple[FoldingClaim, Transcript, Array]:
+        r_tensor, eq_w_prev, eq_evals = carry.state
         i = log2_strict_usize(eq_evals.shape[0])
-        msg = self._round_poly(state)
+        msg = self._round_poly(carry.state)
         transcript, r = transcript.observe_and_sample(msg, 1)
+        reduced, _ = reduce_domain(carry.claim.value, msg, r[0], self.domain)
         new_r = (
             r_tensor[:, None] * _lagrange_over_round_domain(r[0], self.d)[None, :]
         ).reshape(-1)
@@ -88,7 +90,11 @@ class SmallValueRound(ProverRound):
             eq_w_prev * eq_factor(r[0], self.w[i]),
             expand_hypercube_step(eq_evals, r[0]),
         )
-        return new_state, transcript, msg
+        return (
+            FoldingClaim(new_state, carry.claim.bind(reduced, r[0])),
+            transcript,
+            msg,
+        )
 
 
 class TransitionRound(ProverRound):
@@ -103,13 +109,17 @@ class TransitionRound(ProverRound):
         self.domain = uhat_domain(d, dtype)
 
     def __call__(
-        self, state: tuple[Array, Array], transcript: Transcript
-    ) -> tuple[tuple[Array, Array], Transcript, Array]:
-        folded, eq_w_prev = state
+        self, carry: FoldingClaim, transcript: Transcript
+    ) -> tuple[FoldingClaim, Transcript, Array]:
+        folded, eq_w_prev = carry.state
         msg = summand_evals(folded, self.summand._combine, self.domain)
         transcript, r = transcript.observe_and_sample(msg, 1)
+        reduced, _ = reduce_domain(carry.claim.value, msg, r[0], self.domain)
         return (
-            (fold(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
+            FoldingClaim(
+                (fold(folded, r[0]), eq_w_prev * eq_factor(r[0], self.w_l0)),
+                carry.claim.bind(reduced, r[0]),
+            ),
             transcript,
             msg,
         )
@@ -141,6 +151,7 @@ def prove_eq_poly_small_value(
     p_initial: Array,
     w: Array,
     l_0: int,
+    claim: Array,
     transcript: Transcript,
     *,
     challenges: ChallengePolicy,
@@ -159,28 +170,33 @@ def prove_eq_poly_small_value(
     # Phase 1: the accumulator rounds under the standard host-loop driver. The state
     # carries the eq table the transition needs, so nothing is captured by hand.
     one = fnp.ones(1, dtype=p_initial.dtype)
-    state, transcript, msgs = fold_rounds(
-        SmallValueRound(d, w, accumulators), (one, one, one), transcript, l_0
+    start = RunningClaim(claim, fnp.zeros((l,), challenges.dtype), fnp.int32(0))
+    carry, transcript, msgs = fold_rounds(
+        SmallValueRound(d, w, accumulators),
+        FoldingClaim((one, one, one), start),
+        transcript,
+        l_0,
     )
-    _, eq_w_prev, eq_evals = state
+    _, eq_w_prev, eq_evals = carry.state
 
     # Phase 2: the √-space→dense boundary. Materialize the postponed folds (as in
     # sqrt_space), then one transition round over the d+1 factors [P₁..P_d, eq(w,·)].
     # Sampling at Û_d (not Û_{d+1}) drops the eq factor from the message, its fold
     # riding the scalar eq mass, so the tail keeps only the d real factors.
     folded = compute_folded_evaluations(p_with_weights, eq_evals)
-    (folded, eq_w_prev), transcript, msg_t = TransitionRound(
-        d, w[l_0], p_initial.dtype
-    )((folded, eq_w_prev), transcript)
+    carry, transcript, msg_t = TransitionRound(d, w[l_0], p_initial.dtype)(
+        FoldingClaim((folded, eq_w_prev), carry.claim), transcript
+    )
+    folded, eq_w_prev = carry.state
     folded_p = folded[:d]
 
     # Phase 3: the ordinary eq-poly tail. Product-bound: the accumulator precompute
     # (Procedure 9) contracts a product, so this engine is a product sumcheck only —
     # unlike EqPolyRound / SqrtSpaceRound, it does not take a general summand.
-    (p_final, _), transcript, tail = fold_rounds(
+    carry, transcript, tail = fold_rounds(
         EqPolyRound(ProductSummand(degree=d), w, challenges=challenges),
-        (folded_p, eq_w_prev),
+        FoldingClaim((folded_p, eq_w_prev), carry.claim),
         transcript,
         l - l_0 - 1,
     )
-    return p_final, transcript, msgs + [msg_t] + tail
+    return carry, transcript, msgs + [msg_t] + tail

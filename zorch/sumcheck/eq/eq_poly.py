@@ -25,9 +25,10 @@ from frx import Array
 from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
-from zorch.round import ProverRound
+from zorch.round import ProverRound, RunningClaim
 from zorch.sumcheck.domain import EvalDomain, split_halves, uhat_domain
-from zorch.sumcheck.prover import ProductSummand, SumcheckSummand
+from zorch.sumcheck.prover import FoldingClaim, ProductSummand, SumcheckSummand
+from zorch.sumcheck.reduce import reduce_domain
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 from zorch.utils.field import naturals
@@ -173,16 +174,24 @@ class EqPolyRound(ProverRound):
         return diffs * r + p0s, eq_w_prev * eq_factor(r, w_i)
 
     def __call__(
-        self, state: EqPolyState, transcript: Transcript
-    ) -> tuple[EqPolyState, Transcript, Array]:
-        msg, cache = self._round_poly(state)
+        self, carry: FoldingClaim, transcript: Transcript
+    ) -> tuple[FoldingClaim, Transcript, Array]:
+        msg, cache = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return self._fold(cache, state[1], r), transcript, msg
+        reduced, _ = reduce_domain(carry.claim.value, msg, r, self.domain)
+        return (
+            FoldingClaim(
+                self._fold(cache, carry.state[1], r), carry.claim.bind(reduced, r)
+            ),
+            transcript,
+            msg,
+        )
 
 
 def prove_eq_poly(
     p_initial: Array,
     w: Array,
+    claim: Array,
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
@@ -201,6 +210,7 @@ def prove_eq_poly(
         raise ValueError(
             f"w needs one weight per variable: got {w.shape[0]} for {rounds} variables"
         )
+    start = RunningClaim(claim, fnp.zeros((rounds,), challenges.dtype), fnp.int32(0))
     rnd = EqPolyRound(
         summand or ProductSummand(degree=p_initial.shape[0]),
         w,
@@ -208,5 +218,7 @@ def prove_eq_poly(
         challenges=challenges,
     )
     state: EqPolyState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
-    (p_final, _), transcript, msgs = fold_rounds(rnd, state, transcript, rounds)
-    return p_final, transcript, msgs
+    carry, transcript, msgs = fold_rounds(
+        rnd, FoldingClaim(state, start), transcript, rounds
+    )
+    return carry, transcript, msgs

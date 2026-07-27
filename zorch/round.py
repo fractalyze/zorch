@@ -12,15 +12,41 @@ boundaries.
 from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Any, Protocol, TypeVar
 
 from frx import Array
+from frx.tree_util import register_dataclass
 
 from zorch.transcript import Transcript
 
 Carry = TypeVar("Carry")
 Message_co = TypeVar("Message_co", covariant=True)
 Message_contra = TypeVar("Message_contra", contravariant=True)
+
+
+@register_dataclass
+@dataclass(frozen=True)
+class RunningClaim:
+    """A partially built evaluation claim: the value after the rounds bound so far.
+
+    `index` is the write cursor into `point`; both are fixed-shape so the whole
+    carry stays one shape across the loop.
+    """
+
+    value: Array
+    point: Array
+    index: Array
+
+    def bind(self, value: Array, challenge: Array) -> RunningClaim:
+        """Advance to the reduced claim, recording this round's challenge.
+
+        The single definition of the write, so every wire form records its
+        challenge identically and a new one cannot get the bookkeeping wrong.
+        """
+        return RunningClaim(
+            value, self.point.at[self.index].set(challenge), self.index + 1
+        )
 
 
 class ProverRound(Protocol[Carry, Message_co]):

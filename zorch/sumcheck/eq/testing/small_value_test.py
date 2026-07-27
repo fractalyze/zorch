@@ -4,8 +4,10 @@ from __future__ import annotations
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
+from frx import Array
 
 from zorch.challenge import ChallengePolicy
+from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.sumcheck.eq.eq_poly import prove_eq_poly
 from zorch.sumcheck.eq.small_value import prove_eq_poly_small_value
 from zorch.testkit.transcript import cheap_transcript
@@ -19,6 +21,12 @@ _CH = ChallengePolicy(KB)
 _W = {4: [1, 0, 1, 0], 6: [1, 0, 1, 1, 0, 1]}
 
 
+def _eq_claim(factors: Array, w: Array) -> Array:
+    """The eq-weighted sum the engine reduces."""
+    ones = fnp.ones((), factors.dtype)
+    return fnp.sum(fnp.prod(factors, axis=0) * expand_eq_to_hypercube(w, ones))
+
+
 class SmallValueTest(absltest.TestCase):
     def test_matches_eq_poly(self) -> None:
         # The small-value prover computes the same eq-weighted sumcheck as Algorithm
@@ -27,9 +35,11 @@ class SmallValueTest(absltest.TestCase):
         for d, l, l_0 in [(2, 4, 1), (2, 6, 2), (3, 6, 2), (2, 6, 1), (2, 6, 3)]:
             p = fnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
             w = fnp.array(_W[l], dtype=KB)
-            _, _, ref = prove_eq_poly(p, w, cheap_transcript(KB), challenges=_CH)
+            _, _, ref = prove_eq_poly(
+                p, w, _eq_claim(p, w), cheap_transcript(KB), challenges=_CH
+            )
             _, _, got = prove_eq_poly_small_value(
-                p, w, l_0, cheap_transcript(KB), challenges=_CH
+                p, w, l_0, _eq_claim(p, w), cheap_transcript(KB), challenges=_CH
             )
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):
@@ -39,10 +49,11 @@ class SmallValueTest(absltest.TestCase):
 
     def test_prove_folds_to_scalar(self) -> None:
         p = fnp.arange(1, 2 * 64 + 1, dtype=KB).reshape(2, 64)
-        p_final, _, msgs = prove_eq_poly_small_value(
-            p, fnp.array(_W[6], dtype=KB), 2, cheap_transcript(KB), challenges=_CH
+        w = fnp.array(_W[6], dtype=KB)
+        carry, _, msgs = prove_eq_poly_small_value(
+            p, w, 2, _eq_claim(p, w), cheap_transcript(KB), challenges=_CH
         )
-        self.assertEqual(p_final.shape, (2, 1))
+        self.assertEqual(carry.state[0].shape, (2, 1))
         self.assertLen(msgs, 6)
 
 

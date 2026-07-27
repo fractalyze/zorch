@@ -27,9 +27,15 @@ from frx import Array
 from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import expand_hypercube_step
 from zorch.prove import fold_rounds
-from zorch.round import ProverRound
+from zorch.round import ProverRound, RunningClaim
 from zorch.sumcheck.domain import EvalDomain, summand_evals, uhat_domain
-from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
+from zorch.sumcheck.prover import (
+    FoldingClaim,
+    ProductSummand,
+    StandardRound,
+    SumcheckSummand,
+)
+from zorch.sumcheck.reduce import reduce_domain
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
 
@@ -73,16 +79,25 @@ class SqrtSpaceRound(ProverRound):
         )
 
     def __call__(
-        self, state: SqrtSpaceState, transcript: Transcript
-    ) -> tuple[SqrtSpaceState, Transcript, Array]:
-        p_stacked, eq_evals = state
-        msg = self._round_poly(state)
+        self, carry: FoldingClaim, transcript: Transcript
+    ) -> tuple[FoldingClaim, Transcript, Array]:
+        p_stacked, eq_evals = carry.state
+        msg = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return (p_stacked, expand_hypercube_step(eq_evals, r)), transcript, msg
+        reduced, _ = reduce_domain(carry.claim.value, msg, r, self.domain)
+        return (
+            FoldingClaim(
+                (p_stacked, expand_hypercube_step(eq_evals, r)),
+                carry.claim.bind(reduced, r),
+            ),
+            transcript,
+            msg,
+        )
 
 
 def prove_sqrt_space(
     p_initial: Array,
+    claim: Array,
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     domain: EvalDomain | None = None,
@@ -94,24 +109,30 @@ def prove_sqrt_space(
     compressed Û_degree; pass a homogeneous SumcheckSummand and/or another EvalDomain
     to retarget the engine. `challenges` configures both phases; an extension
     policy makes this a drop-in tail for univariate skip. Returns the final
-    folded factors (d, 1), the transcript, and all l messages."""
+    folded factors (d, 1) beside the reduced claim, the transcript, and all l
+    messages. Both phases reduce the claim as they fold, so a caller gets the
+    reduced claim without replaying its own proof."""
     summand = summand or ProductSummand(degree=p_initial.shape[0])
     domain = domain or uhat_domain(summand.degree, p_initial.dtype)
     l = log2_strict_usize(p_initial.shape[1])
     l_half = l // 2
 
     state: SqrtSpaceState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
-    state, transcript, phase1 = fold_rounds(
-        SqrtSpaceRound(summand, domain, challenges), state, transcript, l_half
+    start = RunningClaim(claim, fnp.zeros((l,), challenges.dtype), fnp.int32(0))
+    carry, transcript, phase1 = fold_rounds(
+        SqrtSpaceRound(summand, domain, challenges),
+        FoldingClaim(state, start),
+        transcript,
+        l_half,
     )
 
     # Boundary: materialize the deferred state — fold the whole bound prefix down at
     # once — then run standard sumcheck rounds over the explicit evaluations.
-    folded = compute_folded_evaluations(*state)
-    folded, transcript, phase2 = fold_rounds(
+    folded = compute_folded_evaluations(*carry.state)
+    carry, transcript, phase2 = fold_rounds(
         StandardRound(summand, domain, challenges=challenges),
-        folded,
+        FoldingClaim(folded, carry.claim),
         transcript,
         l - l_half,
     )
-    return folded, transcript, phase1 + phase2
+    return carry, transcript, phase1 + phase2

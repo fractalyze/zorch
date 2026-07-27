@@ -4,16 +4,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import frx.numpy as fnp
 from frx import Array
 
 from zorch.prove import fold_rounds
-from zorch.round import ProverRound, VerifierRound
+from zorch.round import ProverRound, RunningClaim, VerifierRound
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
+from zorch.sumcheck.prover import FoldingClaim, initial_claim
 from zorch.transcript import Transcript
-from zorch.verify import RunningClaim, verify
+from zorch.verify import verify
 
 
 @dataclass(frozen=True)
@@ -42,14 +43,11 @@ class EvaluationClaim:
 class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Array]):
     """The prover role of dense sumcheck."""
 
-    def __init__(
-        self,
-        prover_round: ProverRound[Any, Array],
-        verifier_round: VerifierRound[RunningClaim, Array],
-    ) -> None:
+    def __init__(self, prover_round: ProverRound[FoldingClaim, Array]) -> None:
+        # No verifier round: the prover reduces its own claim through the same
+        # `sumcheck.reduce` definition the verifier uses, so it needs the
+        # arithmetic, not the other role.
         self.prover_round = prover_round
-        # Public replay logic derives the canonical reduced claim and transcript.
-        self.verifier_round = verifier_round
 
     def prove(
         self,
@@ -57,15 +55,18 @@ class SumcheckProver(ProverStage[SumClaim, SumcheckWitness, EvaluationClaim, Arr
         witness: SumcheckWitness,
         transcript: Transcript,
     ) -> ProveResult[EvaluationClaim, Array]:
-        pre = transcript
-        _, _, messages = fold_rounds(
-            self.prover_round, witness.state, transcript, claim.rounds
+        folded, transcript, messages = fold_rounds(
+            self.prover_round,
+            initial_claim(witness.state, claim.value, claim.rounds),
+            transcript,
+            claim.rounds,
         )
-        reduction_proof = fnp.stack(messages)
-        point, value, replayed, _ = verify(
-            self.verifier_round, claim.value, reduction_proof, pre
+        reduced = folded.claim
+        return ProveResult(
+            EvaluationClaim(reduced.point, reduced.value),
+            fnp.stack(messages),
+            transcript,
         )
-        return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
 
 
 class SumcheckVerifier(VerifierStage[SumClaim, EvaluationClaim, Array]):
