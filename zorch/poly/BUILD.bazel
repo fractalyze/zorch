@@ -12,6 +12,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:scan_body",
         "//zorch/utils:bits",
         "//zorch/utils:field",
         requirement("frx"),
