@@ -19,6 +19,46 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.utils.bits import log2_strict_usize
 
 
+# Module-level rather than lambdas at the call site: a fresh callable per call
+# is a fresh cache key, which is what defeats the memoization below.
+def _zeta_combine(lo: Array, hi: Array) -> Array:
+    return lo + hi
+
+
+def _mobius_combine(lo: Array, hi: Array) -> Array:
+    return hi - lo
+
+
+# Memoized so the body handed to `lax.scan` keeps one identity across calls.
+# `lax.scan` keys its trace cache on that identity, so a body built per call
+# re-traces an identical graph every time. The key carries the shapes the body
+# closes over, since a different table shape is a genuinely different program.
+_LEVELS: dict[
+    tuple[Callable[[Array, Array], Array], tuple[int, ...], int],
+    Callable[[Array, None], tuple[Array, None]],
+] = {}
+
+
+def _level(
+    combine: Callable[[Array, Array], Array], lead: tuple[int, ...], n: int
+) -> Callable[[Array, None], tuple[Array, None]]:
+    """One butterfly pass, built once per (combine, shape)."""
+    cached = _LEVELS.get((combine, lead, n))
+    if cached is not None:
+        return cached
+
+    def level(a: Array, _: None) -> tuple[Array, None]:
+        x = a.reshape(lead + (2, n // 2))
+        lo, hi = x[..., 0, :], x[..., 1, :]
+        paired = fnp.stack([lo, combine(lo, hi)], axis=-2)
+        # Left-rotate the bit labels: the MSB just folded drops to the LSB, so
+        # the next level's fixed (2, n/2) reshape exposes the next bit.
+        return paired.swapaxes(-2, -1).reshape(lead + (n,)), None
+
+    _LEVELS[(combine, lead, n)] = level
+    return level
+
+
 def _butterfly_scan(table: Array, combine: Callable[[Array, Array], Array]) -> Array:
     """Run the `k = log2` per-bit butterfly passes of a zeta/Möbius transform as
     one fixed-shape `lax.scan`, NOT a `k`-deep Python unroll.
@@ -38,15 +78,7 @@ def _butterfly_scan(table: Array, combine: Callable[[Array, Array], Array]) -> A
     if k == 0:
         return table  # zero variables: the transform is the identity
 
-    def level(a: Array, _: None) -> tuple[Array, None]:
-        x = a.reshape(lead + (2, n // 2))
-        lo, hi = x[..., 0, :], x[..., 1, :]
-        paired = fnp.stack([lo, combine(lo, hi)], axis=-2)
-        # Left-rotate the bit labels: the MSB just folded drops to the LSB, so
-        # the next level's fixed (2, n/2) reshape exposes the next bit.
-        return paired.swapaxes(-2, -1).reshape(lead + (n,)), None
-
-    out, _ = lax.scan(level, table, xs=None, length=k)
+    out, _ = lax.scan(_level(combine, lead, n), table, xs=None, length=k)
     return out
 
 
@@ -57,14 +89,14 @@ def mle_coeffs_to_evals(coeffs: Array) -> Array:
     the per-bit passes (`a[v] += a[v with one set bit cleared]`) as one fixed
     `lax.scan` (see `_butterfly_scan`). Inverse of `mle_evals_to_coeffs`; leading
     axes ride through."""
-    return _butterfly_scan(coeffs, lambda lo, hi: lo + hi)
+    return _butterfly_scan(coeffs, _zeta_combine)
 
 
 def mle_evals_to_coeffs(evals: Array) -> Array:
     """Evaluation→coefficient transform, the Möbius inverse of
     `mle_coeffs_to_evals` (`a[v] -= a[v with one set bit cleared]`), as one fixed
     `lax.scan`. Leading axes ride through."""
-    return _butterfly_scan(evals, lambda lo, hi: hi - lo)
+    return _butterfly_scan(evals, _mobius_combine)
 
 
 def eval_mle(mle: Array, point: Array, axis: int = 0) -> Array:
