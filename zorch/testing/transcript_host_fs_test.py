@@ -6,6 +6,7 @@ same inputs."""
 from __future__ import annotations
 
 from typing import Any
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -13,9 +14,14 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import tree_util
 
+from zorch import transcript as transcript_mod
 from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
-from zorch.transcript import DuplexTranscript, sample_challenge
+from zorch.transcript import (
+    DuplexState,
+    DuplexTranscript,
+    sample_challenge,
+)
 
 F = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
@@ -99,6 +105,113 @@ class TranscriptHostFsTest(parameterized.TestCase):
         t = self._new(True).observe(rand_field(7, (4,), F))
         leaf = tree_util.tree_leaves(t)[0]
         self.assertEqual(next(iter(leaf.devices())).platform, "cpu")
+
+
+@absltest.skipIf(_CPU_BACKEND, "a scoped host absorb is only meaningful off CPU")
+class ScopedHostAbsorbTest(parameterized.TestCase):
+    """`absorb_on_host` relocates ONE absorb to the CPU sponge without moving the
+    stream: byte-identical to `observe`, and the state comes back on the device so
+    the following device-path steps are unaffected."""
+
+    def _new(self, on_host: bool = False) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8, fs_on_host=on_host)
+
+    def _state_eq(self, a: DuplexTranscript, b: DuplexTranscript) -> bool:
+        return all(
+            bool(fnp.all(x == y))
+            for x, y in zip(
+                tree_util.tree_leaves(a), tree_util.tree_leaves(b), strict=True
+            )
+        )
+
+    @parameterized.named_parameters(
+        ("under_a_block", 5), ("one_block", 8), ("block_and_tail", 17), ("many", 130)
+    )
+    def test_byte_identical_to_observe(self, mlen: int) -> None:
+        v = rand_field(mlen + 1, (mlen,), F)
+        self.assertTrue(
+            self._state_eq(self._new().observe(v), self._new().absorb_on_host(v))
+        )
+
+    def test_byte_identical_mid_stream(self) -> None:
+        # From a non-zero (in_pos, out_pos): the partial input buffer has to cross
+        # to the host and back, not just the sponge lane.
+        def seeded() -> DuplexTranscript:
+            t = self._new().observe(rand_field(1, (5,), F))
+            return t.sample(3)[0].observe(rand_field(2, (7,), F))
+
+        v = rand_field(3, (130,), F)
+        self.assertTrue(self._state_eq(seeded().observe(v), seeded().absorb_on_host(v)))
+
+    def test_sequence_matches_successive_observes(self) -> None:
+        # The variadic form is the point: a length prefix plus its payload must
+        # absorb in one host excursion, not one per message.
+        msgs = [
+            fnp.array(130, F),
+            rand_field(1, (130,), F),
+            fnp.array(130, F),
+            rand_field(2, (130,), F),
+        ]
+        ref = self._new()
+        for m in msgs:
+            ref = ref.observe(m)
+        self.assertTrue(self._state_eq(ref, self._new().absorb_on_host(*msgs)))
+
+    def test_sequence_crosses_the_host_boundary_once(self) -> None:
+        # Absorbing a sequence one call at a time would drag the state back to
+        # the device between messages; batching pays the trip once. Counted by
+        # how many times a fresh host commit happens.
+        moves = 0
+        real = transcript_mod._state_on_host
+
+        def counting(state: DuplexState) -> DuplexState:
+            nonlocal moves
+            if not transcript_mod._on_host(state.sponge_state):
+                moves += 1
+            return real(state)
+
+        msgs = [rand_field(i, (130,), F) for i in range(3)]
+        with mock.patch.object(transcript_mod, "_state_on_host", counting):
+            self._new().absorb_on_host(*msgs)
+        self.assertEqual(moves, 1)
+
+    def test_empty_sequence_is_the_identity(self) -> None:
+        self.assertTrue(self._state_eq(self._new(), self._new().absorb_on_host()))
+
+    def test_state_returns_to_the_device(self) -> None:
+        # The point of "scoped": the stream stays on the device path, so the
+        # following steps must not silently run host-resident.
+        t = self._new().absorb_on_host(rand_field(4, (130,), F))
+        for leaf in tree_util.tree_leaves(t):
+            self.assertNotEqual(next(iter(leaf.devices())).platform, "cpu")
+        self.assertFalse(t.fs_on_host)
+
+    def test_challenges_match_after_a_scoped_absorb(self) -> None:
+        # What actually has to hold: the Fiat-Shamir stream cannot notice where an
+        # absorb ran.
+        v = rand_field(6, (130,), F)
+        _, dev = sample_challenge(self._new().observe(v), EF, 4)
+        _, scoped = sample_challenge(self._new().absorb_on_host(v), EF, 4)
+        self.assertTrue(bool(fnp.all(dev == scoped)))
+
+    def test_host_backend_absorbs_in_place(self) -> None:
+        # Already on host: nothing to relocate, and the state must NOT be dragged
+        # to the device -- that would undo the backend's whole residency win.
+        t = self._new(True).absorb_on_host(rand_field(8, (17,), F))
+        self.assertTrue(
+            self._state_eq(t, self._new(True).observe(rand_field(8, (17,), F)))
+        )
+        self.assertEqual(
+            next(iter(tree_util.tree_leaves(t)[0].devices())).platform, "cpu"
+        )
+
+    def test_rejects_a_traced_call(self) -> None:
+        # It moves buffers across the host boundary, so it cannot be traced. Failing
+        # loudly beats silently leaking a host round-trip into a compiled zone.
+        with self.assertRaisesRegex(ValueError, "eager"):
+            frx.jit(lambda t, x: t.absorb_on_host(x))(
+                self._new(), rand_field(9, (8,), F)
+            )
 
 
 if __name__ == "__main__":

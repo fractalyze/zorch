@@ -327,6 +327,59 @@ class DuplexTranscript:
         compiled graph size is independent of `len(values)`."""
         return self.fs.observe(self, values)
 
+    def absorb_on_host(self, *messages: Array) -> DuplexTranscript:
+        """Absorb `messages` in order through the CPU sponge, leaving the state
+        on the device it came from. Byte-identical to the same sequence of
+        `observe` calls -- the same `_observe_body`, only relocated.
+
+        The win is per permutation, and it is placement, not algorithm. A
+        single sponge on an accelerator runs one warp-cooperative permute per
+        rate-block, where ~21 rounds of full-warp shuffle latency dominate a
+        few hundred field ops; a CPU pays none of that. Measured on
+        koalabear16 at rate 8: 5.4 us per permutation on an RTX 5090 against
+        1.0 us on the host. A short message is not worth the two crossings,
+        so the caller applies its own length threshold -- but a message of
+        thousands of blocks (a LogUp-GKR output-MLE observe on a wide shard)
+        spends milliseconds on placement alone.
+
+        Scoped deliberately: `fs` still decides where the stream runs, and
+        only THIS absorb relocates. Re-deriving the choice per call from
+        `fs_on_host` is the trap the `fs` meta-field exists to close, so the
+        placement is named at the call site, which is where the message
+        length that justifies it is known.
+
+        Variadic because the crossing, not the absorb, is what a caller would
+        otherwise pay repeatedly: a Fiat-Shamir step is usually several messages
+        in a fixed order (a length prefix, then its payload), and absorbing them
+        one call at a time drags the state back to the device between each. The
+        whole sequence costs one round trip.
+
+        Eager only -- it moves buffers across the host boundary, so it cannot
+        run inside a traced region; `observe` is the in-graph form.
+        """
+        if not messages:
+            return self
+        if self.fs.on_host:
+            # The stream already runs there; relocating is the backend's job.
+            t = self
+            for m in messages:
+                t = t.observe(m)
+            return t
+        if isinstance(self.state.sponge_state, frx.core.Tracer) or any(
+            isinstance(m, frx.core.Tracer) for m in messages
+        ):
+            raise ValueError(
+                "absorb_on_host is eager (it moves the sponge state across the "
+                "host boundary); call observe() inside a traced region"
+            )
+        device = next(iter(self.state.sponge_state.devices()))
+        t = self
+        for m in messages:
+            # `_observe_host` commits the state to the CPU on the first hop and
+            # returns host leaves, so the rest of the sequence finds it resident.
+            t = _observe_host(t, m)
+        return t._with_state(_state_on_device(t.state, device))
+
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
         # Permute when input is pending or the output buffer is drained.
         need_perm = (self.state.in_pos > 0) | (self.state.out_pos == 0)
@@ -795,6 +848,12 @@ def _state_on_host(state: DuplexState) -> DuplexState:
         return state
     c = _host_cpu()
     return DuplexState(*(frx.device_put(leaf, c) for leaf in _state_leaves(state)))
+
+
+def _state_on_device(state: DuplexState, device: frx.Device) -> DuplexState:
+    """Move the sponge state to `device` — the inverse of `_state_on_host`, for
+    a scoped host absorb that has to hand the stream back to the device path."""
+    return DuplexState(*(frx.device_put(leaf, device) for leaf in _state_leaves(state)))
 
 
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
