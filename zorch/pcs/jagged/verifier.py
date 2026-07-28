@@ -45,9 +45,8 @@ from zorch.pcs.jagged.prover import (
 )
 from zorch.pcs.jagged.stacked import stacked_verify
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
-from zorch.sumcheck.verifier import SumcheckRound
+from zorch.sumcheck.verifier import SumcheckRound, verify
 from zorch.transcript import Transcript
-from zorch.verify import verify
 
 # Outer Hadamard sumcheck degree (must match the prover's).
 _OUTER_DEGREE = 2
@@ -75,7 +74,7 @@ def verify_jagged_eval(
     reduced branching-program leaf at the reduced point. Returns `(ok, transcript)`.
     """
     transcript = transcript.observe(claimed_sum)
-    point, final_claim, transcript, ok_rounds = verify(
+    final_claim, transcript, point, ok_rounds = verify(
         SumcheckRound(_INNER_DEGREE), claimed_sum, inner_round_polys, transcript
     )
     # Reverse sampling order → buffer (MSB-first) order, split (z_left, z_right).
@@ -147,7 +146,7 @@ def _verify_device(
     claim = _compress_column_claims(column_claims, z_col)
 
     # S3: replay the outer Hadamard sumcheck.
-    point, outer_final_eval, transcript, ok_outer = verify(
+    outer_final_eval, transcript, point, ok_outer = verify(
         SumcheckRound(_OUTER_DEGREE),
         claim,
         proof.outer_sumcheck_polys,

@@ -26,7 +26,7 @@ live data packed at the front, masks the dead tail out of the round-poly sum, an
 folds back into the front, zero-padding the rest — byte-identical to the
 Python-loop fold. This is the multilinear-sumcheck specialization; the
 scheme-agnostic round loop (any `Round`, any message shape) is
-`zorch.prove.fold_rounds`. A univariate / FFT prover would be its own driver.
+`zorch.round.ProveChain`. A univariate / FFT prover would be its own driver.
 
 When the transcript's Fiat-Shamir permutation lowers to a dedicated fusion marker
 (`transcript.has_dedicated_fusion`, the `zorch.merkle_commit` gate), `prove` wraps
@@ -170,7 +170,8 @@ class RoundMsg:
     evaluation point. The challenge is re-derivable from `round_poly`, so it never
     goes on the wire -- it rides here only to spare the prover a transcript replay.
     A registered pytree because the `lax.scan` stacks it as its output;
-    `LogupSumcheckRound.__call__` also emits one for the `fold_rounds` driver."""
+    `LogupSumcheckRound.__call__` emits one too, so a `ProveChain` can drive that
+    round per-variable instead of this scan."""
 
     round_poly: Array
     challenge: Array
@@ -235,7 +236,7 @@ def prove(
 
     Generic over the round's summand (`_combine`): the product and LogUp
     per-variable loops share this scan. The heterogeneous case (distinct rounds in
-    sequence) stays on `zorch.prove.fold_rounds`.
+    sequence) stays on `zorch.round.ProveChain`.
 
     When the transcript's Fiat-Shamir permutation lowers to a dedicated fusion
     marker (`has_dedicated_fusion`), the whole scan is wrapped in one

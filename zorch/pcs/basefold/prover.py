@@ -39,8 +39,7 @@ from zorch.pcs.fold import (
     sample_positions,
 )
 from zorch.poly.multilinear import eval_mle, mle_fold
-from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProveChain, Round
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -227,12 +226,10 @@ def _open_batch_body(
     #    Every round commits its pre-fold layer; the final folded codeword
     #    (length `blowup`) is the cleartext final poly.
     carry: _OpenCarry = (cw, current_mle, current_claim, z)
-    carry, t, msgs = fold_rounds(
-        _SumcheckPairFoldRound(PreFoldPairCommitRound(prover.code, prover.tree)),
-        carry,
-        t,
-        num_vars,
+    fold_round = _SumcheckPairFoldRound(
+        PreFoldPairCommitRound(prover.code, prover.tree)
     )
+    carry, t, msgs = ProveChain([fold_round] * num_vars)(carry, t)
     final_poly = carry[0]
     uni_msgs = [uni for uni, _ in msgs]
     layers = [layer for _, layer in msgs]

@@ -12,9 +12,9 @@ from jax import Array
 from zorch.sumcheck import prover, verifier
 from zorch.sumcheck.prover import prove
 from zorch.sumcheck.testing import eval_mle_oracle, product
+from zorch.sumcheck.verifier import verify
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.verify import verify
 
 KB = zk_dtypes.koalabear_mont
 _GPU_BACKEND = jax.default_backend() == "gpu"
@@ -27,7 +27,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
             prover.SumcheckRound(degree), list(factors), cheap_transcript(KB)
         )
         proof = msgs.round_poly
-        point, final_claim, _, ok = verify(
+        final_claim, _, point, ok = verify(
             verifier.SumcheckRound(degree), claimed, proof, cheap_transcript(KB)
         )
         self.assertTrue(bool(ok))
@@ -57,7 +57,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
         claimed = jnp.sum(f)
         _, _, msgs = prove(prover.SumcheckRound(1), [f], cheap_transcript(EF))
         proof = msgs.round_poly
-        point, final_claim, _, ok = verify(
+        final_claim, _, point, ok = verify(
             verifier.SumcheckRound(1), claimed, proof, cheap_transcript(EF)
         )
         self.assertTrue(bool(ok))
@@ -71,7 +71,7 @@ class SumcheckRoundtripTest(absltest.TestCase):
             prover.SumcheckRound(2), [a, b], cheap_transcript(KB)
         )
         proof = msgs.round_poly
-        _, final_claim, _, ok = verify(
+        final_claim, _, _, ok = verify(
             verifier.SumcheckRound(2), claimed, proof, cheap_transcript(KB)
         )
         self.assertTrue(bool(ok))

@@ -12,12 +12,12 @@ state, a GKR layer's running claim, ...) and the transcript thread functionally
 Rounds live at two levels. A *stage* round is one step of the heterogeneous
 protocol sequence (a GKR layer), run by the chains here; an *inner* round binds
 one variable of a stage's sumcheck — the homogeneous case, scanned by
-`zorch.prove` / `zorch.verify`, typically from inside a stage round. On the
-prover side both levels share one shape, so `ProverRound` is the single prover
-contract (`ProveChain` / `fold_rounds`). On the verifier side the inner round
-must also surface its sampled challenge for `zorch.verify` to collect into the
-evaluation point, so the contracts split: `VerifierRound` (stage, `VerifyChain`)
-vs `InnerVerifierRound` (per-variable). The Protocols are structural, so a
+`zorch.sumcheck`'s `prove` / `verify`, typically from inside a stage round. On
+the prover side both levels share one shape, so `ProverRound` is the single
+prover contract (`ProveChain`). On the verifier side the inner round must also
+surface its sampled challenge for `verify` to collect into the evaluation point,
+so the contracts split: `VerifierRound` (stage, `VerifyChain`) vs
+`InnerVerifierRound` (per-variable). The Protocols are structural, so a
 wrong-shaped — or wrong-level — round is a type error. `Round` stays the
 nominal base subclasses inherit.
 
@@ -43,9 +43,9 @@ class Round:
 
 
 class ProverRound(Protocol):
-    """What `ProveChain` / `fold_rounds` consume. `carry` and `msg` are
-    scheme-defined (`Any`); the checker enforces arity and the threaded
-    `transcript` — what discriminates a prover round from a verifier one.
+    """What `ProveChain` consumes. `carry` and `msg` are scheme-defined (`Any`);
+    the checker enforces arity and the threaded `transcript` — what discriminates
+    a prover round from a verifier one.
 
     Parameters are positional-only (`/`): rounds name their carry `state` /
     `claim` / `layer`, so a name-bound contract would reject every real round."""
@@ -65,9 +65,10 @@ class VerifierRound(Protocol):
 
 
 class InnerVerifierRound(Protocol):
-    """What the `zorch.verify` scan consumes: the per-variable verifier inside a
-    stage's sumcheck. The trailing element is the bound coordinate `r`, collected
-    by the driver into the evaluation point. Positional-only as on `ProverRound`."""
+    """What the `zorch.sumcheck.verifier.verify` scan consumes: the per-variable
+    verifier inside a stage's sumcheck. The trailing element is the bound
+    coordinate `r`, collected by the driver into the evaluation point.
+    Positional-only as on `ProverRound`."""
 
     def __call__(
         self, claim: Any, msg: Any, transcript: Transcript, /
@@ -78,6 +79,9 @@ class ProveChain(Round):
     """Sequence prover rounds (nn.Sequential). Threads the carry + transcript
     through each round and collects their messages. Itself a `Round`, so chains
     nest.
+
+    Distinct rounds (a GKR layer pyramid) pass a list of rounds; a folding open
+    that repeats one round N times passes `[rnd] * n`.
 
     The rounds are consumed lazily on `__call__`: a generator that builds each
     round on demand lets a proved round (and the witness it holds) be released

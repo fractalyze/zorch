@@ -57,8 +57,7 @@ from zorch.pcs.jagged.poly import (
 from zorch.pcs.jagged.stacked import stacked_open
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_univariate
-from zorch.prove import fold_rounds
-from zorch.round import Round
+from zorch.round import ProveChain, Round
 from zorch.sumcheck.prover import RoundMsg, SumcheckRound, prove
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_ceil_usize
@@ -111,7 +110,7 @@ class _InnerState:
 
     A registered pytree (num_vars static) so it threads through the per-round
     `@jit` — each round shares the carry's shapes, so the round body compiles once
-    and `fold_rounds`'s nine remaining calls reuse it, instead of unrolling ten
+    and the chain's nine remaining calls reuse it, instead of unrolling ten
     sponge permutes into one graph (a multi-minute XLA compile on the ZKX CPU
     backend)."""
 
@@ -131,7 +130,7 @@ def _jagged_assist_step(
     state: _InnerState, transcript: Transcript
 ) -> tuple[_InnerState, Transcript, RoundMsg]:
     """One jitted jagged-assist round body — see `JaggedAssistRound`. The carry
-    shapes are round-invariant, so this compiles once and `fold_rounds` reuses it
+    shapes are round-invariant, so this compiles once and the chain reuses it
     across all 2·n_d rounds (the sponge permute is not re-unrolled per round)."""
     dtype = state.z_row.dtype
     num_bits = state.merged_bits.shape[1] // 2
@@ -218,7 +217,7 @@ class JaggedAssistRound(Round):
     [s(0), s(1), s(2)], observe + sample alpha, then fold — bind that column to
     alpha, update the running weights by eq(alpha, bit_c), and reduce the claim to
     s(alpha). The fold lands in the emitted state, so the round is self-contained
-    and `fold_rounds` chains it straight through with no prior-challenge plumbing.
+    and `ProveChain` chains it straight through with no prior-challenge plumbing.
     Delegates to the jitted `_jagged_assist_step` so the round body compiles once
     and is reused across rounds."""
 
@@ -281,7 +280,7 @@ def prove_jagged_eval(
     J̃(z_row, z_col, z_final) = eval_jagged_mle(...) and `inner_round_polys` is the
     `(2·n_d, 3)` eval-form proof the stock `verify(SumcheckRound(2))` replays.
 
-    Jitted setup (claim eval + one sponge absorb), then the `fold_rounds` Python
+    Jitted setup (claim eval + one sponge absorb), then the `ProveChain` Python
     loop over the jitted per-round step. The round body compiles once
     (round-invariant carry shapes) and is reused across all 2·n_d rounds —
     unrolling all rounds into a single `@jit` instead re-expands the sponge permute
@@ -290,8 +289,8 @@ def prove_jagged_eval(
     state, claimed_sum, transcript = _inner_setup(
         col_prefix_sums, z_row, z_col, z_final, transcript, cfg=cfg
     )
-    _, transcript, msgs = fold_rounds(
-        JaggedAssistRound(), state, transcript, 2 * cfg.n_d
+    _, transcript, msgs = ProveChain([JaggedAssistRound()] * (2 * cfg.n_d))(
+        state, transcript
     )
     inner_round_polys = jnp.stack([m.round_poly for m in msgs])  # (2·n_d, 3)
     return inner_round_polys, claimed_sum, transcript

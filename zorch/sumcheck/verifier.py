@@ -1,5 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sumcheck verifier rounds -- the per-variable duals of the prover family.
+"""Sumcheck verifier rounds and their scan driver -- the per-variable duals of
+the prover family.
 
 `SumcheckRound` checks the round-poly identity and reduces the claim. It is
 summand-agnostic: it sees only the round polynomials, so one verifier serves
@@ -13,6 +14,11 @@ interpolated off a non-natural node set (e.g. through an eq factor's root),
 where value form would force the verifier to know the sender's nodes. It also
 owns the challenge squeeze rule (`challenge_limbs`), since a coefficient
 prover's claims may live in an extension of the transcript's field.
+
+`verify` scans either round over a proof -- the dual of `prover.prove`, and one
+`lax.scan` for the same reason: the replay compiles to a single traced region
+flat in the round count (issue #58) rather than an unrolled body that crosses the
+ZKX PTX cliff.
 """
 
 from __future__ import annotations
@@ -23,7 +29,7 @@ from typing import TYPE_CHECKING
 
 import jax
 import jax.numpy as jnp
-from jax import Array
+from jax import Array, lax
 
 from zorch.poly.univariate import eval_coeffs, eval_univariate
 from zorch.round import Round
@@ -89,6 +95,30 @@ class CoeffsSumcheckRound(Round):
         transcript = transcript.observe(msg)
         transcript, r = sample_challenge(transcript, claim.dtype, self.challenge_limbs)
         return eval_coeffs(msg, r), transcript, r, ok
+
+
+def verify(
+    verifier: InnerVerifierRound, claim: Array, proof: Array, transcript: Transcript
+) -> tuple[Array, Transcript, Array, Array]:
+    """Replay `proof` against `claim` → `(final_claim, transcript, point, ok)`.
+
+    `point` is the evaluation point the rounds bound; `ok` ANDs every round's
+    check, so one false anywhere rejects the proof. The reduced `(final_claim,
+    point)` is where the verifier stops — closing it needs a PCS opening, which
+    is the consumer's.
+    """
+    if proof.ndim != 2 or proof.shape[0] == 0:
+        raise ValueError("proof must be a non-empty 2-D array (one row per round)")
+
+    def step(
+        carry: tuple[Array, Transcript], msg: Array
+    ) -> tuple[tuple[Array, Transcript], tuple[Array, Array]]:
+        claim, transcript = carry
+        claim, transcript, r, ok = verifier(claim, msg, transcript)
+        return (claim, transcript), (r, ok)
+
+    (claim, transcript), (point, oks) = lax.scan(step, (claim, transcript), proof)
+    return claim, transcript, point, jnp.all(oks)
 
 
 if TYPE_CHECKING:

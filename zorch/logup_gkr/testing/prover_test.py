@@ -26,7 +26,6 @@ from zorch.logup_gkr.prover import (
 )
 from zorch.logup_gkr.testing import prove_gkr, prove_gkr_jitted, random_first_layer
 from zorch.poly.univariate import eval_univariate
-from zorch.prove import fold_rounds
 from zorch.round import ProveChain
 from zorch.sumcheck.prover import prove
 from zorch.testkit.fusion import assert_fusion_ready
@@ -97,11 +96,11 @@ class LogupSumcheckRoundTest(absltest.TestCase):
         self.assertTrue(bool(state[0].shape == (1,)))  # collapsed to a point
         self.assertTrue(bool(rnd._combine(*state)[0] == claim))
 
-        # `fold_rounds` collects the round polys and the bound point, and the
-        # homogeneous scan driver `prove` (what GkrLayerRound uses) is byte-identical
-        # to that loop -- same Fiat-Shamir order over an identical fresh sponge, so
-        # same round polys + point.
-        _, _, msgs = fold_rounds(rnd, st, cheap_transcript(KB), n)
+        # A `ProveChain` of the round collects the round polys and the bound point,
+        # and the homogeneous scan driver `prove` (what GkrLayerRound uses) is
+        # byte-identical to that loop -- same Fiat-Shamir order over an identical
+        # fresh sponge, so same round polys + point.
+        _, _, msgs = ProveChain([rnd] * n)(st, cheap_transcript(KB))
         round_polys = jnp.stack([m.round_poly for m in msgs])
         point = jnp.stack([m.challenge for m in msgs])
         self.assertEqual(round_polys.shape, (n, 4))
@@ -112,7 +111,7 @@ class LogupSumcheckRoundTest(absltest.TestCase):
     def test_scan_prove_is_flat_in_variable_count(self) -> None:
         # The per-variable LogUp loop scans rather than unrolls: the prove jaxpr
         # equation count is invariant under the variable count (#58), the compile
-        # win the scan driver buys over the old unrolled fold_rounds. Trace only,
+        # win the scan driver buys over an unrolled Python round loop. Trace only,
         # no execution, so it runs on any backend.
         def eqn_count(num_vars: int) -> int:
             st = _state(7, 1 << num_vars)
@@ -247,7 +246,7 @@ class GkrProverTest(absltest.TestCase):
 
     def test_prove_under_jit_matches_eager(self) -> None:
         # prove_gkr_jitted fuses the whole prove into one program; guard that
-        # fusing changes nothing — GkrLayer / cheap_transcript / fold_rounds are
+        # fusing changes nothing — GkrLayer / cheap_transcript / ProveChain are
         # all jit-traceable and the round polynomials are bit-identical to the
         # eager prove_gkr.
         first = random_first_layer(23, 2, 3)

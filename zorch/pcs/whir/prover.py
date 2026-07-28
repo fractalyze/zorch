@@ -130,8 +130,10 @@ def _commit_body(
     return root, WhirProverData(mle=mle, codeword=codeword, digest_layers=layers)
 
 
-# Jitted open body (prover the static key by value): one round driver, not
-# `fold_rounds` over a FoldableCode. Each round runs `k_whir` degree-2 sumcheck
+# Jitted open body (prover the static key by value). A WHIR round accumulates
+# into ~8 parallel proof lists rather than emitting one message, so it does not
+# fit the `(carry, transcript, msg)` `Round` contract and drives its own loop
+# instead of a `ProveChain`. Each round runs `k_whir` degree-2 sumcheck
 # folds of `Σ f̂·ŵ`, re-encodes the folded MLE as a fresh shrinking RS codeword
 # (committed via the strided tree, out-of-domain sampled), opens the queried
 # codeword at strided cosets, then folds the out-of-domain and in-domain query

@@ -19,7 +19,6 @@ py_library(
     deps = [
         "//zorch:round",
         "//zorch:transcript",
-        "//zorch:verify",
         "//zorch/poly",
         "//zorch/sumcheck",
         "//zorch/utils:bits",

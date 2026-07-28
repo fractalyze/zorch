@@ -54,7 +54,6 @@ py_library(
     srcs = ["prover.py"],
     visibility = ["//visibility:public"],
     deps = [
-        "//zorch:prove",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/coding:foldable_code",
@@ -80,7 +79,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:transcript",
-        "//zorch:verify",
         "//zorch/hash:compression",
         "//zorch/hash:sponge",
         "//zorch/pcs/basefold",

@@ -4,10 +4,11 @@
 `LogupSumcheckRound` is one per-variable sumcheck round whose summand (`_combine`)
 is the LogUp combine `eq * (lam*(n0*d1 + n1*d0) + d0*d1)` over five MLE factors
 `[eq, n0, d1, n1, d0]` -- the sibling of the product `zorch.sumcheck.prover.
-SumcheckRound`. Its `__call__` emits a `RoundMsg(round_poly, challenge)` for the
-generic `fold_rounds` driver; the homogeneous scan driver `prove` (which
-`GkrLayerRound` uses) reads only `degree` + `_combine` and stacks that same
-`RoundMsg`, so the evaluation point is `msgs.challenge`.
+SumcheckRound`. `GkrLayerRound` drives it through the homogeneous scan driver
+`prove`, which reads only `degree` + `_combine` and stacks a
+`RoundMsg(round_poly, challenge)` per round, so the evaluation point is
+`msgs.challenge`. `__call__` emits that same `RoundMsg`, so a `ProveChain` can
+drive the round one variable at a time instead.
 
 `GkrLayerRound` is one GKR layer: it runs the layer's per-variable LogUp sumcheck
 (via the homogeneous scan driver `prove` over `LogupSumcheckRound`), then reduces

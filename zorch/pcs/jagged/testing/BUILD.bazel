@@ -88,7 +88,6 @@ py_test(
     tags = ["local_only"],
     deps = [
         "//zorch:transcript",
-        "//zorch:verify",
         "//zorch/coding:reed_solomon",
         "//zorch/commit/testing:koalabear16",
         "//zorch/hash/poseidon2/testing:koalabear16",

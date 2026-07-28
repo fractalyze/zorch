@@ -14,7 +14,7 @@ pure data: a `GkrLayer` is four equal-length MLEs `(n0, n1, d0, d1)`,
 `prover.LogupSumcheckRound` is one per-variable sumcheck round whose summand is
 `logup_combine` over five factors `[eq, n0, d1, n1, d0]` — the direct sibling of
 the product `sumcheck.prover.SumcheckRound`. `GkrLayerRound` proves one layer (its
-per-variable sumcheck via `fold_rounds`, then the child-selector reduction), and
+per-variable sumcheck via `prove`, then the child-selector reduction), and
 the GKR prover is `ProveChain([GkrLayerRound(l) for l in reversed(layers[:-1])])`
 — the **heterogeneous-chain** case of the `Round` composition contract (distinct
 rounds in sequence; see [`sumcheck.md`](sumcheck.md)), one bound variable per
@@ -31,7 +31,7 @@ verifier's points align with no flip. The verifier evaluates `eq` with the
 `O(n)` `eval_eq`, never a `2ⁿ` vector, so it stays succinct.
 
 **Stops at the point-claim; the PCS closes.** `verify` reduces to a
-`(point, claim)`; the final `claim == leaf_mle(point)` check needs a PCS opening
+`(claim, point)`; the final `claim == leaf_mle(point)` check needs a PCS opening
 of the input trace and is the consumer's — keeping this block PCS-agnostic.
 Interaction fingerprinting, padding schedules, and trace openings likewise stay
 in the consumer: the circuit and provers carry only the two layouts (dense and
@@ -61,7 +61,7 @@ A `JaggedGkrLayer` materializes only `sum(row_counts)` of its virtual
 
 The two rounds are two wire forms of the same LogUp summand — `logup_combine`
 stays the one shared definition — and the jagged verifier replays through the
-same agnostic `zorch.verify` scan via `sumcheck.verifier.CoeffsSumcheckRound`.
+same agnostic `sumcheck.verifier.verify` scan via `CoeffsSumcheckRound`.
 
 ## Fusion by construction
 

@@ -1,11 +1,10 @@
 # sumcheck — design notes
 
 The *why* behind the sumcheck block. The *what* already lives in two drift-proof
-places: the code (`zorch/sumcheck/`, `zorch/prove.py`, `zorch/verify.py`) and the
-tests under `zorch/sumcheck/testing/`, which are the executable usage and run on
-every commit. This file carries only what neither can. Full design and open
-decisions: epic issue
-[fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
+places: the code (`zorch/sumcheck/`) and the tests under
+`zorch/sumcheck/testing/`, which are the executable usage and run on every
+commit. This file carries only what neither can. Full design and open decisions:
+epic issue [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 
 ## Why the shape
 
@@ -14,13 +13,13 @@ as free functions — `split_halves` / `factors_on_domain` / `fold` — and each
 supplies only its summand `_combine`: `prover.SumcheckRound` multiplies a product,
 `logup_gkr.prover.LogupSumcheckRound` evaluates the LogUp combine. `prove` is the
 homogeneous scan driver, generic over that summand — it reads a round's `degree` +
-`_combine` (the `SumcheckSummand` seam in `prove.py`) and owns the split / fold /
-scan, so the product and LogUp per-variable loops share one driver; `verify` is the
-dual, generic over any `InnerVerifierRound`. The verifier is a single
-`verifier.SumcheckRound` that pairs with all of them: it sees only the round
-polynomials, so the summand is purely the prover's concern. Its observe→challenge
-order mirrors the prover's exactly — that shared ordering is the only thing keeping
-the two Fiat-Shamir transcripts from diverging.
+`_combine` (the `SumcheckSummand` seam in `sumcheck/prover.py`) and owns the
+split / fold / scan, so the product and LogUp per-variable loops share one driver;
+`verify` is the dual, generic over any `InnerVerifierRound`. The verifier is a
+single `verifier.SumcheckRound` that pairs with all of them: it sees only the
+round polynomials, so the summand is purely the prover's concern. Its
+observe→challenge order mirrors the prover's exactly — that shared ordering is
+the only thing keeping the two Fiat-Shamir transcripts from diverging.
 
 **Prover and verifier in symmetric namespaces.** Each side is a `Round` in its
 own module — `prover.SumcheckRound` / `verifier.SumcheckRound` — so a caller picks
@@ -37,7 +36,7 @@ link. How a multi-stage prover composes from chains — the seam carry contract
 and glue rounds — is [`stage-composition.md`](stage-composition.md).
 
 **The verifier reduces; the PCS closes.** `verify` stops at the point-claim
-`(point, final_claim)`. The final `final_claim == f(point)` check needs the
+`(final_claim, point)`. The final `final_claim == f(point)` check needs the
 polynomial's value at `point`, which a PCS opening supplies — keeping it outside
 the block is what makes sumcheck here proving-scheme- and PCS-agnostic (a
 non-negotiable). A wrong claimed sum or a tampered message comes back as a

@@ -32,7 +32,7 @@ from jax import Array
 from zorch.commit.merkle import MerkleTree
 from zorch.pcs.fold import PreFoldPairCommitRound, open_rows, sample_positions
 from zorch.pcs.fri.config import DeepFoldableCode, FriCommitment, FriParams, FriProof
-from zorch.prove import fold_rounds
+from zorch.round import ProveChain
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
@@ -139,9 +139,8 @@ def _open_one(
     quotient = (committed.codeword - v) / (domain - z)
 
     t = t.observe(committed.digest_layers[-1][0])  # bind the f commitment root
-    cw, t, layers = fold_rounds(
-        PreFoldPairCommitRound(code, tree), quotient, t, params.num_rounds
-    )
+    fold_round = PreFoldPairCommitRound(code, tree)
+    cw, t, layers = ProveChain([fold_round] * params.num_rounds)(quotient, t)
     final_layer = cw
     t = t.observe(final_layer)
 

@@ -2,7 +2,7 @@
 """Jagged LogUp-GKR verifier -- the dual of the jagged prover chain.
 
 A `JaggedGkrLayerRound` replays one layer's coefficient-form sumcheck (the
-agnostic `zorch.verify` driver over `sumcheck.verifier.CoeffsSumcheckRound`),
+agnostic `sumcheck.verifier.verify` driver over `CoeffsSumcheckRound`),
 checks the LogUp oracle at the bound point via the shared `logup_combine`,
 then reduces the claim across the child selector -- the same
 `(num_eval, den_eval, eval_point)` carry the dense chain threads. The jagged
@@ -31,9 +31,8 @@ from zorch.logup_gkr.jagged_prover import JaggedLayerProof
 from zorch.logup_gkr.prover import Carry, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import Round
-from zorch.sumcheck.verifier import CoeffsSumcheckRound
+from zorch.sumcheck.verifier import CoeffsSumcheckRound, verify
 from zorch.transcript import Transcript, sample_challenge
-from zorch.verify import verify
 
 if TYPE_CHECKING:
     from zorch.round import VerifierRound
@@ -59,7 +58,7 @@ class JaggedGkrLayerRound(Round):
             transcript, num_eval.dtype, self.challenge_limbs
         )
         claim = lam * num_eval + den_eval
-        point, final_claim, transcript, ok_sc = verify(
+        final_claim, transcript, point, ok_sc = verify(
             CoeffsSumcheckRound(_DEGREE, self.challenge_limbs),
             claim,
             layer_proof.round_polys,

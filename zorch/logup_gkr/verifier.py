@@ -2,7 +2,7 @@
 """Dense LogUp-GKR verifier -- the dual of the prover chain.
 
 A `GkrLayerRound` replays one layer's per-variable sumcheck (the agnostic
-`zorch.verify` driver over `zorch.sumcheck.verifier.SumcheckRound`), checks the
+`sumcheck.verifier.verify` driver over `SumcheckRound`), checks the
 LogUp oracle at the bound point via the shared `logup_combine`, then reduces the
 claim across the child selector. The whole GKR verifier is
 `VerifyChain([GkrLayerRound() for _ in layer_proofs])`, threading the same
@@ -26,8 +26,8 @@ from zorch.logup_gkr.prover import Carry, LayerProof, logup_combine
 from zorch.poly.eq import eval_eq
 from zorch.round import Round
 from zorch.sumcheck.verifier import SumcheckRound as SumcheckVerifierRound
+from zorch.sumcheck.verifier import verify
 from zorch.transcript import Transcript
-from zorch.verify import verify
 
 if TYPE_CHECKING:
     from zorch.round import VerifierRound
@@ -47,7 +47,7 @@ class GkrLayerRound(Round):
         transcript, lam = transcript.sample(1)
         lam = lam[0]
         claim = lam * num_eval + den_eval
-        point, final_claim, transcript, ok_sc = verify(
+        final_claim, transcript, point, ok_sc = verify(
             SumcheckVerifierRound(_DEGREE), claim, layer_proof.round_polys, transcript
         )
         # LogUp oracle: the reduced claim equals the combine at the bound point.

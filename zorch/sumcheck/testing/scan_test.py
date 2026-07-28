@@ -23,8 +23,8 @@ from absl.testing import absltest
 
 from zorch.sumcheck import prover, verifier
 from zorch.sumcheck.prover import prove
+from zorch.sumcheck.verifier import verify
 from zorch.testkit.transcript import cheap_transcript
-from zorch.verify import verify
 
 KB = zk_dtypes.koalabear_mont
 

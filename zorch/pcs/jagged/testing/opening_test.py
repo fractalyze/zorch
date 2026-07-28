@@ -33,10 +33,10 @@ from zorch.pcs.jagged.prover import (
 from zorch.pcs.jagged.verifier import JaggedPcsVerifier, _verify_device
 from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck.verifier import SumcheckRound as VSumcheckRound
+from zorch.sumcheck.verifier import verify as outer_verify
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
-from zorch.verify import verify as outer_verify
 
 # heights [4, 2, 3], width-1 columns -> area 9, tier log_m == n_d == 5 (the
 # seam's requirement, by construction for any log_s <= n_d). log_s 5 gives the
@@ -166,7 +166,7 @@ class JaggedOpeningTest(absltest.TestCase):
         z_col = z_col.astype(cfg.dtype)  # mirror the prover's EF embedding
         # Replay the outer sumcheck to recover z_final (verifier's path).
         claim = _compress_column_claims(_claims, z_col)
-        point, _final, _tr, _ok = outer_verify(
+        _final, _tr, point, _ok = outer_verify(
             VSumcheckRound(2), claim, proof.outer_sumcheck_polys, z_col_seed_t
         )
         z_final = point.astype(cfg.dtype)

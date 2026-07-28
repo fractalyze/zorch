@@ -58,24 +58,3 @@ py_library(
         requirement("jax"),
     ],
 )
-
-py_library(
-    name = "prove",
-    srcs = ["prove.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":round",
-        ":transcript",
-    ],
-)
-
-py_library(
-    name = "verify",
-    srcs = ["verify.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":round",
-        ":transcript",
-        requirement("jax"),
-    ],
-)

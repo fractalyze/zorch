@@ -14,10 +14,10 @@ inside are fine — `jit` unrolls them.
 - returns a Python value from structure — e.g. `zorch.utils.bits.log2_strict_usize`
   returns an `int` from a length; `jit` would trace it away.
 - composes sub-rounds in a static Python loop over heterogeneous shapes — e.g.
-  `fold_rounds` and the GKR `ProveChain` / `VerifyChain` thread the carry +
-  transcript through rounds whose message shapes vary round to round. `@jit`
-  would unroll the composition into one trace; the per-round numeric bodies are
-  the fusion target, not the driver. (`prove` / `verify` are the deliberate
+  the GKR `ProveChain` / `VerifyChain` thread the carry + transcript through
+  rounds whose message shapes vary round to round. `@jit` would unroll the
+  composition into one trace; the per-round numeric bodies are the fusion target,
+  not the driver. (`prove` / `verify` are the deliberate
   exception — their per-variable loop is homogeneous, so it *is* one `lax.scan`.)
 - builds a constant from static (non-`Array`) arguments alone — e.g.
   `zorch.poly.univariate.compute_inv_vandermonde` assembles a matrix from
@@ -51,28 +51,30 @@ Three ways to repeat work; the **shape of the per-iteration output** picks one.
   be) one `jit`'d region, scan it: unrolling many rounds inflates the graph past
   the ZKX PTX cliff (#58). `prove` / `verify` are the case — every variable's
   round poly has the same shape. A `scan` carry must keep a **fixed shape**, so a
-  halving MLE state rides in a full-width buffer with the live prefix packed at the
-  front and the dead tail masked (see [`prove.py`](../zorch/prove.py)). The round
-  is the carry, so it must be a registered pytree. `prove` is **generic over the
-  round's summand**: it reads only `degree` + `_combine` (the `SumcheckSummand`
-  Protocol in `prove.py`) and owns the buffer / mask / fold / scan, so the product
-  `SumcheckRound` and the LogUp `LogupSumcheckRound` share one scan — a new
-  sumcheck rides it by supplying a `_combine`, not by re-deriving the scan
-  machinery. Only this per-variable inner loop scans; the heterogeneous chain over
-  it (`fold_rounds`, the GKR `ProveChain`) stays a Python `for` (next bullet).
+  halving MLE state rides in a full-width buffer with the live prefix packed at
+  the front and the dead tail masked (see
+  [`sumcheck/prover.py`](../zorch/sumcheck/prover.py)). The round is the carry,
+  so it must be a registered pytree. `prove` is **generic over the round's
+  summand**: it reads only `degree` + `_combine` (the `SumcheckSummand` Protocol
+  there) and owns the buffer / mask / fold / scan, so the product `SumcheckRound`
+  and the LogUp `LogupSumcheckRound` share one scan — a new sumcheck rides it by
+  supplying a `_combine`, not by re-deriving the scan machinery. Only this
+  per-variable inner loop scans; the chain over it (the GKR `ProveChain`) stays a
+  Python `for` (next bullet).
 
 - **Python `for` — heterogeneous / non-round-invariant per-round loop.** When the
   per-round message or committed artifact changes shape across rounds it is not
-  `scan`-shaped — keep it a Python loop (`fold_rounds`, the FRI fold phase, the GKR
-  `ProveChain`). FRI's fold halves the codeword and commits a half-size Merkle
-  layer each round; the GKR pyramid halves each layer. This is safe as a
-  **host-orchestrated** loop (separate dispatches, not one giant traced graph);
-  the `DuplexTranscript` steps inside it are device ops either way.
+  `scan`-shaped — keep it a Python loop (`ProveChain` / `VerifyChain`: the FRI
+  fold phase, the GKR pyramid). FRI's fold halves the codeword and commits a
+  half-size Merkle layer each round; the GKR pyramid halves each layer. This is
+  safe as a **host-orchestrated** loop (separate dispatches, not one giant traced
+  graph); the `DuplexTranscript` steps inside it are device ops either way.
 
 The per-round Fiat-Shamir `observe` / `sample` is wrapped in a `Round` (the
 composable unit) by design, so a round loop is one of the two `Round` forms above:
-`fold_rounds` (heterogeneous → Python `for`) or `prove` / `verify` (homogeneous →
-`lax.scan`).
+`ProveChain` / `VerifyChain` (a round sequence → Python `for`) or `prove` /
+`verify` (a homogeneous per-variable loop → `lax.scan`). A chain covers the
+folding-open case too: repeating one round N times is `ProveChain([rnd] * n)`.
 
 Decision, in order: independent with no carry → `vmap`; static small straight-line
 arithmetic → `for`; sequential carry with a round-invariant shape in one traced
@@ -112,13 +114,12 @@ class LogupSumcheckRound(Round):
 
 **Which classes.** The per-variable sumcheck rounds —
 `sumcheck.prover.SumcheckRound`, `sumcheck.verifier.SumcheckRound`,
-`logup_gkr.prover.LogupSumcheckRound` — are registered: `fold_rounds` loops them,
+`logup_gkr.prover.LogupSumcheckRound` — are registered: `ProveChain` loops them,
 `prove` / `verify` carry them through a `lax.scan` (the per-variable loop is one
 traced region), and they are `vmap`-able over their config. `DuplexTranscript`
 is registered for the same reason: the `scan` threads the transcript as part of
-its carry. `prove.RoundMsg`
-(round poly + challenge) is registered too — `prove` returns it as the `lax.scan`'s
-stacked per-round output.
+its carry. `sumcheck.prover.RoundMsg` (round poly + challenge) is registered too
+— `prove` returns it as the `lax.scan`'s stacked per-round output.
 
 Do **not** pre-register what no transform threads yet — registration that buys no
 capability is noise:
@@ -129,7 +130,7 @@ capability is noise:
   composed in plain Python. Register only if a transform later threads one.
 - **Plain data records** — `LayerProof`, `GkrLayer`, `LogUpGkrOutput`. They pass
   between un-`jit`-ed calls today. Register the moment one becomes `jit`/`scan`
-  I/O, not before — as `prove.RoundMsg` now is.
+  I/O, not before — as `sumcheck.prover.RoundMsg` is.
 
 ## Comments & documentation
 

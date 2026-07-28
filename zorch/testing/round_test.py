@@ -4,7 +4,8 @@
 The toy round threads a scalar carry and a sampled challenge so the test covers
 what the chains must guarantee: carry threading, lockstep transcript threading
 (prover and verifier sample in the same order), message collect/consume, ok
-aggregation, heterogeneous rounds, and nesting (a chain is itself a Round).
+aggregation, heterogeneous rounds, one round repeated N times, and nesting (a
+chain is itself a Round).
 """
 
 from __future__ import annotations
@@ -54,6 +55,16 @@ class _ScaleVerifier(Round):
         return carry * self.factor + r[0], transcript, ok
 
 
+class _CollectRound(Round):
+    """Halves a 1-element-per-factor carry; emits a heterogeneous dict message."""
+
+    def __call__(self, state: Any, transcript: Transcript) -> Any:
+        (xs,) = state
+        half = xs.shape[-1] // 2
+        msg = {"first": xs[0], "len": xs.shape[-1]}  # non-stackable on purpose
+        return [xs[:half]], transcript, msg
+
+
 class _Payload:
     """weakref-able stand-in for a layer-sized witness (`object()` is not)."""
 
@@ -96,6 +107,14 @@ class ChainTest(absltest.TestCase):
         )
         self.assertTrue(bool(ok))
         self.assertTrue(bool(vcarry == final))  # lockstep carries agree
+
+    def test_repeated_round_collects_nonstackable_messages(self) -> None:
+        # The folding-open shape (fri / basefold / the jagged assist): one round
+        # instance repeated N times. The messages deliberately vary in shape --
+        # the collected list must stay a plain list, never stacked.
+        xs = jnp.arange(8, dtype=KB)
+        _, _, msgs = ProveChain([_CollectRound()] * 3)([xs], cheap_transcript(KB))
+        self.assertEqual([m["len"] for m in msgs], [8, 4, 2])
 
     def test_chain_is_a_round_so_chains_nest(self) -> None:
         inner = ProveChain([_ScaleProver(2), _ScaleProver(3)])

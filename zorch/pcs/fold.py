@@ -12,7 +12,7 @@ layer is the code's identity, so the round and query phase read it off the
 of assuming an order. The position derivation is shared so prover and verifier
 sample identical query indices from the transcript.
 
-The round loop stays a Python `for` via `zorch.prove.fold_rounds`: each round
+The round loop stays a Python `for` via `zorch.round.ProveChain`: each round
 Merkle-commits a half-size layer whose retained artifacts are ragged across
 rounds, so it is not `lax.scan`-shaped (docs/conventions.md "Loops")."""
 
@@ -41,7 +41,7 @@ class PairCommittedLayer:
     challenge β (a composing round folds its own state by it), the pair-leaf
     commitment root (proof wire), and the committed `[n//2, 2]` pair-leaves +
     digest layers (query phase). A plain dataclass — a prover-internal
-    `fold_rounds` message, not a proof leaf."""
+    `ProveChain` message, not a proof leaf."""
 
     beta: Array
     root: Array
