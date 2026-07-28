@@ -106,6 +106,17 @@ class _ScriptedTranscript:
     ) -> tuple[_ScriptedTranscript, Array]:
         return self.sample(n)
 
+    # A recorded stream has no proof-of-work to replay, and the jagged path this
+    # stands in for schedules none. Reaching either of these means the double is
+    # being used for a protocol it was not recorded against.
+    def grind(self, pow_bits: int) -> tuple[_ScriptedTranscript, Array]:
+        raise NotImplementedError("the scripted transcript replays, it cannot grind")
+
+    def check_witness(
+        self, witness: Array, *, pow_bits: int
+    ) -> tuple[_ScriptedTranscript, Array]:
+        raise NotImplementedError("the scripted transcript replays, it cannot grind")
+
 
 class JaggedEvalByteMatchTest(absltest.TestCase):
     @classmethod

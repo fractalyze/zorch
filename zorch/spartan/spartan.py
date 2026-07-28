@@ -219,7 +219,9 @@ class SpartanVerifier(VerifierStage[SpartanClaim, TrivialClaim, SpartanProof]):
 
     def __init__(
         self,
-        pcs_verifier: VerifierStage[OpeningClaim[Any], TrivialClaim, OpeningProof[Any]],
+        pcs_verifier: VerifierStage[
+            OpeningClaim[Any], TrivialClaim, OpeningProof[Any], Any
+        ],
         *,
         outer: (
             VerifierStage[ZerocheckClaim, RowEvaluationClaim, OuterProof] | None

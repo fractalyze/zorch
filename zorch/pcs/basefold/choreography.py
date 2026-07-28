@@ -17,7 +17,7 @@ whose schedule both sides read off the same bits methods).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic
 
 import frx.numpy as fnp
 from frx import Array
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class BasefoldChoreography(FoldChoreography):
+class BasefoldChoreography(FoldChoreography[TranscriptT], Generic[TranscriptT]):
     """zorch's native BaseFold wire as an overridable choreography. Stateless —
     a consumer subclasses and overrides only its deltas."""
 

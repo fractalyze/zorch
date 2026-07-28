@@ -25,7 +25,7 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.poly.eq import expand_eq_to_hypercube
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 from zorch.utils.bits import log2_ceil_usize
 
 
@@ -36,8 +36,12 @@ def partial_lagrange(point: Array) -> Array:
 
 
 def sample_staggered_coeffs(
-    transcript: Transcript, total_width: int, dtype: Any, *, lsb_first: bool = False
-) -> tuple[Transcript, Array]:
+    transcript: TranscriptT,
+    total_width: int,
+    dtype: Any,
+    *,
+    lsb_first: bool = False,
+) -> tuple[TranscriptT, Array]:
     """Batch weights for `total_width` columns: `log2_ceil(total_width)` squeezed
     challenges expanded to the partial-Lagrange basis (length `2^nbv >= total_width`).
     `total_width == 1` -> `[1]`, no squeeze. Called by both `open` and `verify` so

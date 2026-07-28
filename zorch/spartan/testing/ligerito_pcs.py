@@ -70,7 +70,7 @@ class LigeritoSpartanProver:
         claim: OpeningClaim[Array],
         witness: OpeningWitness[LigeritoProverData],
         transcript: Transcript,
-    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof]]:
+    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof], Transcript]:
         value, proof, transcript = self._inner._open(
             witness.prover_data, [embed(claim.points[0])], transcript
         )
@@ -93,7 +93,7 @@ class LigeritoSpartanVerifier:
         claim: OpeningClaim[Array],
         reduction_proof: OpeningProof[LigeritoProof],
         transcript: Transcript,
-    ) -> VerifyResult[TrivialClaim]:
+    ) -> VerifyResult[TrivialClaim, Transcript]:
         ok, transcript = self._inner._verify_opening(
             claim.commitment,
             [embed(claim.points[0])],
@@ -111,8 +111,14 @@ if TYPE_CHECKING:
             OpeningWitness[LigeritoProverData],
             TrivialClaim,
             OpeningProof[LigeritoProof],
+            Transcript,
         ]
     ] = LigeritoSpartanProver
     _v: type[
-        VerifierStage[OpeningClaim[Array], TrivialClaim, OpeningProof[LigeritoProof]]
+        VerifierStage[
+            OpeningClaim[Array],
+            TrivialClaim,
+            OpeningProof[LigeritoProof],
+            Transcript,
+        ]
     ] = LigeritoSpartanVerifier

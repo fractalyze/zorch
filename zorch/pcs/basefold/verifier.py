@@ -27,7 +27,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Generic, cast
 
 import frx
 import frx.numpy as fnp
@@ -52,7 +52,7 @@ from zorch.pcs.fold import (
 )
 from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 from zorch.utils.bits import log2_strict_usize
 
 
@@ -62,7 +62,9 @@ class BasefoldVerifier(
         OpeningClaim[BasefoldCommitment],
         TrivialClaim,
         OpeningProof[BasefoldProof],
-    ]
+        TranscriptT,
+    ],
+    Generic[TranscriptT],
 ):
     """BaseFold PCS verifier. `code` fixes the block geometry +
     fold; `tree` the Merkle config; `choreography` the Fiat-Shamir wire (share
@@ -76,7 +78,7 @@ class BasefoldVerifier(
     tree: MerkleTree
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
-    choreography: BasefoldChoreography = BasefoldChoreography()
+    choreography: BasefoldChoreography[TranscriptT] = BasefoldChoreography()
     kernel: SumcheckKernel = SumcheckKernel()
     config: BasefoldConfig | None = None
 
@@ -98,8 +100,8 @@ class BasefoldVerifier(
         self,
         claim: OpeningClaim[BasefoldCommitment],
         reduction_proof: OpeningProof[BasefoldProof],
-        transcript: Transcript,
-    ) -> VerifyResult[TrivialClaim]:
+        transcript: TranscriptT,
+    ) -> VerifyResult[TrivialClaim, TranscriptT]:
         """Verify a single-matrix open — the degenerate one-round batch."""
         ok, transcript = self.verify_batch(
             [claim.commitment],
@@ -116,8 +118,8 @@ class BasefoldVerifier(
         points: Sequence[Array],
         values: Sequence[Array],
         proof: BasefoldProof,
-        transcript: Transcript,
-    ) -> tuple[Array, Transcript]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         if len(points) != 1:
             raise ValueError(
                 f"BaseFold opens the matrices at one shared point, got {len(points)}"
@@ -154,8 +156,8 @@ class BasefoldVerifier(
         basis: Array,
         value: Array,
         proof: BasefoldProof | CadenceProof,
-        transcript: Transcript,
-    ) -> tuple[Array, Transcript]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         """Verify a RAW-basis open — the dual of `BasefoldProver.open_with_basis`
         (`bind_statement` receives `point=None`), dispatching on the fold schedule
         exactly as the prover entry does.
@@ -229,7 +231,7 @@ class BasefoldVerifier(
             )
 
 
-def _require_no_grind(chor: BasefoldChoreography, config: BasefoldConfig) -> None:
+def _require_no_grind(chor: BasefoldChoreography[Any], config: BasefoldConfig) -> None:
     """Fail loud on a scheduled grind: `BasefoldProof` / `CadenceProof` now carry a
     `pow_witnesses` wire slot, but the prover does not populate it and the verifier
     does not `check_grind` against it yet — the grind production + check are a
@@ -280,14 +282,14 @@ def _fold_coset(
 
 
 def _verify_with_basis_cadence(
-    verifier: BasefoldVerifier,
+    verifier: BasefoldVerifier[TranscriptT],
     commitment: BasefoldCommitment,
     basis: Array,
     value: Array,
     config: BasefoldConfig,
     proof: CadenceProof,
-    transcript: Transcript,
-) -> tuple[Array, Transcript]:
+    transcript: TranscriptT,
+) -> tuple[Array, TranscriptT]:
     """Replay a non-native cadence open (row-batch prefix + multi-arity FRI
     epochs), the structural dual of `prover._open_with_basis_cadence`. Eager, like
     the prover's driver — a host-sequential byte-wire replay cannot ride one jit
@@ -425,13 +427,13 @@ def _verify_with_basis_cadence(
 # config and choreography (both frozen, value-compared) fix the compiled zone.
 @partial(frx.jit, static_argnames=("verifier",))
 def _verify_batch_body(
-    verifier: BasefoldVerifier,
+    verifier: BasefoldVerifier[TranscriptT],
     commitments: list[Array],
     z: Array,
     values: list[Array],
     proof: BasefoldProof,
-    transcript: Transcript,
-) -> tuple[Array, Transcript]:
+    transcript: TranscriptT,
+) -> tuple[Array, TranscriptT]:
     chor = verifier.choreography
     kernel = verifier.kernel
     dtype = z.dtype
@@ -471,9 +473,9 @@ def _verify_batch_body(
     fri_roots = fnp.stack(proof.fri_roots)
 
     def fold_round(
-        carry: tuple[Transcript, Array, Array],
+        carry: tuple[TranscriptT, Array, Array],
         xs: tuple[Array, Array, Array, Array],
-    ) -> tuple[tuple[Transcript, Array, Array], Array]:
+    ) -> tuple[tuple[TranscriptT, Array, Array], Array]:
         t, claim, ok = carry
         zero_val, one_val, last, root = xs
         components = (zero_val, one_val)

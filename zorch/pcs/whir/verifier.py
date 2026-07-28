@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import frx
 import frx.numpy as fnp
@@ -39,7 +39,11 @@ from zorch.poly.eq import eval_eq
 from zorch.poly.multilinear import mle_coeffs_to_evals
 from zorch.poly.univariate import eval_coeffs
 from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
-from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
+from zorch.transcript import (
+    Transcript,
+    TranscriptT,
+    sample_challenge,
+)
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class WhirVerifier(
         OpeningClaim[WhirCommitment],
         TrivialClaim,
         OpeningProof[WhirProof],
+        Transcript,
     ]
 ):
     """WHIR PCS verifier. `code`/`tree`/`params`/`scheme` must
@@ -62,8 +67,8 @@ class WhirVerifier(
         self,
         claim: OpeningClaim[WhirCommitment],
         reduction_proof: OpeningProof[WhirProof],
-        transcript: Transcript,
-    ) -> VerifyResult[TrivialClaim]:
+        transcript: TranscriptT,
+    ) -> VerifyResult[TrivialClaim, TranscriptT]:
         """Check the claimed evaluations against the commitment."""
         ok, transcript = self._verify_opening(
             claim.commitment,
@@ -80,8 +85,8 @@ class WhirVerifier(
         points: Sequence[Array],
         values: Array,
         proof: WhirProof,
-        transcript: Transcript,
-    ) -> tuple[Array, Transcript]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         """Return `(ok, transcript)` where `ok` is a scalar boolean array."""
         if len(points) != 1:
             raise ValueError(f"WHIR opens at one point, got {len(points)}")
@@ -145,8 +150,8 @@ def _verify_body(
     z: Array,
     values: Array,
     proof: WhirProof,
-    transcript: Transcript,
-) -> tuple[Array, Transcript]:
+    transcript: TranscriptT,
+) -> tuple[Array, TranscriptT]:
     code, tree, params = verifier.code, verifier.tree, verifier.params
     k = params.k_whir
     num_rounds = len(params.num_queries)
@@ -158,9 +163,7 @@ def _verify_body(
     # Mirror the prover: bind commitment + per-column values, sample μ, and take
     # the running claim as the μ-power combine of the columns' claimed evals.
     t = verifier.scheme.bind(transcript, commitment, values)
-    t, ok = cast(GrindingTranscript, t).check_witness(
-        params.mu_pow_bits, proof.mu_pow_witness
-    )
+    t, ok = t.check_witness(proof.mu_pow_witness, pow_bits=params.mu_pow_bits)
     t, mu = sample_challenge(t, ef, limbs)
     claim = eval_coeffs(values, mu)
 
@@ -178,8 +181,8 @@ def _verify_body(
         for _ in range(k):
             s = proof.sumcheck_polys[sc_idx]
             t = t.observe(s)
-            t, okw = cast(GrindingTranscript, t).check_witness(
-                params.folding_pow_bits, proof.folding_pow_witnesses[sc_idx]
+            t, okw = t.check_witness(
+                proof.folding_pow_witnesses[sc_idx], pow_bits=params.folding_pow_bits
             )
             ok = ok & okw
             t, alpha = sample_challenge(t, ef, limbs)
@@ -198,8 +201,8 @@ def _verify_body(
         else:
             t = t.observe(proof.final_poly)
 
-        t, okw = cast(GrindingTranscript, t).check_witness(
-            params.query_pow_bits, proof.query_pow_witnesses[r]
+        t, okw = t.check_witness(
+            proof.query_pow_witnesses[r], pow_bits=params.query_pow_bits
         )
         ok = ok & okw
         stride = cur_code.block_len >> k
@@ -303,5 +306,6 @@ if TYPE_CHECKING:
             OpeningClaim[WhirCommitment],
             TrivialClaim,
             OpeningProof[WhirProof],
+            Transcript,
         ]
     ] = WhirVerifier

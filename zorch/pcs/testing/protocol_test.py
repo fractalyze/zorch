@@ -38,7 +38,10 @@ from zorch.pcs.stage import (
 from zorch.stage import TrivialClaim, VerifierStage
 from zorch.testkit.random_field import rand_ext_field
 from zorch.testkit.transcript import cheap_transcript
-from zorch.transcript import DuplexTranscript, Transcript
+from zorch.transcript import (
+    DuplexTranscript,
+    TranscriptT,
+)
 
 KB = zk_dtypes.koalabear_mont
 EF = zk_dtypes.koalabearx4_mont
@@ -53,10 +56,12 @@ P = TypeVar("P")
 
 def _round_trip(
     prover: CommittingOpener[C, D, P],
-    verifier: VerifierStage[OpeningClaim[C], TrivialClaim, OpeningProof[P]],
+    verifier: VerifierStage[
+        OpeningClaim[C], TrivialClaim, OpeningProof[P], TranscriptT
+    ],
     polys: Sequence[Array],
     points: Sequence[Array],
-    transcript: Callable[[], Transcript],
+    transcript: Callable[[], TranscriptT],
 ) -> Array:
     """commit → prove → verify through the seam types only."""
     commitment, prover_data = prover.commit(polys)

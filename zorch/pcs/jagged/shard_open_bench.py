@@ -45,7 +45,7 @@ from zorch.pcs.jagged.open import (
     StackedRound,
     stacked_basefold_open,
 )
-from zorch.transcript import DuplexTranscript, GrindingTranscript
+from zorch.transcript import DuplexTranscript, Transcript
 
 MODULUS = pfinfo(BF).modulus
 _DEFAULT_SHARD = "/data/sp1_dumps/rsp_21740136_sp1/shard0"
@@ -182,7 +182,7 @@ def main() -> None:
     dense_eval = _rand_ef(kd, 1)[0]
     frx.block_until_ready((z_final, dense_eval))
 
-    def _open() -> tuple[StackedOpenProof, GrindingTranscript]:
+    def _open() -> tuple[StackedOpenProof, Transcript]:
         return open_jit(
             smcs,
             code,

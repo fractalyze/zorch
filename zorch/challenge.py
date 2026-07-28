@@ -10,7 +10,7 @@ import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import efinfo
 
-from zorch.transcript import Transcript, reinterpret_challenge
+from zorch.transcript import TranscriptT, reinterpret_challenge
 
 
 def challenge_limbs(dtype: Any) -> int:
@@ -63,13 +63,13 @@ class ChallengePolicy:
             ]
         )
 
-    def sample(self, transcript: Transcript) -> tuple[Transcript, Array]:
+    def sample(self, transcript: TranscriptT) -> tuple[TranscriptT, Array]:
         transcript, challenges = self.sample_many(transcript, 1)
         return transcript, challenges[0]
 
     def sample_many(
-        self, transcript: Transcript, count: int
-    ) -> tuple[Transcript, Array]:
+        self, transcript: TranscriptT, count: int
+    ) -> tuple[TranscriptT, Array]:
         # One squeeze call for all `count * limbs` limbs: the duplex squeezes a
         # rate-block per permutation, so batching costs ~ceil(n/rate) permutes
         # where a per-challenge loop costs ~n, for the same stream.
@@ -78,8 +78,8 @@ class ChallengePolicy:
         return transcript, self._regroup(raw, count, limbs)
 
     def observe_and_sample(
-        self, transcript: Transcript, values: Array
-    ) -> tuple[Transcript, Array]:
+        self, transcript: TranscriptT, values: Array
+    ) -> tuple[TranscriptT, Array]:
         # The absorb and the squeeze stay one hop: splitting them into `observe`
         # then `sample` bypasses the duplex-FS fusion marker and scatters ~9
         # kernels per round, which `zorch`'s fusion rule does not allow.

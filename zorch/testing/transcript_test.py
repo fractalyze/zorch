@@ -255,7 +255,7 @@ class TranscriptJitCacheTest(absltest.TestCase):
         assert_single_trace(
             self,
             _check_witness_body,
-            [functools.partial(new().check_witness, 4, w) for _ in (0, 1)],
+            [functools.partial(new().check_witness, w, pow_bits=4) for _ in (0, 1)],
         )
 
 
@@ -273,14 +273,14 @@ class GrindTest(absltest.TestCase):
     def test_check_witness_accepts_grind_result(self) -> None:
         for pow_bits in (0, 4, 12):
             _, witness = self._seeded().grind(pow_bits)
-            _, ok = self._seeded().check_witness(pow_bits, witness)
+            _, ok = self._seeded().check_witness(witness, pow_bits=pow_bits)
             self.assertTrue(bool(ok), f"pow_bits={pow_bits}")
 
     def test_high_pow_bits_clears(self) -> None:
         # Acceptance: a pow_bits far past a single window's reach still resolves
         # to a witness the verifier accepts.
         _, witness = self._seeded().grind(22)
-        _, ok = self._seeded().check_witness(22, witness)
+        _, ok = self._seeded().check_witness(witness, pow_bits=22)
         self.assertTrue(bool(ok))
 
     def test_search_spans_windows(self) -> None:
@@ -294,12 +294,12 @@ class GrindTest(absltest.TestCase):
         _, far = self._seeded().grind(14, chunk=large)
         self.assertEqual(int(near.astype(fnp.uint32)), int(far.astype(fnp.uint32)))
         self.assertGreater(int(near.astype(fnp.uint32)), small)
-        _, ok = self._seeded().check_witness(14, near)
+        _, ok = self._seeded().check_witness(near, pow_bits=14)
         self.assertTrue(bool(ok))
 
     def test_prover_and_verifier_states_agree(self) -> None:
         prover, witness = self._seeded().grind(8)
-        verifier, ok = self._seeded().check_witness(8, witness)
+        verifier, ok = self._seeded().check_witness(witness, pow_bits=8)
         self.assertTrue(bool(ok))
         for a, b in zip(
             tree_util.tree_leaves(prover), tree_util.tree_leaves(verifier), strict=True
@@ -315,23 +315,25 @@ class GrindTest(absltest.TestCase):
             return witness
 
         witness = frx.jit(body)()
-        _, ok = self._seeded().check_witness(8, witness)
+        _, ok = self._seeded().check_witness(witness, pow_bits=8)
         self.assertTrue(bool(ok))
 
     def test_rejects_out_of_range_pow_bits(self) -> None:
         with self.assertRaises(ValueError):
             self._seeded().grind(32)
         with self.assertRaises(ValueError):
-            self._seeded().check_witness(-1, fnp.zeros((), F))
+            self._seeded().check_witness(fnp.zeros((), F), pow_bits=-1)
 
     def test_check_witness_rejects_off_domain_witness(self) -> None:
         # The witness must be a scalar base-field element -- the domain grind
         # enumerates -- so the verifier accepts exactly what the prover searched.
         seeded = self._seeded()
         with self.assertRaises(ValueError):
-            seeded.check_witness(8, fnp.zeros((2,), F))  # non-scalar
+            seeded.check_witness(fnp.zeros((2,), F), pow_bits=8)  # non-scalar
         with self.assertRaises(ValueError):
-            seeded.check_witness(8, fnp.zeros((), zk_dtypes.koalabearx4_mont))  # not F
+            seeded.check_witness(
+                fnp.zeros((), zk_dtypes.koalabearx4_mont), pow_bits=8
+            )  # not F
 
     def test_grind_rejects_non_positive_chunk(self) -> None:
         with self.assertRaises(ValueError):
@@ -345,7 +347,7 @@ class GrindTest(absltest.TestCase):
         with self.assertRaises(GrindError):
             cheap_transcript(wide).grind(8)
         with self.assertRaises(GrindError):
-            cheap_transcript(wide).check_witness(8, fnp.zeros((), wide))
+            cheap_transcript(wide).check_witness(fnp.zeros((), wide), pow_bits=8)
 
 
 def _cond_sample_one(t: DuplexTranscript) -> tuple[DuplexTranscript, fnp.ndarray]:

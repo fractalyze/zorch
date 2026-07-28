@@ -63,7 +63,7 @@ from zorch.pcs.jagged.prover import (
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
 from zorch.sumcheck.verifier import CoeffsSumcheckRound
-from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
+from zorch.transcript import Transcript, sample_challenge
 from zorch.utils.bits import log2_strict_usize
 from zorch.verify import verify
 
@@ -170,11 +170,11 @@ def stacked_basefold_verify(
     dense_eval: Array,
     log_stacking_height: int,
     proof: StackedOpenProof,
-    transcript: GrindingTranscript,
+    transcript: Transcript,
     *,
     num_queries: int,
     pow_bits: int,
-) -> tuple[GrindingTranscript, Array]:
+) -> tuple[Transcript, Array]:
     """Verify a stacked BaseFold open; returns ``(transcript, ok)``.
 
     ``round_widths`` is the statement-side stacked column count of each
@@ -260,7 +260,7 @@ def stacked_basefold_verify(
 
     # The open's absorb schedule: the scalar D(z_final), then each round's
     # batch evaluations (the component roots were bound upstream at commit).
-    t: GrindingTranscript = transcript
+    t: Transcript = transcript
     t = t.observe(dense_eval)
     for evals in proof.batch_evals:
         t = t.observe(evals)
@@ -296,7 +296,7 @@ def stacked_basefold_verify(
         )
 
     t = t.observe(fnp.atleast_1d(proof.final_poly))
-    t, ok_pow = t.check_witness(pow_bits, proof.pow_witness)
+    t, ok_pow = t.check_witness(proof.pow_witness, pow_bits=pow_bits)
     ok = ok & ok_pow
 
     t, positions = sample_query_positions(t, block_len, num_queries)

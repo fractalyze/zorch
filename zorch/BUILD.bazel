@@ -58,6 +58,7 @@ py_library(
         ":grind",
         "//zorch/hash:permutation",
         requirement("frx"),
+        requirement("typing_extensions"),
         requirement("zk_dtypes"),
     ],
 )

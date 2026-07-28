@@ -18,7 +18,7 @@ reached through a context object.
 | Substrate              | **device**: `observe`/`sample` are device ops, threadable through `@jit` / a `lax.scan` carry | **host**: a `bytes` buffer; the injected `ByteHash.digest` runs on `hashlib` or the marker | **device**: a streaming `Sha256State` pytree — threads `@jit` / a `lax.scan` carry |
 | Squeeze                | sponge rate read                                                                              | `HASH(buffer ‖ ctr)` counter stream (a hash is not an XOF) + re-absorb                     | same `SHA256(buffer ‖ ctr)` counter stream over the streaming midstate             |
 | `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `zorch.sha256` marker)                |
-| Seam                   | `Transcript` / `GrindingTranscript` (field-element, canonical-bit PoW)                        | `ByteTranscript` / `ByteGrindingTranscript` (byte, leading-zero-bit nonce PoW)             | `Transcript` (field-element)                                                       |
+| Seam                   | `Transcript` (field-element, canonical-bit PoW)                                               | `ByteTranscript` (byte, leading-zero-bit nonce PoW)                                        | `Transcript` (field-element)                                                       |
 
 The byte transcript is **one class parameterized by a `ByteHash`**: the same
 Merlin-over-hash framing (op-tagged absorb, `HASH(buffer ‖ ctr)` counter-squeeze,

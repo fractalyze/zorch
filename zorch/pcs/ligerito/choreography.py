@@ -29,7 +29,7 @@ whole.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Generic
 
 from frx import Array
 
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class LigeritoChoreography(FoldChoreography):
+class LigeritoChoreography(FoldChoreography[TranscriptT], Generic[TranscriptT]):
     """zorch's native Ligerito wire as an overridable choreography. Stateless —
     a consumer subclasses and overrides only its deltas."""
 

@@ -20,7 +20,7 @@ from typing import Generic, Protocol, TypeVar
 
 from frx import Array
 
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 
 Claim = TypeVar("Claim")
 Witness = TypeVar("Witness")
@@ -46,36 +46,44 @@ class TrivialClaim:
 
 
 @dataclass(frozen=True)
-class ProveResult(Generic[ReducedClaim, ReductionProof]):
+class ProveResult(Generic[ReducedClaim, ReductionProof, TranscriptT]):
     """A reduced claim, its conditional reduction proof, and the transcript."""
 
     reduced_claim: ReducedClaim
     reduction_proof: ReductionProof
-    transcript: Transcript
+    transcript: TranscriptT
 
 
 @dataclass(frozen=True)
-class VerifyResult(Generic[ReducedClaim]):
+class VerifyResult(Generic[ReducedClaim, TranscriptT]):
     """The verifier-derived reduced claim, advanced transcript, and verdict."""
 
     reduced_claim: ReducedClaim
-    transcript: Transcript
+    transcript: TranscriptT
     ok: Array
 
 
-class ProverStage(Protocol[Claim_contra, Witness_contra, ReducedClaim, ReductionProof]):
-    """The prover role of one conditional claim reduction."""
+class ProverStage(
+    Protocol[Claim_contra, Witness_contra, ReducedClaim, ReductionProof, TranscriptT]
+):
+    """The prover role of one conditional claim reduction.
+
+    The transcript parameter carries the caller's concrete type through the
+    reduction; omit it and it is the base `Transcript`.
+    """
 
     @abstractmethod
     def prove(
         self,
         claim: Claim_contra,
         witness: Witness_contra,
-        transcript: Transcript,
-    ) -> ProveResult[ReducedClaim, ReductionProof]: ...
+        transcript: TranscriptT,
+    ) -> ProveResult[ReducedClaim, ReductionProof, TranscriptT]: ...
 
 
-class VerifierStage(Protocol[Claim_contra, ReducedClaim, ReductionProof_contra]):
+class VerifierStage(
+    Protocol[Claim_contra, ReducedClaim, ReductionProof_contra, TranscriptT]
+):
     """The verifier role of the same conditional claim reduction."""
 
     @abstractmethod
@@ -83,5 +91,5 @@ class VerifierStage(Protocol[Claim_contra, ReducedClaim, ReductionProof_contra])
         self,
         claim: Claim_contra,
         reduction_proof: ReductionProof_contra,
-        transcript: Transcript,
-    ) -> VerifyResult[ReducedClaim]: ...
+        transcript: TranscriptT,
+    ) -> VerifyResult[ReducedClaim, TranscriptT]: ...

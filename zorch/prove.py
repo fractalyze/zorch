@@ -17,15 +17,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from zorch.transcript import Transcript
+from zorch.transcript import TranscriptT
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
 
 
 def fold_rounds(
-    rnd: ProverRound[Any, Any], state: Any, transcript: Transcript, rounds: int
-) -> tuple[Any, Transcript, list[Any]]:
+    rnd: ProverRound[Any, Any, TranscriptT],
+    state: Any,
+    transcript: TranscriptT,
+    rounds: int,
+) -> tuple[Any, TranscriptT, list[Any]]:
     """Run `rnd` exactly `rounds` times; return (state, transcript, list[msg])."""
     msgs: list[Any] = []
     for _ in range(rounds):

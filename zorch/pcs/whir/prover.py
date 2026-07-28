@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import frx
 import frx.numpy as fnp
@@ -42,7 +42,11 @@ from zorch.poly.multilinear import mle_evals_to_coeffs
 from zorch.poly.univariate import eval_coeffs
 from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.sumcheck.domain import fold
-from zorch.transcript import GrindingTranscript, Transcript, sample_challenge
+from zorch.transcript import (
+    Transcript,
+    TranscriptT,
+    sample_challenge,
+)
 from zorch.utils.bits import log2_strict_usize
 
 
@@ -71,6 +75,7 @@ class WhirProver(
         OpeningWitness[WhirProverData],
         TrivialClaim,
         OpeningProof[WhirProof],
+        Transcript,
     ]
 ):
     """WHIR PCS prover. `code` is the initial-round RS encoder (the
@@ -106,8 +111,8 @@ class WhirProver(
         self,
         claim: OpeningClaim[WhirCommitment],
         witness: OpeningWitness[WhirProverData],
-        transcript: Transcript,
-    ) -> ProveResult[TrivialClaim, OpeningProof[WhirProof]]:
+        transcript: TranscriptT,
+    ) -> ProveResult[TrivialClaim, OpeningProof[WhirProof], TranscriptT]:
         """Open the committed polynomials at the claim's points.
 
         Terminal: an opening closes its claim rather than reducing it."""
@@ -120,8 +125,8 @@ class WhirProver(
         self,
         prover_data: WhirProverData,
         points: Sequence[Array],
-        transcript: Transcript,
-    ) -> tuple[Array, WhirProof, Transcript]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, WhirProof, TranscriptT]:
         """Open a single committed matrix at `points[0]` — the degenerate
         one-commitment μ-batch. Returns
         `(values, proof, transcript)` with `values` the matrix's per-column
@@ -132,8 +137,8 @@ class WhirProver(
         self,
         prover_datas: Sequence[WhirProverData],
         points: Sequence[Array],
-        transcript: Transcript,
-    ) -> tuple[Array, WhirProof, Transcript]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, WhirProof, TranscriptT]:
         """μ-batch-open the committed matrices at the shared point `points[0]`,
         threading Fiat-Shamir.
 
@@ -294,8 +299,8 @@ def _open_body(
     prover: WhirProver,
     prover_datas: list[WhirProverData],
     z: Array,
-    transcript: Transcript,
-) -> tuple[Array, WhirProof, Transcript]:
+    transcript: TranscriptT,
+) -> tuple[Array, WhirProof, TranscriptT]:
     code, params = prover.code, prover.params
     k = params.k_whir
     num_rounds = len(params.num_queries)
@@ -317,7 +322,7 @@ def _open_body(
     # absorbs both; a consumer whose outer protocol already bound the commitment
     # no-ops this to stay byte-exact).
     t = prover.scheme.bind(transcript, prover_datas[0].digest_layers[-1][0], values)
-    t, mu_wit = cast(GrindingTranscript, t).grind(params.mu_pow_bits)
+    t, mu_wit = t.grind(params.mu_pow_bits)
     t, mu = sample_challenge(t, ef, limbs)
     f_evals, w_evals = _island_tables(prover, mle, z, mu)
 
@@ -342,7 +347,7 @@ def _open_body(
             s = _island_round_poly(f_evals, w_evals)
             t = t.observe(s)
             sumcheck_polys.append(s)
-            t, wit = cast(GrindingTranscript, t).grind(params.folding_pow_bits)
+            t, wit = t.grind(params.folding_pow_bits)
             folding_pow_witnesses.append(wit)
             t, alpha = sample_challenge(t, ef, limbs)
             f_evals, w_evals = _island_fold(f_evals, w_evals, alpha)
@@ -362,7 +367,7 @@ def _open_body(
             t = t.observe(g_coeffs)
             final_poly = g_coeffs
 
-        t, qwit = cast(GrindingTranscript, t).grind(params.query_pow_bits)
+        t, qwit = t.grind(params.query_pow_bits)
         query_pow_witnesses.append(qwit)
         stride = (
             round_code(code, r, k, rate_increase=params.rate_increase).block_len >> k
@@ -408,5 +413,6 @@ if TYPE_CHECKING:
             OpeningWitness[WhirProverData],
             TrivialClaim,
             OpeningProof[WhirProof],
+            Transcript,
         ]
     ] = WhirProver
