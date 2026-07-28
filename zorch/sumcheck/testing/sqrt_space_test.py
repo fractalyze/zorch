@@ -4,6 +4,7 @@ from __future__ import annotations
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
+from frx import Array
 
 from zorch.challenge import ChallengePolicy, challenge_limbs
 from zorch.sumcheck.domain import (
@@ -42,6 +43,11 @@ def _prove_product(p: fnp.ndarray, transcript: Transcript) -> list[fnp.ndarray]:
     return msgs
 
 
+def _sum(factors: Array) -> Array:
+    """The claimed sum the engine reduces: the factors' product over the cube."""
+    return fnp.sum(fnp.prod(factors, axis=0))
+
+
 class SqrtSpaceTest(absltest.TestCase):
     def test_matches_linear_time_prover(self) -> None:
         # The √-space prover must send the exact round polynomials the linear-time
@@ -50,7 +56,9 @@ class SqrtSpaceTest(absltest.TestCase):
         for d, l in [(2, 4), (3, 4), (2, 5), (2, 6)]:
             p = _stacked(d, l)
             ref = _prove_product(p, cheap_transcript(KB))
-            _, _, got = prove_sqrt_space(p, cheap_transcript(KB), challenges=_CH)
+            _, _, got = prove_sqrt_space(
+                p, _sum(p), cheap_transcript(KB), challenges=_CH
+            )
             self.assertLen(got, l)
             for i, (a, b) in enumerate(zip(ref, got, strict=True)):
                 self.assertTrue(
@@ -58,10 +66,11 @@ class SqrtSpaceTest(absltest.TestCase):
                 )
 
     def test_prove_folds_to_scalar(self) -> None:
-        p_final, _, msgs = prove_sqrt_space(
-            _stacked(3, 4), cheap_transcript(KB), challenges=_CH
+        stacked = _stacked(3, 4)
+        carry, _, msgs = prove_sqrt_space(
+            stacked, _sum(stacked), cheap_transcript(KB), challenges=_CH
         )
-        self.assertEqual(p_final.shape, (3, 1))
+        self.assertEqual(carry.state.shape, (3, 1))
         self.assertLen(msgs, 4)
 
     def test_matches_linear_time_prover_ext(self) -> None:
@@ -88,6 +97,7 @@ class SqrtSpaceTest(absltest.TestCase):
             want = ref(p, cheap_transcript(KB))
             _, _, got = prove_sqrt_space(
                 p,
+                _sum(p),
                 cheap_transcript(KB),
                 domain=natural_domain(d, KBx4),
                 challenges=ChallengePolicy(KBx4),

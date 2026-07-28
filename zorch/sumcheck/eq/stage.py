@@ -14,7 +14,7 @@ from zorch.prove import fold_rounds
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.domain import natural_domain
 from zorch.sumcheck.eq.eq_poly import EqPolyRound, EqPolyState
-from zorch.sumcheck.prover import SumcheckSummand
+from zorch.sumcheck.prover import SumcheckSummand, initial_claim
 from zorch.sumcheck.stage import EvaluationClaim
 from zorch.sumcheck.verifier import SumcheckRound
 from zorch.transcript import Transcript
@@ -78,12 +78,18 @@ class EqPolyProver(ProverStage[EqSumClaim, EqPolyWitness, EvaluationClaim, Array
             witness.factors,
             fnp.ones(1, dtype=witness.factors.dtype),
         )
-        _, _, messages = fold_rounds(prover_round, state, transcript, claim.rounds)
-        reduction_proof = fnp.stack(messages)
-        point, value, replayed, _ = verify(
-            self.verifier_round, claim.value, reduction_proof, pre
+        carry, transcript, messages = fold_rounds(
+            prover_round,
+            initial_claim(state, claim.value, claim.rounds),
+            transcript,
+            claim.rounds,
         )
-        return ProveResult(EvaluationClaim(point, value), reduction_proof, replayed)
+        reduced = carry.claim
+        return ProveResult(
+            EvaluationClaim(reduced.point, reduced.value),
+            fnp.stack(messages),
+            transcript,
+        )
 
 
 class EqPolyVerifier(VerifierStage[EqSumClaim, EvaluationClaim, Array]):

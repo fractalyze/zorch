@@ -22,15 +22,18 @@ from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
-import frx.numpy as fnp
 from frx import Array
 
 from zorch.challenge import ChallengePolicy
-from zorch.poly.univariate import eval_coeffs, eval_univariate
-from zorch.round import VerifierRound
-from zorch.sumcheck.domain import subgroup_sum
+from zorch.round import RunningClaim, VerifierRound
+from zorch.sumcheck.reduce import (
+    reduce_coeffs,
+    reduce_compressed,
+    reduce_evals,
+    reduce_subgroup,
+    require_width,
+)
 from zorch.transcript import Transcript
-from zorch.verify import RunningClaim
 
 
 @partial(
@@ -54,13 +57,7 @@ class SumcheckRound(VerifierRound):
         sampled challenge — the dual of `prover.SumcheckRound.round_poly`,
         so a driver whose choreography owns the Fiat-Shamir hop still routes
         the round math through one definition. Returns `(reduced, ok)`."""
-        if msg.shape[0] != self.degree + 1:
-            raise ValueError(
-                f"round message must have degree+1={self.degree + 1} evals, "
-                f"got {msg.shape[0]}"
-            )
-        ok = claim == msg[0] + msg[1]
-        return eval_univariate(msg, r), ok
+        return reduce_evals(claim, msg, r, self.degree)
 
     def __call__(
         self, claim: RunningClaim, transcript: Transcript, msg: Array
@@ -91,14 +88,11 @@ class CoeffsSumcheckRound(VerifierRound):
     def __call__(
         self, claim: RunningClaim, transcript: Transcript, msg: Array
     ) -> tuple[RunningClaim, Transcript, Array]:
-        if msg.shape[0] != self.degree + 1:
-            raise ValueError(
-                f"round message must have degree+1={self.degree + 1} "
-                f"coefficients, got {msg.shape[0]}"
-            )
-        ok = claim.value == msg[0] + fnp.sum(msg)
+        # Structural rejection precedes any read of the claim.
+        require_width(msg, self.degree + 1, "coefficients")
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return claim.bind(eval_coeffs(msg, r), r), transcript, ok
+        reduced, ok = reduce_coeffs(claim.value, msg, r, self.degree)
+        return claim.bind(reduced, r), transcript, ok
 
 
 @partial(
@@ -124,14 +118,7 @@ class CompressedCoeffsSumcheckRound(VerifierRound):
         sampled challenge — mirrors `SumcheckRound.check_reduce`. `ok` is the
         constant true of the compressed form (the redundancy was spent on the
         reconstruction)."""
-        if msg.shape[0] != 2:
-            raise ValueError(
-                f"compressed round message must carry [c_0, c_2], got shape "
-                f"{msg.shape}"
-            )
-        c0, c2 = msg[0], msg[1]
-        c1 = claim - c0 - c0 - c2  # s(1) - c_0 - c_2, with s(1) = claim - c_0
-        return eval_coeffs(fnp.stack([c0, c1, c2]), r), fnp.bool_(True)
+        return reduce_compressed(claim, msg, r)
 
     def __call__(
         self, claim: RunningClaim, transcript: Transcript, msg: Array
@@ -175,15 +162,16 @@ class UnivariateSkipRound(VerifierRound):
     def __call__(
         self, claim: RunningClaim, transcript: Transcript, msg: Array
     ) -> tuple[RunningClaim, Transcript, Array]:
-        d0 = self.degree * ((1 << self.skip_rounds) - 1)
-        if msg.shape[0] != d0 + 1:
-            raise ValueError(
-                f"round-0 message must have degree·(|D|−1)+1={d0 + 1} coefficients, "
-                f"got {msg.shape[0]}"
-            )
-        ok = claim.value == subgroup_sum(msg, self.skip_rounds)
+        require_width(
+            msg,
+            self.degree * ((1 << self.skip_rounds) - 1) + 1,
+            "coefficients",
+        )
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return claim.bind(eval_coeffs(msg, r), r), transcript, ok
+        reduced, ok = reduce_subgroup(
+            claim.value, msg, r, self.skip_rounds, self.degree
+        )
+        return claim.bind(reduced, r), transcript, ok
 
 
 if TYPE_CHECKING:

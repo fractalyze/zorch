@@ -39,14 +39,20 @@ from frx import Array
 from zorch.challenge import ChallengePolicy
 from zorch.poly.univariate import eval_coeffs
 from zorch.prove import fold_rounds
+from zorch.round import RunningClaim
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
 from zorch.sumcheck.domain import subgroup_evals, subgroup_to_coeffs
-from zorch.sumcheck.prover import ProductSummand, StandardRound, SumcheckSummand
+from zorch.sumcheck.prover import (
+    FoldingClaim,
+    ProductSummand,
+    StandardRound,
+    SumcheckSummand,
+)
+from zorch.sumcheck.reduce import reduce_subgroup
 from zorch.sumcheck.stage import SumcheckWitness, SumClaim
 from zorch.sumcheck.verifier import SumcheckRound, UnivariateSkipRound
 from zorch.transcript import Transcript
 from zorch.utils.bits import log2_strict_usize
-from zorch.verify import RunningClaim
 
 
 def _next_power_of_two(x: int) -> int:
@@ -93,11 +99,12 @@ def round0_message(
 
 def skip_round0(
     p_initial: Array,
+    claim: RunningClaim,
     skip_rounds: int,
     transcript: Transcript,
     summand: SumcheckSummand,
     challenges: ChallengePolicy,
-) -> tuple[Array, Transcript, Array]:
+) -> tuple[FoldingClaim, Transcript, Array]:
     """Round 0 of the univariate skip: emit s₀, observe it, sample r₀ ∈ F_ext, and bind
     the prism at r₀. Returns the bound extension MLE state (m, H_n), the transcript, and
     the round-0 message. The caller runs any n-round sumcheck tail over the state —
@@ -106,25 +113,32 @@ def skip_round0(
     levers."""
     msg0, coeffs_z = round0_message(p_initial, skip_rounds, summand)
     transcript, r0 = challenges.observe_and_sample(transcript, msg0)
+    reduced, _ = reduce_subgroup(claim.value, msg0, r0, skip_rounds, summand.degree)
     # Bind the prism at r₀: evaluate each factor's D-univariate there. Base coeffs ×
     # extension r₀ promote to the extension the tail runs in.
-    return eval_coeffs(coeffs_z, r0), transcript, msg0
+    return (
+        FoldingClaim(eval_coeffs(coeffs_z, r0), claim.bind(reduced, r0)),
+        transcript,
+        msg0,
+    )
 
 
 def prove_univariate_skip(
     p_initial: Array,
+    claim: Array,
     skip_rounds: int,
     transcript: Transcript,
     summand: SumcheckSummand | None = None,
     *,
     challenges: ChallengePolicy,
-) -> tuple[Array, Transcript, list[Array]]:
+) -> tuple[FoldingClaim, Transcript, list[Array]]:
     """Prove the sumcheck with the first `skip_rounds` rounds collapsed into one
     univariate round over the order-2^skip_rounds subgroup. `summand` defaults to the
     product over the factors; `challenges` configures the subgroup round and every
     tail round together. Returns the final folded factors
-    (m, 1), the transcript, and all 1+n round messages (the round-0 coefficient message
-    first).
+    (m, 1) beside the reduced claim, the transcript, and all 1+n round messages
+    (the round-0 coefficient message first). Each round reduces the claim as it
+    folds, so the caller gets the reduced claim without a second pass.
 
     `skip_rounds == 0` delegates to the plain StandardRound run — byte-identical to a
     sumcheck without the skip."""
@@ -132,24 +146,30 @@ def prove_univariate_skip(
     total = log2_strict_usize(p_initial.shape[1])
     if not 0 <= skip_rounds <= total:
         raise ValueError(f"skip_rounds must be in [0, {total}], got {skip_rounds}")
+    # The point is bound in the challenge field, which the skip keeps wider than
+    # the round-0 claim: round 0 is base-field work and the extension enters
+    # only once r0 is sampled.
+    start = RunningClaim(
+        claim, fnp.zeros((total - skip_rounds + 1,), challenges.dtype), fnp.int32(0)
+    )
     if skip_rounds == 0:
         return fold_rounds(
             StandardRound(summand, challenges=challenges),
-            p_initial,
+            FoldingClaim(p_initial, RunningClaim(claim, start.point, start.index)),
             transcript,
             total,
         )
 
-    state, transcript, msg0 = skip_round0(
-        p_initial, skip_rounds, transcript, summand, challenges
+    carry, transcript, msg0 = skip_round0(
+        p_initial, start, skip_rounds, transcript, summand, challenges
     )
-    state, transcript, tail = fold_rounds(
+    carry, transcript, tail = fold_rounds(
         StandardRound(summand, challenges=challenges),
-        state,
+        carry,
         transcript,
         total - skip_rounds,
     )
-    return state, transcript, [msg0] + tail
+    return carry, transcript, [msg0] + tail
 
 
 def verify_univariate_skip(
@@ -248,28 +268,19 @@ class UnivariateSkipProver(
         witness: SumcheckWitness,
         transcript: Transcript,
     ) -> ProveResult[PrismEvaluationClaim, UnivariateSkipProof]:
-        pre = transcript
-        _, _, messages = prove_univariate_skip(
+        carry, transcript, messages = prove_univariate_skip(
             witness.state,
+            claim.value,
             self.skip_rounds,
             transcript,
             self.summand,
             challenges=self.challenges,
         )
-        value, replayed, point, _ = verify_univariate_skip(
-            claim.value,
-            messages,
-            self.skip_rounds,
-            claim.rounds,
-            pre,
-            self.summand.degree,
-            challenges=self.challenges,
-        )
-        reduction_proof = UnivariateSkipProof(messages[0], tuple(messages[1:]))
+        reduced = carry.claim
         return ProveResult(
-            PrismEvaluationClaim(point, value),
-            reduction_proof,
-            replayed,
+            PrismEvaluationClaim(reduced.point, reduced.value),
+            UnivariateSkipProof(messages[0], tuple(messages[1:])),
+            transcript,
         )
 
 

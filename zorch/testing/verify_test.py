@@ -98,8 +98,7 @@ class UnrolledVerifyTest(absltest.TestCase):
         state = rand_field(11, (2, 1 << rounds), KB)
         claim = fnp.sum(state[0] * state[1])
         prover = SumcheckProver(
-            prover_mod.StandardRound(prover_mod.ProductSummand(2), challenges=_CH),
-            verifier.SumcheckRound(2, challenges=_CH),
+            prover_mod.StandardRound(prover_mod.ProductSummand(2), challenges=_CH)
         )
         proved = prover.prove(
             SumClaim(claim, rounds), SumcheckWitness(state), cheap_transcript(KB)

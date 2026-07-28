@@ -9,43 +9,18 @@ a round reports only its verdict and every recurrence shape shares one protocol.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING
 
 import frx
 import frx.numpy as fnp
 from frx import Array
-from frx.tree_util import register_dataclass
 
+from zorch.round import RunningClaim
 from zorch.transcript import Transcript
 
 if TYPE_CHECKING:
     from zorch.round import VerifierRound
-
-
-@register_dataclass
-@dataclass(frozen=True)
-class RunningClaim:
-    """A partially built evaluation claim: the value after the rounds bound so far.
-
-    `index` is the write cursor into `point`; both are fixed-shape so the whole
-    carry stays one shape across the loop.
-    """
-
-    value: Array
-    point: Array
-    index: Array
-
-    def bind(self, value: Array, challenge: Array) -> RunningClaim:
-        """Advance to the reduced claim, recording this round's challenge.
-
-        The single definition of the write, so every wire form records its
-        challenge identically and a new one cannot get the bookkeeping wrong.
-        """
-        return RunningClaim(
-            value, self.point.at[self.index].set(challenge), self.index + 1
-        )
 
 
 @partial(frx.jit, static_argnames=("verifier",))

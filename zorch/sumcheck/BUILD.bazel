@@ -10,6 +10,7 @@ py_library(
         "domain.py",
         "gruen.py",
         "prover.py",
+        "reduce.py",
         "sqrt_space.py",
         "stage.py",
         "univariate_skip.py",

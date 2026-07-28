@@ -32,24 +32,66 @@ import operator
 from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 import frx
 import frx.numpy as fnp
 from frx import Array
 
 from zorch.challenge import ChallengePolicy
-from zorch.round import ProverRound
+from zorch.round import ProverRound, RunningClaim
 from zorch.sumcheck.domain import (
     EvalDomain,
     fold,
     natural_domain,
     summand_evals,
 )
+from zorch.sumcheck.reduce import reduce_compressed, reduce_domain, reduce_evals
 from zorch.transcript import Transcript
 
+
+@partial(
+    frx.tree_util.register_dataclass,
+    data_fields=["state", "claim"],
+    meta_fields=[],
+)
+@dataclass(frozen=True)
+class FoldingClaim:
+    """What a sumcheck round threads: the engine's folding state and the claim.
+
+    `state` is whatever the engine folds — stacked factor tables, or the √-space
+    engine's deferred `(factors, eq)` pair. The claim rides beside it because a
+    round's challenge is derived rather than received, and the point and running
+    value it builds live nowhere else.
+    """
+
+    state: Any
+    claim: RunningClaim
+
+    def advance(self, state: Any, reduced: Array, challenge: Array) -> FoldingClaim:
+        """The folded state beside the claim this round reduced it to."""
+        return FoldingClaim(state, self.claim.bind(reduced, challenge))
+
+
+@partial(frx.jit, static_argnames=("degree",))
+def _fold_and_advance(
+    carry: FoldingClaim, msg: Array, r: Array, degree: int
+) -> FoldingClaim:
+    """Fold and reduce in one compiled step, so the claim's handful of field ops
+    ride the fold's program rather than paying for a launch of their own."""
+    reduced, _ = reduce_evals(carry.claim.value, msg, r, degree)
+    return carry.advance(fold(carry.state, r), reduced, r)
+
+
+def initial_claim(state: Any, value: Array, rounds: int) -> FoldingClaim:
+    """Start a fold from `state` with nothing yet bound into `value`."""
+    return FoldingClaim(
+        state, RunningClaim(value, fnp.zeros((rounds,), value.dtype), fnp.int32(0))
+    )
+
+
 if TYPE_CHECKING:
-    from zorch.round import ProverRound
+    from zorch.round import ProverRound, RunningClaim
 
 
 @dataclass(frozen=True)
@@ -113,11 +155,23 @@ class StandardRound(ProverRound):
         return summand_evals(folded, self.summand._combine, domain)
 
     def __call__(
-        self, folded: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array]:
-        msg = self._round_poly(folded)
+        self, carry: FoldingClaim, transcript: Transcript
+    ) -> tuple[FoldingClaim, Transcript, Array]:
+        domain = self.domain or natural_domain(self.summand.degree, carry.state.dtype)
+        msg = summand_evals(carry.state, self.summand._combine, domain)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return fold(folded, r), transcript, msg
+        if self.domain is None:
+            return (
+                _fold_and_advance(carry, msg, r, self.summand.degree),
+                transcript,
+                msg,
+            )
+        # The default domain reduces by direct Lagrange evaluation — the same
+        # arithmetic `verifier.SumcheckRound` does. Going through the domain's
+        # value→coefficient map instead would rebuild an (n, n) Lagrange matrix
+        # every round, which costs more than the fold it rides along with.
+        reduced, _ = reduce_domain(carry.claim.value, msg, r, domain)
+        return carry.advance(fold(carry.state, r), reduced, r), transcript, msg
 
 
 class CompressedProductRound(ProverRound):
@@ -148,11 +202,12 @@ class CompressedProductRound(ProverRound):
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(
-        self, folded: Array, transcript: Transcript
-    ) -> tuple[Array, Transcript, Array]:
-        msg = self._round_poly(folded)
+        self, carry: FoldingClaim, transcript: Transcript
+    ) -> tuple[FoldingClaim, Transcript, Array]:
+        msg = self._round_poly(carry.state)
         transcript, r = self.challenges.observe_and_sample(transcript, msg)
-        return fold(folded, r), transcript, msg
+        reduced, _ = reduce_compressed(carry.claim.value, msg, r)
+        return carry.advance(fold(carry.state, r), reduced, r), transcript, msg
 
 
 @partial(

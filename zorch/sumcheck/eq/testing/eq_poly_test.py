@@ -72,14 +72,15 @@ class EqPolyTest(absltest.TestCase):
 
     def test_prove_folds_all_rounds(self) -> None:
         P = fnp.stack([fnp.arange(1, 33, dtype=KB), fnp.arange(2, 34, dtype=KB)])
-        p_final, _, msgs = prove_eq_poly(
-            P,
-            fnp.array([0, 1, 1, 0, 1], dtype=KB),
-            cheap_transcript(KB),
-            challenges=_CH,
+        w = fnp.array([0, 1, 1, 0, 1], dtype=KB)
+        claim = fnp.sum(
+            expand_eq_to_hypercube(w, fnp.ones((), KB)) * fnp.prod(P, axis=0)
+        )
+        carry, _, msgs = prove_eq_poly(
+            P, w, claim, cheap_transcript(KB), challenges=_CH
         )
         self.assertLen(msgs, 5)
-        self.assertEqual(p_final.shape, (2, 1))
+        self.assertEqual(carry.state[0].shape, (2, 1))
         for msg in msgs:
             self.assertEqual(msg.shape, (2,))
 

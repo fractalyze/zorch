@@ -195,7 +195,11 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         # threading, not the sumcheck math.
         from zorch.challenge import ChallengePolicy
         from zorch.prove import fold_rounds
-        from zorch.sumcheck.prover import ProductSummand, StandardRound
+        from zorch.sumcheck.prover import (
+            ProductSummand,
+            StandardRound,
+            initial_claim,
+        )
 
         a = fnp.arange(8, dtype=fnp.uint32) + 1
         b = fnp.arange(8, dtype=fnp.uint32) + 2
@@ -206,8 +210,11 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
 
         def run(x: fnp.ndarray, y: fnp.ndarray) -> tuple[fnp.ndarray, fnp.ndarray]:
             # 3 rounds folds the 2^3 stacked factors down to width 1.
-            state, _, msgs = fold_rounds(rnd, fnp.stack([x, y]), tr, 3)
-            return state[:, 0], fnp.stack(msgs)
+            stacked = fnp.stack([x, y])
+            carry, _, msgs = fold_rounds(
+                rnd, initial_claim(stacked, fnp.sum(x * y), 3), tr, 3
+            )
+            return carry.state[:, 0], fnp.stack(msgs)
 
         eager = frx.tree_util.tree_map(np.asarray, run(a, b))
         jitted = frx.tree_util.tree_map(np.asarray, frx.jit(run)(a, b))

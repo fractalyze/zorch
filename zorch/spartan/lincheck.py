@@ -94,7 +94,6 @@ class InnerProver(
     ) -> None:
         self.sumcheck = sumcheck or SumcheckProver(
             StandardRound(ProductSummand(2), challenges=challenges),
-            SumcheckRound(2, challenges),
         )
 
     def prove(
