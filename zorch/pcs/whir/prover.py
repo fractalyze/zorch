@@ -43,8 +43,8 @@ from zorch.poly.univariate import eval_coeffs
 from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.sumcheck.domain import fold
 from zorch.transcript import (
-    GrindingTranscript,
-    GrindingTranscriptT,
+    Transcript,
+    TranscriptT,
     sample_challenge,
 )
 from zorch.utils.bits import log2_strict_usize
@@ -75,7 +75,7 @@ class WhirProver(
         OpeningWitness[WhirProverData],
         TrivialClaim,
         OpeningProof[WhirProof],
-        GrindingTranscript,
+        Transcript,
     ]
 ):
     """WHIR PCS prover. `code` is the initial-round RS encoder (the
@@ -111,8 +111,8 @@ class WhirProver(
         self,
         claim: OpeningClaim[WhirCommitment],
         witness: OpeningWitness[WhirProverData],
-        transcript: GrindingTranscriptT,
-    ) -> ProveResult[TrivialClaim, OpeningProof[WhirProof], GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> ProveResult[TrivialClaim, OpeningProof[WhirProof], TranscriptT]:
         """Open the committed polynomials at the claim's points.
 
         Terminal: an opening closes its claim rather than reducing it."""
@@ -125,8 +125,8 @@ class WhirProver(
         self,
         prover_data: WhirProverData,
         points: Sequence[Array],
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, WhirProof, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, WhirProof, TranscriptT]:
         """Open a single committed matrix at `points[0]` — the degenerate
         one-commitment μ-batch. Returns
         `(values, proof, transcript)` with `values` the matrix's per-column
@@ -137,8 +137,8 @@ class WhirProver(
         self,
         prover_datas: Sequence[WhirProverData],
         points: Sequence[Array],
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, WhirProof, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, WhirProof, TranscriptT]:
         """μ-batch-open the committed matrices at the shared point `points[0]`,
         threading Fiat-Shamir.
 
@@ -299,8 +299,8 @@ def _open_body(
     prover: WhirProver,
     prover_datas: list[WhirProverData],
     z: Array,
-    transcript: GrindingTranscriptT,
-) -> tuple[Array, WhirProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[Array, WhirProof, TranscriptT]:
     code, params = prover.code, prover.params
     k = params.k_whir
     num_rounds = len(params.num_queries)
@@ -413,6 +413,6 @@ if TYPE_CHECKING:
             OpeningWitness[WhirProverData],
             TrivialClaim,
             OpeningProof[WhirProof],
-            GrindingTranscript,
+            Transcript,
         ]
     ] = WhirProver

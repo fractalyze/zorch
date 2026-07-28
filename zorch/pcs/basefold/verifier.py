@@ -52,7 +52,7 @@ from zorch.pcs.fold import (
 )
 from zorch.pcs.stage import OpeningClaim, OpeningProof
 from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
-from zorch.transcript import GrindingTranscriptT
+from zorch.transcript import TranscriptT
 from zorch.utils.bits import log2_strict_usize
 
 
@@ -62,9 +62,9 @@ class BasefoldVerifier(
         OpeningClaim[BasefoldCommitment],
         TrivialClaim,
         OpeningProof[BasefoldProof],
-        GrindingTranscriptT,
+        TranscriptT,
     ],
-    Generic[GrindingTranscriptT],
+    Generic[TranscriptT],
 ):
     """BaseFold PCS verifier. `code` fixes the block geometry +
     fold; `tree` the Merkle config; `choreography` the Fiat-Shamir wire (share
@@ -78,7 +78,7 @@ class BasefoldVerifier(
     tree: MerkleTree
     # Must match the prover's; placeholder count, not soundness-calibrated.
     num_queries: int = 4
-    choreography: BasefoldChoreography[GrindingTranscriptT] = BasefoldChoreography()
+    choreography: BasefoldChoreography[TranscriptT] = BasefoldChoreography()
     kernel: SumcheckKernel = SumcheckKernel()
     config: BasefoldConfig | None = None
 
@@ -100,8 +100,8 @@ class BasefoldVerifier(
         self,
         claim: OpeningClaim[BasefoldCommitment],
         reduction_proof: OpeningProof[BasefoldProof],
-        transcript: GrindingTranscriptT,
-    ) -> VerifyResult[TrivialClaim, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> VerifyResult[TrivialClaim, TranscriptT]:
         """Verify a single-matrix open — the degenerate one-round batch."""
         ok, transcript = self.verify_batch(
             [claim.commitment],
@@ -118,8 +118,8 @@ class BasefoldVerifier(
         points: Sequence[Array],
         values: Sequence[Array],
         proof: BasefoldProof,
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         if len(points) != 1:
             raise ValueError(
                 f"BaseFold opens the matrices at one shared point, got {len(points)}"
@@ -156,8 +156,8 @@ class BasefoldVerifier(
         basis: Array,
         value: Array,
         proof: BasefoldProof | CadenceProof,
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         """Verify a RAW-basis open — the dual of `BasefoldProver.open_with_basis`
         (`bind_statement` receives `point=None`), dispatching on the fold schedule
         exactly as the prover entry does.
@@ -282,14 +282,14 @@ def _fold_coset(
 
 
 def _verify_with_basis_cadence(
-    verifier: BasefoldVerifier[GrindingTranscriptT],
+    verifier: BasefoldVerifier[TranscriptT],
     commitment: BasefoldCommitment,
     basis: Array,
     value: Array,
     config: BasefoldConfig,
     proof: CadenceProof,
-    transcript: GrindingTranscriptT,
-) -> tuple[Array, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[Array, TranscriptT]:
     """Replay a non-native cadence open (row-batch prefix + multi-arity FRI
     epochs), the structural dual of `prover._open_with_basis_cadence`. Eager, like
     the prover's driver — a host-sequential byte-wire replay cannot ride one jit
@@ -427,13 +427,13 @@ def _verify_with_basis_cadence(
 # config and choreography (both frozen, value-compared) fix the compiled zone.
 @partial(frx.jit, static_argnames=("verifier",))
 def _verify_batch_body(
-    verifier: BasefoldVerifier[GrindingTranscriptT],
+    verifier: BasefoldVerifier[TranscriptT],
     commitments: list[Array],
     z: Array,
     values: list[Array],
     proof: BasefoldProof,
-    transcript: GrindingTranscriptT,
-) -> tuple[Array, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[Array, TranscriptT]:
     chor = verifier.choreography
     kernel = verifier.kernel
     dtype = z.dtype
@@ -473,9 +473,9 @@ def _verify_batch_body(
     fri_roots = fnp.stack(proof.fri_roots)
 
     def fold_round(
-        carry: tuple[GrindingTranscriptT, Array, Array],
+        carry: tuple[TranscriptT, Array, Array],
         xs: tuple[Array, Array, Array, Array],
-    ) -> tuple[tuple[GrindingTranscriptT, Array, Array], Array]:
+    ) -> tuple[tuple[TranscriptT, Array, Array], Array]:
         t, claim, ok = carry
         zero_val, one_val, last, root = xs
         components = (zero_val, one_val)

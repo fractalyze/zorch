@@ -68,8 +68,8 @@ class ProverStage(
 ):
     """The prover role of one conditional claim reduction.
 
-    A role that grinds declares `GrindingTranscript` as its transcript
-    parameter; one needing only the base seam omits it.
+    The transcript parameter carries the caller's concrete type through the
+    reduction; omit it and it is the base `Transcript`.
     """
 
     @abstractmethod

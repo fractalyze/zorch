@@ -115,12 +115,12 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
 
             # Verifier mirror accepts the honest witness and reaches the same state.
             vf = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
-            vf, ok = vf.check_witness(witness, bits)
+            vf, ok = vf.check_witness(witness, pow_bits=bits)
             self.assertTrue(bool(ok))
             _, vf_ch = vf.sample_scalar()
             self.assertEqual(np.asarray(vf_ch).astype("<u4").tobytes(), b_ch)
         bad = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
-        _, bad_ok = bad.check_witness(int(witness) + 1, 8)
+        _, bad_ok = bad.check_witness(int(witness) + 1, pow_bits=8)
         self.assertFalse(bool(bad_ok))
 
     def test_grind_bits_out_of_range_rejected(self) -> None:
@@ -131,7 +131,7 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
             with self.assertRaises(ValueError):
                 t.grind(bits)
             with self.assertRaises(ValueError):
-                t.check_witness(0, bits)
+                t.check_witness(0, pow_bits=bits)
 
     def test_ghash_dtype_matches_byte_transcript_via_uint32_lanes(self) -> None:
         # ghash <-> bytes routes through uint32 lanes to stay

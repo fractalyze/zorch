@@ -55,7 +55,7 @@ from zorch.poly.multilinear import eval_mle
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound
 from zorch.stage import ProveResult, ProverStage, TrivialClaim
-from zorch.transcript import GrindingTranscriptT
+from zorch.transcript import TranscriptT
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
@@ -96,8 +96,8 @@ _RoundMsg = tuple[tuple, Array, "Array | None"]
 
 @dataclass(frozen=True)
 class _SumcheckPairFoldRound(
-    ProverRound[_OpenState, _RoundMsg, GrindingTranscriptT],
-    Generic[GrindingTranscriptT],
+    ProverRound[_OpenState, _RoundMsg, TranscriptT],
+    Generic[TranscriptT],
 ):
     """One interleaved-sumcheck round of the batch open, driven by the kernel +
     choreography. Ask the kernel for the round-message components, frame them
@@ -114,12 +114,12 @@ class _SumcheckPairFoldRound(
 
     code: FoldableCode
     tree: MerkleTree
-    choreography: BasefoldChoreography[GrindingTranscriptT]
+    choreography: BasefoldChoreography[TranscriptT]
     kernel: SumcheckKernel
 
     def __call__(
-        self, state: _OpenState, transcript: GrindingTranscriptT
-    ) -> tuple[_OpenState, GrindingTranscriptT, _RoundMsg]:
+        self, state: _OpenState, transcript: TranscriptT
+    ) -> tuple[_OpenState, TranscriptT, _RoundMsg]:
         cw, kernel_state, level, layers = state
         chor = self.choreography
         components = self.kernel.message(kernel_state)
@@ -155,9 +155,9 @@ class BasefoldProver(
         OpeningWitness[BasefoldProverData],
         TrivialClaim,
         OpeningProof[BasefoldProof],
-        GrindingTranscriptT,
+        TranscriptT,
     ],
-    Generic[GrindingTranscriptT],
+    Generic[TranscriptT],
 ):
     """BaseFold PCS prover. `code` fixes the per-column message
     length (= the MLE height `S`); `tree` commits the codeword rows;
@@ -170,7 +170,7 @@ class BasefoldProver(
     code: FoldableCode
     tree: MerkleTree
     num_queries: int = 4  # query repetitions; placeholder, not soundness-calibrated
-    choreography: BasefoldChoreography[GrindingTranscriptT] = BasefoldChoreography()
+    choreography: BasefoldChoreography[TranscriptT] = BasefoldChoreography()
     kernel: SumcheckKernel = SumcheckKernel()
     config: BasefoldConfig | None = None
 
@@ -196,8 +196,8 @@ class BasefoldProver(
         self,
         claim: OpeningClaim[BasefoldCommitment],
         witness: OpeningWitness[BasefoldProverData],
-        transcript: GrindingTranscriptT,
-    ) -> ProveResult[TrivialClaim, OpeningProof[BasefoldProof], GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> ProveResult[TrivialClaim, OpeningProof[BasefoldProof], TranscriptT]:
         """Open a single committed matrix — the degenerate one-round batch.
 
         Terminal: an opening closes its claim rather than reducing it, so the
@@ -212,8 +212,8 @@ class BasefoldProver(
         self,
         rounds: Sequence[BasefoldProverData],
         points: Sequence[Array],
-        transcript: GrindingTranscriptT,
-    ) -> tuple[list[Array], BasefoldProof, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[list[Array], BasefoldProof, TranscriptT]:
         """Batch-open the committed matrices `rounds` at the shared point.
 
         Returns `(values, proof, transcript)` where `values[r]` is round `r`'s
@@ -245,8 +245,8 @@ class BasefoldProver(
         prover_data: BasefoldProverData,
         basis: Array,
         value: Array,
-        transcript: GrindingTranscriptT,
-    ) -> tuple[BasefoldProof | CadenceProof, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[BasefoldProof | CadenceProof, TranscriptT]:
         """Open the batched claim `<f, basis> = value` for a RAW hypercube basis
         instead of a point — the entry of outer protocols whose eval-claims
         arrive as an already-batched basis vector. Mirrors
@@ -278,13 +278,13 @@ class BasefoldProver(
 
 
 def _open_with_basis_cadence(
-    prover: BasefoldProver[GrindingTranscriptT],
+    prover: BasefoldProver[TranscriptT],
     pd: BasefoldProverData,
     basis: Array,
     value: Array,
     config: BasefoldConfig,
-    transcript: GrindingTranscriptT,
-) -> tuple[CadenceProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[CadenceProof, TranscriptT]:
     """Eager driver for a non-native fold schedule: the interleaved sumcheck
     (kernel) + a row-batch prefix (deferred lane-combine, one commit at prefix
     end) + multi-arity epoch commits (post-fold, next-arity leaf grouping), all
@@ -456,15 +456,15 @@ def _commit_body(
 
 
 def _fold_and_query(
-    prover: BasefoldProver[GrindingTranscriptT],
+    prover: BasefoldProver[TranscriptT],
     config: BasefoldConfig,
     cw: Array,
     mle: Array,
     claim: Array,
     zs: Array | None,
     component_pds: Sequence[BasefoldProverData],
-    transcript: GrindingTranscriptT,
-) -> tuple[BasefoldProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[BasefoldProof, TranscriptT]:
     """The config+choreography-driven core, shared by the point (`open_batch`)
     and raw-basis (`open_with_basis`) entries: run the interleaved sumcheck +
     pre-fold FRI (num_vars rounds), bind the cleartext terminal codeword, then
@@ -541,11 +541,11 @@ def _fold_and_query(
 # and choreography (both frozen, value-compared) fix the compiled zone.
 @partial(frx.jit, static_argnames=("prover",))
 def _open_batch_body(
-    prover: BasefoldProver[GrindingTranscriptT],
+    prover: BasefoldProver[TranscriptT],
     rounds: Sequence[BasefoldProverData],
     z: Array,
-    transcript: GrindingTranscriptT,
-) -> tuple[list[Array], BasefoldProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[list[Array], BasefoldProof, TranscriptT]:
     dtype = z.dtype
     num_vars = z.shape[0]
     config = prover._resolved_config(num_vars)
@@ -590,12 +590,12 @@ def _open_batch_body(
 # `_SumcheckPairFoldRound`).
 @partial(frx.jit, static_argnames=("prover",))
 def _open_with_basis_body(
-    prover: BasefoldProver[GrindingTranscriptT],
+    prover: BasefoldProver[TranscriptT],
     pd: BasefoldProverData,
     basis: Array,
     value: Array,
-    transcript: GrindingTranscriptT,
-) -> tuple[BasefoldProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[BasefoldProof, TranscriptT]:
     num_vars = log2_strict_usize(basis.shape[0])
     config = prover._resolved_config(num_vars)
     root = pd.digest_layers[-1][0]

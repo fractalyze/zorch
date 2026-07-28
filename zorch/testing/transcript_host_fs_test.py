@@ -77,8 +77,8 @@ class TranscriptHostFsTest(parameterized.TestCase):
         # sponge regardless of fs_on_host, so a host-FS grind's re-check could
         # disagree with its own search. Host and device must match.
         w = rand_field(8, (1,), F)[0]
-        ta, dev = self._new(False).check_witness(pow_bits, w)
-        tb, host = self._new(True).check_witness(pow_bits, w)
+        ta, dev = self._new(False).check_witness(w, pow_bits=pow_bits)
+        tb, host = self._new(True).check_witness(w, pow_bits=pow_bits)
         self.assertEqual(bool(dev), bool(host))
         self.assertTrue(self._state_eq(ta, tb))
 

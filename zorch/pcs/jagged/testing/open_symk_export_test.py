@@ -35,7 +35,7 @@ from zorch.pcs.jagged.open import (
     StackedRound,
     stacked_basefold_open,
 )
-from zorch.transcript import DuplexTranscript, GrindingTranscript
+from zorch.transcript import DuplexTranscript, Transcript
 
 _LOG_S = 6  # stacking height S = 64
 _S = 1 << _LOG_S
@@ -99,7 +99,7 @@ class SymbolicKOpenExportTest(absltest.TestCase):
             z: Array,
             dense_eval: Array,
             transcript: DuplexTranscript,
-        ) -> tuple[StackedOpenProof, GrindingTranscript]:
+        ) -> tuple[StackedOpenProof, Transcript]:
             return stacked_basefold_open(
                 self.smcs,
                 self.code,

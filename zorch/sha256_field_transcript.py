@@ -315,7 +315,7 @@ class Sha256FieldTranscript:
         return self._absorb_witness(witness), witness
 
     def check_witness(
-        self, witness: Array, pow_bits: int
+        self, witness: Array, *, pow_bits: int
     ) -> tuple[Sha256FieldTranscript, Array]:
         """Verifier mirror of `grind`: check the PoW (`pow_bits == 0` requires
         the canonical witness 0), then absorb the witness REGARDLESS so the

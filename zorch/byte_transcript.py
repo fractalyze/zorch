@@ -88,9 +88,9 @@ class ByteTranscript(Protocol):
 
 
 class ByteGrindingTranscript(ByteTranscript, Protocol):
-    """A `ByteTranscript` with a u64-nonce proof-of-work grind. Split from the
-    base seam (as `transcript.GrindingTranscript` is) — the byte/nonce PoW is a
-    different predicate from the field-element one and must not be cross-used."""
+    """A `ByteTranscript` with a u64-nonce proof-of-work grind. Kept off the
+    base seam because the byte/nonce predicate is not the field-element
+    canonical-bit one — the two PoWs must not be cross-used."""
 
     def grind_pow(self, bits: int) -> tuple[Self, int]: ...
     def verify_pow(self, nonce: int, bits: int) -> tuple[Self, bool]: ...

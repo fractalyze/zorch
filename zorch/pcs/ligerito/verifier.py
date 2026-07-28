@@ -37,7 +37,7 @@ from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
 from zorch.sumcheck import prover as sc_prover
 from zorch.sumcheck.domain import fold
 from zorch.sumcheck.verifier import CompressedCoeffsSumcheckRound, SumcheckRound
-from zorch.transcript import GrindingTranscriptT
+from zorch.transcript import TranscriptT
 
 
 # Cached per challenge field: one instance per field, identity-stable for the
@@ -72,9 +72,9 @@ class LigeritoVerifier(
         OpeningClaim[LigeritoCommitment],
         TrivialClaim,
         OpeningProof[LigeritoProof],
-        GrindingTranscriptT,
+        TranscriptT,
     ],
-    Generic[GrindingTranscriptT],
+    Generic[TranscriptT],
 ):
     """Ligerito recursive PCS verifier. Mirrors `LigeritoProver`'s `make_code` /
     `tree` / `config` / `choreography` (share the choreography instance with
@@ -83,7 +83,7 @@ class LigeritoVerifier(
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
-    choreography: LigeritoChoreography[GrindingTranscriptT] = LigeritoChoreography()
+    choreography: LigeritoChoreography[TranscriptT] = LigeritoChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -92,8 +92,8 @@ class LigeritoVerifier(
         self,
         claim: OpeningClaim[LigeritoCommitment],
         reduction_proof: OpeningProof[LigeritoProof],
-        transcript: GrindingTranscriptT,
-    ) -> VerifyResult[TrivialClaim, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> VerifyResult[TrivialClaim, TranscriptT]:
         """Check the claimed evaluations against the commitment."""
         ok, transcript = self._verify_opening(
             claim.commitment,
@@ -110,8 +110,8 @@ class LigeritoVerifier(
         points: Sequence[Array],
         value: Array,
         proof: LigeritoProof,
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         """Return `(ok, transcript)` where `ok` is a scalar boolean array."""
         if len(points) != 1:
             raise ValueError(f"Ligerito opens at one point, got {len(points)}")
@@ -139,8 +139,8 @@ class LigeritoVerifier(
         basis: Array,
         value: Array,
         proof: LigeritoProof,
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, TranscriptT]:
         """`verify` for a RAW hypercube basis instead of a point — the dual of
         `LigeritoProver.open_with_basis` (`bind_statement` receives
         `point=None`)."""
@@ -185,14 +185,14 @@ class LigeritoVerifier(
 
 
 def _verify(
-    verifier: LigeritoVerifier[GrindingTranscriptT],
+    verifier: LigeritoVerifier[TranscriptT],
     commitment: Array,
     z: Array | None,
     B: Array,
     value: Array,
     proof: LigeritoProof,
-    transcript: GrindingTranscriptT,
-) -> tuple[Array, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[Array, TranscriptT]:
     cfg = verifier.config
     chor = verifier.choreography
     dtype = B.dtype
@@ -214,12 +214,12 @@ def _verify(
     wits = iter(proof.pow_witnesses)
     num_vars = cfg.num_vars
 
-    def take(t: GrindingTranscriptT) -> tuple[GrindingTranscriptT, Array]:
+    def take(t: TranscriptT) -> tuple[TranscriptT, Array]:
         """The next eager emission off the wire, absorbed like the prover did."""
         m = next(msgs)
         return chor.observe_message(t, m), m
 
-    def check_grind(t: GrindingTranscriptT, bits: int | None) -> GrindingTranscriptT:
+    def check_grind(t: TranscriptT, bits: int | None) -> TranscriptT:
         nonlocal ok
         if bits is None:
             return t

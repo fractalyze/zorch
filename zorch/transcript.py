@@ -78,30 +78,19 @@ class Transcript(Protocol):
     def observe(self, values: Array) -> Self: ...
     def sample(self, n: int = 1) -> tuple[Self, Array]: ...
     def observe_and_sample(self, values: Array, n: int = 1) -> tuple[Self, Array]: ...
-
-
-class GrindingTranscript(Transcript, Protocol):
-    """A `Transcript` that also supports a proof-of-work grind. Split from the
-    base seam because grinding is meaningful only for a transcript that squeezes
-    a field element to check leading-zero bits against -- a consumer that needs a
-    PoW witness type-narrows to this, and a transcript that cannot grind never
-    has to pretend it can."""
-
-    def check_witness(self, pow_bits: int, witness: Array) -> tuple[Self, Array]: ...
     def grind(self, pow_bits: int) -> tuple[Self, Array]: ...
+    def check_witness(self, witness: Array, *, pow_bits: int) -> tuple[Self, Array]: ...
 
 
-# Preserves a `GrindingTranscript` through the FS helpers and the composition
-# roles instead of widening it to the base seam. The default keeps the parameter
-# optional; it comes from `typing_extensions` because these are subscripted in
-# base-class position, so it must exist at runtime (`typing` gains it in 3.13).
+# Carries the caller's concrete transcript through the FS helpers and the
+# composition roles, so a consumer that hands in a `DuplexTranscript` gets one
+# back rather than the widened seam. Capability plays no part — every transcript
+# grinds — so this is plumbing, not a narrowing.
+#
+# The default keeps the parameter optional; it comes from `typing_extensions`
+# because these are subscripted in base-class position, so it must exist at
+# runtime (`typing` gains it in 3.13).
 TranscriptT = TypeVarWithDefault("TranscriptT", bound=Transcript, default=Transcript)
-
-# For blocks that grind: binding here keeps the caller's flavor instead of
-# casting to reach `grind`.
-GrindingTranscriptT = TypeVarWithDefault(
-    "GrindingTranscriptT", bound=GrindingTranscript, default=GrindingTranscript
-)
 
 
 @partial(jit, static_argnums=(1,))
@@ -196,7 +185,7 @@ class _FsBackend(Protocol):
     ) -> tuple[DuplexTranscript, Array]: ...
 
     def check_witness(
-        self, t: DuplexTranscript, witness: Array, pow_bits: int
+        self, t: DuplexTranscript, witness: Array, *, pow_bits: int
     ) -> tuple[DuplexTranscript, Array]: ...
 
 
@@ -218,9 +207,9 @@ class _DeviceFs:
         return observe_and_sample_marked(t, values, n)
 
     def check_witness(
-        self, t: DuplexTranscript, witness: Array, pow_bits: int
+        self, t: DuplexTranscript, witness: Array, *, pow_bits: int
     ) -> tuple[DuplexTranscript, Array]:
-        return _check_witness_body(t, witness, pow_bits)
+        return _check_witness_body(t, witness, pow_bits=pow_bits)
 
 
 @dataclass(frozen=True)
@@ -242,9 +231,9 @@ class _HostFs:
         return _observe_and_sample_host(t, values, n)
 
     def check_witness(
-        self, t: DuplexTranscript, witness: Array, pow_bits: int
+        self, t: DuplexTranscript, witness: Array, *, pow_bits: int
     ) -> tuple[DuplexTranscript, Array]:
-        return _check_witness_host(t, witness, pow_bits)
+        return _check_witness_host(t, witness, pow_bits=pow_bits)
 
 
 _DEVICE_FS = _DeviceFs()
@@ -424,7 +413,7 @@ class DuplexTranscript:
         return self.fs.observe_and_sample(self, values, n)
 
     def check_witness(
-        self, pow_bits: int, witness: Array
+        self, witness: Array, *, pow_bits: int
     ) -> tuple[DuplexTranscript, Array]:
         """Observe `witness`, squeeze one challenge, and report whether its low
         `pow_bits` canonical bits are zero -- the verifier-side proof-of-work
@@ -443,7 +432,7 @@ class DuplexTranscript:
                 f"witness must be a scalar {field_dtype} field element (the grind "
                 f"search's domain), got shape {witness.shape} dtype {witness.dtype}"
             )
-        return self.fs.check_witness(self, witness, pow_bits)
+        return self.fs.check_witness(self, witness, pow_bits=pow_bits)
 
     @partial(jit, static_argnames=("pow_bits", "chunk"))
     def _grind_search(self, pow_bits: int, chunk: int) -> Array:
@@ -483,9 +472,9 @@ class DuplexTranscript:
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
             witness = fnp.zeros((), field_dtype)
-            return self.check_witness(pow_bits, witness)[0], witness
+            return self.check_witness(witness, pow_bits=pow_bits)[0], witness
         witness = self._grind_search(pow_bits, chunk)
-        advanced, _ = self.check_witness(pow_bits, witness)
+        advanced, _ = self.check_witness(witness, pow_bits=pow_bits)
         return advanced, witness
 
 
@@ -744,7 +733,7 @@ def observe_and_sample_marked(
 
 @partial(jit, static_argnames=("pow_bits",), inline=True)
 def _check_witness_body(
-    t: DuplexTranscript, witness: Array, pow_bits: int
+    t: DuplexTranscript, witness: Array, *, pow_bits: int
 ) -> tuple[DuplexTranscript, Array]:
     advanced, sample = _sample_body(_observe_body(t, witness), 1)
     return advanced, _pow_satisfied(sample[0], pow_bits)
@@ -904,7 +893,7 @@ def _observe_and_sample_host(
 
 
 def _check_witness_host(
-    transcript: DuplexTranscript, witness: Array, pow_bits: int
+    transcript: DuplexTranscript, witness: Array, *, pow_bits: int
 ) -> tuple[DuplexTranscript, Array]:
     """`check_witness` on the host sponge — observe + one squeeze + the pow check,
     the host counterpart of `_check_witness_body`. Routing it through the backend
@@ -916,4 +905,3 @@ def _check_witness_host(
 
 if TYPE_CHECKING:
     _: type[Transcript] = DuplexTranscript
-    _grinding: type[GrindingTranscript] = DuplexTranscript

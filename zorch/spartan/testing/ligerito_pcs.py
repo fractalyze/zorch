@@ -33,7 +33,7 @@ from zorch.stage import (
     VerifierStage,
     VerifyResult,
 )
-from zorch.transcript import GrindingTranscript
+from zorch.transcript import Transcript
 
 _K = fnp.dtype(EF).itemsize // fnp.dtype(F).itemsize
 
@@ -69,8 +69,8 @@ class LigeritoSpartanProver:
         self,
         claim: OpeningClaim[Array],
         witness: OpeningWitness[LigeritoProverData],
-        transcript: GrindingTranscript,
-    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof], GrindingTranscript]:
+        transcript: Transcript,
+    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof], Transcript]:
         value, proof, transcript = self._inner._open(
             witness.prover_data, [embed(claim.points[0])], transcript
         )
@@ -92,8 +92,8 @@ class LigeritoSpartanVerifier:
         self,
         claim: OpeningClaim[Array],
         reduction_proof: OpeningProof[LigeritoProof],
-        transcript: GrindingTranscript,
-    ) -> VerifyResult[TrivialClaim, GrindingTranscript]:
+        transcript: Transcript,
+    ) -> VerifyResult[TrivialClaim, Transcript]:
         ok, transcript = self._inner._verify_opening(
             claim.commitment,
             [embed(claim.points[0])],
@@ -111,7 +111,7 @@ if TYPE_CHECKING:
             OpeningWitness[LigeritoProverData],
             TrivialClaim,
             OpeningProof[LigeritoProof],
-            GrindingTranscript,
+            Transcript,
         ]
     ] = LigeritoSpartanProver
     _v: type[
@@ -119,6 +119,6 @@ if TYPE_CHECKING:
             OpeningClaim[Array],
             TrivialClaim,
             OpeningProof[LigeritoProof],
-            GrindingTranscript,
+            Transcript,
         ]
     ] = LigeritoSpartanVerifier

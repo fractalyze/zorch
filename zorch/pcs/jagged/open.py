@@ -49,7 +49,7 @@ from zorch.commit.smcs import SingleMatrixCommitmentScheme
 from zorch.pcs.basefold.batching import batch_staggered, partial_lagrange
 from zorch.poly.multilinear import eval_mle, mle_fold
 from zorch.transcript import (
-    GrindingTranscript,
+    Transcript,
     TranscriptT,
     sample_challenge,
 )
@@ -187,11 +187,11 @@ def _open_prologue(
     blocks: list[Array],
     stack_point: Array,
     dense_eval: Array,
-    transcript: GrindingTranscript,
+    transcript: Transcript,
     *,
     rlc_bits: int | None,
     total_width: int | None,
-) -> tuple[list[Array], list[Array], Array, Array, GrindingTranscript]:
+) -> tuple[list[Array], list[Array], Array, Array, Transcript]:
     ef_dtype = dense_eval.dtype
     # [S, K] views; inside the jit XLA fuses the transposes into the consumers,
     # so no [S, K] copy materializes.
@@ -240,11 +240,11 @@ def _open_fold(
     mle: Array,
     claim: Array,
     stack_point: Array,
-    transcript: GrindingTranscript,
+    transcript: Transcript,
     *,
     num_queries: int,
     pow_bits: int,
-) -> tuple[Array, Array, Array, Array, Array, Array, list[Opening], GrindingTranscript]:
+) -> tuple[Array, Array, Array, Array, Array, Array, list[Opening], Transcript]:
     ef_dtype = claim.dtype
     bf_dtype = code.dtype
     ef_degree = efinfo(ef_dtype).degree
@@ -369,9 +369,9 @@ def stacked_basefold_open(
     *,
     num_queries: int,
     pow_bits: int,
-    transcript: GrindingTranscript,
+    transcript: Transcript,
     rlc_bits: int | None = None,
-) -> tuple[StackedOpenProof, GrindingTranscript]:
+) -> tuple[StackedOpenProof, Transcript]:
     """Open the stacked dense at ``z_final`` via one batched FRI over ``rounds``.
 
     ``transcript`` must be a real grinding transcript at the state SP1 enters the

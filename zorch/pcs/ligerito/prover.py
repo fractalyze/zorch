@@ -68,7 +68,7 @@ from zorch.sumcheck.prover import (
     ProductSummand,
     StandardRound,
 )
-from zorch.transcript import GrindingTranscriptT
+from zorch.transcript import TranscriptT
 from zorch.utils.bits import log2_strict_usize
 
 # A code factory: (message_len, log_inv_rate) -> the level's TensorCode. Keeping
@@ -137,9 +137,9 @@ class LigeritoProver(
         OpeningWitness[LigeritoProverData],
         TrivialClaim,
         OpeningProof[LigeritoProof],
-        GrindingTranscriptT,
+        TranscriptT,
     ],
-    Generic[GrindingTranscriptT],
+    Generic[TranscriptT],
 ):
     """Ligerito recursive PCS prover. `make_code(message_len, log_inv_rate)`
     builds each level's `TensorCode`; `config` fixes the fold schedule; `tree`
@@ -153,7 +153,7 @@ class LigeritoProver(
     make_code: MakeCode
     tree: MerkleTree
     config: LigeritoConfig
-    choreography: LigeritoChoreography[GrindingTranscriptT] = LigeritoChoreography()
+    choreography: LigeritoChoreography[TranscriptT] = LigeritoChoreography()
 
     def _code(self, level: int, message_len: int) -> TensorCode:
         return self.make_code(message_len, self.config.log_inv_rates[level])
@@ -184,8 +184,8 @@ class LigeritoProver(
         self,
         claim: OpeningClaim[LigeritoCommitment],
         witness: OpeningWitness[LigeritoProverData],
-        transcript: GrindingTranscriptT,
-    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof], GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> ProveResult[TrivialClaim, OpeningProof[LigeritoProof], TranscriptT]:
         """Open the committed polynomials at the claim's points.
 
         Terminal: an opening closes its claim rather than reducing it."""
@@ -198,8 +198,8 @@ class LigeritoProver(
         self,
         prover_data: LigeritoProverData,
         points: Sequence[Array],
-        transcript: GrindingTranscriptT,
-    ) -> tuple[Array, LigeritoProof, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[Array, LigeritoProof, TranscriptT]:
         """Open the committed multilinear at `z`, returning `(value, proof,
         transcript)` with `value = f(z)`."""
         if len(points) != 1:
@@ -221,8 +221,8 @@ class LigeritoProver(
         prover_data: LigeritoProverData,
         basis: Array,
         value: Array,
-        transcript: GrindingTranscriptT,
-    ) -> tuple[LigeritoProof, GrindingTranscriptT]:
+        transcript: TranscriptT,
+    ) -> tuple[LigeritoProof, TranscriptT]:
         """Open the batched claim `<f, basis> = value` for a RAW hypercube basis
         instead of a point — the entry of outer protocols whose eval-claims
         arrive as an already-batched basis vector (flock's
@@ -237,13 +237,13 @@ class LigeritoProver(
 
 
 def _open(
-    prover: LigeritoProver[GrindingTranscriptT],
+    prover: LigeritoProver[TranscriptT],
     pd: LigeritoProverData,
     z: Array | None,
     B: Array,
     value: Array,
-    transcript: GrindingTranscriptT,
-) -> tuple[LigeritoProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[LigeritoProof, TranscriptT]:
     # Static-config recursion → the whole open compiles to ONE device program;
     # eager, the tiny per-round ops dispatch from Python and starve the GPU.
     return _open_jit(prover, pd.f, pd.initial, z, B, value, transcript)
@@ -251,14 +251,14 @@ def _open(
 
 @partial(frx.jit, static_argnums=(0,))
 def _open_jit(
-    prover: LigeritoProver[GrindingTranscriptT],
+    prover: LigeritoProver[TranscriptT],
     W0: Array,
     initial: CommittedMatrix,
     z: Array | None,
     B: Array,
     value: Array,
-    transcript: GrindingTranscriptT,
-) -> tuple[LigeritoProof, GrindingTranscriptT]:
+    transcript: TranscriptT,
+) -> tuple[LigeritoProof, TranscriptT]:
     cfg = prover.config
     chor = prover.choreography
     dtype = B.dtype
@@ -292,14 +292,12 @@ def _open_jit(
     # never both.
     eager = chor.eager_messages
 
-    def emit(
-        t: GrindingTranscriptT, witness: Array, basis: Array
-    ) -> GrindingTranscriptT:
+    def emit(t: TranscriptT, witness: Array, basis: Array) -> TranscriptT:
         msg = round_._round_poly(fnp.stack([witness, basis]))
         sumcheck_messages.append(msg)
         return chor.observe_message(t, msg)
 
-    def grind(t: GrindingTranscriptT, bits: int | None) -> GrindingTranscriptT:
+    def grind(t: TranscriptT, bits: int | None) -> TranscriptT:
         if bits is None:
             return t
         t, witness = chor.grind(t, bits)
