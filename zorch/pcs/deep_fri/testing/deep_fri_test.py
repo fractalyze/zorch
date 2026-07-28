@@ -41,6 +41,23 @@ class DeepFoldableCodeTest(absltest.TestCase):
         self.assertIsInstance(_params().code, DeepFoldableCode)
 
 
+class DeepFriParamsTest(absltest.TestCase):
+    def test_degenerate_schedules_rejected(self) -> None:
+        # Zero rounds satisfies the verifier's structural guard then crashes
+        # its layer-0 rebuild; zero queries verifies anything; over-folding
+        # runs past the code's depth. All three fail at construction.
+        good = _params()
+        for rounds, queries in ((0, 3), (4, 3), (2, 0)):
+            with self.assertRaises(ValueError):
+                dataclasses.replace(good, num_rounds=rounds, num_queries=queries)
+
+    def test_full_depth_schedule_accepted(self) -> None:
+        # block_len 8 folds at most 3 times (to one element); the boundary is
+        # a valid schedule, not a degenerate one.
+        params = dataclasses.replace(_params(), num_rounds=3)
+        self.assertEqual(params.num_rounds, 3)
+
+
 class DeepFriCommitCacheTest(absltest.TestCase):
     def test_commit_zone_ignores_open_only_params(self) -> None:
         # commit reads only code/tree, so params differing in the open-side

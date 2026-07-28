@@ -42,12 +42,30 @@ class DeepFoldableCode(FoldableCode, Protocol):
 
 @dataclass(frozen=True)
 class DeepFriParams:
-    """Public DEEP-FRI configuration, identical on both sides."""
+    """Public DEEP-FRI configuration, identical on both sides.
+
+    The two degenerate schedules are rejected at construction rather than
+    downstream: zero rounds satisfies the verifier's structural length guard
+    and then crashes its layer-0 rebuild, and zero queries makes every Merkle,
+    composition, and fold check vacuously pass — a verifier that accepts
+    anything. Everything else the schedule needs is checked where it is used.
+    """
 
     code: DeepFoldableCode  # LDE; the fold seam + the DEEP quotients' domain
     tree: MerkleTree  # Merkle commitment over codeword leaves
     num_rounds: int  # fold rounds; final codeword has block_len >> num_rounds entries
     num_queries: int  # query repetitions (soundness amplification)
+
+    def __post_init__(self) -> None:
+        if self.num_queries < 1:
+            raise ValueError(f"num_queries must be positive, got {self.num_queries}")
+        max_rounds = self.code.block_len.bit_length() - 1
+        if not 1 <= self.num_rounds <= max_rounds:
+            raise ValueError(
+                f"num_rounds must be in [1, {max_rounds}] (the code folds "
+                f"block_len {self.code.block_len} at most that far), got "
+                f"{self.num_rounds}"
+            )
 
 
 @partial(
