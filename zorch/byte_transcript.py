@@ -85,15 +85,8 @@ class ByteTranscript(Protocol):
     def observe_slice(self, payload: bytes, count: int) -> Self: ...
     def sample_scalar(self, nbytes: int) -> tuple[Self, bytes]: ...
     def sample_slice(self, count: int, width: int) -> tuple[Self, bytes]: ...
-
-
-class ByteGrindingTranscript(ByteTranscript, Protocol):
-    """A `ByteTranscript` with a u64-nonce proof-of-work grind. Kept off the
-    base seam because the byte/nonce predicate is not the field-element
-    canonical-bit one — the two PoWs must not be cross-used."""
-
     def grind_pow(self, bits: int) -> tuple[Self, int]: ...
-    def verify_pow(self, nonce: int, bits: int) -> tuple[Self, bool]: ...
+    def verify_pow(self, nonce: int, *, bits: int) -> tuple[Self, bool]: ...
 
 
 @dataclass(frozen=True)
@@ -205,7 +198,7 @@ class ByteHashTranscript:
         nonce = 0 if bits == 0 else self._grind(self._digest(), bits)
         return self.observe_bytes(_len8(nonce)), nonce
 
-    def verify_pow(self, nonce: int, bits: int) -> tuple[ByteHashTranscript, bool]:
+    def verify_pow(self, nonce: int, *, bits: int) -> tuple[ByteHashTranscript, bool]:
         """Verifier mirror: check the PoW (bits==0 requires the canonical nonce 0),
         then absorb the nonce REGARDLESS so the transcript stays in lockstep."""
         _validate_pow_bits(bits, self.byte_hash.digest_size)
@@ -222,4 +215,3 @@ class ByteHashTranscript:
 if TYPE_CHECKING:
     # Seam-conformance pins (docs/reference/conventions.md).
     _bt: type[ByteTranscript] = ByteHashTranscript
-    _bg: type[ByteGrindingTranscript] = ByteHashTranscript

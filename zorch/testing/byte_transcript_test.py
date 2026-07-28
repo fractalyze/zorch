@@ -139,7 +139,7 @@ class ByteTranscriptTest(absltest.TestCase):
             p = _new(b"pow").observe_bytes(b"root")
             p, nonce = p.grind_pow(bits)
             v = _new(b"pow").observe_bytes(b"root")
-            v, ok = v.verify_pow(nonce, bits)
+            v, ok = v.verify_pow(nonce, bits=bits)
             self.assertTrue(ok, f"verify failed at bits={bits}")
             # Subsequent challenges agree on both sides.
             self.assertEqual(p.sample_scalar(16)[1], v.sample_scalar(16)[1])
@@ -148,7 +148,7 @@ class ByteTranscriptTest(absltest.TestCase):
         p = _new(b"pow").observe_bytes(b"root")
         _, nonce = p.grind_pow(10)
         v = _new(b"pow").observe_bytes(b"root")
-        _, ok = v.verify_pow(nonce + 1, 10)
+        _, ok = v.verify_pow(nonce + 1, bits=10)
         self.assertFalse(ok)
 
     def test_pow_zero_bits_requires_canonical_nonce(self) -> None:
@@ -156,9 +156,9 @@ class ByteTranscriptTest(absltest.TestCase):
             return _new(b"pow").observe_bytes(b"root")
 
         self.assertEqual(mk().grind_pow(0)[1], 0)
-        self.assertTrue(mk().verify_pow(0, 0)[1])
+        self.assertTrue(mk().verify_pow(0, bits=0)[1])
         for bad in (1, 42, 2**64 - 1):
-            self.assertFalse(mk().verify_pow(bad, 0)[1])
+            self.assertFalse(mk().verify_pow(bad, bits=0)[1])
 
     def test_pow_bits_out_of_range_rejected(self) -> None:
         # A 32-byte digest carries at most 256 leading-zero bits; a wider target
@@ -167,7 +167,7 @@ class ByteTranscriptTest(absltest.TestCase):
             with self.assertRaises(ValueError):
                 _new(b"pow").grind_pow(bits)
             with self.assertRaises(ValueError):
-                _new(b"pow").verify_pow(0, bits)
+                _new(b"pow").verify_pow(0, bits=bits)
 
     def test_negative_sample_sizes_rejected(self) -> None:
         with self.assertRaises(ValueError):
