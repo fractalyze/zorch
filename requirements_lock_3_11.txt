@@ -10,19 +10,19 @@ absl-py==2.4.0 \
     --hash=sha256:88476fd881ca8aab94ffa78b7b6c632a782ab3ba1cd19c9bd423abc4fb4cd28d \
     --hash=sha256:8c6af82722b35cf71e0f4d1d47dcaebfff286e27110a99fc359349b247dfb5d4
     # via -r requirements.in
-frx==0.10.0.dev20260725093147 \
-    --hash=sha256:636d790960db652bce67978c511f06fab6110662b40e6501243cc85fecd2dddd
+frx==0.10.1.dev20260728064432 \
+    --hash=sha256:a2ded9428b2e88baab7f3e5807a3cfcaea344f794b7164511e74b9548442c40e
     # via -r requirements.in
-frx-cuda12-pjrt==0.10.0.dev20260725093147 \
-    --hash=sha256:ef941e6734852c6886570e9b24b7b12c1017a91cb605603c09f98e6c551ee217
+frx-cuda12-pjrt==0.10.1.dev20260728064432 \
+    --hash=sha256:f197a85194823ad5669a7aec540f2d183b410fa180a2d8db4b287d65383567dd
     # via
     #   -r requirements.in
     #   frx-cuda12-plugin
-frx-cuda12-plugin==0.10.0.dev20260725093147 \
-    --hash=sha256:14ba8d599dc2645385b9fd59c519f36fd1955da5a9eef6c19f09065214d8844f
+frx-cuda12-plugin==0.10.1.dev20260728064432 \
+    --hash=sha256:0408a9ec8cd9eaaf0f230e2a9d6dc60cf10906fae554ab29d5277fbd147870bf
     # via -r requirements.in
-frxlib==0.10.0.dev20260725093147 \
-    --hash=sha256:edd89d1cef9a66f00b93be1583fae210533fb642118bbc622143b6689f47c2a5
+frxlib==0.10.1.dev20260728064432 \
+    --hash=sha256:dd3bbf6847ea450f4462784d5f1b24f7971e222637fff3103e41d3401e848bd0
     # via
     #   -r requirements.in
     #   frx
