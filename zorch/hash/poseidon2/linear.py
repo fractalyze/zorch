@@ -1,34 +1,22 @@
-"""Normal-form linear layers — explicit field add/mul, no dot/reduce/gather.
+"""Normal-form poseidon2 linear layers — explicit field add/mul, no dot/reduce/gather.
 
-`matrix @ state` and the internal layer `(off_diag*J + Diag(d)) @ state` written as a
-fixed, unrolled sum of column-scaled lanes. This keeps a round body straight-line
-element-wise so it fuses to one kernel: `fnp.dot`/`fnp.sum` lower to a reduction
-(the `kInput` fusion boundary) and dynamic indexing to `gather`, either of which
-splits the kernel. Static lane indices lower to `slice`, not `gather`.
+The internal layer `(off_diag*J + Diag(d)) @ state` and the external M4 layer are
+written as a fixed, unrolled sum of column-scaled lanes. This keeps a round body
+straight-line element-wise so it fuses to one kernel: `fnp.dot`/`fnp.sum` lower to
+a reduction (the `kInput` fusion boundary) and dynamic indexing to `gather`,
+either of which splits the kernel. Static lane indices lower to `slice`, not
+`gather`. The summation primitive `unrolled_sum` and the dense field-array layer
+`apply_matrix` are shared with poseidon in `zorch.hash.linear`.
 """
 
 from __future__ import annotations
 
-import functools
-import operator
-
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.hash.linear import apply_matrix, unrolled_sum
 
-def _unrolled_sum(terms: list[Array]) -> Array:
-    return functools.reduce(operator.add, terms)
-
-
-def apply_matrix(matrix: Array, state: Array) -> Array:
-    """`matrix @ state`, as the sum of each column scaled by its lane."""
-    if state.ndim != 1 or matrix.shape != (state.shape[0], state.shape[0]):
-        raise ValueError(
-            f"need a square matrix matching 1-D state, got matrix {matrix.shape}, "
-            f"state {state.shape}"
-        )
-    w = state.shape[0]
-    return _unrolled_sum([matrix[:, j] * state[j] for j in range(w)])
+__all__ = ["apply_matrix", "apply_external_m4", "apply_internal"]
 
 
 def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
@@ -50,7 +38,7 @@ def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
         )
     return fnp.stack(
         [
-            _unrolled_sum(
+            unrolled_sum(
                 [
                     m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) * state[j]
                     for j in range(w)
@@ -77,7 +65,7 @@ def apply_internal(
             f"internal_diag {internal_diag.shape}, state {state.shape}"
         )
     w = state.shape[0]
-    total = _unrolled_sum([state[j] for j in range(w)])
+    total = unrolled_sum([state[j] for j in range(w)])
     if off_diag is not None:
         total = off_diag * total
     return total + internal_diag * state

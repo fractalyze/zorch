@@ -8,10 +8,12 @@ py_library(
         "linear.py",
         "params.py",
         "poseidon.py",
+        "sparse.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:fusion",
+        "//zorch/hash:linear",
         "//zorch/hash:permutation",
         "//zorch/hash:sponge",
         requirement("frx"),
