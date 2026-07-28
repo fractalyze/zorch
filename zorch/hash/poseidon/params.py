@@ -290,7 +290,7 @@ class SparsePoseidonParams:
 
     @property
     def transition_matrix_rows(self) -> tuple[tuple[int, ...], ...]:
-        """The transition matrix `P` as canonical ints (the transition round's layer)."""
+        """The transition matrix `P` as canonical ints (transition round's layer)."""
         return _canon_int_rows(self.transition_matrix)
 
     @property
@@ -300,5 +300,5 @@ class SparsePoseidonParams:
 
     @property
     def partial_col_rows(self) -> tuple[tuple[int, ...], ...]:
-        """Per partial round, the lane-t update column as canonical ints (`(NP, W-1)`)."""
+        """Per partial round, lane-t update column as canonical ints (`(NP, W-1)`)."""
         return _canon_int_rows(self.partial_col)

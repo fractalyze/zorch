@@ -25,12 +25,12 @@ There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirrori
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
-That path is gated behind `_DEDICATED_EMITTER_AVAILABLE`, kept `False` until the
-plugin ships the emitter — emitting the marker before the recognizer exists fails
-every compile with `custom op 'stablehlo.composite' is unknown`. Until then the
-permutation stays on the generic marker, which already fuses this body to one
-kernel. The dedicated path's attributes and reference body are exercised directly
-by `testing/sparse_test.py`, so they cannot rot while dormant.
+That path is gated behind `_DEDICATED_EMITTER_AVAILABLE`: when the pinned plugin
+ships the emitter the permutation emits the dedicated marker, otherwise it falls
+back to the generic marker (which fuses this body to one kernel just the same),
+because emitting a marker the plugin cannot recognize fails every compile with
+`custom op 'stablehlo.composite' is unknown`. Either way the dedicated path's
+attributes and reference body are exercised directly by `testing/sparse_test.py`.
 """
 
 from __future__ import annotations
@@ -62,12 +62,13 @@ POSEIDON_SPARSE_MARKER = "zorch.sparse_poseidon"
 # a future contract change can be staged without renaming the marker.
 POSEIDON_SPARSE_MARKER_VERSION = 1
 
-# Whether the dedicated `SparsePoseidonFusion` emitter is published in the
-# Fractalyze XLA plugin. Flip to True in lockstep with the wheel bump that ships
-# it (fractalyze/zorch#527) — until then, emitting the `zorch.sparse_poseidon`
-# marker would fail every compile with `custom op 'stablehlo.composite' is
-# unknown`, so the permutation stays on the generic `zorch.fused_region` marker.
-_DEDICATED_EMITTER_AVAILABLE = False
+# Whether the pinned Fractalyze XLA plugin ships the dedicated
+# `SparsePoseidonFusion` emitter. When True, `permute` emits the dedicated
+# `zorch.sparse_poseidon` marker; when False it falls back to the generic
+# `zorch.fused_region` marker (which fuses the same body to one kernel), because
+# emitting a marker the plugin cannot recognize fails every compile with
+# `custom op 'stablehlo.composite' is unknown`.
+_DEDICATED_EMITTER_AVAILABLE = True
 
 
 class SparsePoseidon:
@@ -100,8 +101,8 @@ class SparsePoseidon:
             self._partial_col_rows = params.partial_col_rows
 
     def _select_fused_region_name(self) -> str:
-        """Route to the dedicated `SparsePoseidonFusion` once the plugin ships it;
-        until then keep the generic marker so compiles don't fail on an unknown
+        """Route to the dedicated `SparsePoseidonFusion` when the pinned plugin
+        ships it, else the generic marker so compiles don't fail on an unknown
         composite. Gated on `_DEDICATED_EMITTER_AVAILABLE`, not on a data property
         (unlike Poseidon2's M4 check) — readiness is the emitter's existence, not
         the params."""

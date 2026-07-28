@@ -145,8 +145,8 @@ class SparsePoseidonPermuteShapeTest(absltest.TestCase):
         self.assertIsInstance(perm, Permutation)
         self.assertEqual(perm.width, _WIDTH)
         self.assertEqual(perm.dtype, F)
-        # No sparse-structure emitter: stays on the generic-marker per-block path.
-        self.assertFalse(perm.has_dedicated_fusion)
+        # The shipped emitter routes the permute to the dedicated sparse marker.
+        self.assertTrue(perm.has_dedicated_fusion)
 
     def test_permute_shape_and_vmap(self) -> None:
         perm = SparsePoseidon(_params())
@@ -204,12 +204,12 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
-    def test_permute_emits_generic_fused_region(self) -> None:
-        # Default (emitter not shipped, `_DEDICATED_EMITTER_AVAILABLE=False`): the
-        # permute marks its region with the generic "zorch.fused_region" name so no
-        # compile fails on an unknown composite; the normal-form body still fuses.
-        # Flips to the dedicated marker below once the emitter is available.
-        perm = SparsePoseidon(_params())
+    def test_permute_falls_back_to_generic_when_emitter_absent(self) -> None:
+        # When the plugin lacks the emitter (`_DEDICATED_EMITTER_AVAILABLE=False`)
+        # the permute marks its region with the generic "zorch.fused_region" name so
+        # no compile fails on an unknown composite; the normal-form body still fuses.
+        # The dedicated (default) path is covered by SparsePoseidonDedicatedMarkerTest.
+        perm = _generic_perm()
         self.assertFalse(perm.has_dedicated_fusion)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
@@ -219,19 +219,20 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
 
 
-def _dedicated_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
-    """A SparsePoseidon built with the dedicated emitter forced available, so its
-    permute routes to the `zorch.sparse_poseidon` marker. `_DEDICATED_EMITTER_-
-    AVAILABLE` is read in `__init__`, so the patch must wrap construction; the
-    instance then carries the dedicated name/attrs and lowers the same afterwards."""
-    with mock.patch.object(sparse_mod, "_DEDICATED_EMITTER_AVAILABLE", True):
+def _generic_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
+    """A SparsePoseidon built with the dedicated emitter forced unavailable, so its
+    permute falls back to the generic `zorch.fused_region` marker. `_DEDICATED_-
+    EMITTER_AVAILABLE` is read in `__init__`, so the patch must wrap construction;
+    the instance then carries the generic name/attrs and lowers the same afterwards."""
+    with mock.patch.object(sparse_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
         return SparsePoseidon(params if params is not None else _params())
 
 
 class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
-    """The dormant dedicated path: verified by lowering (the emitter is not
-    published, so these must not compile/run the marker) and by exercising the
-    reference body directly (eager, no emitter needed)."""
+    """The dedicated path — the default now that the plugin ships the emitter.
+    Verified by lowering (marker name, attributes, ABI operand count) and by
+    exercising the reference decomposition body directly. The end-to-end
+    compile+run byte-match lives in `SparsePoseidonReferenceByteMatchTest`."""
 
     def test_permute_emits_dedicated_composite(self) -> None:
         # When the emitter is available the permute marks its region
@@ -239,7 +240,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # ABI operands are exactly [state, initial_arc, full_rc_pre, transition_rc,
         # partial_rc, full_rc_post] = 6; a closed-over matrix would be lifted to a
         # leading operand (frx.lax.composite prepends consts) and break that ABI.
-        perm = _dedicated_perm()
+        perm = SparsePoseidon(_params())
         self.assertTrue(perm.has_dedicated_fusion)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
@@ -256,7 +257,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # DenseElementsAttrs (`dense<[..]> : tensor<Nxi64>`) — the form the XLA
         # recognizer reads via GetCompositeAttrIntArray, NOT a plain ArrayAttr
         # (`mds = [..]`) a Python list would produce. Matrices flatten row-major.
-        perm = _dedicated_perm()
+        perm = SparsePoseidon(_params())
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
         for shape_attr in (
             f"width = {_WIDTH} : i64",
@@ -284,9 +285,9 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # The composite's decomposition (`_permute_from_operands`, int-literal
         # matrices + operand constants) is the semantics the emitter must match, so
         # it must byte-match the same pure-Python reference the generic body does.
-        # Called directly (eager) — the marker itself can't be compiled until the
-        # emitter ships.
-        perm = _dedicated_perm()
+        # Exercised directly (eager) so this pins the reference body independently of
+        # the compiled marker (whose end-to-end match lives in the byte-match test).
+        perm = SparsePoseidon(_params())
         rng = np.random.default_rng(0)
         for _ in range(8):
             canon = rng.integers(0, _P, size=_WIDTH, dtype=np.int64)
@@ -301,7 +302,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # operands, a callable body, and attrs carrying the permutation
         # discriminator plus the four matrices for a region wrapper (e.g. a Merkle
         # commit) to route the whole region through SparsePoseidonFusion.
-        perm = _dedicated_perm()
+        perm = SparsePoseidon(_params())
         operands, body, attrs = perm.fused_region_spec(fnp.arange(_WIDTH, dtype=F))
         self.assertLen(operands, 6)
         self.assertTrue(callable(body))
