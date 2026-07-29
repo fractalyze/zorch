@@ -7,11 +7,12 @@ from absl.testing import absltest
 
 from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eval_eq, expand_eq_to_hypercube
-from zorch.sumcheck.domain import product_round_poly
+from zorch.sumcheck.domain import product_round_poly, summand_evals, uhat_domain
 from zorch.sumcheck.eq.eq_poly import (
     EqPolyRound,
     _split_slope,
     compute_eq_evaluations,
+    compute_eq_prefixes,
     prove_eq_poly,
 )
 from zorch.sumcheck.prover import ProductSummand
@@ -109,6 +110,79 @@ class EqPolyTest(absltest.TestCase):
         claim = running.value
         expected = eval_eq(w, running.point) * fnp.prod(state[0][:, 0])
         self.assertTrue(bool(claim == expected))
+
+
+class EqPolyLsbBindTest(absltest.TestCase):
+    """`msb=False`: the same sumcheck walked from the low variable up.
+
+    The dense engines bind MSB-first, but a prover matching an external
+    verifier does not get to choose — a16z/jolt binds its cycle rounds
+    low-to-high — so the bind order is a knob rather than a convention.
+    """
+
+    def test_prefix_eq_tables(self) -> None:
+        # w = [0, 1]: eq(w[:1], ·) = [1, 0]; eq([0, 1], ·) = [0, 1, 0, 0].
+        w = fnp.array([0, 1], dtype=KB)
+        tables = compute_eq_prefixes(w)
+        self.assertTrue(bool(fnp.array_equal(tables[0], fnp.array([1, 0], dtype=KB))))
+        self.assertTrue(
+            bool(fnp.array_equal(tables[1], fnp.array([0, 1, 0, 0], dtype=KB)))
+        )
+        # Both constructions end at the same full table — they differ only in
+        # which partial tables they leave behind on the way there.
+        self.assertTrue(
+            bool(fnp.array_equal(tables[-1], compute_eq_evaluations(w)[-1]))
+        )
+
+    def test_messages_match_lsb_product_sumcheck(self) -> None:
+        # The MSB anchor's dual: messages equal a plain product sumcheck over
+        # [P_1, …, P_d, eq(w, ·)] when both bind the low variable.
+        d, l = 3, 4
+        P = fnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
+        w = fnp.array([1, 0, 1, 0], dtype=KB)
+        eq_w = compute_eq_prefixes(w)[-1]
+
+        rnd = EqPolyRound(ProductSummand(degree=d), w, challenges=_CH, msb=False)
+        state = (P, fnp.ones(1, dtype=KB))
+        ref = fnp.concatenate([P, eq_w[None, :]], axis=0)
+        ref_combine = ProductSummand(degree=d + 1)._combine
+
+        for challenge in (2, 3, 5, 7):
+            r = fnp.array(challenge, dtype=KB)
+            msg, cache = rnd._round_poly(state)
+            expected = summand_evals(
+                ref, ref_combine, uhat_domain(d + 1, KB), msb=False
+            )
+            self.assertTrue(bool(fnp.array_equal(msg, expected[:-1])))
+            state = rnd._fold(cache, state[1], r)
+            ref_p0, ref_diff = _split_slope(ref, msb=False)
+            ref = ref_diff * r + ref_p0
+
+    def test_coeff_round_verifies_with_reversed_point(self) -> None:
+        # Full round trip, and the reason the bind order is worth a flag: round
+        # j binds w[l-1-j], so the bound point is the challenge sequence
+        # reversed. Pairing them in order instead would still verify every
+        # round and land on the wrong evaluation point.
+        d, l = 2, 4
+        P = fnp.arange(1, d * (1 << l) + 1, dtype=KB).reshape(d, 1 << l)
+        w = fnp.array([1, 0, 1, 0], dtype=KB)
+        claim = fnp.sum(
+            expand_eq_to_hypercube(w, fnp.ones((), KB)) * fnp.prod(P, axis=0)
+        )
+
+        rnd = EqPolyRound(ProductSummand(degree=d), w, challenges=_CH, msb=False)
+        state = (P, fnp.ones(1, dtype=KB))
+        verifier = CoeffsSumcheckRound(degree=d + 1, challenges=_CH)
+        transcript: Transcript = cheap_transcript(KB)
+        running = RunningClaim(claim, fnp.zeros((l,), claim.dtype), fnp.int32(0))
+        for i in range(l):
+            coeffs, cache = rnd._round_coeffs(state)
+            self.assertEqual(coeffs.shape, (d + 2,))
+            running, transcript, ok = verifier(running, transcript, coeffs)
+            self.assertTrue(bool(ok))
+            state = rnd._fold(cache, state[1], running.point[i])
+        expected = eval_eq(w, running.point[::-1]) * fnp.prod(state[0][:, 0])
+        self.assertTrue(bool(running.value == expected))
 
 
 if __name__ == "__main__":

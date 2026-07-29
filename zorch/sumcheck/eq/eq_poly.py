@@ -26,7 +26,12 @@ from zorch.challenge import ChallengePolicy
 from zorch.poly.eq import eq_factor, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound, RunningClaim
-from zorch.sumcheck.domain import EvalDomain, split_halves, uhat_domain
+from zorch.sumcheck.domain import (
+    EvalDomain,
+    split_halves,
+    split_pairs,
+    uhat_domain,
+)
 from zorch.sumcheck.prover import FoldingClaim, ProductSummand, SumcheckSummand
 from zorch.sumcheck.reduce import reduce_domain
 from zorch.transcript import Transcript
@@ -50,10 +55,26 @@ def compute_eq_evaluations(w: Array) -> list[Array]:
     return v_list
 
 
-def _split_slope(p_stacked: Array) -> tuple[Array, Array]:
+def compute_eq_prefixes(w: Array) -> list[Array]:
+    """Prefix eq tables [eq(w[:1], ·), …, eq(w, ·)], entry i over {0,1}ⁱ⁺¹.
+
+    Scans w forwards, appending each coordinate as the LSB, so `w[0]` stays the
+    MSB of every table. The dual of compute_eq_evaluations: a round that binds
+    the LOW variable consumes w from the back, so what it has left is a prefix."""
+    v = fnp.ones(1, dtype=w.dtype)
+    v_list = []
+    for i in range(w.shape[0]):
+        v = expand_hypercube_step(v, w[i], msb=False)
+        v_list.append(v)
+    return v_list
+
+
+def _split_slope(p_stacked: Array, *, msb: bool = True) -> tuple[Array, Array]:
     """Halve each factor on the current variable into (P0, slope P1−P0), each
-    (d, N/2) — the MSB `split_halves` in the (P0, slope) form the eq round folds by."""
-    p0, p1 = split_halves(p_stacked)
+    (d, N/2) — the split in the (P0, slope) form the eq round folds by. `msb`
+    takes contiguous halves (`split_halves`), `msb=False` stride-2 pairs
+    (`split_pairs`), matching domain.fold's two bind orders."""
+    p0, p1 = split_halves(p_stacked) if msb else split_pairs(p_stacked)
     return p0, p1 - p0
 
 
@@ -111,23 +132,48 @@ class EqPolyRound(ProverRound):
         domain: EvalDomain | None = None,
         *,
         challenges: ChallengePolicy,
+        msb: bool = True,
     ) -> None:
         self.summand = summand
         self.w = w
         self.domain = domain or uhat_domain(summand.degree, w.dtype)
         self.challenges = challenges
+        self.msb = msb
         self.l = int(w.shape[0])
         self.l_half = self.l // 2
-        self.eq_w_l_list = compute_eq_evaluations(w[: self.l_half])
-        self.eq_w_r_list = compute_eq_evaluations(w[self.l_half :])
+        tables = compute_eq_evaluations if msb else compute_eq_prefixes
+        self.eq_w_l_list = tables(w[: self.l_half])
+        self.eq_w_r_list = tables(w[self.l_half :])
+
+    def _w_index(self, i: int) -> int:
+        """The coordinate round `i` binds. Binding the high variable walks w
+        forwards from w[0]; binding the low variable walks it backwards."""
+        return i - 1 if self.msb else self.l - i
 
     def _eq_tables(self, p_stacked: Array) -> tuple[int, Array | None, Array]:
-        """Round index i and the eq weights for it: both halves early (i < l/2),
-        the right half alone late."""
+        """Round index i and the eq weights for it: both halves early, one alone
+        late.
+
+        The unbound cube stays MSB-indexed either way, so `eq_w_l` always weights
+        its high part and `eq_w_r` its low part. What the bind order changes is
+        *which* coordinates survive — binding high leaves a suffix of w, binding
+        low leaves a prefix — so the two directions read their tables from
+        opposite ends.
+        """
         i = self.l - log2_strict_usize(p_stacked.shape[1]) + 1
-        if i < self.l_half:
-            return i, self.eq_w_l_list[(self.l_half - i) - 1], self.eq_w_r_list[-1]
-        return i, None, self.eq_w_r_list[(self.l - i) - 1]
+        rest = self.l - i  # coordinates this round leaves unbound
+        if rest == 0:
+            # The final round weights nothing. Worth stating rather than falling
+            # through to a negative index: Σₓ eq(w, x) = 1, so summing against a
+            # whole table would also scale by one, but only by accident.
+            return i, None, fnp.ones(1, dtype=self.w.dtype)
+        if self.msb:
+            if i < self.l_half:
+                return i, self.eq_w_l_list[(self.l_half - i) - 1], self.eq_w_r_list[-1]
+            return i, None, self.eq_w_r_list[rest - 1]
+        if rest > self.l_half:
+            return i, self.eq_w_l_list[-1], self.eq_w_r_list[(rest - self.l_half) - 1]
+        return i, None, self.eq_w_l_list[rest - 1]
 
     def _round_poly(
         self, state: EqPolyState
@@ -137,15 +183,16 @@ class EqPolyRound(ProverRound):
         coefficient form is _round_coeffs)."""
         p_stacked, eq_w_prev = state
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
-        p0s, diffs = _split_slope(p_stacked)
+        p0s, diffs = _split_slope(p_stacked, msb=self.msb)
         t_evals = _weighted_summand(
             p0s, diffs, eq_w_l, eq_w_r, self.domain, self.summand._combine
         )
-        l_evals = expand_hypercube_step(eq_w_prev, self.w[i - 1])
+        w_i = self.w[self._w_index(i)]
+        l_evals = expand_hypercube_step(eq_w_prev, w_i)
         return sumcheck_poly_from_t(t_evals, l_evals, self.domain), (
             p0s,
             diffs,
-            self.w[i - 1],
+            w_i,
         )
 
     def _round_coeffs(
@@ -158,8 +205,8 @@ class EqPolyRound(ProverRound):
         p_stacked, eq_w_prev = state
         degree = self.summand.degree
         i, eq_w_l, eq_w_r = self._eq_tables(p_stacked)
-        p0s, diffs = _split_slope(p_stacked)
-        w_i = self.w[i - 1]
+        p0s, diffs = _split_slope(p_stacked, msb=self.msb)
+        w_i = self.w[self._w_index(i)]
         full = EvalDomain(naturals(degree + 1, p_stacked.dtype), inf_index=0)
         t = _weighted_summand(p0s, diffs, eq_w_l, eq_w_r, full, self.summand._combine)
         l_evals = expand_hypercube_step(eq_w_prev, w_i)  # lᵢ(0), lᵢ(1)
@@ -192,6 +239,7 @@ def prove_eq_poly(
     domain: EvalDomain | None = None,
     *,
     challenges: ChallengePolicy,
+    msb: bool = True,
 ) -> tuple[Array, Transcript, list[Array]]:
     """Fold all l variables; return the final factors (d, 1), the advanced
     transcript, and the per-round messages (each sᵢ over Û_d).
@@ -211,6 +259,7 @@ def prove_eq_poly(
         w,
         domain,
         challenges=challenges,
+        msb=msb,
     )
     state: EqPolyState = (p_initial, fnp.ones(1, dtype=p_initial.dtype))
     carry, transcript, msgs = fold_rounds(
