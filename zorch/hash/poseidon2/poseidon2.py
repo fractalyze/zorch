@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 import frx
 import frx.numpy as fnp
 import numpy as np
-from frx import Array
+from frx import Array, lax
 
 from zorch.fusion import FUSED_REGION_MARKER, fused_region
 from zorch.hash.poseidon2.linear import (
@@ -43,6 +43,17 @@ POSEIDON2_MARKER = "zorch.poseidon2"
 # a future contract change can be staged without renaming the marker. v2: J scale
 # is the `internal_j_scale` attribute, not an operand (#440).
 POSEIDON2_MARKER_VERSION = 2
+
+# A whole duplex-absorb chain (sequential block permutes with a live-count
+# mask) as one marked region, so a vendor with a chain emitter runs it as a
+# single kernel — the per-permute thunk/launch machinery of a scanned chain is
+# the dominant cost of a long host absorb, not the permute math. A vendor
+# without the emitter leaves the composite unrecognized and inlines its
+# decomposition: the same masked `lax.scan` of `zorch.poseidon2` permutes that
+# an unmarked absorb emits, so behavior and kernel schedule degrade to exactly
+# the status quo.
+ABSORB_CHAIN_MARKER = "zorch.absorb_chain"
+ABSORB_CHAIN_MARKER_VERSION = 1
 
 
 class Poseidon2:
@@ -121,6 +132,19 @@ class Poseidon2:
             "internal_j_scale": _internal_j_scale_attr(self),
         }
         return _abi_operands(self, leading), partial(_permutation_body, self), attrs
+
+    def absorb_chain(self, sponge: Array, blocks: Array, active_blocks: Array) -> Array:
+        """Absorb `blocks` (`(num_blocks, rate)`) into `sponge` (`(width,)`) as
+        one `zorch.absorb_chain` region; blocks at index >= `active_blocks`
+        (int32 scalar) are padding and leave the sponge unchanged. Dedicated
+        (M4-structured) path only — the caller gates on `has_dedicated_fusion`.
+        """
+        if not self.has_dedicated_fusion:
+            raise ValueError(
+                "absorb_chain needs the dedicated (M4-structured) Poseidon2 "
+                "marker; gate on has_dedicated_fusion"
+            )
+        return _absorb_chain_body(self, sponge, blocks, active_blocks)
 
 
 def _permutation_body(
@@ -283,6 +307,77 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         name=perm._fused_region_name,
         version=version,
         **attrs,
+    )
+
+
+# Same trace-once rationale as `_permute_body`: one prove emits many
+# identical-aval absorbs, and `lax.composite` re-traces its decomposition per
+# emission.
+@partial(frx.jit, static_argnames=("perm",), inline=True)
+def _absorb_chain_body(
+    perm: Poseidon2, sponge: Array, blocks: Array, active_blocks: Array
+) -> Array:
+    rate = blocks.shape[1]
+    inner_attrs, inner_version = _marker_attrs(perm)
+
+    def decomposition(
+        sponge: Array,
+        blocks: Array,
+        active_blocks: Array,
+        ext_init_rc: Array,
+        int_rc: Array,
+        ext_term_rc: Array,
+        diag: Array,
+        **_attrs: object,
+    ) -> Array:
+        # The inner permute re-marks each block permute with the composite's
+        # OWN round-constant parameters — not `perm`'s closed-over arrays,
+        # which `frx.lax.composite` would lift to leading operands and derail
+        # the chain ABI. Inlined (unrecognized-marker) fallback thus keeps the
+        # per-permute `zorch.poseidon2` markers of an unmarked absorb.
+        def inner(
+            s: Array, a: Array, b_: Array, c: Array, d: Array, **_a: object
+        ) -> Array:
+            return _permutation_body(perm, s, a, b_, c, d)
+
+        def _absorb(
+            carry: tuple[Array, Array], block: Array
+        ) -> tuple[tuple[Array, Array], None]:
+            spg, k = carry
+            permuted = fused_region(
+                inner,
+                fnp.concatenate([block, spg[rate:]]),
+                ext_init_rc,
+                int_rc,
+                ext_term_rc,
+                diag,
+                name=perm._fused_region_name,
+                version=inner_version,
+                **inner_attrs,
+            )
+            # Blocks past the live count are padding-only: sponge unchanged.
+            return (
+                fnp.where(k < active_blocks, permuted, spg),
+                k + fnp.int32(1),
+            ), None
+
+        (spg, _), _ = lax.scan(_absorb, (sponge, fnp.int32(0)), blocks)
+        return spg
+
+    p = perm._p
+    return fused_region(
+        decomposition,
+        sponge,
+        blocks,
+        active_blocks,
+        p.external_constants_initial.reshape(-1),
+        p.internal_constants[:, 0],
+        p.external_constants_terminal.reshape(-1),
+        p.internal_diag,
+        name=ABSORB_CHAIN_MARKER,
+        version=ABSORB_CHAIN_MARKER_VERSION,
+        rate=rate,
+        **inner_attrs,
     )
 
 
