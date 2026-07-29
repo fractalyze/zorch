@@ -554,6 +554,11 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     return t._with_state(final_state), fnp.stack(outs)
 
 
+# Permutes per absorb-scan iteration; 8 measured best on both the CPU host
+# sponge (thunk dispatch) and the GPU chain (launch overhead).
+_UNROLL = 8
+
+
 @partial(jit, inline=True)
 def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     base_dtype = t.state.sponge_state.dtype
@@ -608,15 +613,37 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # in-place scatter, no traced dynamic_slice), which keeps the absorb
     # byte-identical on GPU and CPU. `k` rides the carry so the live-count mask
     # needs no `arange`, one path for concrete and symbolic `num_blocks` (export).
-    blocks = combined[: num_blocks * rate].reshape(num_blocks, rate)
+    #
+    # `_UNROLL` permutes per scan step (frx's scan ignores its own unroll
+    # knob): a long absorb is bound by per-iteration overhead — ~8 CPU thunks
+    # or one GPU launch per permute — not by the permute math, so fewer
+    # iterations at O(_UNROLL) module size buys most of a fused chain's win.
+    # Padding blocks are masked per permute, so the chain stays byte-identical
+    # for any live count. Symbolic `num_blocks` (export) can't bound the
+    # chunk count, so that path keeps the unchunked scan (unroll = 1).
+    concrete = isinstance(num_blocks, int)
+    unroll = min(_UNROLL, num_blocks) if concrete and num_blocks else 1
+    if unroll == 1:
+        blocks = combined[: num_blocks * rate].reshape(num_blocks, 1, rate)
+    else:
+        padded = -(-num_blocks // unroll) * unroll
+        blocks = fnp.concatenate(
+            [
+                combined[: num_blocks * rate],
+                fnp.zeros((padded - num_blocks) * rate, dtype=base_dtype),
+            ]
+        ).reshape(padded // unroll, unroll, rate)
 
     def _absorb(
-        carry: tuple[Array, Array], block: Array
+        carry: tuple[Array, Array], chunk: Array
     ) -> tuple[tuple[Array, Array], None]:
         sponge, k = carry
-        permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
-        # Blocks past the live count are padding-only: leave the sponge alone.
-        return (fnp.where(k < active_blocks, permuted, sponge), k + fnp.int32(1)), None
+        for u in range(unroll):
+            permuted = permutation.permute(fnp.concatenate([chunk[u], sponge[rate:]]))
+            # Blocks past the live count are padding-only: sponge unchanged.
+            sponge = fnp.where(k < active_blocks, permuted, sponge)
+            k = k + fnp.int32(1)
+        return (sponge, k), None
 
     (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
 
