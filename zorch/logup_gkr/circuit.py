@@ -40,6 +40,11 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch._composite import composite
+from zorch.sumcheck.prover import (
+    SUMCHECK_ROUND_MARKER,
+    SUMCHECK_ROUND_MARKER_VERSION,
+)
 from zorch.utils.bits import log2_strict_usize
 
 
@@ -327,8 +332,7 @@ def _derive_transition_gathers(
     return gather_even, gather_odd, live
 
 
-@partial(frx.jit, static_argnames=("out_width",))
-def _jagged_transition_core(
+def _transition_composite_decomp(
     numerator_0: Array,
     numerator_1: Array,
     denominator_0: Array,
@@ -337,12 +341,12 @@ def _jagged_transition_core(
     out_row_counts: Array,
     *,
     out_width: int,
+    **_attrs: object,
 ) -> tuple[Array, Array, Array, Array]:
-    """The transition's one `@jit` boundary: derive the (even, odd) gathers
-    in-trace from the traced counts, apply `_fold_pairs`' algebra to the
-    gathered operands, and zero the dead region past the live out rows. The
-    compile keys on (input width, output width, batch count, dtypes) alone --
-    capacity constants, never one input's layout."""
+    """The `zorch.sumcheck.round` (variant=transition) decomposition — the
+    byte-exact fallback a recognizing emitter replaces: derive the (even, odd)
+    gathers in-trace from the traced counts, apply `_fold_pairs`' algebra to
+    the gathered operands, and zero the dead region past the live out rows."""
     gather_even, gather_odd, live = _derive_transition_gathers(
         row_counts, out_row_counts, out_width, numerator_0.shape[0]
     )
@@ -365,6 +369,37 @@ def _jagged_transition_core(
         dead_zeroed(n0o * d1o + n1o * d0o),
         dead_zeroed(d0e * d1e),
         dead_zeroed(d0o * d1o),
+    )
+
+
+@partial(frx.jit, static_argnames=("out_width",))
+def _jagged_transition_core(
+    numerator_0: Array,
+    numerator_1: Array,
+    denominator_0: Array,
+    denominator_1: Array,
+    row_counts: Array,
+    out_row_counts: Array,
+    *,
+    out_width: int,
+) -> tuple[Array, Array, Array, Array]:
+    """The transition's one `@jit` boundary, marked with the
+    `zorch.sumcheck.round` transition variant: a recognizing emitter fuses the
+    whole map into one kernel (the gather graph materializes its
+    intermediates); an unclaiming compiler runs the decomposition inline,
+    byte-identical. The compile keys on (input width, output width, batch
+    count, dtypes) alone -- capacity constants, never one input's layout."""
+    return composite(
+        partial(_transition_composite_decomp, out_width=out_width),
+        numerator_0,
+        numerator_1,
+        denominator_0,
+        denominator_1,
+        row_counts,
+        out_row_counts,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        variant="transition",
     )
 
 
