@@ -15,6 +15,8 @@ class _Id:
     width = 3
     dtype = fnp.int32
     has_dedicated_fusion = False  # no dedicated marker -> consumers use a fallback
+    fused_region_name = "zorch.fused_region"
+    fused_region_version = 0
 
     def permute(self, state: Array) -> Array:
         return state

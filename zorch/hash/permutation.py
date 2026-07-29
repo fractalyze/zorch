@@ -30,6 +30,14 @@ class Permutation(Protocol):
     # e.g. a Merkle commit — by reading this hash's marker; consumers gate that
     # wrapping on it without naming a concrete hash.
     has_dedicated_fusion: bool
+    # The composite name + version `permute`'s marker carries — what a consumer
+    # needs to RE-MARK a permute inside its own composite decomposition (e.g.
+    # the absorb chain), so the inlined fallback keeps the dedicated
+    # per-permute kernels instead of raw permute bodies. Meaningful only when
+    # `has_dedicated_fusion`; an undedicated permutation reports the generic
+    # marker at version 0.
+    fused_region_name: str
+    fused_region_version: int
 
     def permute(self, state: Array) -> Array:
         """Apply the permutation: (width,) over `dtype` -> (width,).

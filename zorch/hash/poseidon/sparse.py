@@ -84,11 +84,14 @@ class SparsePoseidon:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
-        self._fused_region_name = self._select_fused_region_name()
+        self.fused_region_name = self._select_fused_region_name()
         # Dedicated == permute lowers to the hash-named marker, not the generic
         # region one. Derived from the marker choice itself so the two can't drift
         # (mirrors Poseidon2).
-        self.has_dedicated_fusion = self._fused_region_name != FUSED_REGION_MARKER
+        self.has_dedicated_fusion = self.fused_region_name != FUSED_REGION_MARKER
+        self.fused_region_version = (
+            POSEIDON_SPARSE_MARKER_VERSION if self.has_dedicated_fusion else 0
+        )
         # Canonical-int views of the four matrices — the dedicated emitter carries
         # them as int64 marker attributes and the reference body applies them via
         # integer literals (no captured field array, which the name-routed marker
@@ -121,12 +124,10 @@ class SparsePoseidon:
         # constant, so every live instance shares it and pytree-aux stability holds.
         if not isinstance(other, SparsePoseidon):
             return NotImplemented
-        return (
-            self._p == other._p and self._fused_region_name == other._fused_region_name
-        )
+        return self._p == other._p and self.fused_region_name == other.fused_region_name
 
     def __hash__(self) -> int:
-        return hash((self._p, self._fused_region_name))
+        return hash((self._p, self.fused_region_name))
 
     def permute(self, state: Array) -> Array:
         if state.ndim != 1 or state.shape[0] != self.width:
@@ -318,7 +319,7 @@ def _permute_body(perm: SparsePoseidon, state: Array) -> Array:
     return fused_region(
         dedicated,
         *_abi_operands(perm, state),
-        name=perm._fused_region_name,
+        name=perm.fused_region_name,
         version=version,
         **attrs,
     )
