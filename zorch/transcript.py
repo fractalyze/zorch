@@ -610,15 +610,33 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # needs no `arange`, one path for concrete and symbolic `num_blocks` (export).
     blocks = combined[: num_blocks * rate].reshape(num_blocks, rate)
 
-    def _absorb(
-        carry: tuple[Array, Array], block: Array
-    ) -> tuple[tuple[Array, Array], None]:
-        sponge, k = carry
-        permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
-        # Blocks past the live count are padding-only: leave the sponge alone.
-        return (fnp.where(k < active_blocks, permuted, sponge), k + fnp.int32(1)), None
+    # A permutation with a dedicated chain marker routes the whole absorb to a
+    # single-kernel vendor emitter, sidestepping the scanned chain's
+    # per-permute thunk/launch machinery; where no emitter exists the marker
+    # inlines back to this same masked scan. Chain markers need a concrete
+    # block count, so the symbolic path (export) keeps the plain scan.
+    chain = getattr(permutation, "absorb_chain", None)
+    if (
+        chain is not None
+        and permutation.has_dedicated_fusion
+        and isinstance(num_blocks, int)
+        and num_blocks
+    ):
+        sponge = chain(st.sponge_state, blocks, active_blocks)
+    else:
 
-    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
+        def _absorb(
+            carry: tuple[Array, Array], block: Array
+        ) -> tuple[tuple[Array, Array], None]:
+            sponge, k = carry
+            permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
+            # Blocks past the live count are padding-only: sponge unchanged.
+            return (
+                fnp.where(k < active_blocks, permuted, sponge),
+                k + fnp.int32(1),
+            ), None
+
+        (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode
