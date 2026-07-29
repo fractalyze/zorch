@@ -219,10 +219,13 @@ class JaggedGkrLayer:
     row_counts: Array
 
     def __post_init__(self) -> None:
-        # Shape-only checks: `register_dataclass` reruns this on tracers
-        # during unflatten, so no value may be branched on here.
+        # Shape-only checks: `register_dataclass` reruns this during
+        # unflatten, so no value may be branched on here — and the leaves are
+        # not always arrays: AOT lowering (`jit(f).lower(layer)`) rebuilds the
+        # tree with `frx.stages.ArgInfo` leaves, which expose `shape`/`dtype`
+        # but no `ndim`. Stick to `.shape`.
         log2_strict_usize(self.num_batches)
-        if self.row_counts.ndim != 1:
+        if len(self.row_counts.shape) != 1:
             raise ValueError(
                 f"row_counts must be a flat vector, got {self.row_counts.shape}"
             )
