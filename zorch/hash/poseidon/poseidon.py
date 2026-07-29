@@ -64,6 +64,8 @@ class Poseidon:
         # routes to the dedicated `zorch.poseidon` emitter — there is no
         # free-form fallback (the MDS rides as a marker attribute either way).
         self.has_dedicated_fusion = True
+        self.fused_region_name = POSEIDON_MARKER
+        self.fused_region_version = POSEIDON_MARKER_VERSION
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux

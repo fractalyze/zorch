@@ -61,12 +61,15 @@ class Poseidon2:
         # the marker name and the const-free (literal-M4) external layer.
         self._is_m4_structured = params.is_m4_block_structured
         self._external_m4 = params.external_m4 if self._is_m4_structured else None
-        self._fused_region_name = self._select_fused_region_name()
+        self.fused_region_name = self._select_fused_region_name()
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
         # around it is unexpandable). Derived from the marker choice itself so the
         # two can't drift if `_select_fused_region_name` grows another case.
-        self.has_dedicated_fusion = self._fused_region_name != FUSED_REGION_MARKER
+        self.has_dedicated_fusion = self.fused_region_name != FUSED_REGION_MARKER
+        self.fused_region_version = (
+            POSEIDON2_MARKER_VERSION if self.has_dedicated_fusion else 0
+        )
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
@@ -280,7 +283,7 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
     return fused_region(
         decomposition,
         *_abi_operands(perm, state),
-        name=perm._fused_region_name,
+        name=perm.fused_region_name,
         version=version,
         **attrs,
     )

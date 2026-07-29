@@ -36,6 +36,8 @@ class CheapPermutation:
         self.dtype = dtype
         # Keep test transcripts on prove's unmarked path.
         self.has_dedicated_fusion = False
+        self.fused_region_name = "zorch.fused_region"
+        self.fused_region_version = 0
 
     def __eq__(self, other: object) -> bool:
         # Pytree-aux value equality, mirroring `Poseidon2`
