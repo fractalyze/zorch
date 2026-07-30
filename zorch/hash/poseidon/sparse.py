@@ -25,12 +25,14 @@ There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirrori
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
-That path is gated behind `_DEDICATED_EMITTER_AVAILABLE`: when the pinned plugin
-ships the emitter the permutation emits the dedicated marker, otherwise it falls
-back to the generic marker (which fuses this body to one kernel just the same),
-because emitting a marker the plugin cannot recognize fails every compile with
-`custom op 'stablehlo.composite' is unknown`. Either way the dedicated path's
-attributes and reference body are exercised directly by `testing/sparse_test.py`.
+Two conditions gate that path: the pinned plugin has to ship the emitter
+(`_DEDICATED_EMITTER_AVAILABLE`) and the instance's matrices have to fit the int64
+attributes. Otherwise the permutation falls back to the generic marker (which
+fuses this body to one kernel just the same) — emitting a marker the plugin cannot
+recognize fails every compile with `custom op 'stablehlo.composite' is unknown`,
+and a matrix over a field wider than an int64 (Goldilocks) has nothing the
+attribute can carry. Either way the dedicated path's attributes and reference body
+are exercised directly by `testing/sparse_test.py`.
 """
 
 from __future__ import annotations
@@ -70,6 +72,11 @@ POSEIDON_SPARSE_MARKER_VERSION = 1
 # `custom op 'stablehlo.composite' is unknown`.
 _DEDICATED_EMITTER_AVAILABLE = True
 
+# Bounds of the dedicated marker's int64 matrix attributes. A field whose
+# canonical values leave this range cannot ride that contract at all — see
+# `_select_fused_region_name`.
+_I64_MIN, _I64_MAX = -(2**63), 2**63 - 1
+
 
 class SparsePoseidon:
     """An optimized-sparse Poseidon permutation built from a SparsePoseidonParams;
@@ -84,7 +91,18 @@ class SparsePoseidon:
         self._p = params
         self.width = params.width
         self.dtype = params.dtype
-        self.fused_region_name = self._select_fused_region_name()
+        # Canonical-int views of the four matrices — the dedicated emitter carries
+        # them as int64 marker attributes and the reference body applies them via
+        # integer literals (no captured field array, which the name-routed marker
+        # would lift to a leading operand). Extracted once here (eager), as classic
+        # Poseidon does, because the marker choice below reads them too.
+        rows = (
+            params.mds_rows,
+            params.transition_matrix_rows,
+            params.partial_dot_rows,
+            params.partial_col_rows,
+        )
+        self.fused_region_name = self._select_fused_region_name(rows)
         # Dedicated == permute lowers to the hash-named marker, not the generic
         # region one. Derived from the marker choice itself so the two can't drift
         # (mirrors Poseidon2).
@@ -92,24 +110,32 @@ class SparsePoseidon:
         self.fused_region_version = (
             POSEIDON_SPARSE_MARKER_VERSION if self.has_dedicated_fusion else 0
         )
-        # Canonical-int views of the four matrices — the dedicated emitter carries
-        # them as int64 marker attributes and the reference body applies them via
-        # integer literals (no captured field array, which the name-routed marker
-        # would lift to a leading operand). Extracted once here (eager), as classic
-        # Poseidon does; the generic path never reads them.
         if self.has_dedicated_fusion:
-            self._mds_rows = params.mds_rows
-            self._transition_rows = params.transition_matrix_rows
-            self._partial_dot_rows = params.partial_dot_rows
-            self._partial_col_rows = params.partial_col_rows
+            (
+                self._mds_rows,
+                self._transition_rows,
+                self._partial_dot_rows,
+                self._partial_col_rows,
+            ) = rows
 
-    def _select_fused_region_name(self) -> str:
+    def _select_fused_region_name(
+        self, rows: tuple[tuple[tuple[int, ...], ...], ...]
+    ) -> str:
         """Route to the dedicated `SparsePoseidonFusion` when the pinned plugin
-        ships it, else the generic marker so compiles don't fail on an unknown
-        composite. Gated on `_DEDICATED_EMITTER_AVAILABLE`, not on a data property
-        (unlike Poseidon2's M4 check) — readiness is the emitter's existence, not
-        the params."""
-        if _DEDICATED_EMITTER_AVAILABLE:
+        ships it AND this instance's matrices fit its int64 attribute contract,
+        else the generic marker so compiles don't fail on an unknown composite or
+        an unrepresentable attribute.
+
+        Two gates, because readiness has two independent halves: the emitter's
+        existence (`_DEDICATED_EMITTER_AVAILABLE`) and a data property, like
+        Poseidon2's M4 check. Unlike Poseidon2 — whose only matrix attribute is
+        the small structural M4, its full-width constants riding as operands —
+        every linear layer here is a matrix of field elements, so a field whose
+        canonical values exceed an int64 (Goldilocks, `p = 2^64 - 2^32 + 1`) has
+        nothing the attribute can carry. Widening that contract is an emitter-side
+        change (a u64 bit-cast and a version bump), so until then such a field
+        takes the generic marker, which fuses the same body to one kernel."""
+        if _DEDICATED_EMITTER_AVAILABLE and all(_fits_i64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
         return FUSED_REGION_MARKER
 
@@ -117,10 +143,10 @@ class SparsePoseidon:
         # Value identity IS the params surface — required for the pytree-aux seat
         # in `DuplexTranscript` (docs/reference/conventions.md "Pytree
         # registration"). The marker name joins the key because it is part of what
-        # `permute` lowers to and, unlike Poseidon2's params-derived M4 gate, is
-        # NOT a function of the params (it tracks `_DEDICATED_EMITTER_AVAILABLE`).
-        # Without it a dedicated and a generic perm on the same params collide in
-        # the `_permute_body` static-arg cache. In production the flag is a global
+        # `permute` lowers to and is not derived from the params alone: its int64
+        # half is, but `_DEDICATED_EMITTER_AVAILABLE` is not. Without it a
+        # dedicated and a generic perm on the same params collide in the
+        # `_permute_body` static-arg cache. In production that flag is a global
         # constant, so every live instance shares it and pytree-aux stability holds.
         if not isinstance(other, SparsePoseidon):
             return NotImplemented
@@ -253,12 +279,20 @@ def _abi_operands(perm: "SparsePoseidon", state: Array) -> tuple[Array, ...]:
     )
 
 
+def _fits_i64(rows: tuple[tuple[int, ...], ...]) -> bool:
+    """Whether every canonical entry is representable as an int64 marker attribute.
+    Checked before `_rows_to_i64` builds one, which would otherwise raise
+    `OverflowError: Python int too large to convert to C long` at construction."""
+    return all(_I64_MIN <= v <= _I64_MAX for row in rows for v in row)
+
+
 def _rows_to_i64(rows: tuple[tuple[int, ...], ...]) -> np.ndarray:
     """Canonical-int rows flattened row-major as a numpy int64 array — a numpy
     value (not a Python list) so the marker attribute lowers to a
     `dense<[..]> : tensor<Nxi64>` the recognizer parses, not an unparsed ArrayAttr.
     Mirrors `Poseidon._poseidon_marker_attrs`' `mds`; the emitter supports only
-    fields whose canonical values fit an int64 literal."""
+    fields whose canonical values fit an int64 literal, which
+    `_select_fused_region_name` has already established for a dedicated perm."""
     return np.array(rows, dtype=np.int64).flatten()
 
 

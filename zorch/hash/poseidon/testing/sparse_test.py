@@ -20,6 +20,7 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from zk_dtypes import babybear_mont as F
+from zk_dtypes import goldilocks_mont as GL  # wider than an int64, for the gate test
 from zk_dtypes import koalabear_mont as G  # a distinct field, for dtype-guard tests
 from zk_dtypes import pfinfo
 
@@ -34,6 +35,7 @@ from zorch.hash.poseidon.sparse import (
 )
 
 _P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
+_GL_P = pfinfo(GL).modulus  # 2^64 - 2^32 + 1 — past what an int64 attribute holds.
 
 # A small width-4 config. alpha=7 is coprime to p-1 for this field, so the S-box
 # is a permutation. half_full_rounds=2 -> one pre-partial and one post-partial
@@ -85,6 +87,34 @@ def _param_kwargs() -> dict:
 
 def _params() -> SparsePoseidonParams:
     return SparsePoseidonParams(**_param_kwargs())
+
+
+def _wide_field_params() -> SparsePoseidonParams:
+    """The same width-4 schedule over Goldilocks (`p = 2^64 - 2^32 + 1`), with one
+    MDS entry above `2^63 - 1`. alpha=7 is coprime to `p - 1` here too, so the
+    S-box still permutes. Only the matrices matter to the marker gate — the round
+    constants ride as operands whatever their magnitude — so those stay small."""
+
+    def gl(rows: object) -> fnp.ndarray:
+        # uint64, not int64: a canonical Goldilocks value can exceed int64.
+        return fnp.array(np.array(rows, dtype=np.uint64), dtype=GL)
+
+    mds = ((_GL_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1, 2))
+    return SparsePoseidonParams(
+        **{
+            **_param_kwargs(),
+            "dtype": GL,
+            "initial_arc": gl(_INITIAL_ARC),
+            "full_rc_pre": gl(_FULL_RC_PRE),
+            "transition_rc": gl(_TRANSITION_RC),
+            "partial_rc": gl(_PARTIAL_RC),
+            "full_rc_post": gl(_FULL_RC_POST),
+            "mds": gl(mds),
+            "transition_matrix": gl(_TRANSITION_M),
+            "partial_dot": gl(_PARTIAL_DOT),
+            "partial_col": gl(_PARTIAL_COL),
+        }
+    )
 
 
 def _reference_permute(state_canon: list[int]) -> list[int]:
@@ -212,6 +242,22 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         perm = _generic_perm()
         self.assertFalse(perm.has_dedicated_fusion)
         txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
+        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
+
+    def test_matrix_wider_than_i64_falls_back_to_generic(self) -> None:
+        # A matrix over a field wider than an int64 has nothing the dedicated
+        # marker's attribute contract can carry, so the instance takes the generic
+        # marker even though the emitter is available. Constructing it must not
+        # raise: the gate establishes representability before `_rows_to_i64` builds
+        # an attribute, where an out-of-range entry is an OverflowError.
+        perm = SparsePoseidon(_wide_field_params())
+        self.assertFalse(perm.has_dedicated_fusion)
+        self.assertEqual(perm.fused_region_version, 0)
+        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=GL)).as_text()
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
