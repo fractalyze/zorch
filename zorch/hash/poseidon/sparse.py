@@ -25,14 +25,11 @@ There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirrori
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
-Two conditions gate that path: the pinned plugin has to ship the emitter
-(`_DEDICATED_EMITTER_AVAILABLE`) and the instance's matrices have to fit the int64
-attributes. Otherwise the permutation falls back to the generic marker (which
-fuses this body to one kernel just the same) — emitting a marker the plugin cannot
-recognize fails every compile with `custom op 'stablehlo.composite' is unknown`,
-and a matrix over a field wider than an int64 (Goldilocks) has nothing the
-attribute can carry. Either way the dedicated path's attributes and reference body
-are exercised directly by `testing/sparse_test.py`.
+`_select_fused_region_name` gates that path on the plugin shipping the emitter and
+on the matrices fitting those attributes; failing either, the permutation takes
+the generic marker, which fuses this body to one kernel just the same. Either way
+the dedicated path's attributes and reference body are exercised directly by
+`testing/sparse_test.py`.
 """
 
 from __future__ import annotations
@@ -121,20 +118,16 @@ class SparsePoseidon:
     def _select_fused_region_name(
         self, rows: tuple[tuple[tuple[int, ...], ...], ...]
     ) -> str:
-        """Route to the dedicated `SparsePoseidonFusion` when the pinned plugin
-        ships it AND this instance's matrices fit its int64 attribute contract,
-        else the generic marker so compiles don't fail on an unknown composite or
-        an unrepresentable attribute.
+        """The marker `permute` emits, given the four matrices as canonical-int
+        rows: the dedicated `SparsePoseidonFusion` name when the pinned plugin
+        ships the emitter and every entry fits its int64 attributes, else the
+        generic one.
 
-        Two gates, because readiness has two independent halves: the emitter's
-        existence (`_DEDICATED_EMITTER_AVAILABLE`) and a data property, like
-        Poseidon2's M4 check. Unlike Poseidon2 — whose only matrix attribute is
-        the small structural M4, its full-width constants riding as operands —
-        every linear layer here is a matrix of field elements, so a field whose
-        canonical values exceed an int64 (Goldilocks, `p = 2^64 - 2^32 + 1`) has
-        nothing the attribute can carry. Widening that contract is an emitter-side
-        change (a u64 bit-cast and a version bump), so until then such a field
-        takes the generic marker, which fuses the same body to one kernel."""
+        Every linear layer here is a matrix of field elements (unlike Poseidon2,
+        whose one matrix attribute is the small structural M4), so a field whose
+        canonical values exceed an int64 — Goldilocks, `p = 2^64 - 2^32 + 1` — has
+        nothing those attributes can carry. Widening them is an emitter-side change
+        (a u64 bit-cast and a version bump)."""
         if _DEDICATED_EMITTER_AVAILABLE and all(_fits_i64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
         return FUSED_REGION_MARKER
