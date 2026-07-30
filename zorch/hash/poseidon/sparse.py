@@ -25,11 +25,10 @@ There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirrori
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
-`_select_fused_region_name` gates that path on the plugin shipping the emitter and
-on the matrices fitting those attributes; failing either, the permutation takes
-the generic marker, which fuses this body to one kernel just the same. Either way
-the dedicated path's attributes and reference body are exercised directly by
-`testing/sparse_test.py`.
+`_select_fused_region_name` gates that path on the matrices fitting those
+attributes; a field too wide for them takes the generic marker, which fuses this
+body to one kernel just the same. Either way the dedicated path's attributes and
+reference body are exercised directly by `testing/sparse_test.py`.
 """
 
 from __future__ import annotations
@@ -60,14 +59,6 @@ POSEIDON_SPARSE_MARKER = "zorch.sparse_poseidon"
 # name + attributes and deliberately does not gate on the version; it exists so
 # a future contract change can be staged without renaming the marker.
 POSEIDON_SPARSE_MARKER_VERSION = 1
-
-# Whether the pinned Fractalyze XLA plugin ships the dedicated
-# `SparsePoseidonFusion` emitter. When True, `permute` emits the dedicated
-# `zorch.sparse_poseidon` marker; when False it falls back to the generic
-# `zorch.fused_region` marker (which fuses the same body to one kernel), because
-# emitting a marker the plugin cannot recognize fails every compile with
-# `custom op 'stablehlo.composite' is unknown`.
-_DEDICATED_EMITTER_AVAILABLE = True
 
 # Bounds of the dedicated marker's int64 matrix attributes. A field whose
 # canonical values leave this range cannot ride that contract at all — see
@@ -119,34 +110,29 @@ class SparsePoseidon:
         self, rows: tuple[tuple[tuple[int, ...], ...], ...]
     ) -> str:
         """The marker `permute` emits, given the four matrices as canonical-int
-        rows: the dedicated `SparsePoseidonFusion` name when the pinned plugin
-        ships the emitter and every entry fits its int64 attributes, else the
-        generic one.
+        rows: the dedicated `SparsePoseidonFusion` name when every entry fits its
+        int64 attributes, else the generic one.
 
         Every linear layer here is a matrix of field elements (unlike Poseidon2,
         whose one matrix attribute is the small structural M4), so a field whose
         canonical values exceed an int64 — Goldilocks, `p = 2^64 - 2^32 + 1` — has
         nothing those attributes can carry. Widening them is an emitter-side change
         (a u64 bit-cast and a version bump)."""
-        if _DEDICATED_EMITTER_AVAILABLE and all(_fits_i64(m) for m in rows):
+        if all(_fits_i64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
         return FUSED_REGION_MARKER
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux seat
         # in `DuplexTranscript` (docs/reference/conventions.md "Pytree
-        # registration"). The marker name joins the key because it is part of what
-        # `permute` lowers to and is not derived from the params alone: its int64
-        # half is, but `_DEDICATED_EMITTER_AVAILABLE` is not. Without it a
-        # dedicated and a generic perm on the same params collide in the
-        # `_permute_body` static-arg cache. In production that flag is a global
-        # constant, so every live instance shares it and pytree-aux stability holds.
+        # registration"). The marker name needs no seat of its own: it is a
+        # function of the params (as Poseidon2's M4 gate is).
         if not isinstance(other, SparsePoseidon):
             return NotImplemented
-        return self._p == other._p and self.fused_region_name == other.fused_region_name
+        return self._p == other._p
 
     def __hash__(self) -> int:
-        return hash((self._p, self.fused_region_name))
+        return hash(self._p)
 
     def permute(self, state: Array) -> Array:
         if state.ndim != 1 or state.shape[0] != self.width:

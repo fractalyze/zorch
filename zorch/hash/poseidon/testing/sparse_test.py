@@ -13,7 +13,6 @@ that supplies genuine constants.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -240,30 +239,14 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
-    def test_permute_falls_back_to_generic_when_emitter_absent(self) -> None:
-        # When the plugin lacks the emitter (`_DEDICATED_EMITTER_AVAILABLE=False`)
-        # the permute marks its region with the generic "zorch.fused_region" name so
-        # no compile fails on an unknown composite; the normal-form body still fuses.
-        # The dedicated (default) path is covered by SparsePoseidonDedicatedMarkerTest.
-        perm = _generic_perm()
-        self.assertFalse(perm.has_dedicated_fusion)
-        txt = (
-            frx.jit(perm.permute)
-            .lower(fnp.arange(_WIDTH, dtype=babybear_mont))
-            .as_text()
-        )
-        self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
-        composite_line = next(
-            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
-        )
-        self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
-
     def test_matrix_wider_than_i64_falls_back_to_generic(self) -> None:
         # A matrix over a field wider than an int64 has nothing the dedicated
-        # marker's attribute contract can carry, so the instance takes the generic
-        # marker even though the emitter is available. Constructing it must not
-        # raise: the gate establishes representability before `_rows_to_i64` builds
-        # an attribute, where an out-of-range entry is an OverflowError.
+        # marker's attribute contract can carry, so the instance marks its region
+        # with the generic "zorch.fused_region" name instead; the normal-form body
+        # still fuses. Constructing it must not raise: the gate establishes
+        # representability before `_rows_to_i64` builds an attribute, where an
+        # out-of-range entry is an OverflowError. The dedicated (default) path is
+        # covered by SparsePoseidonDedicatedMarkerTest.
         perm = SparsePoseidon(_wide_field_params())
         self.assertFalse(perm.has_dedicated_fusion)
         self.assertEqual(perm.fused_region_version, 0)
@@ -277,15 +260,6 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
-
-
-def _generic_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
-    """A SparsePoseidon built with the dedicated emitter forced unavailable, so its
-    permute falls back to the generic `zorch.fused_region` marker. `_DEDICATED_-
-    EMITTER_AVAILABLE` is read in `__init__`, so the patch must wrap construction;
-    the instance then carries the generic name/attrs and lowers the same afterwards."""
-    with mock.patch.object(sparse_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
-        return SparsePoseidon(params if params is not None else _params())
 
 
 class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
