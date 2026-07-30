@@ -85,6 +85,13 @@ class JaggedGkrLayerTest(absltest.TestCase):
                 row_counts=fnp.asarray((2, 2), fnp.int32),
             )
 
+    def test_aot_lower_admits_arginfo_leaves(self) -> None:
+        # `jit(f).lower(layer)` rebuilds the layer with `frx.stages.ArgInfo`
+        # leaves (shape/dtype only, no ndim); `__post_init__` must accept
+        # them or every compile-only cache warm dies at the lowering step.
+        layer = _random_jagged_layer(3, (3, 1, 2, 2))
+        frx.jit(lambda la: la.numerator_0).lower(layer)
+
 
 class JaggedTransitionTest(absltest.TestCase):
     def test_uniform_even_segments_match_dense_transition(self) -> None:
