@@ -77,6 +77,20 @@ jobs:
       - name: Build wheel
         run: python -m build -w
 
+      # The Bazel suite resolves requirements.in, so it stays green when a
+      # runtime import is missing from pyproject's `dependencies` — only
+      # installing the artifact from its own metadata catches that. Import a
+      # module on a scheme seam's path rather than the top-level package, which
+      # is a namespace shim and pulls almost nothing.
+      - name: Verify the wheel imports from its own metadata
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install dist/*.whl \
+            --extra-index-url https://fractalyze.github.io/pypi/simple/
+          # From /tmp, so the checkout's own `zorch/` on sys.path cannot stand in
+          # for the installed package and hide a packaging omission.
+          cd /tmp && ./wheel-smoke/bin/python -c 'import zorch.pcs.fold, zorch.transcript'
+
       - name: Upload wheel
         uses: actions/upload-artifact@v4
         with:
