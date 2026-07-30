@@ -201,6 +201,18 @@ jobs:
       - name: Build sdist + wheel
         run: python -m build
 
+      # Same guard as dev-release, and it matters more here: a PyPI file can
+      # never be corrected in place, so a wheel whose metadata omits a runtime
+      # import has to be yanked and re-released under a new version.
+      - name: Verify the wheel imports from its own metadata
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install dist/*.whl \
+            --extra-index-url https://fractalyze.github.io/pypi/simple/
+          # From /tmp, so the checkout's own `zorch/` on sys.path cannot stand in
+          # for the installed package and hide a packaging omission.
+          cd /tmp && ./wheel-smoke/bin/python -c 'import zorch.pcs.fold, zorch.transcript'
+
       - name: Upload distributions
         uses: actions/upload-artifact@v4
         with:

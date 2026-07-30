@@ -25,12 +25,17 @@ classifiers = [
 # requirements.in sets. The floor itself does not conflict with that pin;
 # sp1-zorch and groth16-zorch have shipped this combination.
 #
+# `typing-extensions` is declared for the same reason: `zorch.transcript` imports
+# its `TypeVar` at module scope for PEP 696 defaults, which `typing` gains only
+# in 3.13, and that module sits on the import path of every scheme seam.
+#
 # The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
 # platform choice, offered through frx's own `cuda12` extra.
 dependencies = [
     "absl-py",
     "numpy",
     "frx>=0.10.0.dev0",
+    "typing-extensions",
 ]
 
 [project.urls]
