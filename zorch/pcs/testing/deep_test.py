@@ -108,7 +108,7 @@ class DeepCompositionTest(absltest.TestCase):
 class DeepCompositionPowerAssignmentTest(absltest.TestCase):
     def test_custom_vf_pows_reverses_assignment(self) -> None:
         # A caller may fix descending powers (Horner-style accumulation:
-        # column 0 highest). Σ_j vf^(m−1−j)·q_j equals the ascending reference
+        # column 0 highest). Σ_j vf^(m-1-j)·q_j equals the ascending reference
         # over the REVERSED column list — exact, so byte equality.
         coeffs, domain, base_cols, ext_cols, vf = DeepCompositionTest._setup(self, 11)
         m = _B + _C
@@ -129,6 +129,37 @@ class DeepCompositionPowerAssignmentTest(absltest.TestCase):
         )
         self.assertTrue(bool(fnp.all(got == want)), "descending vf_pows mismatch")
 
+    def test_columns_leading_boundary_shapes(self) -> None:
+        # A block may be empty (all columns of one kind) or hold a single
+        # column: both make the transposed shape degenerate, where a wrong
+        # axis still indexes without erroring.
+        n = 1 << _N_BITS
+        domain = eval_domain(KB, n)
+        z = rand_ext_field(779, (), KB, EF)
+        for n_base, n_ext in ((1, 0), (0, 1), (1, 1)):
+            base_coeffs = [rand_field(31 + i, (n,), KB) for i in range(n_base)]
+            ext_coeffs = [rand_ext_field(41 + j, (n,), KB, EF) for j in range(n_ext)]
+            base_cols = (
+                fnp.stack([_evals_on(c, domain) for c in base_coeffs], axis=1)
+                if n_base
+                else fnp.zeros(
+                    (n, 0), dtype=base_coeffs[0].dtype if base_coeffs else KB
+                )
+            )
+            ext_cols = (
+                fnp.stack([_evals_on(c, domain) for c in ext_coeffs], axis=1)
+                if n_ext
+                else fnp.zeros((n, 0), dtype=EF)
+            )
+            m = n_base + n_ext
+            vf = rand_ext_field(51, (), KB, EF)
+            evals = fnp.stack([eval_coeffs(c, z) for c in base_coeffs + ext_coeffs])
+            args = (evals, fnp.stack([z]), [0] * m, vf, domain)
+            want = deep_composition(base_cols, ext_cols, *args)
+            got = deep_composition(base_cols.T, ext_cols.T, *args, columns_leading=True)
+            self.assertTrue(
+                bool(fnp.all(got == want)), f"B={n_base} C={n_ext} mismatch"
+            )
 
     def test_columns_leading_matches_row_major_bytes(self) -> None:
         # Layout must not perturb the arithmetic: same columns, transposed,
