@@ -38,6 +38,7 @@ def deep_composition(
     opening_pos: Sequence[int],
     vf: Array,
     domain: Array,
+    vf_pows: Array | None = None,
 ) -> Array:
     """``f(x) = Σ_m vf^m · (col_m(x) − evals[m]) / (domain − xis[opening_pos[m]])``
     on ``domain`` — the DEEP-ALI batched quotient.
@@ -51,10 +52,17 @@ def deep_composition(
     numerator accumulates into a per-opening-point running sum, then one reciprocal
     per distinct point divides — a fused elementwise graph by construction, no
     ``(N, M)`` intermediate and no ``axis`` reduction. Field addition is exact, so
-    the accumulation order does not affect the result."""
+    the accumulation order does not affect the result.
+
+    ``vf_pows`` (``(M,)``) overrides the default ascending ``vf^m`` when the
+    caller fixes a different power-to-column assignment — e.g. descending,
+    where column 0 carries the highest power (a Horner-style accumulation
+    order). Passing precomputed powers changes only the per-column scalar
+    constants, never the per-row work."""
     b, c = base_cols.shape[1], ext_cols.shape[1]
     m = b + c
-    vf_pows = powers(vf, m)
+    if vf_pows is None:
+        vf_pows = powers(vf, m)
     numer_by_opening: dict[int, Array] = {}
     for col in range(m):
         column = base_cols[:, col] if col < b else ext_cols[:, col - b]

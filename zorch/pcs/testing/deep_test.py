@@ -16,7 +16,10 @@ from absl.testing import absltest
 from frx import Array
 
 from zorch.coding.reed_solomon import eval_domain
-from zorch.pcs.deep import deep_composition, open_columns
+from zorch.pcs.deep import (
+    deep_composition,
+    open_columns,
+)
 from zorch.poly.univariate import compute_lagrange_basis, eval_coeffs, powers
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.utils.field import split_coeffs
@@ -100,6 +103,31 @@ class DeepCompositionTest(absltest.TestCase):
         got = deep_composition(base_cols, ext_cols, evals, xis, pos, vf, domain)
         want = self._expect(coeffs, domain, vf, xis_of)
         self.assertTrue(bool(fnp.all(got == want)), "wrapped-opening mismatch")
+
+
+class DeepCompositionPowerAssignmentTest(absltest.TestCase):
+    def test_custom_vf_pows_reverses_assignment(self) -> None:
+        # A caller may fix descending powers (Horner-style accumulation:
+        # column 0 highest). Σ_j vf^(m−1−j)·q_j equals the ascending reference
+        # over the REVERSED column list — exact, so byte equality.
+        coeffs, domain, base_cols, ext_cols, vf = DeepCompositionTest._setup(self, 11)
+        m = _B + _C
+        z = rand_ext_field(888, (), KB, EF)
+        evals = fnp.stack([eval_coeffs(coeffs[i], z) for i in range(m)])
+        got = deep_composition(
+            base_cols,
+            ext_cols,
+            evals,
+            fnp.stack([z]),
+            [0] * m,
+            vf,
+            domain,
+            vf_pows=powers(vf, m)[::-1],
+        )
+        want = DeepCompositionTest._expect(
+            self, list(reversed(coeffs)), domain, vf, [z] * m
+        )
+        self.assertTrue(bool(fnp.all(got == want)), "descending vf_pows mismatch")
 
 
 class OpenColumnsTest(absltest.TestCase):
