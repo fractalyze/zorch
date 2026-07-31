@@ -13,15 +13,17 @@ that supplies genuine constants.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from unittest import mock
 
 import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
-from zk_dtypes import babybear_mont as F
-from zk_dtypes import koalabear_mont as G  # a distinct field, for dtype-guard tests
-from zk_dtypes import pfinfo
+from zk_dtypes import (
+    babybear_mont,
+    goldilocks_mont,  # wider than an int64, for the gate test
+    koalabear_mont,  # a distinct field, for dtype-guard tests
+    pfinfo,
+)
 
 from zorch.fusion import FUSED_REGION_MARKER
 from zorch.hash.permutation import Permutation
@@ -33,7 +35,10 @@ from zorch.hash.poseidon.sparse import (
     SparsePoseidon,
 )
 
-_P = pfinfo(F).modulus  # field prime; canonical-int reference reduces mod this.
+# The field prime the canonical-int reference reduces mod.
+_BABYBEAR_P = pfinfo(babybear_mont).modulus
+# 2^64 - 2^32 + 1 — past what an int64 marker attribute holds.
+_GOLDILOCKS_P = pfinfo(goldilocks_mont).modulus
 
 # A small width-4 config. alpha=7 is coprime to p-1 for this field, so the S-box
 # is a permutation. half_full_rounds=2 -> one pre-partial and one post-partial
@@ -52,7 +57,7 @@ _PARTIAL_COL = ((2, 3, 5), (1, 4, 2))  # (n_partial, width-1)
 
 
 def _to_field(canon: np.ndarray) -> fnp.ndarray:
-    return fnp.asarray(canon.astype(np.int64).astype(F))
+    return fnp.asarray(canon.astype(np.int64).astype(babybear_mont))
 
 
 def _to_canon(arr: fnp.ndarray) -> np.ndarray:
@@ -67,7 +72,7 @@ def _param_kwargs() -> dict:
     """The valid width-4 param kwargs; validation tests override one field."""
     return dict(
         width=_WIDTH,
-        dtype=F,
+        dtype=babybear_mont,
         alpha=_ALPHA,
         half_full_rounds=_HALF,
         n_partial_rounds=_NPART,
@@ -87,6 +92,34 @@ def _params() -> SparsePoseidonParams:
     return SparsePoseidonParams(**_param_kwargs())
 
 
+def _wide_field_params() -> SparsePoseidonParams:
+    """The same width-4 schedule over Goldilocks (`p = 2^64 - 2^32 + 1`), with one
+    MDS entry above `2^63 - 1`. alpha=7 is coprime to `p - 1` here too, so the
+    S-box still permutes. Only the matrices matter to the marker gate — the round
+    constants ride as operands whatever their magnitude — so those stay small."""
+
+    def fld(rows: object) -> fnp.ndarray:
+        # uint64, not int64: a canonical Goldilocks value can exceed int64.
+        return fnp.array(np.array(rows, dtype=np.uint64), dtype=goldilocks_mont)
+
+    mds = ((_GOLDILOCKS_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1, 2))
+    return SparsePoseidonParams(
+        **{
+            **_param_kwargs(),
+            "dtype": goldilocks_mont,
+            "initial_arc": fld(_INITIAL_ARC),
+            "full_rc_pre": fld(_FULL_RC_PRE),
+            "transition_rc": fld(_TRANSITION_RC),
+            "partial_rc": fld(_PARTIAL_RC),
+            "full_rc_post": fld(_FULL_RC_POST),
+            "mds": fld(mds),
+            "transition_matrix": fld(_TRANSITION_M),
+            "partial_dot": fld(_PARTIAL_DOT),
+            "partial_col": fld(_PARTIAL_COL),
+        }
+    )
+
+
 def _reference_permute(state_canon: list[int]) -> list[int]:
     """Independent optimized-sparse Poseidon reference in pure-Python int mod p.
 
@@ -97,7 +130,7 @@ def _reference_permute(state_canon: list[int]) -> list[int]:
     constant (the constant seeds the next round's S-box); the initial ARC seeds
     the first.
     """
-    p, w, alpha = _P, _WIDTH, _ALPHA
+    p, w, alpha = _BABYBEAR_P, _WIDTH, _ALPHA
     s = [x % p for x in state_canon]
 
     def sbox(x: int) -> int:
@@ -132,7 +165,7 @@ class SparsePoseidonReferenceByteMatchTest(absltest.TestCase):
         perm = SparsePoseidon(_params())
         rng = np.random.default_rng(0)
         for _ in range(8):
-            canon = rng.integers(0, _P, size=_WIDTH, dtype=np.int64)
+            canon = rng.integers(0, _BABYBEAR_P, size=_WIDTH, dtype=np.int64)
             out = perm.permute(_to_field(canon))
             got = [int(x) for x in _to_canon(out)]
             want = _reference_permute([int(x) for x in canon])
@@ -144,17 +177,17 @@ class SparsePoseidonPermuteShapeTest(absltest.TestCase):
         perm = SparsePoseidon(_params())
         self.assertIsInstance(perm, Permutation)
         self.assertEqual(perm.width, _WIDTH)
-        self.assertEqual(perm.dtype, F)
+        self.assertEqual(perm.dtype, babybear_mont)
         # The shipped emitter routes the permute to the dedicated sparse marker.
         self.assertTrue(perm.has_dedicated_fusion)
 
     def test_permute_shape_and_vmap(self) -> None:
         perm = SparsePoseidon(_params())
-        x = fnp.arange(_WIDTH, dtype=F)
+        x = fnp.arange(_WIDTH, dtype=babybear_mont)
         out = perm.permute(x)
         self.assertEqual(out.shape, (_WIDTH,))
-        self.assertEqual(out.dtype, F)
-        batch = fnp.stack([x, x + F(1)])
+        self.assertEqual(out.dtype, babybear_mont)
+        batch = fnp.stack([x, x + babybear_mont(1)])
         bout = frx.vmap(perm.permute)(batch)
         self.assertEqual(bout.shape, (2, _WIDTH))
         self.assertTrue(bool(fnp.array_equal(bout[0], out)))
@@ -162,16 +195,16 @@ class SparsePoseidonPermuteShapeTest(absltest.TestCase):
     def test_permute_rejects_wrong_shape(self) -> None:
         perm = SparsePoseidon(_params())
         with self.assertRaises(ValueError):
-            perm.permute(fnp.zeros((_WIDTH + 1,), dtype=F))
+            perm.permute(fnp.zeros((_WIDTH + 1,), dtype=babybear_mont))
         with self.assertRaises(ValueError):
-            perm.permute(fnp.zeros((2, _WIDTH), dtype=F))
+            perm.permute(fnp.zeros((2, _WIDTH), dtype=babybear_mont))
 
     def test_permute_rejects_wrong_dtype(self) -> None:
         # A right-shaped state in the wrong field must hit the TypeError branch,
         # not silently permute in the other field.
         perm = SparsePoseidon(_params())
         with self.assertRaises(TypeError):
-            perm.permute(fnp.zeros((_WIDTH,), dtype=G))
+            perm.permute(fnp.zeros((_WIDTH,), dtype=koalabear_mont))
 
 
 class SparsePoseidonParamsValidationTest(absltest.TestCase):
@@ -187,7 +220,9 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
     def test_rejects_dtype_mismatch(self) -> None:
         # An array in a different field than `dtype` must be rejected.
-        wrong = fnp.asarray(np.array(_INITIAL_ARC, dtype=np.int64).astype(G))
+        wrong = fnp.asarray(
+            np.array(_INITIAL_ARC, dtype=np.int64).astype(koalabear_mont)
+        )
         with self.assertRaises(ValueError):
             SparsePoseidonParams(**{**_param_kwargs(), "initial_arc": wrong})
 
@@ -204,28 +239,27 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
-    def test_permute_falls_back_to_generic_when_emitter_absent(self) -> None:
-        # When the plugin lacks the emitter (`_DEDICATED_EMITTER_AVAILABLE=False`)
-        # the permute marks its region with the generic "zorch.fused_region" name so
-        # no compile fails on an unknown composite; the normal-form body still fuses.
-        # The dedicated (default) path is covered by SparsePoseidonDedicatedMarkerTest.
-        perm = _generic_perm()
+    def test_matrix_wider_than_i64_falls_back_to_generic(self) -> None:
+        # A matrix over a field wider than an int64 has nothing the dedicated
+        # marker's attribute contract can carry, so the instance marks its region
+        # with the generic "zorch.fused_region" name instead; the normal-form body
+        # still fuses. Constructing it must not raise: the gate establishes
+        # representability before `_rows_to_i64` builds an attribute, where an
+        # out-of-range entry is an OverflowError. The dedicated (default) path is
+        # covered by SparsePoseidonDedicatedMarkerTest.
+        perm = SparsePoseidon(_wide_field_params())
         self.assertFalse(perm.has_dedicated_fusion)
-        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
+        self.assertEqual(perm.fused_region_version, 0)
+        txt = (
+            frx.jit(perm.permute)
+            .lower(fnp.arange(_WIDTH, dtype=goldilocks_mont))
+            .as_text()
+        )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
-
-
-def _generic_perm(params: SparsePoseidonParams | None = None) -> SparsePoseidon:
-    """A SparsePoseidon built with the dedicated emitter forced unavailable, so its
-    permute falls back to the generic `zorch.fused_region` marker. `_DEDICATED_-
-    EMITTER_AVAILABLE` is read in `__init__`, so the patch must wrap construction;
-    the instance then carries the generic name/attrs and lowers the same afterwards."""
-    with mock.patch.object(sparse_mod, "_DEDICATED_EMITTER_AVAILABLE", False):
-        return SparsePoseidon(params if params is not None else _params())
 
 
 class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
@@ -242,7 +276,11 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # leading operand (frx.lax.composite prepends consts) and break that ABI.
         perm = SparsePoseidon(_params())
         self.assertTrue(perm.has_dedicated_fusion)
-        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
+        txt = (
+            frx.jit(perm.permute)
+            .lower(fnp.arange(_WIDTH, dtype=babybear_mont))
+            .as_text()
+        )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
@@ -258,7 +296,11 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # recognizer reads via GetCompositeAttrIntArray, NOT a plain ArrayAttr
         # (`mds = [..]`) a Python list would produce. Matrices flatten row-major.
         perm = SparsePoseidon(_params())
-        txt = frx.jit(perm.permute).lower(fnp.arange(_WIDTH, dtype=F)).as_text()
+        txt = (
+            frx.jit(perm.permute)
+            .lower(fnp.arange(_WIDTH, dtype=babybear_mont))
+            .as_text()
+        )
         for shape_attr in (
             f"width = {_WIDTH} : i64",
             f"half_full_rounds = {_HALF} : i64",
@@ -290,7 +332,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         perm = SparsePoseidon(_params())
         rng = np.random.default_rng(0)
         for _ in range(8):
-            canon = rng.integers(0, _P, size=_WIDTH, dtype=np.int64)
+            canon = rng.integers(0, _BABYBEAR_P, size=_WIDTH, dtype=np.int64)
             operands = sparse_mod._abi_operands(perm, _to_field(canon))
             out = sparse_mod._permute_from_operands(perm, *operands)
             got = [int(x) for x in _to_canon(out)]
@@ -303,7 +345,9 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
         # discriminator plus the four matrices for a region wrapper (e.g. a Merkle
         # commit) to route the whole region through SparsePoseidonFusion.
         perm = SparsePoseidon(_params())
-        operands, body, attrs = perm.fused_region_spec(fnp.arange(_WIDTH, dtype=F))
+        operands, body, attrs = perm.fused_region_spec(
+            fnp.arange(_WIDTH, dtype=babybear_mont)
+        )
         self.assertLen(operands, 6)
         self.assertTrue(callable(body))
         self.assertEqual(attrs["permutation"], "sparse_poseidon")
@@ -322,40 +366,43 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
 #     All derivation arithmetic is pure-Python int mod p — independent of the JAX
 #     lowering under test.
 
-_EQ_P = int(_P)
-
 
 def _minv(a: int) -> int:
-    return pow(a % _EQ_P, _EQ_P - 2, _EQ_P)
+    return pow(a % _BABYBEAR_P, _BABYBEAR_P - 2, _BABYBEAR_P)
 
 
 def _mm(A: list, B: list) -> list:
     n, k, m = len(A), len(B), len(B[0])
     return [
-        [sum(A[i][t] * B[t][j] for t in range(k)) % _EQ_P for j in range(m)]
+        [sum(A[i][t] * B[t][j] for t in range(k)) % _BABYBEAR_P for j in range(m)]
         for i in range(n)
     ]
 
 
 def _mv(A: list, v: list) -> list:
-    return [sum(A[i][j] * v[j] for j in range(len(v))) % _EQ_P for i in range(len(A))]
+    return [
+        sum(A[i][j] * v[j] for j in range(len(v))) % _BABYBEAR_P for i in range(len(A))
+    ]
 
 
 def _matinv(A: list) -> list:
     n = len(A)
     aug = [
-        [A[i][j] % _EQ_P for j in range(n)] + [1 if i == j else 0 for j in range(n)]
+        [A[i][j] % _BABYBEAR_P for j in range(n)]
+        + [1 if i == j else 0 for j in range(n)]
         for i in range(n)
     ]
     for col in range(n):
-        piv = next(r for r in range(col, n) if aug[r][col] % _EQ_P != 0)
+        piv = next(r for r in range(col, n) if aug[r][col] % _BABYBEAR_P != 0)
         aug[col], aug[piv] = aug[piv], aug[col]
         ipiv = _minv(aug[col][col])
-        aug[col] = [(x * ipiv) % _EQ_P for x in aug[col]]
+        aug[col] = [(x * ipiv) % _BABYBEAR_P for x in aug[col]]
         for r in range(n):
-            if r != col and aug[r][col] % _EQ_P != 0:
+            if r != col and aug[r][col] % _BABYBEAR_P != 0:
                 f = aug[r][col]
-                aug[r] = [(aug[r][k] - f * aug[col][k]) % _EQ_P for k in range(2 * n)]
+                aug[r] = [
+                    (aug[r][k] - f * aug[col][k]) % _BABYBEAR_P for k in range(2 * n)
+                ]
     return [row[n:] for row in aug]
 
 
@@ -371,7 +418,7 @@ def _blockdiag1(N: list) -> list:
 
 def _rand_invertible(w: int, rng: np.random.Generator) -> list:
     while True:
-        M = [[int(rng.integers(0, _EQ_P)) for _ in range(w)] for _ in range(w)]
+        M = [[int(rng.integers(0, _BABYBEAR_P)) for _ in range(w)] for _ in range(w)]
         try:
             _matinv(M)
             _matinv([row[1:] for row in M[1:]])  # M-hat must be invertible too
@@ -381,7 +428,7 @@ def _rand_invertible(w: int, rng: np.random.Generator) -> list:
 
 
 def _sbox(x: int) -> int:
-    return pow(x % _EQ_P, _ALPHA, _EQ_P)
+    return pow(x % _BABYBEAR_P, _ALPHA, _BABYBEAR_P)
 
 
 def _naive_permute(
@@ -393,10 +440,10 @@ def _naive_permute(
     just another dense-MDS full round here (the optimized form is what turns its
     matrix into P)."""
     w = _WIDTH
-    s = [(state[i] + iarc[i]) % _EQ_P for i in range(w)]
+    s = [(state[i] + iarc[i]) % _BABYBEAR_P for i in range(w)]
 
     def full(vec: list, rc: list) -> list:
-        return _mv(M, [(_sbox(vec[i]) + rc[i]) % _EQ_P for i in range(w)])
+        return _mv(M, [(_sbox(vec[i]) + rc[i]) % _BABYBEAR_P for i in range(w)])
 
     for k in range(_HALF - 1):
         s = full(s, pre[k])
@@ -404,8 +451,8 @@ def _naive_permute(
     for i in range(_NPART):
         s = _mv(
             M,
-            [(_sbox(s[0]) + part_c[i][0]) % _EQ_P]
-            + [(s[t] + part_c[i][t]) % _EQ_P for t in range(1, w)],
+            [(_sbox(s[0]) + part_c[i][0]) % _BABYBEAR_P]
+            + [(s[t] + part_c[i][t]) % _BABYBEAR_P for t in range(1, w)],
         )
     for k in range(_HALF - 1):
         s = full(s, post[k])
@@ -435,14 +482,18 @@ def _derive_sparse(M: list, trans_c: list, part_c: list) -> tuple:
     prc = [0] * npr
     carry = [0] * w
     for i in range(npr - 1, -1, -1):
-        need = [(r[i][j] + carry[j]) % _EQ_P for j in range(w)]
+        need = [(r[i][j] + carry[j]) % _BABYBEAR_P for j in range(w)]
         c0 = [Sp[i][t][0] for t in range(w)]  # Sp_i column 0
         row0tail = Sp[i][0][1:]
-        rt_ct = sum(row0tail[t] * c0[t + 1] for t in range(w - 1)) % _EQ_P
-        rt_needt = sum(row0tail[t] * need[t + 1] for t in range(w - 1)) % _EQ_P
-        prc[i] = ((need[0] - rt_needt) * _minv((c0[0] - rt_ct) % _EQ_P)) % _EQ_P
-        carry = [0] + [(need[t + 1] - prc[i] * c0[t + 1]) % _EQ_P for t in range(w - 1)]
-    trans_folded = [(trans_c[j] + _mv(Pinv, carry)[j]) % _EQ_P for j in range(w)]
+        rt_ct = sum(row0tail[t] * c0[t + 1] for t in range(w - 1)) % _BABYBEAR_P
+        rt_needt = sum(row0tail[t] * need[t + 1] for t in range(w - 1)) % _BABYBEAR_P
+        prc[i] = (
+            (need[0] - rt_needt) * _minv((c0[0] - rt_ct) % _BABYBEAR_P)
+        ) % _BABYBEAR_P
+        carry = [0] + [
+            (need[t + 1] - prc[i] * c0[t + 1]) % _BABYBEAR_P for t in range(w - 1)
+        ]
+    trans_folded = [(trans_c[j] + _mv(Pinv, carry)[j]) % _BABYBEAR_P for j in range(w)]
     return Pmat, Sp, prc, trans_folded
 
 
@@ -452,7 +503,7 @@ class SparsePoseidonEquivalenceTest(absltest.TestCase):
         w = _WIDTH
 
         def vec() -> list:
-            return [int(rng.integers(0, _EQ_P)) for _ in range(w)]
+            return [int(rng.integers(0, _BABYBEAR_P)) for _ in range(w)]
 
         M = _rand_invertible(w, rng)
         iarc = vec()
@@ -466,11 +517,11 @@ class SparsePoseidonEquivalenceTest(absltest.TestCase):
         for i in range(_NPART):
             for t in range(1, w):
                 for j in range(1, w):
-                    self.assertEqual(Sp[i][t][j] % _EQ_P, 1 if t == j else 0)
+                    self.assertEqual(Sp[i][t][j] % _BABYBEAR_P, 1 if t == j else 0)
 
         params = SparsePoseidonParams(
             width=w,
-            dtype=F,
+            dtype=babybear_mont,
             alpha=_ALPHA,
             half_full_rounds=_HALF,
             n_partial_rounds=_NPART,
@@ -489,7 +540,7 @@ class SparsePoseidonEquivalenceTest(absltest.TestCase):
         perm = SparsePoseidon(params)
         rng_in = np.random.default_rng(7)
         for _ in range(8):
-            canon = rng_in.integers(0, _EQ_P, size=w, dtype=np.int64)
+            canon = rng_in.integers(0, _BABYBEAR_P, size=w, dtype=np.int64)
             got = [int(x) for x in _to_canon(perm.permute(_to_field(canon)))]
             want = _naive_permute(
                 [int(x) for x in canon], M, iarc, pre, trans_c, part_c, post
