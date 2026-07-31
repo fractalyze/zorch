@@ -33,6 +33,9 @@ py_test(
         "//zorch:prove",
         "//zorch:sha256_field_transcript",
         "//zorch/hash:sha256",
+        # The unmarked sampler the marked draw is gated against, and the entry
+        # that routes to it.
+        "//zorch/pcs:fold",
         "//zorch/sumcheck",
         requirement("absl_py"),
         requirement("frx"),
