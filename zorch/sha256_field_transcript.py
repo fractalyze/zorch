@@ -156,6 +156,133 @@ def _sha256_squeeze_zone(
     return Sha256State(h, pending, counts), squeezed
 
 
+# ============================================================================
+# `zorch.sample_distinct` — one rejection-sampling DRAW as one kernel.
+#
+# Rejection sampling is irreducibly serial: each candidate is a squeeze and the
+# squeezes are a Fiat-Shamir chain, so the only thing left to win is what a
+# draw costs in kernels. Marking the squeeze alone leaves the bookkeeping
+# around it — the membership test over the accepted prefix, the append, the
+# accept/reject select — as three more launches, and on an idle card those cost
+# as much as the squeeze itself: the body is latency-bound, so op COUNT is the
+# cost and rewriting any single op into a cheaper one buys nothing.
+#
+# The framing rides as an OPERAND and the limb width as an attr, which is what
+# lets one region serve both conventions in use — a scalar-framed draw reducing
+# the low uint64 limb and a slice-framed one reducing the low uint32 — without
+# either being baked into the emitter.
+#
+# The decomposition is the plain draw, so with no emitter the marker inlines
+# byte-identically, exactly like the squeeze hop above.
+# ============================================================================
+SAMPLE_DISTINCT_MARKER = "zorch.sample_distinct"
+SAMPLE_DISTINCT_MARKER_VERSION = 1
+
+
+# Limb widths a draw may reduce by, and the unsigned dtype each bitcasts to.
+# Restricted to native widths on purpose: assembling the integer from bytes
+# instead costs a shift/or chain that does NOT fold away inside the marked
+# region, and measured 22% slower per draw than the bitcast it replaced.
+_LIMB_DTYPES = {1: fnp.uint8, 2: fnp.uint16, 4: fnp.uint32, 8: fnp.uint64}
+
+
+def _le_limb(data: Array, limb_bytes: int) -> Array:
+    """`data[:limb_bytes]` read as a little-endian unsigned integer — the same
+    bitcast the unmarked samplers do, so the marked draw reduces identically."""
+    return lax.bitcast_convert_type(
+        data[:limb_bytes], _LIMB_DTYPES[limb_bytes]
+    ).reshape(())
+
+
+def _distinct_draw(
+    state: Sha256State,
+    framing: Array,
+    out: Array,
+    n: Array,
+    *,
+    nbytes: int,
+    block_len: int,
+    limb_bytes: int,
+) -> tuple[Sha256State, Array, Array]:
+    """One draw: squeeze, reduce the low `limb_bytes` limb mod `block_len`, and
+    append the position to `out[:n]` unless it is already there. `out` keeps its
+    full width throughout — only `n` says how much of it is live.
+
+    The squeeze is the MARKED hop, so this region nests `zorch.sha256_squeeze`
+    (as `zorch.duplex_fs` nests `zorch.poseidon2`). That nesting is what keeps
+    the marker free before its own emitter exists: dropping to the plain
+    `_squeeze_hop` here would un-fuse the squeeze and blow the draw from 7
+    launch-shaped ops back out to 17."""
+    state, squeezed = _sha256_squeeze_zone(state, framing, nbytes)
+    limb = _le_limb(squeezed, limb_bytes)
+    pos = (limb % limb.dtype.type(block_len)).astype(fnp.int32)
+    idx = fnp.arange(out.shape[0], dtype=fnp.int32)
+    hit = fnp.any((idx < n) & (out == pos))
+    return (
+        state,
+        fnp.where(hit, out, out.at[n].set(pos)),
+        fnp.where(hit, n, n + fnp.int32(1)),
+    )
+
+
+def _sample_distinct_region(
+    h: Array,
+    pending: Array,
+    counts: Array,
+    framing: Array,
+    out: Array,
+    n: Array,
+    *,
+    nbytes: int,
+    block_len: int,
+    limb_bytes: int,
+) -> tuple[Array, Array, Array, Array, Array]:
+    """The `zorch.sample_distinct` decomposition. The stream position rides in
+    the state leaves and the accepted count in `n`, both operands, so one
+    recompile-free kernel serves every draw of every level."""
+    state, out, n = _distinct_draw(
+        Sha256State(h, pending, counts),
+        framing,
+        out,
+        n,
+        nbytes=nbytes,
+        block_len=block_len,
+        limb_bytes=limb_bytes,
+    )
+    return state.h, state.pending, state.counts, out, n
+
+
+@partial(jit, static_argnames=("nbytes", "block_len", "limb_bytes"), inline=True)
+def _sample_distinct_zone(
+    state: Sha256State,
+    framing: Array,
+    out: Array,
+    n: Array,
+    *,
+    nbytes: int,
+    block_len: int,
+    limb_bytes: int,
+) -> tuple[Sha256State, Array, Array]:
+    """The marked draw as one compiled dispatch carrying the
+    `zorch.sample_distinct` composite. `inline=True` keeps a call site already
+    inside an outer jit byte-identical (mirrors `_sha256_squeeze_zone`)."""
+    h, pending, counts, out, n = fused_region(
+        _sample_distinct_region,
+        state.h,
+        state.pending,
+        state.counts,
+        framing,
+        out,
+        n,
+        name=SAMPLE_DISTINCT_MARKER,
+        version=SAMPLE_DISTINCT_MARKER_VERSION,
+        nbytes=nbytes,
+        block_len=block_len,
+        limb_bytes=limb_bytes,
+    )
+    return Sha256State(h, pending, counts), out, n
+
+
 def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
     """Whether each digest (uint8 `[B, 32]`) has >= `bits` leading zero bits,
     big-endian (digest[..., 0] most significant). Traceable; byte-identical to
@@ -262,6 +389,69 @@ class Sha256FieldTranscript:
         self, values: Array, n: int = 1
     ) -> tuple[Sha256FieldTranscript, Array]:
         return self.observe(values).sample(n)
+
+    # ---- rejection-sampled query positions (`zorch.sample_distinct`) ----
+    def _sample_distinct(
+        self, framing: Array, block_len: int, count: int, limb_bytes: int
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """`count` DISTINCT positions in `[0, block_len)`, sorted ascending: one
+        marked draw per candidate, re-drawing on a repeat. A device `while_loop`
+        — `jit`-safe, never leaves the device — whose body is one marked hop, so
+        a vendor that emits the marker pays one kernel per candidate."""
+        if count > block_len:
+            raise ValueError(
+                f"cannot sample {count} distinct positions from a block of "
+                f"{block_len}"
+            )
+        nbytes = self._item_bytes()
+        # An over-wide limb would slice past the squeezed element, which a
+        # traced slice CLAMPS rather than raises on — a silently wrong position,
+        # so reject it here alongside the non-native widths.
+        if limb_bytes not in _LIMB_DTYPES or limb_bytes > nbytes:
+            raise ValueError(
+                f"limb_bytes must be one of {sorted(_LIMB_DTYPES)} and at most "
+                f"the {nbytes}-byte element width, got {limb_bytes}"
+            )
+
+        def body(
+            carry: tuple[Sha256State, Array, Array]
+        ) -> tuple[Sha256State, Array, Array]:
+            state, out, n = carry
+            return _sample_distinct_zone(
+                state,
+                framing,
+                out,
+                n,
+                nbytes=nbytes,
+                block_len=block_len,
+                limb_bytes=limb_bytes,
+            )
+
+        state, out, _ = lax.while_loop(
+            lambda c: c[2] < count,
+            body,
+            (self.state, fnp.zeros(count, fnp.int32), fnp.int32(0)),
+        )
+        return replace(self, state=state), fnp.sort(out)
+
+    def sample_distinct(
+        self, block_len: int, count: int, *, limb_bytes: int = 4
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """Rejection-sample distinct positions drawing under SLICE framing —
+        each candidate is a `sample(1)`. Separate from `sample_distinct_scalar`
+        for the same reason `sample` and `sample_scalar` are separate: the KIND
+        tag is transcript-semantic, so the two draw different challenge streams
+        and a mode flag would hide that in an argument."""
+        framing = _const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(1))
+        return self._sample_distinct(framing, block_len, count, limb_bytes)
+
+    def sample_distinct_scalar(
+        self, block_len: int, count: int, *, limb_bytes: int = 4
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """`sample_distinct` drawing under SCALAR framing — each candidate is a
+        `sample_scalar()`."""
+        framing = _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))
+        return self._sample_distinct(framing, block_len, count, limb_bytes)
 
     # ---- proof-of-work (DuplexTranscript's grind/check_witness shape) ----
     def _pow_state(self) -> Sha256State:

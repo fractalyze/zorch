@@ -10,6 +10,8 @@ scan-threadable — and threads zorch's sumcheck round driver under `@jit`.
 """
 from __future__ import annotations
 
+from typing import Any
+
 import frx
 import frx.numpy as fnp
 import numpy as np
@@ -17,7 +19,9 @@ from absl.testing import absltest
 
 from zorch.byte_transcript import KIND_SCALAR, OP_SQUEEZE, ByteHashTranscript
 from zorch.hash.sha256 import HostSha256, Sha256
+from zorch.pcs.fold import sample_distinct_positions
 from zorch.sha256_field_transcript import (
+    SAMPLE_DISTINCT_MARKER,
     SHA256_SQUEEZE_MARKER,
     Sha256FieldTranscript,
     _const_u8,
@@ -282,6 +286,110 @@ class Sha256SqueezeMarkerTest(absltest.TestCase):
             frx.tree_util.tree_leaves(ref), frx.tree_util.tree_leaves(mk), strict=True
         ):
             self.assertEqual(np.asarray(a).tobytes(), np.asarray(b).tobytes())
+
+
+class SampleDistinctMarkerTest(absltest.TestCase):
+    """The `zorch.sample_distinct` draw marker is a byte-identical drop-in for
+    the plain rejection-sampling body, on both framings and any limb width."""
+
+    # (block_len, count) — the last pair is deliberately not a power of two, so
+    # the reduction's modulus is exercised rather than a mask.
+    SHAPES = ((256, 53), (1024, 71), (100, 40))
+
+    def _reference(
+        self,
+        t: Sha256FieldTranscript,
+        block_len: int,
+        count: int,
+        limb_bytes: int,
+        scalar: bool,
+    ) -> tuple[Sha256FieldTranscript, list[int]]:
+        """The plain loop, written straight off the transcript's own draw
+        surface — no marked hop anywhere on this path."""
+        out: list[int] = []
+        while len(out) < count:
+            t, g = t.sample_scalar() if scalar else t.sample(1)
+            raw = np.asarray(g).tobytes()[:limb_bytes]
+            pos = int.from_bytes(raw, "little") % block_len
+            if pos not in out:
+                out.append(pos)
+        return t, sorted(out)
+
+    def _assert_matches_reference(
+        self, dtype: Any, limb_bytes: int, scalar: bool
+    ) -> None:
+        for block_len, count in self.SHAPES:
+            t = Sha256FieldTranscript.new(b"dom", dtype)
+            ref_t, ref = self._reference(t, block_len, count, limb_bytes, scalar)
+            draw = t.sample_distinct_scalar if scalar else t.sample_distinct
+            mk_t, mk = draw(block_len, count, limb_bytes=limb_bytes)
+
+            self.assertEqual(
+                np.asarray(mk).tolist(), ref, f"positions differ at {block_len=}"
+            )
+            # The state matters as much as the positions: the next phase
+            # continues this transcript, so a hop that stopped one draw early
+            # would still return the right answer here and diverge later.
+            for a, b in zip(
+                frx.tree_util.tree_leaves(ref_t),
+                frx.tree_util.tree_leaves(mk_t),
+                strict=True,
+            ):
+                self.assertEqual(
+                    np.asarray(a).tobytes(),
+                    np.asarray(b).tobytes(),
+                    f"transcript state differs at {block_len=}",
+                )
+
+    def test_slice_framing_matches_the_plain_loop(self) -> None:
+        self._assert_matches_reference(np.uint32, limb_bytes=4, scalar=False)
+
+    def test_scalar_framing_matches_the_plain_loop(self) -> None:
+        self._assert_matches_reference(np.uint32, limb_bytes=4, scalar=True)
+
+    def test_narrow_limb_matches_the_plain_loop(self) -> None:
+        # A limb narrower than the element is the general shape the consumer
+        # case has (flock reduces the low uint64 of a 16-byte element); the
+        # reduction assembles the bytes little-endian rather than bitcasting, so
+        # any width exercises the same code. The 8-byte width itself needs an
+        # 8-byte challenge dtype — x64, which this file does not enable — and is
+        # covered end to end by the consumer's byte gates.
+        self._assert_matches_reference(np.uint32, limb_bytes=2, scalar=True)
+
+    def test_matches_the_unmarked_pcs_fold_sampler(self) -> None:
+        # The strongest byte-identity claim available: equality with the
+        # generic, unmarked sampler already in production (`pcs/fold`), which is
+        # slice-framed and reduces the low uint32.
+        for block_len, count in self.SHAPES:
+            t = Sha256FieldTranscript.new(b"dom", np.uint32)
+            ref_t, ref = sample_distinct_positions(t, block_len, count)
+            mk_t, mk = t.sample_distinct(block_len, count)
+            self.assertEqual(np.asarray(mk).tolist(), np.asarray(ref).tolist())
+            for a, b in zip(
+                frx.tree_util.tree_leaves(ref_t),
+                frx.tree_util.tree_leaves(mk_t),
+                strict=True,
+            ):
+                self.assertEqual(np.asarray(a).tobytes(), np.asarray(b).tobytes())
+
+    def test_marker_appears_in_lowered_hlo(self) -> None:
+        # Present by construction for a vendor to fuse — on both framings.
+        t = Sha256FieldTranscript.new(b"dom", np.uint32)
+        for fn in (
+            lambda x: x.sample_distinct(256, 8),
+            lambda x: x.sample_distinct_scalar(256, 8),
+        ):
+            hlo = frx.jit(fn).lower(t).as_text()
+            self.assertIn(SAMPLE_DISTINCT_MARKER, hlo)
+
+    def test_rejects_a_block_too_small_and_an_unrepresentable_limb(self) -> None:
+        t = Sha256FieldTranscript.new(b"dom", np.uint32)
+        with self.assertRaises(ValueError):
+            t.sample_distinct(8, 9)  # more positions than the block holds
+        with self.assertRaises(ValueError):
+            # Wider than the 4-byte element: the draw would index past the
+            # squeezed bytes, and a traced gather clamps instead of raising.
+            t.sample_distinct(256, 4, limb_bytes=8)
 
 
 if __name__ == "__main__":
