@@ -120,7 +120,24 @@ def _wide_field_params() -> SparsePoseidonParams:
     )
 
 
-def _reference_permute(state_canon: list[int]) -> list[int]:
+def _reference_permute(
+    state_canon: list[int],
+    *,
+    p: int = _BABYBEAR_P,
+    w: int = _WIDTH,
+    alpha: int = _ALPHA,
+    half: int = _HALF,
+    npart: int = _NPART,
+    initial_arc: Sequence[int] = _INITIAL_ARC,
+    full_rc_pre: Sequence[Sequence[int]] = _FULL_RC_PRE,
+    transition_rc: Sequence[int] = _TRANSITION_RC,
+    partial_rc: Sequence[int] = _PARTIAL_RC,
+    full_rc_post: Sequence[Sequence[int]] = _FULL_RC_POST,
+    mds: Sequence[Sequence[int]] = _MDS,
+    transition_matrix: Sequence[Sequence[int]] = _TRANSITION_M,
+    partial_dot: Sequence[Sequence[int]] = _PARTIAL_DOT,
+    partial_col: Sequence[Sequence[int]] = _PARTIAL_COL,
+) -> list[int]:
     """Independent optimized-sparse Poseidon reference in pure-Python int mod p.
 
     Mirrors the documented schedule: initial ARC, (half-1) full rounds with the
@@ -129,8 +146,10 @@ def _reference_permute(state_canon: list[int]) -> list[int]:
     final full round with no trailing constant. The S-box precedes the round
     constant (the constant seeds the next round's S-box); the initial ARC seeds
     the first.
+
+    Defaults describe the module's width-4 config; every part of the schedule is
+    overridable so a larger one can reuse this reference.
     """
-    p, w, alpha = _BABYBEAR_P, _WIDTH, _ALPHA
     s = [x % p for x in state_canon]
 
     def sbox(x: int) -> int:
@@ -144,19 +163,19 @@ def _reference_permute(state_canon: list[int]) -> list[int]:
     ) -> list[int]:
         return matmul(mat, [(sbox(vec[i]) + rc[i]) % p for i in range(w)])
 
-    s = [(s[i] + _INITIAL_ARC[i]) % p for i in range(w)]
-    for r in range(_HALF - 1):
-        s = full_round(s, _FULL_RC_PRE[r], _MDS)
-    s = full_round(s, _TRANSITION_RC, _TRANSITION_M)
-    for r in range(_NPART):
-        a = (sbox(s[0]) + _PARTIAL_RC[r]) % p
+    s = [(s[i] + initial_arc[i]) % p for i in range(w)]
+    for r in range(half - 1):
+        s = full_round(s, full_rc_pre[r], mds)
+    s = full_round(s, transition_rc, transition_matrix)
+    for r in range(npart):
+        a = (sbox(s[0]) + partial_rc[r]) % p
         old = [a] + s[1:]
-        new0 = sum(old[j] * _PARTIAL_DOT[r][j] for j in range(w)) % p
-        rest = [(s[t] + a * _PARTIAL_COL[r][t - 1]) % p for t in range(1, w)]
+        new0 = sum(old[j] * partial_dot[r][j] for j in range(w)) % p
+        rest = [(s[t] + a * partial_col[r][t - 1]) % p for t in range(1, w)]
         s = [new0] + rest
-    for r in range(_HALF - 1):
-        s = full_round(s, _FULL_RC_POST[r], _MDS)
-    s = matmul(_MDS, [sbox(x) for x in s])
+    for r in range(half - 1):
+        s = full_round(s, full_rc_post[r], mds)
+    s = matmul(mds, [sbox(x) for x in s])
     return s
 
 
@@ -170,6 +189,80 @@ class SparsePoseidonReferenceByteMatchTest(absltest.TestCase):
             got = [int(x) for x in _to_canon(out)]
             want = _reference_permute([int(x) for x in canon])
             self.assertEqual(got, want)
+
+
+# A production-scale schedule: 8 lanes, 22 partial rounds, over Goldilocks. The
+# width-4 config above carries only 2 partial rounds, which is why it could not
+# catch a per-lane fan-out in the sparse partial layer: the cost of re-deriving
+# each round per consumer compounds with the partial-round count, so 2 rounds
+# hides what 22 makes fatal (the pre-fix body does not terminate at this size).
+_BIG_WIDTH, _BIG_HALF, _BIG_NPART = 8, 4, 22
+
+
+def _big_schedule() -> dict[str, np.ndarray]:
+    """A deterministic full-magnitude Goldilocks schedule. The constants are
+    arbitrary — this pins zorch against the independent reference, not against
+    any particular parameterization — but they are full-width so nothing folds
+    away at trace time."""
+    rng = np.random.default_rng(565)
+
+    def rnd(*shape: int) -> np.ndarray:
+        return rng.integers(1, _GOLDILOCKS_P, size=shape, dtype=np.uint64)
+
+    return {
+        "initial_arc": rnd(_BIG_WIDTH),
+        "full_rc_pre": rnd(_BIG_HALF - 1, _BIG_WIDTH),
+        "transition_rc": rnd(_BIG_WIDTH),
+        "partial_rc": rnd(_BIG_NPART),
+        "full_rc_post": rnd(_BIG_HALF - 1, _BIG_WIDTH),
+        "mds": rnd(_BIG_WIDTH, _BIG_WIDTH),
+        "transition_matrix": rnd(_BIG_WIDTH, _BIG_WIDTH),
+        "partial_dot": rnd(_BIG_NPART, _BIG_WIDTH),
+        "partial_col": rnd(_BIG_NPART, _BIG_WIDTH - 1),
+    }
+
+
+class SparsePoseidonManyPartialRoundsTest(absltest.TestCase):
+    """Guards the sparse partial layer against per-lane fan-out.
+
+    Each partial round consumes the post-S-box lane-0 value in every lane. Written
+    as width-1 independent scalar expressions, that value expands to the whole
+    preceding round in each one, so chained rounds re-derive each round per
+    consumer rather than once and the cost compounds per round — invisible at 2
+    partial rounds, terminal at 22. Keeping the layer array-shaped gives the
+    compiler one value to materialize. This test only completes in the array form.
+    """
+
+    def test_byte_matches_reference_at_production_scale(self) -> None:
+        sched = _big_schedule()
+
+        def fld(rows: np.ndarray) -> fnp.ndarray:
+            return fnp.array(rows, dtype=goldilocks_mont)
+
+        perm = SparsePoseidon(
+            SparsePoseidonParams(
+                width=_BIG_WIDTH,
+                dtype=goldilocks_mont,
+                alpha=_ALPHA,
+                half_full_rounds=_BIG_HALF,
+                n_partial_rounds=_BIG_NPART,
+                **{name: fld(rows) for name, rows in sched.items()},
+            )
+        )
+
+        rng = np.random.default_rng(1)
+        canon = rng.integers(1, _GOLDILOCKS_P, size=_BIG_WIDTH, dtype=np.uint64)
+        got = [int(x) for x in _to_canon(perm.permute(fld(canon)))]
+        want = _reference_permute(
+            [int(x) for x in canon],
+            p=_GOLDILOCKS_P,
+            w=_BIG_WIDTH,
+            alpha=_ALPHA,
+            half=_BIG_HALF,
+            npart=_BIG_NPART,
+            **{name: rows.tolist() for name, rows in sched.items()},
+        )
+        self.assertEqual(got, want)
 
 
 class SparsePoseidonPermuteShapeTest(absltest.TestCase):

@@ -88,10 +88,17 @@ def apply_sparse_partial(
             f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
             f"width {w}"
         )
-    out0 = unrolled_sum(
-        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
-    )
-    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
+    # Both halves stay ARRAY-shaped so `active` is consumed once, not once per
+    # lane. Writing them as w-1 independent scalar expressions costs nothing on
+    # its own, but `active` expands to the whole previous round, and chaining
+    # rounds then re-derives each round per consumer instead of once: run time
+    # grows geometrically in the partial-round count (measured ~3.6x per round
+    # on the CPU backend, so a 22-round Goldilocks permutation never finishes).
+    # The array form gives the compiler a single value to materialize.
+    # https://github.com/fractalyze/zorch/issues/565
+    prods = dot_row[1:] * tail
+    out0 = unrolled_sum([dot_row[0] * active] + [prods[j] for j in range(w - 1)])
+    out_rest = tail + col_vec * active
     return fnp.concatenate([out0[None], out_rest])
 
 
