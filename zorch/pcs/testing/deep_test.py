@@ -130,6 +130,29 @@ class DeepCompositionPowerAssignmentTest(absltest.TestCase):
         self.assertTrue(bool(fnp.all(got == want)), "descending vf_pows mismatch")
 
 
+    def test_columns_leading_matches_row_major_bytes(self) -> None:
+        # Layout must not perturb the arithmetic: same columns, transposed,
+        # must land on the same bytes — not merely the same polynomial.
+        coeffs, domain, base_cols, ext_cols, vf = DeepCompositionTest._setup(self, 3)
+        m = _B + _C
+        z = rand_ext_field(778, (), KB, EF)
+        evals = fnp.stack([eval_coeffs(coeffs[i], z) for i in range(m)])
+        want = deep_composition(
+            base_cols, ext_cols, evals, fnp.stack([z]), [0] * m, vf, domain
+        )
+        got = deep_composition(
+            base_cols.T,
+            ext_cols.T,
+            evals,
+            fnp.stack([z]),
+            [0] * m,
+            vf,
+            domain,
+            columns_leading=True,
+        )
+        self.assertTrue(bool(fnp.all(got == want)), "columns_leading mismatch")
+
+
 class OpenColumnsTest(absltest.TestCase):
     def test_matches_per_column_dot(self) -> None:
         # The coefficient-wise reduction against its definition: each opening
