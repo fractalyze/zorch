@@ -192,10 +192,11 @@ def sample_distinct_positions(
 
     A transcript that offers a MARKED draw serves it instead of the loop below.
     Same wire — the marked draw is gated byte-for-byte against this one — but
-    the whole per-candidate body carries `zorch.sample_distinct`, so a vendor
-    that emits the marker pays one kernel per candidate rather than four, which
-    is what the cost of this loop actually is (it is a Fiat-Shamir chain, so
-    every op in the body sits on the critical path).
+    the WHOLE per-candidate body is enclosed in `zorch.sample_distinct`, so the
+    draw is one replayable unit rather than a squeeze plus loose bookkeeping.
+    That the body must be enclosed whole is a property of this loop, not of any
+    lowering: it is a Fiat-Shamir chain, so every op in it is on the critical
+    path and none can be hoisted out.
 
     Asked for structurally rather than by type: the transcript surface is a
     Protocol, and a flavour with no marked draw simply does not define the

@@ -393,15 +393,27 @@ class SampleDistinctMarkerTest(absltest.TestCase):
         ):
             hlo = frx.jit(fn).lower(t).as_text()
             self.assertIn(SAMPLE_DISTINCT_MARKER, hlo)
+            # The NESTED squeeze marker too: the draw region encloses the marked
+            # hop, not the plain one, and losing that nesting is invisible from
+            # the outer marker alone — it costs the squeeze its own fusion.
+            self.assertIn(SHA256_SQUEEZE_MARKER, hlo)
 
-    def test_rejects_a_block_too_small_and_an_unrepresentable_limb(self) -> None:
+    def test_rejects_configurations_that_cannot_terminate_or_reduce(self) -> None:
+        # Each of these is a HANG or a silently wrong draw on device, not a
+        # merely odd configuration, so all four are refused up front.
         t = Sha256FieldTranscript.new(b"dom", np.uint32)
         with self.assertRaises(ValueError):
             t.sample_distinct(8, 9)  # more positions than the block holds
         with self.assertRaises(ValueError):
-            # Wider than the 4-byte element: the draw would index past the
-            # squeezed bytes, and a traced gather clamps instead of raising.
+            # Wider than the 4-byte element: the draw would slice past the
+            # squeezed bytes, and a traced slice clamps instead of raising.
             t.sample_distinct(256, 4, limb_bytes=8)
+        with self.assertRaises(ValueError):
+            t.sample_distinct(256, 4, limb_bytes=3)  # not a native width
+        with self.assertRaises(ValueError):
+            # A 1-byte limb addresses 256 positions, so a wider block leaves
+            # some unreachable and the loop can never fill `count`.
+            t.sample_distinct(512, 300, limb_bytes=1)
 
 
 if __name__ == "__main__":

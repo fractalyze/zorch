@@ -412,6 +412,17 @@ class Sha256FieldTranscript:
                 f"limb_bytes must be one of {sorted(_LIMB_DTYPES)} and at most "
                 f"the {nbytes}-byte element width, got {limb_bytes}"
             )
+        # A block wider than the limb can address is not merely skewed, it is a
+        # HANG: positions land in [0, 2**(8*limb_bytes)), so once `count`
+        # exceeds that the loop can never accumulate enough distinct ones and
+        # spins on device forever. (The modulus would overflow its own dtype
+        # first, but only for a block that is exactly unreachable.)
+        limb_range = 1 << (8 * limb_bytes)
+        if block_len > limb_range:
+            raise ValueError(
+                f"block_len {block_len} exceeds what a {limb_bytes}-byte limb "
+                f"can address ({limb_range})"
+            )
 
         def body(
             carry: tuple[Sha256State, Array, Array]
