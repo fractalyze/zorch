@@ -188,11 +188,34 @@ def sample_distinct_positions(
     """Rejection-sample `count` DISTINCT positions in `[0, block_len)`, sorted
     ascending: one squeeze per candidate, low limb mod `block_len`, re-squeeze on
     a repeat. A device `while_loop` (one squeeze/iter matches a scanned chain),
-    so it's `jit`-safe and never leaves the device."""
+    so it's `jit`-safe and never leaves the device.
+
+    A transcript that offers a MARKED draw serves it instead of the loop below.
+    Same wire — the marked draw is gated byte-for-byte against this one — but
+    the whole per-candidate body carries `zorch.sample_distinct`, so a vendor
+    that emits the marker pays one kernel per candidate rather than four, which
+    is what the cost of this loop actually is (it is a Fiat-Shamir chain, so
+    every op in the body sits on the critical path).
+
+    Asked for structurally rather than by type: the transcript surface is a
+    Protocol, and a flavour with no marked draw simply does not define the
+    method — so `pcs` stays free of an import on any one FS flavour."""
     if count > block_len:
         raise ValueError(
             f"cannot sample {count} distinct positions from a block of {block_len}"
         )
+    marked_draw = getattr(transcript, "sample_distinct", None)
+    if marked_draw is not None:
+        return marked_draw(block_len, count)
+    return _sample_distinct_positions_plain(transcript, block_len, count)
+
+
+def _sample_distinct_positions_plain(
+    transcript: TranscriptT, block_len: int, count: int
+) -> tuple[TranscriptT, Array]:
+    """The unmarked loop, on the generic `Transcript` surface alone. Serves
+    every flavour without a marked draw, and stays the independent reference a
+    marked draw is gated against."""
     bl = fnp.uint32(block_len)
     idx = fnp.arange(count, dtype=fnp.int32)
 

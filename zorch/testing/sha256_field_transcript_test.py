@@ -19,7 +19,10 @@ from absl.testing import absltest
 
 from zorch.byte_transcript import KIND_SCALAR, OP_SQUEEZE, ByteHashTranscript
 from zorch.hash.sha256 import HostSha256, Sha256
-from zorch.pcs.fold import sample_distinct_positions
+from zorch.pcs.fold import (
+    _sample_distinct_positions_plain,
+    sample_distinct_positions,
+)
 from zorch.sha256_field_transcript import (
     SAMPLE_DISTINCT_MARKER,
     SHA256_SQUEEZE_MARKER,
@@ -356,13 +359,15 @@ class SampleDistinctMarkerTest(absltest.TestCase):
         # covered end to end by the consumer's byte gates.
         self._assert_matches_reference(np.uint32, limb_bytes=2, scalar=True)
 
-    def test_matches_the_unmarked_pcs_fold_sampler(self) -> None:
-        # The strongest byte-identity claim available: equality with the
-        # generic, unmarked sampler already in production (`pcs/fold`), which is
-        # slice-framed and reduces the low uint32.
+    def test_matches_the_unmarked_pcs_fold_loop(self) -> None:
+        # The strongest byte-identity claim available: equality with `pcs/fold`'s
+        # own unmarked loop, which is slice-framed and reduces the low uint32.
+        # Against the PLAIN loop specifically — `sample_distinct_positions` now
+        # routes this transcript to the marked draw, so comparing against the
+        # public entry would compare the marked path to itself.
         for block_len, count in self.SHAPES:
             t = Sha256FieldTranscript.new(b"dom", np.uint32)
-            ref_t, ref = sample_distinct_positions(t, block_len, count)
+            ref_t, ref = _sample_distinct_positions_plain(t, block_len, count)
             mk_t, mk = t.sample_distinct(block_len, count)
             self.assertEqual(np.asarray(mk).tolist(), np.asarray(ref).tolist())
             for a, b in zip(
@@ -371,6 +376,13 @@ class SampleDistinctMarkerTest(absltest.TestCase):
                 strict=True,
             ):
                 self.assertEqual(np.asarray(a).tobytes(), np.asarray(b).tobytes())
+
+    def test_pcs_fold_routes_this_transcript_to_the_marked_draw(self) -> None:
+        # The wiring itself: a consumer calling the generic entry gets the
+        # marker, so it is not a surface only a future consumer would reach.
+        t = Sha256FieldTranscript.new(b"dom", np.uint32)
+        hlo = frx.jit(lambda x: sample_distinct_positions(x, 256, 8)).lower(t).as_text()
+        self.assertIn(SAMPLE_DISTINCT_MARKER, hlo)
 
     def test_marker_appears_in_lowered_hlo(self) -> None:
         # Present by construction for a vendor to fuse — on both framings.
