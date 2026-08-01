@@ -28,6 +28,7 @@ from zk_dtypes import (
 from zorch.fusion import FUSED_REGION_MARKER
 from zorch.hash.permutation import Permutation
 from zorch.hash.poseidon import sparse as sparse_mod
+from zorch.hash.poseidon.linear import apply_sparse_partial
 from zorch.hash.poseidon.params import SparsePoseidonParams
 from zorch.hash.poseidon.sparse import (
     POSEIDON_SPARSE_MARKER,
@@ -220,6 +221,43 @@ def _big_schedule() -> dict[str, np.ndarray]:
         "partial_dot": rnd(_BIG_NPART, _BIG_WIDTH),
         "partial_col": rnd(_BIG_NPART, _BIG_WIDTH - 1),
     }
+
+
+def _sparse_partial_multiplies(width: int) -> int:
+    """How many multiply primitives the partial layer traces to at `width`."""
+    dot_row = fnp.arange(width, dtype=goldilocks_mont)
+    col_vec = fnp.arange(width - 1, dtype=goldilocks_mont)
+    tail = fnp.arange(width - 1, dtype=goldilocks_mont)
+    active = fnp.arange(1, dtype=goldilocks_mont)[0]
+    jaxpr = frx.make_jaxpr(apply_sparse_partial)(dot_row, col_vec, active, tail).jaxpr
+    return sum(1 for eqn in jaxpr.eqns if "mul" in str(eqn.primitive))
+
+
+class SparsePartialArrayShapeTest(absltest.TestCase):
+    """Pins the partial layer to array ops, in constant time.
+
+    Per-lane scalar expressions cost 2w-1 multiplies and, chained over a real
+    round count, make each round re-derive its predecessor once per consumer.
+    Array ops cost a fixed few whatever the width, which is the property that
+    keeps the shared lane-0 value a single materializable value.
+
+    `SparsePoseidonManyPartialRoundsTest` covers the same regression end to end,
+    but can only fail by exhausting its timeout — there is no value to assert on
+    when the computation never returns. This one fails in milliseconds and says
+    which width drifted, so it is the useful signal; the other proves the
+    consequence.
+    """
+
+    def test_multiply_count_does_not_scale_with_width(self) -> None:
+        counts = {w: _sparse_partial_multiplies(w) for w in (8, 12, 16)}
+        self.assertEqual(
+            len(set(counts.values())),
+            1,
+            msg=(
+                f"multiplies must not scale with width, got {counts}. A per-lane "
+                f"scalar form gives 2w-1; see apply_sparse_partial."
+            ),
+        )
 
 
 class SparsePoseidonManyPartialRoundsTest(absltest.TestCase):
