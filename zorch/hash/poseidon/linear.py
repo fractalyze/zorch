@@ -92,16 +92,10 @@ def apply_sparse_partial(
             f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
             f"width {w}"
         )
-    # Both halves stay ARRAY-shaped so `active` is consumed once, not once per
-    # lane. Writing them as w-1 independent scalar expressions costs nothing on
-    # its own, but `active` expands to the whole previous round, and chaining
-    # rounds then re-derives each round per consumer instead of once: run time
-    # grows geometrically in the partial-round count (measured ~3.6x per round
-    # on the CPU backend, so a 22-round Goldilocks permutation never finishes).
-    # The array form gives the compiler a single value to materialize.
-    # https://github.com/fractalyze/zorch/issues/565
+    # Array-shaped so `active` is read twice rather than once per lane — the
+    # chained-input rule in `zorch.hash.linear`.
     prods = dot_row[1:] * tail
-    out0 = unrolled_sum([dot_row[0] * active] + [prods[j] for j in range(w - 1)])
+    out0 = unrolled_sum([dot_row[0] * active, *prods])
     out_rest = tail + col_vec * active
     return fnp.concatenate([out0[None], out_rest])
 
@@ -121,6 +115,16 @@ def apply_sparse_partial_ints(
     and break the emitter's operand ABI (the sparse structure rides as an int64
     marker attribute instead). Same arithmetic and reduction-free normal form as
     `apply_sparse_partial`; this is the sparse-partial sibling of `apply_dense_mds`.
+
+    Unlike its twin this reads `active` once per lane, against the chained-input
+    rule in `zorch.hash.linear`. Broadcasting `active` to a vector first would
+    hold the rule without capturing an array, but costs ~23% more traced
+    equations, and nothing chains this body at a width where that matters: the
+    int64 literals confine it to fields under 2^63, and those route to the
+    dedicated emitter, which replaces it. **That safety is incidental** — the
+    gate is about marker attribute width, not fan-out — so a field between 2^32
+    and 2^63 would put a real permutation back on this shape. Give it the
+    broadcast then.
     """
     w = len(dot_row)
     if len(col_vec) != w - 1:

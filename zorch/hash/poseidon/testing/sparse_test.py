@@ -12,7 +12,9 @@ that supplies genuine constants.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Sequence
+from typing import Any
 
 import frx
 import frx.numpy as fnp
@@ -65,8 +67,14 @@ def _to_canon(arr: fnp.ndarray) -> np.ndarray:
     return np.asarray(np.asarray(arr).astype(object), dtype=object)
 
 
+def _field(rows: object, dtype: Any) -> fnp.ndarray:
+    """Canonical ints -> a field array. uint64, not int64: a canonical Goldilocks
+    value can exceed an int64."""
+    return fnp.array(np.array(rows, dtype=np.uint64), dtype=dtype)
+
+
 def _fld(rows: object) -> fnp.ndarray:
-    return _to_field(np.array(rows, dtype=np.int64))
+    return _field(rows, babybear_mont)
 
 
 def _param_kwargs() -> dict:
@@ -100,8 +108,7 @@ def _wide_field_params() -> SparsePoseidonParams:
     constants ride as operands whatever their magnitude — so those stay small."""
 
     def fld(rows: object) -> fnp.ndarray:
-        # uint64, not int64: a canonical Goldilocks value can exceed int64.
-        return fnp.array(np.array(rows, dtype=np.uint64), dtype=goldilocks_mont)
+        return _field(rows, goldilocks_mont)
 
     mds = ((_GOLDILOCKS_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1, 2))
     return SparsePoseidonParams(
@@ -121,24 +128,71 @@ def _wide_field_params() -> SparsePoseidonParams:
     )
 
 
-def _reference_permute(
-    state_canon: list[int],
-    *,
-    p: int = _BABYBEAR_P,
-    w: int = _WIDTH,
-    alpha: int = _ALPHA,
-    half: int = _HALF,
-    npart: int = _NPART,
-    initial_arc: Sequence[int] = _INITIAL_ARC,
-    full_rc_pre: Sequence[Sequence[int]] = _FULL_RC_PRE,
-    transition_rc: Sequence[int] = _TRANSITION_RC,
-    partial_rc: Sequence[int] = _PARTIAL_RC,
-    full_rc_post: Sequence[Sequence[int]] = _FULL_RC_POST,
-    mds: Sequence[Sequence[int]] = _MDS,
-    transition_matrix: Sequence[Sequence[int]] = _TRANSITION_M,
-    partial_dot: Sequence[Sequence[int]] = _PARTIAL_DOT,
-    partial_col: Sequence[Sequence[int]] = _PARTIAL_COL,
-) -> list[int]:
+@dataclasses.dataclass(frozen=True)
+class _Schedule:
+    """One optimized-sparse Poseidon parameterization, as canonical ints.
+
+    Both sides of a byte-match read the same instance: `params` renders it for
+    zorch, `_reference_permute` interprets it in pure Python, so the two cannot
+    drift apart. Field names match `SparsePoseidonParams` so rendering needs no
+    translation step.
+    """
+
+    p: int
+    width: int
+    alpha: int
+    half_full_rounds: int
+    n_partial_rounds: int
+    initial_arc: Sequence[int]
+    full_rc_pre: Sequence[Sequence[int]]
+    transition_rc: Sequence[int]
+    partial_rc: Sequence[int]
+    full_rc_post: Sequence[Sequence[int]]
+    mds: Sequence[Sequence[int]]
+    transition_matrix: Sequence[Sequence[int]]
+    partial_dot: Sequence[Sequence[int]]
+    partial_col: Sequence[Sequence[int]]
+
+    def params(self, dtype: Any) -> SparsePoseidonParams:
+        """Render for zorch. Kwargs are written out rather than splatted so a
+        renamed field fails the type check, not the run."""
+        return SparsePoseidonParams(
+            width=self.width,
+            dtype=dtype,
+            alpha=self.alpha,
+            half_full_rounds=self.half_full_rounds,
+            n_partial_rounds=self.n_partial_rounds,
+            initial_arc=_field(self.initial_arc, dtype),
+            full_rc_pre=_field(self.full_rc_pre, dtype),
+            transition_rc=_field(self.transition_rc, dtype),
+            partial_rc=_field(self.partial_rc, dtype),
+            full_rc_post=_field(self.full_rc_post, dtype),
+            mds=_field(self.mds, dtype),
+            transition_matrix=_field(self.transition_matrix, dtype),
+            partial_dot=_field(self.partial_dot, dtype),
+            partial_col=_field(self.partial_col, dtype),
+        )
+
+
+_WIDTH4 = _Schedule(
+    p=_BABYBEAR_P,
+    width=_WIDTH,
+    alpha=_ALPHA,
+    half_full_rounds=_HALF,
+    n_partial_rounds=_NPART,
+    initial_arc=_INITIAL_ARC,
+    full_rc_pre=_FULL_RC_PRE,
+    transition_rc=_TRANSITION_RC,
+    partial_rc=_PARTIAL_RC,
+    full_rc_post=_FULL_RC_POST,
+    mds=_MDS,
+    transition_matrix=_TRANSITION_M,
+    partial_dot=_PARTIAL_DOT,
+    partial_col=_PARTIAL_COL,
+)
+
+
+def _reference_permute(state_canon: list[int], sched: _Schedule) -> list[int]:
     """Independent optimized-sparse Poseidon reference in pure-Python int mod p.
 
     Mirrors the documented schedule: initial ARC, (half-1) full rounds with the
@@ -147,10 +201,11 @@ def _reference_permute(
     final full round with no trailing constant. The S-box precedes the round
     constant (the constant seeds the next round's S-box); the initial ARC seeds
     the first.
-
-    Defaults describe the module's width-4 config; every part of the schedule is
-    overridable so a larger one can reuse this reference.
     """
+    # Only what the closures below capture; everything else reads `sched.<field>`
+    # so it stays diffable against SparsePoseidonParams.
+    p, w, alpha = sched.p, sched.width, sched.alpha
+    mds = sched.mds
     s = [x % p for x in state_canon]
 
     def sbox(x: int) -> int:
@@ -164,18 +219,18 @@ def _reference_permute(
     ) -> list[int]:
         return matmul(mat, [(sbox(vec[i]) + rc[i]) % p for i in range(w)])
 
-    s = [(s[i] + initial_arc[i]) % p for i in range(w)]
-    for r in range(half - 1):
-        s = full_round(s, full_rc_pre[r], mds)
-    s = full_round(s, transition_rc, transition_matrix)
-    for r in range(npart):
-        a = (sbox(s[0]) + partial_rc[r]) % p
+    s = [(s[i] + sched.initial_arc[i]) % p for i in range(w)]
+    for r in range(sched.half_full_rounds - 1):
+        s = full_round(s, sched.full_rc_pre[r], mds)
+    s = full_round(s, sched.transition_rc, sched.transition_matrix)
+    for r in range(sched.n_partial_rounds):
+        a = (sbox(s[0]) + sched.partial_rc[r]) % p
         old = [a] + s[1:]
-        new0 = sum(old[j] * partial_dot[r][j] for j in range(w)) % p
-        rest = [(s[t] + a * partial_col[r][t - 1]) % p for t in range(1, w)]
+        new0 = sum(old[j] * sched.partial_dot[r][j] for j in range(w)) % p
+        rest = [(s[t] + a * sched.partial_col[r][t - 1]) % p for t in range(1, w)]
         s = [new0] + rest
-    for r in range(half - 1):
-        s = full_round(s, full_rc_post[r], mds)
+    for r in range(sched.half_full_rounds - 1):
+        s = full_round(s, sched.full_rc_post[r], mds)
     s = matmul(mds, [sbox(x) for x in s])
     return s
 
@@ -188,39 +243,45 @@ class SparsePoseidonReferenceByteMatchTest(absltest.TestCase):
             canon = rng.integers(0, _BABYBEAR_P, size=_WIDTH, dtype=np.int64)
             out = perm.permute(_to_field(canon))
             got = [int(x) for x in _to_canon(out)]
-            want = _reference_permute([int(x) for x in canon])
+            want = _reference_permute([int(x) for x in canon], _WIDTH4)
             self.assertEqual(got, want)
 
 
-# A production-scale schedule: 8 lanes, 22 partial rounds, over Goldilocks. The
-# width-4 config above carries only 2 partial rounds, which is why it could not
-# catch a per-lane fan-out in the sparse partial layer: the cost of re-deriving
-# each round per consumer compounds with the partial-round count, so 2 rounds
-# hides what 22 makes fatal (the pre-fix body does not terminate at this size).
-_BIG_WIDTH, _BIG_HALF, _BIG_NPART = 8, 4, 22
+def _big_schedule() -> _Schedule:
+    """A deterministic production-scale Goldilocks schedule: 8 lanes, 22 partial
+    rounds.
 
+    The width-4 config above carries only 2 partial rounds, which is why it could
+    not catch a per-lane fan-out in the sparse partial layer — the cost of
+    re-deriving each round per consumer compounds with the partial-round count,
+    so 2 rounds hides what 22 makes fatal.
 
-def _big_schedule() -> dict[str, np.ndarray]:
-    """A deterministic full-magnitude Goldilocks schedule. The constants are
-    arbitrary — this pins zorch against the independent reference, not against
-    any particular parameterization — but they are full-width so nothing folds
-    away at trace time."""
+    The constants are arbitrary — this pins zorch against the independent
+    reference, not against any particular parameterization — but they are
+    full-magnitude so nothing folds away at trace time.
+    """
+    width, half, npart = 8, 4, 22
     rng = np.random.default_rng(565)
 
-    def rnd(*shape: int) -> np.ndarray:
-        return rng.integers(1, _GOLDILOCKS_P, size=shape, dtype=np.uint64)
+    def rnd(*shape: int) -> list:
+        return rng.integers(1, _GOLDILOCKS_P, size=shape, dtype=np.uint64).tolist()
 
-    return {
-        "initial_arc": rnd(_BIG_WIDTH),
-        "full_rc_pre": rnd(_BIG_HALF - 1, _BIG_WIDTH),
-        "transition_rc": rnd(_BIG_WIDTH),
-        "partial_rc": rnd(_BIG_NPART),
-        "full_rc_post": rnd(_BIG_HALF - 1, _BIG_WIDTH),
-        "mds": rnd(_BIG_WIDTH, _BIG_WIDTH),
-        "transition_matrix": rnd(_BIG_WIDTH, _BIG_WIDTH),
-        "partial_dot": rnd(_BIG_NPART, _BIG_WIDTH),
-        "partial_col": rnd(_BIG_NPART, _BIG_WIDTH - 1),
-    }
+    return _Schedule(
+        p=_GOLDILOCKS_P,
+        width=width,
+        alpha=_ALPHA,
+        half_full_rounds=half,
+        n_partial_rounds=npart,
+        initial_arc=rnd(width),
+        full_rc_pre=rnd(half - 1, width),
+        transition_rc=rnd(width),
+        partial_rc=rnd(npart),
+        full_rc_post=rnd(half - 1, width),
+        mds=rnd(width, width),
+        transition_matrix=rnd(width, width),
+        partial_dot=rnd(npart, width),
+        partial_col=rnd(npart, width - 1),
+    )
 
 
 def _sparse_partial_multiplies(width: int) -> int:
@@ -230,22 +291,17 @@ def _sparse_partial_multiplies(width: int) -> int:
     tail = fnp.arange(width - 1, dtype=goldilocks_mont)
     active = fnp.arange(1, dtype=goldilocks_mont)[0]
     jaxpr = frx.make_jaxpr(apply_sparse_partial)(dot_row, col_vec, active, tail).jaxpr
-    return sum(1 for eqn in jaxpr.eqns if "mul" in str(eqn.primitive))
+    return sum(1 for eqn in jaxpr.eqns if eqn.primitive.name == "mul")
 
 
 class SparsePartialArrayShapeTest(absltest.TestCase):
-    """Pins the partial layer to array ops, in constant time.
+    """Pins `apply_sparse_partial` to the chained-input rule in `zorch.hash.linear`.
 
-    Per-lane scalar expressions cost 2w-1 multiplies and, chained over a real
-    round count, make each round re-derive its predecessor once per consumer.
-    Array ops cost a fixed few whatever the width, which is the property that
-    keeps the shared lane-0 value a single materializable value.
-
-    `SparsePoseidonManyPartialRoundsTest` covers the same regression end to end,
-    but can only fail by exhausting its timeout — there is no value to assert on
-    when the computation never returns. This one fails in milliseconds and says
-    which width drifted, so it is the useful signal; the other proves the
-    consequence.
+    Per-lane scalar expressions cost 2w-1 multiplies, array ops a fixed few. This
+    is the useful signal — it fails in milliseconds naming the width that drifted.
+    `SparsePoseidonManyPartialRoundsTest` proves the consequence end to end, but
+    can only fail by exhausting its timeout: when the computation never returns
+    there is no value to assert on.
     """
 
     def test_multiply_count_does_not_scale_with_width(self) -> None:
@@ -261,45 +317,22 @@ class SparsePartialArrayShapeTest(absltest.TestCase):
 
 
 class SparsePoseidonManyPartialRoundsTest(absltest.TestCase):
-    """Guards the sparse partial layer against per-lane fan-out.
+    """The consequence of breaking the chained-input rule, at production scale.
 
-    Each partial round consumes the post-S-box lane-0 value in every lane. Written
-    as width-1 independent scalar expressions, that value expands to the whole
-    preceding round in each one, so chained rounds re-derive each round per
-    consumer rather than once and the cost compounds per round — invisible at 2
-    partial rounds, terminal at 22. Keeping the layer array-shaped gives the
-    compiler one value to materialize. This test only completes in the array form.
+    Chained over 22 partial rounds the per-lane form re-derives each round per
+    consumer, and this test stops terminating. See `apply_sparse_partial` and
+    https://github.com/fractalyze/zorch/issues/565.
     """
 
     def test_byte_matches_reference_at_production_scale(self) -> None:
         sched = _big_schedule()
-
-        def fld(rows: np.ndarray) -> fnp.ndarray:
-            return fnp.array(rows, dtype=goldilocks_mont)
-
-        perm = SparsePoseidon(
-            SparsePoseidonParams(
-                width=_BIG_WIDTH,
-                dtype=goldilocks_mont,
-                alpha=_ALPHA,
-                half_full_rounds=_BIG_HALF,
-                n_partial_rounds=_BIG_NPART,
-                **{name: fld(rows) for name, rows in sched.items()},
-            )
-        )
+        perm = SparsePoseidon(sched.params(goldilocks_mont))
 
         rng = np.random.default_rng(1)
-        canon = rng.integers(1, _GOLDILOCKS_P, size=_BIG_WIDTH, dtype=np.uint64)
-        got = [int(x) for x in _to_canon(perm.permute(fld(canon)))]
-        want = _reference_permute(
-            [int(x) for x in canon],
-            p=_GOLDILOCKS_P,
-            w=_BIG_WIDTH,
-            alpha=_ALPHA,
-            half=_BIG_HALF,
-            npart=_BIG_NPART,
-            **{name: rows.tolist() for name, rows in sched.items()},
-        )
+        canon = rng.integers(1, _GOLDILOCKS_P, size=sched.width, dtype=np.uint64)
+        state = _field(canon, goldilocks_mont)
+        got = [int(x) for x in _to_canon(perm.permute(state))]
+        want = _reference_permute([int(x) for x in canon], sched)
         self.assertEqual(got, want)
 
 
@@ -467,7 +500,7 @@ class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
             operands = sparse_mod._abi_operands(perm, _to_field(canon))
             out = sparse_mod._permute_from_operands(perm, *operands)
             got = [int(x) for x in _to_canon(out)]
-            want = _reference_permute([int(x) for x in canon])
+            want = _reference_permute([int(x) for x in canon], _WIDTH4)
             self.assertEqual(got, want)
 
     def test_fused_region_spec_is_dedicated(self) -> None:
