@@ -23,6 +23,14 @@ kernel (the poseidon2 fusion path, #25). The tree folds the layers one
 right-sized level at a time (`_fold_to_root`) — see `_build` for why this beats a
 full-width `scan`.
 
+`fused_levels > 1` folds each run of whole levels as ONE `zorch.merkle_fold`
+region (leaf-to-root layers returned together) instead of one `vmap` per level,
+so a vendor emitter can keep the intermediate layers resident and delete the
+per-level global read passes and launches — the port of flock-challenge's
+`parent_hash3`. Every level's layer is still stored at its ordinary flat-tree
+slot, so the fold stays byte-identical to the per-level one and `open` is
+unchanged; absent the emitter the marker decomposes to the per-level fold.
+
 `commit` lowers each leaf hash to a `zorch.sponge_hash` marker and each
 fold layer's `compress` to a `zorch.poseidon2` permute marker, which the vendor
 lowers to kernels directly. Committing by this plain vmap/fold body keeps the fast
@@ -38,9 +46,24 @@ import frx
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.fusion import fused_region
 from zorch.hash.compression import Compression
 from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
+
+# The whole-region marker for a fused run of adjacent fold levels — one
+# `frx.lax.composite` the vendor expands into a single kernel that keeps the
+# intermediate layers register/shared-resident, writing each level to its
+# ordinary flat-tree slot (so opening is unchanged). It is name-routed like
+# `zorch.sponge_hash`: the region contains the per-level `zorch.poseidon2`
+# permute markers nested inside, exactly the shape the `SpongeHashFusion`
+# emitter already reads for the absorb chain. Absent that emitter the marker
+# DECOMPOSES to the per-level fold — byte-identical, no launch change — so the
+# seam is safe to carry ahead of the emitter. Attrs (`arity`, `digest_elems`,
+# `levels`) are the structural metadata the emitter parses; the per-level node
+# counts it needs to size shared memory come off the operand shape.
+MERKLE_FOLD_MARKER = "zorch.merkle_fold"
+MERKLE_FOLD_MARKER_VERSION = 0
 
 
 @partial(frx.tree_util.register_dataclass, data_fields=["row", "path"], meta_fields=[])
@@ -85,12 +108,15 @@ class MerkleTree:
         compressor: Compression,
         *,
         column_major: bool = False,
+        fused_levels: int = 1,
     ) -> None:
         if leaf_hasher.out != compressor.chunk:
             raise ValueError(
                 f"leaf digest size ({leaf_hasher.out}) must equal compressor "
                 f"chunk ({compressor.chunk})"
             )
+        if fused_levels < 1:
+            raise ValueError(f"fused_levels ({fused_levels}) must be >= 1")
         self._leaf_hasher = leaf_hasher
         self._compressor = compressor
         self.arity = compressor.arity
@@ -98,6 +124,16 @@ class MerkleTree:
         # Commit-side leaf layout (contract in the class docstring): when True
         # the leaf hash vmaps over axis 1 (a leaf is a column). Touches commit only.
         self._column_major = column_major
+        # How many adjacent fold levels to fuse into one `zorch.merkle_fold`
+        # region per dispatch (1 = the historical per-level fold, no marker).
+        # The fold only marks a group when the compressor lowers to a dedicated
+        # per-permute kernel — the region's value is nesting those kernels so the
+        # vendor emitter can keep the intermediates resident; a non-dedicated
+        # permutation gains nothing from the wrapper, so it stays per-level. The
+        # marked and unmarked folds are byte-identical (the module docstring's
+        # decompose-on-fallback), so `fused_levels` never changes the tree.
+        self._fused_levels = fused_levels
+        self._fused_fold = fused_levels > 1 and compressor.has_dedicated_fusion
 
     # Value equality/hash for static jit-zone keys (#214) — identity equality
     # re-traces per instance. Both blocks compare by value themselves; the leaf
@@ -106,14 +142,27 @@ class MerkleTree:
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, MerkleTree):
             return NotImplemented
-        return (self._leaf_hasher, self._compressor, self._column_major) == (
+        return (
+            self._leaf_hasher,
+            self._compressor,
+            self._column_major,
+            self._fused_levels,
+        ) == (
             other._leaf_hasher,
             other._compressor,
             other._column_major,
+            other._fused_levels,
         )
 
     def __hash__(self) -> int:
-        return hash((self._leaf_hasher, self._compressor, self._column_major))
+        return hash(
+            (
+                self._leaf_hasher,
+                self._compressor,
+                self._column_major,
+                self._fused_levels,
+            )
+        )
 
     def commit(self, matrix: Array) -> tuple[Array, list[Array]]:
         """Commit a matrix: leaf-major `(num_leaves, leaf_width)`, or
@@ -184,21 +233,89 @@ class MerkleTree:
     def _compress_groups(self, groups: Array) -> Array:
         return frx.vmap(self._compressor.compress)(groups)
 
+    # `num_levels` is static (it fixes the unrolled decomposition + each output
+    # shape), so it joins `self` in static_argnums.
+    @partial(frx.jit, static_argnums=(0, 2))
+    def _fold_levels(self, layer: Array, num_levels: int) -> tuple[Array, ...]:
+        """Fold `num_levels` adjacent whole (no-pad) levels of `layer` as ONE
+        `zorch.merkle_fold` region, returning each level's layer leaf-to-root.
+
+        The decomposition runs the successive `compress` folds — each keeping its
+        own `zorch.poseidon2` marker — so with no vendor merkle emitter the region
+        decomposes to exactly the per-level fold (byte-identical), and with one it
+        collapses to a single kernel holding the intermediates resident. Returning
+        every level's layer (not just the last) is what keeps each node in its
+        ordinary flat-tree slot, so `open` is unchanged. The caller guarantees the
+        first `num_levels` folds from `layer.shape[0]` are each divisible by
+        `arity` (no padding inside a fused group)."""
+
+        def decomposition(lay: Array, **_attrs: object) -> tuple[Array, ...]:
+            outs: list[Array] = []
+            for _ in range(num_levels):
+                groups = lay.reshape(-1, self.arity, self.digest_elems)
+                lay = frx.vmap(self._compressor.compress)(groups)
+                outs.append(lay)
+            return tuple(outs)
+
+        return fused_region(
+            decomposition,
+            layer,
+            name=MERKLE_FOLD_MARKER,
+            version=MERKLE_FOLD_MARKER_VERSION,
+            arity=self.arity,
+            digest_elems=self.digest_elems,
+            levels=num_levels,
+        )
+
+    def _fusible_levels(self, n: int) -> int:
+        """How many adjacent levels from `n` nodes fuse into one region: the
+        largest `L <= fused_levels` for which every one of the `L` folds is a
+        whole multiple of `arity` (no padding inside the group). `L < 2` means
+        fall back to the padding-aware single-level step."""
+        if not self._fused_fold:
+            return 1
+        levels = 0
+        m = n
+        while levels < self._fused_levels and m % self.arity == 0 and m >= self.arity:
+            m //= self.arity
+            levels += 1
+            if m == 1:  # reached the root inside the group; can't fold further
+                break
+        return levels
+
+    def _fold_one_level(self, layer: Array, digest_layers: list[Array]) -> Array:
+        """One padding-aware fold level (the historical step): complete a short
+        level with zero digests, storing the padded form in place (so an opening
+        adjacent to a boundary reads its zero siblings), then compress."""
+        rem = layer.shape[0] % self.arity
+        if rem:
+            pad = fnp.zeros((self.arity - rem, self.digest_elems), layer.dtype)
+            layer = fnp.concatenate([layer, pad])
+            digest_layers[-1] = layer
+        groups = layer.reshape(-1, self.arity, self.digest_elems)
+        return self._compress_groups(groups)
+
     def _fold_to_root(self, layer: Array) -> tuple[Array, list[Array]]:
-        """Fold the leaf layer to the root one level at a time, completing a
-        short top level with zero digests (a binary power-of-two tree never pads;
-        a k-ary tree may). The padded form is stored, so an opening adjacent to a
-        boundary reads its zero siblings from the layer like any others."""
+        """Fold the leaf layer to the root, completing a short top level with zero
+        digests (a binary power-of-two tree never pads; a k-ary tree may). The
+        padded form is stored, so an opening adjacent to a boundary reads its zero
+        siblings from the layer like any others.
+
+        With `fused_levels > 1` (and a dedicated-fusion compressor) each run of
+        whole levels folds as one `zorch.merkle_fold` region; the padding tail and
+        any group too short to fuse fall back to the per-level step. Every level's
+        layer is stored either way, so the two paths are byte-identical and share
+        one `open`/`reconstruct`."""
         digest_layers = [layer]
         while layer.shape[0] > 1:
-            rem = layer.shape[0] % self.arity
-            if rem:
-                pad = fnp.zeros((self.arity - rem, self.digest_elems), layer.dtype)
-                layer = fnp.concatenate([layer, pad])
-                digest_layers[-1] = layer
-            groups = layer.reshape(-1, self.arity, self.digest_elems)
-            layer = self._compress_groups(groups)
-            digest_layers.append(layer)
+            num_levels = self._fusible_levels(layer.shape[0])
+            if num_levels >= 2:
+                fused = self._fold_levels(layer, num_levels)
+                digest_layers.extend(fused)
+                layer = fused[-1]
+            else:
+                layer = self._fold_one_level(layer, digest_layers)
+                digest_layers.append(layer)
         return digest_layers[-1][0], digest_layers
 
     def open(
