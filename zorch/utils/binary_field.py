@@ -113,13 +113,12 @@ def _xor_reduce_rows(x: Array) -> Array:
 # Gridding on that output gives only `W*L` programs, each serial over `n` — at
 # flock m=28 that is 512 programs looping 16384 blocks, ~18x slower than the
 # sibling `bits` kernel purely from under-parallelization. Instead grid over `n`:
-# each program XOR-folds `iters` sub-blocks of `_ELEMENTS_BLOCK` rows into one
-# `(W, L)` accumulator — reading every selector/value once, not `W` times — and
-# the per-program partials are XOR-combined. XOR is associative, so the result is
-# bit-identical to a serial reduction. `_ELEMENTS_TARGET_PROGRAMS` bounds the
-# partials array so the large-`m` shapes #504 cared about stay in memory.
-# rows per materialized (BLOCK, W, L) tile; < 256 so _xor_reduce_rows cannot carry
-_ELEMENTS_BLOCK = 32
+# each program streams `iters` individual rows into one `(W, L)` accumulator,
+# reading every selector/value once and avoiding the integer-sum parity emulation
+# needed by a multi-row tile. The per-program partials are then XOR-combined.
+# `_ELEMENTS_TARGET_PROGRAMS` bounds the partials array so the large-`m` shapes
+# #504 cared about stay in memory.
+_ELEMENTS_BLOCK = 1
 _ELEMENTS_TARGET_PROGRAMS = 8192
 
 
@@ -148,8 +147,8 @@ def _bit_select_reduce_elements_pallas(
             )
             sel = selector_ref[rows, :]
             val = value_ref[rows, :]
-            bits = ((sel[:, :, None] >> shifts) & 1).reshape(block, width)
-            return acc ^ _xor_reduce_rows(bits[:, :, None] * val[:, None, :])
+            bits = ((sel[:, :, None] >> shifts) & 1).reshape(width)
+            return acc ^ bits[:, None] * val.reshape(limbs)[None, :]
 
         out_ref[program] = lax.fori_loop(
             0, iters, body, fnp.zeros((width, limbs), _LIMB)
@@ -163,37 +162,6 @@ def _bit_select_reduce_elements_pallas(
         name="bit_select_xor_reduce_elements",
     )(selectors, values)
     return lax.reduce_xor(partials, (0,))
-
-
-def _bit_select_reduce_bits_pallas(
-    selectors: Array, values: Array, width: int, limbs: int
-) -> Array:
-    """Pallas lowering for `(n,) x (W,) -> (n, L)` limb output."""
-    n = selectors.shape[0]
-    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
-    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
-
-    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
-        block = pl.program_id(0)
-        limb = pl.program_id(1)
-        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
-        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
-        for selector_limb in range(limbs):
-            packed = selector_ref[rows, selector_limb]
-            for shift in range(_LIMB_BITS):
-                bit = selector_limb * _LIMB_BITS + shift
-                value = value_ref[bit, limb]
-                acc ^= fnp.where(((packed >> shift) & 1) != 0, value, 0)
-        out_ref[rows, limb] = acc
-
-    out = pl.pallas_call(
-        kernel,
-        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
-        grid=(padded_n // _SELECT_BLOCK, limbs),
-        compiler_params=plgpu.CompilerParams(),
-        name="bit_select_xor_reduce_bits",
-    )(selectors, values)
-    return out[:n]
 
 
 def _bit_select_unpacked_bits_pallas(
@@ -230,37 +198,86 @@ def _bit_select_packed_bytes_pallas(
 ) -> Array:
     """Pallas lowering for packed-byte `(n, B/8) x (B,) -> (n, L)`."""
     n, n_bytes = selectors.shape
-    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    # Keep all storage limbs in the same program.  Splitting limbs across the
+    # grid rereads every selector byte once per limb, paying one global-memory
+    # pass per limb.  A 64-row tile exposes enough blocks to saturate the GPU
+    # while reusing each selector load across all limbs.
+    block_rows = 64
+    padded_n = ((n + block_rows - 1) // block_rows) * block_rows
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
 
-    # Flock-core's UniSkipFoldTable: table[j, v] XORs the eight weights selected
-    # by byte value v in byte position j. At k_skip=6 this is 8*256*16 = 32 KiB.
-    byte_values = values.reshape(n_bytes, 8, limbs)
-    byte = fnp.arange(256, dtype=_LIMB)
-    shift = fnp.arange(8, dtype=_LIMB)
-    selected = ((byte[:, None] >> shift[None, :]) & 1).astype(_LIMB)
-    table = lax.reduce_xor(
-        selected[None, :, :, None] * byte_values[:, None, :, :], (2,)
-    )
+    table = _byte_xor_table(values, n_bytes, limbs)
 
     def kernel(selector_ref: Any, table_ref: Any, out_ref: Any) -> None:
         block = pl.program_id(0)
-        limb = pl.program_id(1)
-        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
-        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
+        rows = block * block_rows + fnp.arange(block_rows, dtype=fnp.int32)
+        acc = fnp.zeros((block_rows, limbs), dtype=_LIMB)
         for byte_index in range(n_bytes):
             value = selector_ref[rows, byte_index].astype(fnp.int32)
-            acc ^= table_ref[byte_index, value, limb]
-        out_ref[rows, limb] = acc
+            acc ^= table_ref[byte_index, value, :]
+        out_ref[rows, :] = acc
 
     out = pl.pallas_call(
         kernel,
         out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
-        grid=(padded_n // _SELECT_BLOCK, limbs),
-        compiler_params=plgpu.CompilerParams(),
+        grid=(padded_n // block_rows,),
+        compiler_params=plgpu.CompilerParams(num_warps=2),
         name="bit_select_xor_reduce_packed_bytes",
     )(selectors, table)
     return out[:n]
+
+
+def _byte_xor_table(values: Array, n_bytes: int, limbs: int) -> Array:
+    """Build the `(n_bytes, 256, limbs)` per-byte-position XOR table."""
+    byte_values = values.reshape(n_bytes, 8, limbs)
+    byte = fnp.arange(256, dtype=_LIMB)
+    shift = fnp.arange(8, dtype=_LIMB)
+    selected = ((byte[:, None] >> shift[None, :]) & 1).astype(_LIMB)
+    return lax.reduce_xor(selected[None, :, :, None] * byte_values[:, None, :, :], (2,))
+
+
+def _bit_select_wide_packed_bytes_pallas(
+    selectors: Array, values: Array, limbs: int
+) -> Array:
+    """Packed-byte selection with one lane-parallel program per output row."""
+    n, n_bytes = selectors.shape
+    # Eight adjacent gathers per warp give the L2 much better locality than a
+    # 128-wide vector on this table-shaped access.  Keep the 256 steps as a
+    # loop: unrolling them saves only ~10% kernel time but makes full-prover
+    # compilation prohibitively large.
+    lanes = 8
+    if n_bytes % lanes:
+        pad = lanes - n_bytes % lanes
+        selectors = fnp.pad(selectors, ((0, 0), (0, pad)))
+        values = fnp.pad(values, ((0, pad * 8), (0, 0)))
+    padded_bytes = selectors.shape[1]
+
+    table = _byte_xor_table(values, padded_bytes, limbs)
+
+    def kernel(selector_ref: Any, table_ref: Any, out_ref: Any) -> None:
+        row = pl.program_id(0)
+        lane = fnp.arange(lanes, dtype=fnp.int32)
+
+        def body(step: Array, acc: Array) -> Array:
+            byte_index = step * lanes + lane
+            value = selector_ref[row, byte_index].astype(fnp.int32)
+            return acc ^ table_ref[byte_index, value, :]
+
+        acc = lax.fori_loop(
+            0,
+            padded_bytes // lanes,
+            body,
+            fnp.zeros((lanes, limbs), dtype=_LIMB),
+        )
+        out_ref[row, :] = _xor_reduce_rows(acc)
+
+    return pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((n, limbs), _LIMB),
+        grid=(n,),
+        compiler_params=plgpu.CompilerParams(num_warps=1),
+        name="bit_select_xor_reduce_wide_packed_bytes",
+    )(selectors, table)
 
 
 @frx.jit
@@ -297,7 +314,10 @@ def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
     limbs = field_bit_width(values.dtype) // _LIMB_BITS
     values_l = _to_limbs(values)
     if frx.default_backend() == "gpu":
-        out_l = _bit_select_packed_bytes_pallas(selectors, values_l, limbs)
+        if selectors.shape[1] <= 16:
+            out_l = _bit_select_packed_bytes_pallas(selectors, values_l, limbs)
+        else:
+            out_l = _bit_select_wide_packed_bytes_pallas(selectors, values_l, limbs)
     else:
         shifts = fnp.arange(8, dtype=fnp.uint8)
         unpacked = ((selectors[:, :, None] >> shifts) & 1).reshape(
@@ -395,7 +415,10 @@ def bit_select_xor_reduce(
                 f"{values.shape}"
             )
         if frx.default_backend() == "gpu":
-            out_l = _bit_select_reduce_bits_pallas(selectors_l, values_l, width, limbs)
+            selector_bytes = lax.bitcast_convert_type(selectors_l, fnp.uint8).reshape(
+                selectors.shape[0], width // 8
+            )
+            out_l = _bit_select_packed_bytes_pallas(selector_bytes, values_l, limbs)
         else:
             bits = _bits(selectors)
             out_l = lax.reduce_xor(bits[:, :, None] * values_l[None, :, :], (1,))
