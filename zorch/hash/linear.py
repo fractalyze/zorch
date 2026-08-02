@@ -6,6 +6,14 @@ column-scaled lanes so a round body stays straight-line element-wise and fuses t
 one kernel: `fnp.dot`/`fnp.sum` lower to a reduction (the `kInput` fusion
 boundary) and dynamic indexing to `gather`, either of which splits the kernel.
 
+A layer must also keep the number of times it reads its **chained** input — the
+state, or the scalar a partial round threads through every lane — from scaling
+with the width. Per-lane scalar expressions each re-derive that value, so where
+rounds chain, the cost compounds per round rather than adding: measured ~3.6x per
+round on the CPU backend, enough that a 22-round Goldilocks permutation never
+finished (https://github.com/fractalyze/zorch/issues/565). Read the input once as
+an array, or hoist its lanes once and index the hoisted list.
+
 `unrolled_sum` is that summation primitive; `apply_matrix` is the dense
 `matrix @ state` built on it for a **field-array** matrix. The scheme-specific
 layers (`apply_dense_mds`, `apply_external_m4`, `apply_internal`,

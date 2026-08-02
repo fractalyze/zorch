@@ -46,8 +46,12 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
             f"dense MDS needs a 1-D state matching a square matrix, got state "
             f"{state.shape}, matrix rows {len(mds_rows)}"
         )
+    # Hoist the lanes once. Indexing `state` inside both loops reads the chained
+    # input w**2 times, which is the same per-lane fan-out the chained-input rule
+    # in `zorch.hash.linear` forbids, squared.
+    lanes = [state[j] for j in range(w)]
     return fnp.stack(
-        [unrolled_sum([mds_rows[i][j] * state[j] for j in range(w)]) for i in range(w)]
+        [unrolled_sum([mds_rows[i][j] * lanes[j] for j in range(w)]) for i in range(w)]
     )
 
 
@@ -88,10 +92,11 @@ def apply_sparse_partial(
             f"tail (state[1:]) must have width-1 entries, got {tail.shape} for "
             f"width {w}"
         )
-    out0 = unrolled_sum(
-        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
-    )
-    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
+    # Array-shaped so `active` is read twice rather than once per lane — the
+    # chained-input rule in `zorch.hash.linear`.
+    prods = dot_row[1:] * tail
+    out0 = unrolled_sum([dot_row[0] * active, *prods])
+    out_rest = tail + col_vec * active
     return fnp.concatenate([out0[None], out_rest])
 
 
@@ -110,6 +115,16 @@ def apply_sparse_partial_ints(
     and break the emitter's operand ABI (the sparse structure rides as an int64
     marker attribute instead). Same arithmetic and reduction-free normal form as
     `apply_sparse_partial`; this is the sparse-partial sibling of `apply_dense_mds`.
+
+    Unlike its twin this reads `active` once per lane, against the chained-input
+    rule in `zorch.hash.linear`. Broadcasting `active` to a vector first would
+    hold the rule without capturing an array, but costs ~23% more traced
+    equations, and nothing chains this body at a width where that matters: the
+    int64 literals confine it to fields under 2^63, and those route to the
+    dedicated emitter, which replaces it. **That safety is incidental** — the
+    gate is about marker attribute width, not fan-out — so a field between 2^32
+    and 2^63 would put a real permutation back on this shape. Give it the
+    broadcast then.
     """
     w = len(dot_row)
     if len(col_vec) != w - 1:
