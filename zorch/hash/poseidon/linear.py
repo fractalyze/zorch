@@ -46,8 +46,12 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
             f"dense MDS needs a 1-D state matching a square matrix, got state "
             f"{state.shape}, matrix rows {len(mds_rows)}"
         )
+    # Hoist the lanes once. Indexing `state` inside both loops reads the chained
+    # input w**2 times, which is the same per-lane fan-out the chained-input rule
+    # in `zorch.hash.linear` forbids, squared.
+    lanes = [state[j] for j in range(w)]
     return fnp.stack(
-        [unrolled_sum([mds_rows[i][j] * state[j] for j in range(w)]) for i in range(w)]
+        [unrolled_sum([mds_rows[i][j] * lanes[j] for j in range(w)]) for i in range(w)]
     )
 
 
