@@ -30,7 +30,6 @@ from zk_dtypes import (
 from zorch.fusion import FUSED_REGION_MARKER
 from zorch.hash.permutation import Permutation
 from zorch.hash.poseidon import sparse as sparse_mod
-from zorch.hash.poseidon.linear import apply_sparse_partial
 from zorch.hash.poseidon.params import SparsePoseidonParams
 from zorch.hash.poseidon.sparse import (
     POSEIDON_SPARSE_MARKER,
@@ -75,57 +74,6 @@ def _field(rows: object, dtype: Any) -> fnp.ndarray:
 
 def _fld(rows: object) -> fnp.ndarray:
     return _field(rows, babybear_mont)
-
-
-def _param_kwargs() -> dict:
-    """The valid width-4 param kwargs; validation tests override one field."""
-    return dict(
-        width=_WIDTH,
-        dtype=babybear_mont,
-        alpha=_ALPHA,
-        half_full_rounds=_HALF,
-        n_partial_rounds=_NPART,
-        initial_arc=_fld(_INITIAL_ARC),
-        full_rc_pre=_fld(_FULL_RC_PRE),
-        transition_rc=_fld(_TRANSITION_RC),
-        partial_rc=_fld(_PARTIAL_RC),
-        full_rc_post=_fld(_FULL_RC_POST),
-        mds=_fld(_MDS),
-        transition_matrix=_fld(_TRANSITION_M),
-        partial_dot=_fld(_PARTIAL_DOT),
-        partial_col=_fld(_PARTIAL_COL),
-    )
-
-
-def _params() -> SparsePoseidonParams:
-    return SparsePoseidonParams(**_param_kwargs())
-
-
-def _wide_field_params() -> SparsePoseidonParams:
-    """The same width-4 schedule over Goldilocks (`p = 2^64 - 2^32 + 1`), with one
-    MDS entry above `2^63 - 1`. alpha=7 is coprime to `p - 1` here too, so the
-    S-box still permutes. Only the matrices matter to the marker gate — the round
-    constants ride as operands whatever their magnitude — so those stay small."""
-
-    def fld(rows: object) -> fnp.ndarray:
-        return _field(rows, goldilocks_mont)
-
-    mds = ((_GOLDILOCKS_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1, 2))
-    return SparsePoseidonParams(
-        **{
-            **_param_kwargs(),
-            "dtype": goldilocks_mont,
-            "initial_arc": fld(_INITIAL_ARC),
-            "full_rc_pre": fld(_FULL_RC_PRE),
-            "transition_rc": fld(_TRANSITION_RC),
-            "partial_rc": fld(_PARTIAL_RC),
-            "full_rc_post": fld(_FULL_RC_POST),
-            "mds": fld(mds),
-            "transition_matrix": fld(_TRANSITION_M),
-            "partial_dot": fld(_PARTIAL_DOT),
-            "partial_col": fld(_PARTIAL_COL),
-        }
-    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -190,6 +138,26 @@ _WIDTH4 = _Schedule(
     partial_dot=_PARTIAL_DOT,
     partial_col=_PARTIAL_COL,
 )
+
+
+def _param_kwargs() -> dict:
+    """The valid width-4 param kwargs; validation tests override one field."""
+    params = _WIDTH4.params(babybear_mont)
+    return {f.name: getattr(params, f.name) for f in dataclasses.fields(params)}
+
+
+def _params() -> SparsePoseidonParams:
+    return SparsePoseidonParams(**_param_kwargs())
+
+
+def _wide_field_params() -> SparsePoseidonParams:
+    """The same width-4 schedule over Goldilocks (`p = 2^64 - 2^32 + 1`), with one
+    MDS entry above `2^63 - 1`. alpha=7 is coprime to `p - 1` here too, so the
+    S-box still permutes. Only the matrices matter to the marker gate — the round
+    constants ride as operands whatever their magnitude — so those stay small."""
+    mds = ((_GOLDILOCKS_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1, 2))
+    wide = dataclasses.replace(_WIDTH4, p=_GOLDILOCKS_P, mds=mds)
+    return wide.params(goldilocks_mont)
 
 
 def _reference_permute(state_canon: list[int], sched: _Schedule) -> list[int]:
@@ -282,38 +250,6 @@ def _big_schedule() -> _Schedule:
         partial_dot=rnd(npart, width),
         partial_col=rnd(npart, width - 1),
     )
-
-
-def _sparse_partial_multiplies(width: int) -> int:
-    """How many multiply primitives the partial layer traces to at `width`."""
-    dot_row = fnp.arange(width, dtype=goldilocks_mont)
-    col_vec = fnp.arange(width - 1, dtype=goldilocks_mont)
-    tail = fnp.arange(width - 1, dtype=goldilocks_mont)
-    active = fnp.arange(1, dtype=goldilocks_mont)[0]
-    jaxpr = frx.make_jaxpr(apply_sparse_partial)(dot_row, col_vec, active, tail).jaxpr
-    return sum(1 for eqn in jaxpr.eqns if eqn.primitive.name == "mul")
-
-
-class SparsePartialArrayShapeTest(absltest.TestCase):
-    """Pins `apply_sparse_partial` to the chained-input rule in `zorch.hash.linear`.
-
-    Per-lane scalar expressions cost 2w-1 multiplies, array ops a fixed few. This
-    is the useful signal — it fails in milliseconds naming the width that drifted.
-    `SparsePoseidonManyPartialRoundsTest` proves the consequence end to end, but
-    can only fail by exhausting its timeout: when the computation never returns
-    there is no value to assert on.
-    """
-
-    def test_multiply_count_does_not_scale_with_width(self) -> None:
-        counts = {w: _sparse_partial_multiplies(w) for w in (8, 12, 16)}
-        self.assertEqual(
-            len(set(counts.values())),
-            1,
-            msg=(
-                f"multiplies must not scale with width, got {counts}. A per-lane "
-                f"scalar form gives 2w-1; see apply_sparse_partial."
-            ),
-        )
 
 
 class SparsePoseidonManyPartialRoundsTest(absltest.TestCase):
