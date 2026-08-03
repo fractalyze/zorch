@@ -46,23 +46,24 @@ applies). They carry no host control flow, so they drop unchanged into the
 ## Field-dtype gotchas
 
 The canonical list the other blocks point to. The finite-field dtypes are not
-general integer arrays:
+general integer arrays. Two limits hold on the current toolchain (measured on
+the frx `0.10.1.dev20260803` wheels, CPU and CUDA tiers):
 
-- **No iota over an extension dtype.** `jnp.arange(dtype=<extension field>)`
-  raises, so an integer domain / index ramp is built per element (`jnp.array` in
-  a static loop, `jnp.stack`) or in the base field and `.astype(EF)`. Hits the
-  sumcheck domain, the LogUp round-poly `us`, and `eval_univariate`'s nodes.
-- **Iterating a field `Array` dispatches `lax.sign`.** `for coord in x` over a
-  field array trips an unimplemented `sign`; index explicitly (`x[j]`) instead —
-  see `expand_eq_to_hypercube`.
-- **No `lax.shift`, no type-promoted power.** `field >> int` and
-  `jnp.power(field, int_array)` are unsupported; bit-decompose host-side in
-  `numpy` (the jagged `msb_first_bits`) and build a coset ramp with `jnp.cumprod`,
-  not arange/power (see [`coding.md`](coding.md)).
-- **Extension-field `reduce_sum` is unsupported.** `jnp.sum` over an extension
-  array can abort with an MLIR assertion; where the trip count is static, unroll
-  with `functools.reduce` (the jagged `eval_jagged_mle`) and revert to a single
-  reduction once the backend supports it.
-- **`jnp.tile` aborts on a field dtype.** Tiling trips an MLIR bit-width
-  assertion; broadcast with a `vmap`'d matmul or `jnp.stack` / `reshape` instead
-  (the jagged transition broadcast).
+- **No `lax.shift`.** `field >> int` fails to lower
+  (`'stablehlo.shift_right_arithmetic' op operand #0 must be … integer`);
+  bit-decompose host-side in `numpy` (the jagged `msb_first_bits`).
+- **No power by a traced exponent.** `jnp.power(field, int_array)` raises
+  (`field/EF base requires a Python-int exponent; use lax.integer_pow`). A
+  static Python-int exponent is fine; a coset / geometric ramp is built with
+  `jnp.cumprod`, not power-by-index (see [`coding.md`](coding.md)).
+
+Three earlier limits — iota over an extension dtype, extension-field
+`reduce_sum`, and `jnp.tile` (plus iterating a field array, which dispatched an
+unimplemented `lax.sign`) — no longer reproduce on the current wheels. Their
+workarounds are still in the tree and explain those shapes: the per-element
+domain ramps in the sumcheck domain, the LogUp round-poly `us`, and
+`eval_univariate`'s nodes; the `functools.reduce` unroll in the jagged
+`eval_jagged_mle`; the `vmap`'d-matmul broadcast in the jagged transition; the
+explicit indexing in `expand_eq_to_hypercube`. Simplify a site to the direct
+op when touching it — with the compile-count/runtime checks that motivated the
+workaround — rather than in a blanket pass.
