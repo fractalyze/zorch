@@ -69,10 +69,13 @@ Which blocks exist and where to import them from:
    the transcript in and out of every round; never hide it in mutable state.
    Anything both roles can derive from the transcript belongs in the carry —
    only prover→verifier data is a message.
-4. **Keep round bodies fusion-ready.** Element-wise field ops plus the one
-   inherent `Σ`; no gratuitous `reduce`/`gather` or host round-trips inside a
-   round body — zorch's fusion contract assumes it. The `@jit` discipline,
-   loop-tool choice, and how to verify fusion:
+4. **Fusion is a design property, not an optimizer favor.** zorch's contract:
+   a `Round`, an `absorb`/`squeeze`, a `commit`/`open`, a fold step, and a
+   hash permutation each lower to **one replayable device unit by
+   construction** — never by hoping a compiler pattern-match recovers it. In
+   your round bodies that means element-wise field ops plus the one inherent
+   `Σ`, no gratuitous `reduce`/`gather`, no host round-trips. The `@jit`
+   discipline, loop-tool choice, and how to verify:
    [references/frx-and-fusion.md](references/frx-and-fusion.md).
 
 ## References

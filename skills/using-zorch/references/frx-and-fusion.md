@@ -76,25 +76,42 @@ what the bodies measure out to today:
 Don't assume — measure, then pin:
 
 ```bash
-JAX_LOG_COMPILES=1           # per-function trace/lower/compile time
-JAX_EXPLAIN_CACHE_MISSES=1   # names the function and line that re-traced
+# Prefix the flags on the run — a bare `VAR=1` line on its own sets an
+# unexported shell variable that the python process never sees.
+JAX_LOG_COMPILES=1 JAX_EXPLAIN_CACHE_MISSES=1 python your_prover.py
 ```
 
-The compile log includes toolchain-internal compiles (`jit(convert_element_type)`,
+`JAX_LOG_COMPILES` logs per-function trace/lower/compile;
+`JAX_EXPLAIN_CACHE_MISSES` names the function and line that re-traced. The
+compile log includes toolchain-internal compiles (`jit(convert_element_type)`,
 `jit(dynamic_slice)`, …) — filter to your own function names. A *flood* of
 `jit(<op-name>)` lines is itself a smell: your compute is running eagerly,
 one dispatch per op, with no `@jit` boundary around it.
 
 - Re-trace on every call → a per-call callable or an identity-compared meta
   field.
-- Recompile on a "different" input → a shape changed.
-- Slow first call → an unrolled Python `for` that wanted a `scan`
-  (`JAX_DUMP_IR_MODES=eqn_count_pprof` + `pprof -top` names the line).
-- For kernel-level ground truth, dump HLO (`XLA_FLAGS=--xla_dump_to=<dir>`).
-  Per module the dump has many files; read
-  `*after_optimizations.txt` for the fused module and `*thunk_sequence.txt`
-  for the cleanest answer to "how many kernel launches" — an element-wise
-  round body should show one `kLoop` fusion kernel.
+- Recompile on a "different" input → a shape, dtype, or static argument
+  changed (the cache-miss log names which).
+- Slow first call → often an unrolled Python `for` that wanted a `scan` —
+  confirm before restructuring:
+  `JAX_DUMP_IR_TO=/tmp/jax_ir JAX_DUMP_IR_MODES=eqn_count_pprof python
+  your_prover.py`, then `pprof -top` names the line.
+- For kernel-level evidence, dump HLO:
+  `XLA_FLAGS=--xla_dump_to=/tmp/xla_dump python your_prover.py`. Per module
+  the dump has many files; read `*after_optimizations.txt` for the fused
+  module and `*thunk_sequence.txt` for the cleanest answer to "how many
+  kernel launches" — an element-wise body should show one `kLoop` fusion
+  kernel.
+
+**What the contract actually measures.** The fusion unit is the *round* —
+`round_poly → absorb → squeeze → fold` as **one replayable device unit**
+(a captured graph replay), not necessarily one fused kernel. The runtime does
+not yet expose the captured graph to consumer code, so the working proxies
+are: the whole round body staying in one traced region (device-side
+transcript, no host round-trips — the thing that *breaks* capture), and the
+`thunk_sequence` launch count staying flat as your round logic grows. Treat
+the HLO dump as body-level supporting evidence toward that unit, not as the
+contract itself.
 
 zorch's own tests pin compile count, runtime, and peak memory per stage so
 regressions fail loudly; do the same for your prover's hot path.
