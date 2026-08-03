@@ -71,7 +71,9 @@ Which blocks exist and where to import them from:
    only prover→verifier data is a message.
 4. **Keep round bodies fusion-ready.** Element-wise field ops plus the one
    inherent `Σ`; no gratuitous `reduce`/`gather` or host round-trips inside a
-   round body — zorch's fusion contract assumes it.
+   round body — zorch's fusion contract assumes it. The `@jit` discipline,
+   loop-tool choice, and how to verify fusion:
+   [references/frx-and-fusion.md](references/frx-and-fusion.md).
 
 ## References
 
@@ -80,6 +82,7 @@ Which blocks exist and where to import them from:
 | [references/setup.md](references/setup.md) | installing, wrong-platform/toolchain errors |
 | [references/blocks.md](references/blocks.md) | finding the right block and its import path |
 | [references/field-dtypes.md](references/field-dtypes.md) | writing field arithmetic; MLIR/dtype crashes |
+| [references/frx-and-fusion.md](references/frx-and-fusion.md) | writing FRX/JAX code that fuses; @jit and loop-tool rules; slow-jit debugging |
 | [references/building-on-zorch.md](references/building-on-zorch.md) | assembling a prover; what goes in your repo vs upstream |
 
 Design docs (the WHY behind each block):
