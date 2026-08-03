@@ -48,6 +48,7 @@ proved = prover.prove(claim, SumcheckWitness(fnp.stack([f, h])), cheap_transcrip
 verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(F))
 
 assert bool(verified.ok)
+assert bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
 assert bool(proved.reduced_claim.value == verified.reduced_claim.value)
 print("verified:", bool(verified.ok))
 print("reduced claim: f·h(", verified.reduced_claim.point, ") =",

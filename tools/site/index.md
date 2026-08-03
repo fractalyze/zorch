@@ -92,5 +92,4 @@ sequenceDiagram
 
 !!! tip "Using an AI coding agent?"
     The Guide section doubles as an installable agent skill:
-    `npx skills add fractalyze/zorch` gives your agent the same pages,
-    version-locked to the release you install.
+    `npx skills add fractalyze/zorch` gives your agent the same pages.

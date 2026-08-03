@@ -32,20 +32,26 @@ on:
       - "mkdocs.yml"
       - "requirements-docs.in"
       - "tools/gen_ref_pages.py"
+      - "tools/site/**"
+      - "skills/using-zorch/**"
       - ".github/workflows/docs.yml"
-
-permissions:
-  contents: write
 
 concurrency:
   group: docs-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
+  # The build imports the PR's zorch code (mkdocstrings reads signatures), so
+  # this job runs arbitrary changed code: it gets a read-only, non-persisted
+  # token. Only the main-only deploy job below holds a write token.
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -57,8 +63,23 @@ jobs:
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: mkdocs build
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install docs toolchain
+        run: |
+          pip install -r requirements-docs.in \
+            --extra-index-url https://fractalyze.github.io/pypi/simple/
       - name: Deploy to gh-pages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: |
