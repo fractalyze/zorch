@@ -4,7 +4,7 @@ Your project (a zkVM, zkML, zkTLS prover, …) is a **consumer**: it assembles
 zorch blocks into one concrete proof system, usually byte-matching a reference
 implementation. This page is the boundary contract and the assembly rules,
 condensed from
-[stage-composition.md](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/composition/stage-composition.md).
+[stage-composition.md](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/composition/stage-composition.md).
 
 ## The boundary
 
@@ -13,71 +13,61 @@ condensed from
 
 | zorch owns (import it) | Your repo owns (write it) |
 | --- | --- |
-| The transcript + `grind`/`check_witness` | The rate/field parameterization and the observe/sample **order** |
-| The `Permutation` seam + sponge/compression | Your pinned permutation params (constants, width, field) |
-| Merkle trees + reusable query/opening layout | Which columns are committed; the layout schedule |
-| `LinearCode`/`PcsProver`/`PcsVerifier` seams + instances + fold machinery | The stacking/region/batching schedule; any scheme-specific fold |
-| Sumcheck scan driver + per-variable rounds | The `combine` summand and the round wiring |
-| The `Round` abstraction + chains | The actual stage sequence and the carry between stages |
-| Field-generic kernels | The constraint system, quotient/zero-check shape, base/extension dtypes |
+| Stages, round drivers, transcripts, PCS protocols, math blocks | Protocol schedule — which stages, in what order |
+| The `Permutation` seam + sponge/compression | Your pinned permutation params (width, field, constants) |
+| The `LinearCode` seam + RS/FRI folds | Your code + rate + coset choice |
+| PCS instances (`fri`, `kzg`, `basefold`, …) | The stacking/batching schedule around them |
+| The field-generic kernels | The base/extension dtype choice, threaded as data |
+| — | Root-claim layout, transcript framing, constraint system, serialization |
 
-A consumer **never forks a block** — it supplies only the differing values and
-order through four injection points: a params object behind the `Permutation`
-seam; the field dtype threaded as data; the `PcsProver`/`PcsVerifier`
-protocols over the shared fold machinery; a consumer-owned chain of `Round`s.
-A scheme-agnostic gap goes **upstream into zorch first**, then your repo
-depends on it.
+Two operational corollaries:
 
-## The carry contract (where state lives)
+- **Never fork a zorch block to specialize it** — inject your values through
+  its seam (a params object, a dtype, a `Protocol` impl, a summand).
+- **Scheme-agnostic gaps go upstream first.** If a block is missing and a
+  second scheme would want it, contribute it to zorch and depend on it; don't
+  grow a private copy.
 
-- **Uniform: the transcript** — threaded through every round by the chain;
-  never inside a carry or a message.
-- **Seam-crossing: a typed pytree per seam.** Stage N's carry-out type *is*
-  stage N+1's carry-in type. Reshaping between two stages (slicing a point,
-  RLC-ing claims) is an explicit consumer round at the seam — never a silent
-  slice inside the next stage. The seam type also pins the field embedding;
-  base-field carry folded by extension challenges promotes mid-scan and fails
-  to trace.
-- **Stage-local: the witness, on the `Round` instance** — traces and dense
-  buffers are constructor state, never carry. Build `ProveChain` over a
-  generator so each stage's witness is released once proved.
+## Assembly rules (the ones that bite)
 
-## Bridges — your scheme glue, as rounds
-
-Everything that encodes the reference's exact transcript — a PoW grind, a
-sampled-and-discarded challenge, length-prefixed observes — is a **`Bridge`**:
-a transcript-only `Round` in your chain, with a verifier dual replaying the
-same ops. Writing the schedule once as a list of rounds gives the verifier
-its mirror for free; inlining those steps in `prove` and re-deriving them in
-`verify` duplicates the schedule, and drift between copies surfaces only as an
-end-to-end byte-match failure.
-
-**Stays outside rounds:** transcript-free data preparation (circuit
-construction, dense packing) — host-side, feeding rounds at construction. A
-round exists to put a step on the Fiat-Shamir schedule.
-
-## Failure semantics
-
-Malformed proof *shape* raises `ValueError` (e.g. `VerifyChain` on a
-message-count mismatch); an algebraic/transcript failure comes back as the
-`ok` array a `VerifyChain` ANDs. You decode untrusted bytes into typed proofs
-yourself and translate structural exceptions into rejections.
+- **The transcript is explicit everywhere** — an argument and a result of
+  every round call and stage; never ambient state. Prover and verifier stay
+  two explicit programs; neither is derived from the other.
+- **Role capabilities don't mix.** Proving keys never enter verifier objects,
+  verification keys never enter prover objects. Construct only the role you
+  deploy; a test needing both builds both.
+- **Challenges are carry, not message.** Anything both sides can derive from
+  the transcript goes in the carry; only prover→verifier data is a message.
+  Name the carry for what it holds (`RunningClaim`, `FoldingClaim`), never
+  `carry`.
+- **Domain separators are pinned wire format** — stable tags owned by your
+  protocol, never derived from class or display names.
+- **Not every transcript sequence is a round recurrence.** Setup, a special
+  first round, the repeated middle, and terminal claim derivation are distinct
+  operations — orchestrate them explicitly in your stage; use
+  `prove_rounds`/`verify_rounds` only for the genuinely homogeneous part.
+- **Failure semantics.** Malformed proof *shape* → `ValueError`; a
+  well-formed proof failing an algebraic/transcript/opening check →
+  `VerifyResult(ok=False)`. You decode untrusted bytes into typed proofs
+  yourself and translate structural exceptions into rejection.
 
 ## Testing your prover (what the types can't enforce)
 
-- Both roles' transcripts agree and both derive the same reduced claim at
-  every seam.
-- Honest proofs verify; mutating each named proof section rejects.
-- Porting a reference? **Byte-match, no tolerances** — compare canonical
-  (non-Montgomery) values; a hash mismatch is almost always a shape/padding
-  delta, not a hash-param bug. Vendor golden fixtures from the reference,
-  self-validated at generation.
-- Exercise a second parameter shape (production vs test sizes) to catch
-  assumptions fitted to one configuration.
+- Both roles' transcripts agree and both derive the **same reduced claim** at
+  every stage boundary.
+- Honest proofs verify; mutating **each named proof section** rejects at the
+  corresponding stage.
+- The verifier constructs with no prover capability.
+- Porting a reference prover? **Byte-match, no tolerances** — compare
+  canonical (non-Montgomery) values; a hash mismatch is almost always a
+  shape/padding delta, not a hash-param bug. Vendor golden fixtures generated
+  from the reference, self-validated at generation.
+- Exercise a **second parameter shape** (e.g. production vs test sizes) to
+  catch assumptions fitted to one configuration.
 
 ## Worked example
 
-[`zorch.spartan`](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/schemes/spartan.md)
-ships in the package: zerocheck + lincheck stages, an RLC bridge, PCS-open
-glue over `ProveChain`/`VerifyChain` — read it as the reference for consumer
-assembly.
+[`zorch.spartan`](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/schemes/spartan.md)
+ships in the package: `SpartanProver` / `SpartanVerifier` compose zerocheck +
+lincheck stages, a transcript-only batching step, and PCS-open glue — read it
+as the reference for consumer assembly.

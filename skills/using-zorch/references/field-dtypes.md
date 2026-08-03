@@ -24,7 +24,7 @@ duplicate the dtype's reduction and silently diverge from it:
 
 ## Ops that work on ints but fail on field dtypes
 
-Measured on the toolchain `pyzorch 0.1.2` installs, CPU and CUDA tiers:
+Measured on the toolchain `pyzorch 0.2.0` installs, CPU and CUDA tiers:
 
 | Broken on field dtypes | Error | Workaround |
 | --- | --- | --- |
@@ -35,7 +35,7 @@ Older toolchain pins also rejected iota (`fnp.arange` with an extension
 dtype), `fnp.tile`, extension-field `fnp.sum`, and iterating a field array —
 those all pass on the current wheels. If you are pinned to an older build and
 hit an MLIR assertion on one of them, the historical workarounds are in
-[poly.md — Field-dtype gotchas](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/blocks/poly.md#field-dtype-gotchas).
+[poly.md — Field-dtype gotchas](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/blocks/poly.md#field-dtype-gotchas).
 
 ## Sampling field values in tests
 

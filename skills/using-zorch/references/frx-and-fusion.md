@@ -5,9 +5,9 @@ fused device kernels. FRX is JAX with the same API surface under the `frx`
 name — `@frx.jit`, `frx.vmap`, `frx.lax`, `frx.numpy` (imported as `fnp`) —
 so all JAX discipline applies. This page is the condensed authoring rules; the
 full mental models are in
-[jax.md](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/reference/jax.md)
+[jax.md](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/reference/jax.md)
 and the exact conventions in
-[conventions.md](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/reference/conventions.md).
+[conventions.md](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/reference/conventions.md).
 
 ## The four constraints everything follows from
 
@@ -69,7 +69,7 @@ gratuitous `reduce`/`gather`, and **no host round-trips** — `.item()`,
 split the region. Keep the transcript device-side (pass it through; never pull
 a challenge to Python mid-round). What "one replayable device unit" means and
 what the bodies measure out to today:
-[fusion north star](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/README.md#fusion-north-star).
+[fusion north star](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/README.md#fusion-north-star).
 
 ## Verifying it actually fused
 
