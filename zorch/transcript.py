@@ -245,12 +245,13 @@ class DuplexTranscript:
     """Overwrite-mode duplex sponge implementing `Transcript`. A JAX pytree whose
     `state` buffers are the leaves and whose `permutation`/`rate` are static, so
     the whole transcript threads through `@jit` (and, later, a `lax.scan` carry).
-    Every step is a device op — no host callback, no zkVM FFI.
+    No step crosses a zkVM FFI on any backend.
 
     The `fs` backend (`_DeviceFs` / `_HostFs`) chooses where every absorb / squeeze
-    runs; pick one via `new(..., fs_on_host=)`. `_DeviceFs` (the default) is the
-    in-graph path. `_HostFs` is an eager primitive -- see the host-FS backend
-    section below for what it trades and why."""
+    runs; pick one via `new(..., fs_on_host=)`. Under `_DeviceFs` (the default)
+    every step is a device op and nothing calls back to the host. `_HostFs` is an
+    eager host primitive -- see the host-FS backend section below for what it
+    trades and why."""
 
     permutation: Permutation
     rate: int
