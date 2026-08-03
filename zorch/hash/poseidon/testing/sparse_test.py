@@ -140,14 +140,8 @@ _WIDTH4 = _Schedule(
 )
 
 
-def _param_kwargs() -> dict:
-    """The valid width-4 param kwargs; validation tests override one field."""
-    params = _WIDTH4.params(babybear_mont)
-    return {f.name: getattr(params, f.name) for f in dataclasses.fields(params)}
-
-
 def _params() -> SparsePoseidonParams:
-    return SparsePoseidonParams(**_param_kwargs())
+    return _WIDTH4.params(babybear_mont)
 
 
 def _wide_field_params() -> SparsePoseidonParams:
@@ -314,8 +308,8 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
     def test_rejects_wrong_partial_col_shape(self) -> None:
         with self.assertRaises(ValueError):
-            SparsePoseidonParams(
-                **{**_param_kwargs(), "partial_col": _fld(((2, 3, 5, 9), (1, 4, 2, 8)))}
+            dataclasses.replace(
+                _params(), partial_col=_fld(((2, 3, 5, 9), (1, 4, 2, 8)))
             )  # width, not width-1
 
     def test_rejects_dtype_mismatch(self) -> None:
@@ -324,7 +318,7 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
             np.array(_INITIAL_ARC, dtype=np.int64).astype(koalabear_mont)
         )
         with self.assertRaises(ValueError):
-            SparsePoseidonParams(**{**_param_kwargs(), "initial_arc": wrong})
+            dataclasses.replace(_params(), initial_arc=wrong)
 
     def test_rejects_bad_scalars(self) -> None:
         # Each scalar guard fires independently.
@@ -335,7 +329,7 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
             ("n_partial_rounds", -1),  # must be non-negative
         ):
             with self.assertRaises(ValueError, msg=field):
-                SparsePoseidonParams(**{**_param_kwargs(), field: bad})
+                dataclasses.replace(_params(), **{field: bad})
 
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):

@@ -11,9 +11,10 @@ new op in the fusion-critical body gets a conscious look. Cheap proxy for XLA's
 
 ``assert_fusion_ready`` is not for the hash permutation: poseidon2 fuses via the
 ``zorch.fused_region`` marker and normal-form linear layers (no dot for XLA to
-optimize) -- a different fusion shape. ``assert_input_uses`` is the assertion
-that does apply there: it pins the chained-input rule in ``zorch.hash.linear``,
-which the linear layers must hold whatever their fusion shape.
+optimize) -- a different fusion shape. ``assert_input_uses`` and
+``primitive_count`` are scheme-agnostic traced-graph accounting, so they apply
+to any body whose trace size matters -- a hash layer, a sumcheck round, a fold
+step.
 """
 from __future__ import annotations
 
@@ -56,28 +57,35 @@ def assert_fusion_ready(fn: Callable[..., Any], *args: Any, reduces: int = 0) ->
         raise AssertionError(f"non-fusion-safe ops in body: {offenders}")
 
 
-def input_uses(fn: Callable[..., Any], *args: Any, arg: int = 0) -> int:
-    """How many times ``fn`` reads its ``arg``-th traced input."""
-    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
-    var = jaxpr.invars[arg]
-    return sum(eqn.invars.count(var) for eqn in jaxpr.eqns)
-
-
 def assert_input_uses(
     fn: Callable[..., Any], *args: Any, arg: int = 0, limit: int
 ) -> None:
-    """Assert ``fn`` reads its ``arg``-th input at most ``limit`` times.
+    """Assert ``fn`` reads its ``arg``-th traced input at most ``limit`` times.
 
-    The chained-input rule in ``zorch.hash.linear``: a layer that re-reads the
-    value threaded through the rounds makes the compiler re-derive it per read,
-    and where rounds chain that cost compounds per round rather than adding.
-    Pass ``limit=width`` for a layer whose lanes each legitimately touch the
-    state once, or a small constant for a scalar every lane shares -- either
-    way it is the *scaling* that matters, so call it at two widths.
+    A body must not read a traced input more times than its output shape
+    requires. Each extra read is a separate expression the compiler re-derives
+    the value for, so where the value is loop-carried -- a permutation's rounds,
+    a fold's iterations -- the cost compounds per iteration rather than adding.
+    ``zorch.hash.linear`` tells the story that produced this rule.
+
+    ``limit`` is where the scaling law goes: pass ``limit=width`` for a layer
+    whose lanes each legitimately touch the state once, or the measured constant
+    for a value every lane shares. Written that way one call already pins the
+    scaling; a second width only catches a superlinearity whose constant is
+    small enough to hide at the first.
     """
-    n = input_uses(fn, *args, arg=arg)
+    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
+    var = jaxpr.invars[arg]
+    n = sum(eqn.invars.count(var) for eqn in jaxpr.eqns)
     if n > limit:
         raise AssertionError(
             f"input {arg} read {n} times, over the limit of {limit}. Read it once "
             f"as an array, or hoist its lanes once and index the hoisted list."
         )
+
+
+def primitive_count(fn: Callable[..., Any], *args: Any, name: str) -> int:
+    """How many ``name`` primitives ``fn`` traces to -- the same traced-graph
+    accounting as ``assert_input_uses``, counting ops instead of reads."""
+    jaxpr = frx.make_jaxpr(fn)(*args).jaxpr
+    return sum(1 for eqn in jaxpr.eqns if eqn.primitive.name == name)

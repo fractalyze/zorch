@@ -1,15 +1,13 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Poseidon's normal-form linear layers: fusion-ready, and holding the
-chained-input rule in `zorch.hash.linear`.
+"""Poseidon's normal-form linear layers: fusion-ready, and each reading its
+chained input a bounded number of times.
 
-The rule is about *scaling*, so every check runs at two widths: a layer that
-re-reads the value the rounds thread through makes the compiler re-derive it per
-read, and where rounds chain that compounds per round instead of adding. That is
-what stopped a 22-round Goldilocks permutation from finishing
-(https://github.com/fractalyze/zorch/issues/565).
+The rule and the 22-round permutation that produced it are in
+`zorch.hash.linear`; the limits below are its per-layer instances.
 """
 
-import frx
+from functools import partial
+
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
@@ -20,7 +18,11 @@ from zorch.hash.poseidon.linear import (
     apply_sparse_partial,
     apply_sparse_partial_ints,
 )
-from zorch.testkit.fusion import assert_fusion_ready, assert_input_uses
+from zorch.testkit.fusion import (
+    assert_fusion_ready,
+    assert_input_uses,
+    primitive_count,
+)
 from zorch.testkit.random_field import rand_field
 
 _WIDTHS = (8, 16)
@@ -40,7 +42,8 @@ def _sparse_int_coeffs(w: int) -> tuple[tuple[int, ...], tuple[int, ...]]:
     )
 
 
-def _as_field(values: tuple[int, ...]) -> fnp.ndarray:
+def _as_field(values: object) -> fnp.ndarray:
+    """Canonical ints (any nesting) -> a field array."""
     return fnp.array(np.array(values, dtype=np.uint64), dtype=F)
 
 
@@ -59,20 +62,18 @@ class DenseMdsTest(absltest.TestCase):
         for w in _WIDTHS:
             rows = _int_rows(w)
             s = rand_field(5, (w,), F)
-            m = fnp.array([[c for c in row] for row in rows], dtype=F)
+            m = _as_field(rows)
             self.assertTrue(
                 bool(fnp.array_equal(apply_dense_mds(rows, s), m @ s)), f"width {w}"
             )
 
     def test_state_reads_stay_linear_in_width(self) -> None:
-        # Indexing `state` inside both loops costs w**2 reads; hoisting the lanes
-        # once costs w. Two widths, because it is the scaling that matters.
+        # Indexing `state` inside both loops costs w**2 reads; hoisting the
+        # lanes once costs w.
         for w in _WIDTHS:
             rows = _int_rows(w)
             assert_input_uses(
-                lambda v, rows=rows: apply_dense_mds(rows, v),
-                rand_field(5, (w,), F),
-                limit=w,
+                partial(apply_dense_mds, rows), rand_field(5, (w,), F), limit=w
             )
 
     def test_is_fusion_ready(self) -> None:
@@ -86,37 +87,27 @@ class SparsePartialTest(absltest.TestCase):
         for w in _WIDTHS:
             dot_row, col_vec, active, tail = _sparse_args(w)
             got = apply_sparse_partial(dot_row, col_vec, active, tail)
-            want0 = dot_row[0] * active
-            for j in range(1, w):
-                want0 = want0 + dot_row[j] * tail[j - 1]
+            # Independent in form, not a transcription of the unrolled fold: a
+            # test reference carries no fusion constraint, so it may reduce.
+            want0 = dot_row[0] * active + fnp.sum(dot_row[1:] * tail)
             want = fnp.concatenate([want0[None], tail + col_vec * active])
             self.assertTrue(bool(fnp.array_equal(got, want)), f"width {w}")
 
-    def test_reads_the_shared_lane_value_a_fixed_number_of_times(self) -> None:
-        # `active` is the post-S-box lane-0 value every lane consumes. Per-lane
-        # scalar expressions read it w-1 times and each read re-derives the whole
-        # preceding round; the array form reads it a fixed few.
+    def test_reads_the_shared_lane_value_twice(self) -> None:
+        # `active` is the post-S-box lane-0 value every lane consumes: once in
+        # the lane-0 dot, once in the rank-1 update. A per-lane form reads it
+        # w-1 times, and each read re-derives the whole preceding round.
         for w in _WIDTHS:
-            dot_row, col_vec, active, tail = _sparse_args(w)
-            assert_input_uses(
-                lambda a, d=dot_row, c=col_vec, t=tail: apply_sparse_partial(
-                    d, c, a, t
-                ),
-                active,
-                limit=4,
-            )
+            assert_input_uses(apply_sparse_partial, *_sparse_args(w), arg=2, limit=2)
 
     def test_multiplies_do_not_scale_with_width(self) -> None:
         # The same rule seen through the op count: 2w-1 multiplies per-lane
         # versus a constant few in array form. Sharper than the read count here,
         # and it fails naming the width that drifted.
-        counts = {}
-        for w in (8, 12, 16):
-            dot_row, col_vec, active, tail = _sparse_args(w)
-            jaxpr = frx.make_jaxpr(apply_sparse_partial)(
-                dot_row, col_vec, active, tail
-            ).jaxpr
-            counts[w] = sum(1 for eqn in jaxpr.eqns if eqn.primitive.name == "mul")
+        counts = {
+            w: primitive_count(apply_sparse_partial, *_sparse_args(w), name="mul")
+            for w in (8, 12, 16)
+        }
         self.assertEqual(
             len(set(counts.values())),
             1,
@@ -147,20 +138,20 @@ class SparsePartialIntsTest(absltest.TestCase):
                 f"width {w}",
             )
 
-    def test_shared_lane_value_reads_stay_within_width(self) -> None:
-        # The known exception: the int-literal twin still reads `active` once per
-        # lane, because its operand ABI forbids the field array that makes the
-        # array form possible (broadcasting the scalar would hold the rule at ~23%
-        # more traced equations). Bounded at `w` rather than pinned, so giving it
-        # the broadcast later tightens this without editing the test.
+    def test_reads_the_shared_lane_value_once_per_lane(self) -> None:
+        # The documented exception: this twin knowingly does NOT hold the rule.
+        # Broadcasting `active` first would hold it without capturing a field
+        # array; it is left per-lane because that costs ~23% more traced
+        # equations and nothing chains this body at a width where it matters
+        # (see apply_sparse_partial_ints). `w` is the current count, not slack,
+        # so this fails if it gets worse and tightens for free if it is fixed.
         for w in _WIDTHS:
             ints_dot, ints_col = _sparse_int_coeffs(w)
             _, _, active, tail = _sparse_args(w)
             assert_input_uses(
-                lambda a, d=ints_dot, c=ints_col, t=tail: apply_sparse_partial_ints(
-                    d, c, a, t
-                ),
+                partial(apply_sparse_partial_ints, ints_dot, ints_col),
                 active,
+                tail,
                 limit=w,
             )
 

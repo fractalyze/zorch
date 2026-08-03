@@ -80,10 +80,8 @@ class LinearLayerTest(absltest.TestCase):
             assert_fusion_ready(lambda v: m @ v, s, reduces=0)
 
     def test_state_reads_stay_linear_in_width(self) -> None:
-        # The chained-input rule in `zorch.hash.linear`. Checked at two widths
-        # because it is the scaling that matters: reading `state` inside both
-        # loops of a w*w layer costs w**2 reads, and each one re-derives the
-        # value the rounds thread through.
+        # The chained-input rule in `zorch.hash.linear`: reading `state` inside
+        # both loops of a w*w layer costs w**2 reads, one hoist costs w.
         for w in (8, 16):
             m = rand_field(1, (w, w), F)
             d = rand_field(3, (w,), F)
