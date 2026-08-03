@@ -78,14 +78,13 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Guide:
-      - guide/index.md
       - Setup: guide/setup.md
       - Blocks & imports: guide/blocks.md
       - Field dtypes: guide/field-dtypes.md
       - FRX & fusion: guide/frx-and-fusion.md
       - Building a prover: guide/building-on-zorch.md
   - Design:
-      - Docs map: README.md
+      - Overview & fusion north star: README.md
       - Blocks:
           - Polynomials: blocks/poly.md
           - Hashing: blocks/hash.md

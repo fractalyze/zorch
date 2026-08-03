@@ -53,13 +53,6 @@ mkdocs_gen_files.set_edit_path("index.md", "tools/site/index.md")
 # produced at build time, so the two can never drift.
 SKILL = REPO / "skills" / "using-zorch"
 
-skill_md = (SKILL / "SKILL.md").read_text(encoding="utf-8")
-skill_md = skill_md.split("---\n", 2)[-1]  # drop the agent frontmatter
-skill_md = skill_md.replace("(references/", "(")
-with mkdocs_gen_files.open("guide/index.md", "w") as page:
-    page.write(skill_md)
-mkdocs_gen_files.set_edit_path("guide/index.md", "skills/using-zorch/SKILL.md")
-
 for ref in sorted((SKILL / "references").glob("*.md")):
     out = f"guide/{ref.name}"
     with mkdocs_gen_files.open(out, "w") as page:

@@ -5,45 +5,19 @@ of JAX with native finite-field dtypes. You assemble a prover the way deep
 learning stacks layers: reusable stages, chained until nothing is left to
 prove.
 
-<div class="grid cards" markdown>
+## Install
 
-- :material-download:{ .lg .middle } **Install in one line**
+Python **3.11**, Linux x86_64 or macOS Apple Silicon. Install as `pyzorch`,
+import as `zorch`:
 
-    ***
+```sh
+pip install pyzorch                    # CPU — nothing else needed
+pip install pyzorch 'frx[cuda12]' \
+    --extra-index-url https://fractalyze.github.io/pypi/simple/   # GPU (CUDA 12)
+python -c "import frx, zorch; print(frx.devices()); print(zorch.__version__)"
+```
 
-    `pip install pyzorch` — CPU tier, nothing else needed.
-    CUDA 12 wheels via the Fractalyze index.
-
-    [:octicons-arrow-right-24: Getting started](guide/index.md)
-
-- :material-cube-outline:{ .lg .middle } **Blocks, not a framework**
-
-    ***
-
-    Transcripts, polynomials, hashing, Merkle, codes, PCS, sumcheck,
-    LogUp-GKR — each reusable across proving schemes.
-
-    [:octicons-arrow-right-24: The blocks](guide/blocks.md)
-
-- :material-vector-combine:{ .lg .middle } **Stages chain claims**
-
-    ***
-
-    Each stage reduces a claim to a smaller one, down to `TrivialClaim`.
-    Spartan ships as the worked example.
-
-    [:octicons-arrow-right-24: Building a prover](guide/building-on-zorch.md)
-
-- :material-api:{ .lg .middle } **API from the source**
-
-    ***
-
-    Typed signatures and docstrings, generated per module at build time —
-    never stale.
-
-    [:octicons-arrow-right-24: API reference](api/index.md)
-
-</div>
+Platform limits and error symptoms: [Setup](guide/setup.md).
 
 ## The mental model
 
@@ -74,7 +48,7 @@ sequenceDiagram
     Note over V: replay, check, carry RunningClaim
 ```
 
-Ten lines of working sumcheck — prove it, verify it:
+## Ten lines of working sumcheck
 
 ```python
 CH = ChallengePolicy(F)
@@ -88,21 +62,43 @@ verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(F))
 assert bool(verified.ok)
 ```
 
-Full walkthrough with imports: [the blocks guide](guide/blocks.md).
+Full walkthrough with imports — and every other block's entry point:
+[Blocks & imports](guide/blocks.md).
 
-## Where to go
+## The three sections
 
-| You want to… | Read |
-| --- | --- |
-| Install and run something | [Getting started](guide/index.md) |
-| Find the right block + import path | [Blocks guide](guide/blocks.md) |
-| Write field arithmetic that doesn't crash | [Field dtypes](guide/field-dtypes.md) |
-| Keep your code fused on GPU | [FRX & fusion](guide/frx-and-fusion.md) |
-| Assemble a full prover | [Building on zorch](guide/building-on-zorch.md) |
-| Understand a block's design (the WHY) | [Design docs](README.md) |
-| Look up a signature | [API reference](api/index.md) |
+<div class="grid cards" markdown>
+
+- :material-tools:{ .lg .middle } **Guide — write code today**
+
+    ***
+
+    Task-oriented: setup, every block's import path with a worked example,
+    the field-dtype rules, keeping code fused, assembling a prover.
+
+    [:octicons-arrow-right-24: Start at Setup](guide/setup.md)
+
+- :material-lightbulb-outline:{ .lg .middle } **Design — understand the WHY**
+
+    ***
+
+    Per-block design rationale: why each seam has its shape, the fusion
+    contract, conventions. Prose, for reading — not needed to get running.
+
+    [:octicons-arrow-right-24: Overview & fusion north star](README.md)
+
+- :material-api:{ .lg .middle } **API — look up a signature**
+
+    ***
+
+    Typed signatures and docstrings, generated per module from the source
+    at build time — never stale.
+
+    [:octicons-arrow-right-24: API reference](api/index.md)
+
+</div>
 
 !!! tip "Using an AI coding agent?"
-    The [Guide](guide/index.md) section doubles as an installable agent skill:
+    The Guide section doubles as an installable agent skill:
     `npx skills add fractalyze/zorch` gives your agent the same pages,
     version-locked to the release you install.
