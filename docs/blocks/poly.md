@@ -47,15 +47,18 @@ applies). They carry no host control flow, so they drop unchanged into the
 
 The canonical list the other blocks point to. The finite-field dtypes are not
 general integer arrays. Two limits hold on the current toolchain (measured on
-the frx `0.10.1.dev20260803` wheels, CPU and CUDA tiers):
+the frx `0.10.1.dev20260803` wheels under `jit`, CPU and CUDA tiers; other
+toolchains are unverified):
 
-- **No `lax.shift`.** `field >> int` fails to lower
-  (`'stablehlo.shift_right_arithmetic' op operand #0 must be … integer`);
-  bit-decompose host-side in `numpy` (the jagged `msb_first_bits`).
+- **No bit shifts.** `field >> int` fails to lower — the
+  `stablehlo.shift_right_arithmetic` it becomes rejects field operands
+  (`operand #0 must be … integer`); bit-decompose host-side in `numpy` (the
+  jagged `msb_first_bits`).
 - **No power by a traced exponent.** `jnp.power(field, int_array)` raises
-  (`field/EF base requires a Python-int exponent; use lax.integer_pow`). A
-  static Python-int exponent is fine; a coset / geometric ramp is built with
-  `jnp.cumprod`, not power-by-index (see [`coding.md`](coding.md)).
+  (`field/EF base requires a Python-int exponent; use lax.integer_pow`) —
+  and `lax.integer_pow` itself takes a concrete Python-`int` exponent, never
+  a traced one. A static-exponent power is fine; a coset / geometric ramp is
+  built with `jnp.cumprod`, not power-by-index (see [`coding.md`](coding.md)).
 
 Three earlier limits — iota over an extension dtype, extension-field
 `reduce_sum`, and `jnp.tile` (plus iterating a field array, which dispatched an
