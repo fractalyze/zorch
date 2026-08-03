@@ -44,9 +44,11 @@ with mkdocs_gen_files.open("api/SUMMARY.md", "w") as summary:
 # The landing page is site presentation, not repo documentation — it lives
 # beside this script (outside docs/, which tools/lint_docs.py polices for
 # tree-resolvable links; the landing links build-time virtual pages).
-with mkdocs_gen_files.open("index.md", "w") as page:
-    page.write((REPO / "tools" / "site" / "index.md").read_text(encoding="utf-8"))
-mkdocs_gen_files.set_edit_path("index.md", "tools/site/index.md")
+for site_page in ("index.md", "getting-started.md"):
+    src = REPO / "tools" / "site" / site_page
+    with mkdocs_gen_files.open(site_page, "w") as page:
+        page.write(src.read_text(encoding="utf-8"))
+    mkdocs_gen_files.set_edit_path(site_page, f"tools/site/{site_page}")
 
 # Mirror the agent skill bundle as the site's task-oriented Guide section.
 # The skill is the single source (release-lockstep-gated); the site copy is

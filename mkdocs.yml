@@ -77,12 +77,15 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Guide:
-      - Setup: guide/setup.md
+  - Get started: getting-started.md
+  - Guides:
+      - Assembling a prover: guide/building-on-zorch.md
+      - Keeping code fused: guide/frx-and-fusion.md
+      - Setup & troubleshooting: guide/setup.md
+  - Reference:
       - Blocks & imports: guide/blocks.md
-      - Field dtypes: guide/field-dtypes.md
-      - FRX & fusion: guide/frx-and-fusion.md
-      - Building a prover: guide/building-on-zorch.md
+      - Field-dtype sharp bits: guide/field-dtypes.md
+      - API: api/
   - Design:
       - Overview & fusion north star: README.md
       - Blocks:
@@ -103,4 +106,3 @@ nav:
           - Conventions: reference/conventions.md
           - Dev environment: reference/development.md
           - Thinking in JAX: reference/jax.md
-  - API: api/

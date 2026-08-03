@@ -48,55 +48,52 @@ sequenceDiagram
     Note over V: replay, check, carry RunningClaim
 ```
 
-## Ten lines of working sumcheck
-
-```python
-CH = ChallengePolicy(F)
-claim = SumClaim(fnp.sum(f * h), n_vars)
-
-prover = SumcheckProver(StandardRound(ProductSummand(2), challenges=CH))
-verifier = SumcheckVerifier(SumcheckRound(2, challenges=CH))
-
-proved = prover.prove(claim, SumcheckWitness(fnp.stack([f, h])), cheap_transcript(F))
-verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(F))
-assert bool(verified.ok)
-```
-
-Full walkthrough with imports — and every other block's entry point:
-[Blocks & imports](guide/blocks.md).
-
-## The three sections
+## Find your door
 
 <div class="grid cards" markdown>
 
-- :material-tools:{ .lg .middle } **Guide — write code today**
+- :material-school:{ .lg .middle } **Get started — learn by doing**
 
     ***
 
-    Task-oriented: setup, every block's import path with a worked example,
-    the field-dtype rules, keeping code fused, assembling a prover.
+    Install, prove a sumcheck, verify it, and read what happened — about
+    two minutes, CPU only.
 
-    [:octicons-arrow-right-24: Start at Setup](guide/setup.md)
+    [:octicons-arrow-right-24: First proof](getting-started.md)
+
+- :material-tools:{ .lg .middle } **Guides — get a task done**
+
+    ***
+
+    Assemble a full prover, keep your code fused on GPU, fix install and
+    toolchain issues.
+
+    [:octicons-arrow-right-24: Assembling a prover](guide/building-on-zorch.md)
+
+- :material-file-search:{ .lg .middle } **Reference — look it up**
+
+    ***
+
+    Every block's import path with worked examples, the field-dtype sharp
+    bits, and the generated API.
+
+    [:octicons-arrow-right-24: Blocks & imports](guide/blocks.md)
 
 - :material-lightbulb-outline:{ .lg .middle } **Design — understand the WHY**
 
     ***
 
     Per-block design rationale: why each seam has its shape, the fusion
-    contract, conventions. Prose, for reading — not needed to get running.
+    contract, conventions. Not needed to get running.
 
     [:octicons-arrow-right-24: Overview & fusion north star](README.md)
 
-- :material-api:{ .lg .middle } **API — look up a signature**
-
-    ***
-
-    Typed signatures and docstrings, generated per module from the source
-    at build time — never stale.
-
-    [:octicons-arrow-right-24: API reference](api/index.md)
-
 </div>
+
+!!! note "How this is organized"
+    The four doors follow [Diátaxis](https://diataxis.fr/): a tutorial to
+    learn from, how-to guides for tasks, reference to look things up, and
+    explanation for understanding.
 
 !!! tip "Using an AI coding agent?"
     The Guide section doubles as an installable agent skill:
