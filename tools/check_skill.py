@@ -54,9 +54,13 @@ def check_consistency(expect: str) -> list[str]:
                 problems.append(f"{rel}: names pyzorch {version}, packaged {expect}")
         for version, path in _BLOB.findall(text):
             if version != expect:
-                problems.append(f"{rel}: links blob/v{version}/{path}, packaged {expect}")
+                problems.append(
+                    f"{rel}: links blob/v{version}/{path}, packaged {expect}"
+                )
             if not (REPO / path).exists():
-                problems.append(f"{rel}: links {path}, which does not exist in the tree")
+                problems.append(
+                    f"{rel}: links {path}, which does not exist in the tree"
+                )
         for target in _LINK.findall(text):
             if target.startswith(("http://", "https://", "#")):
                 continue
@@ -64,7 +68,14 @@ def check_consistency(expect: str) -> list[str]:
                 problems.append(f"{rel}: relative link {target} does not resolve")
 
     skill_md = (SKILL_DIR / "SKILL.md").read_text(encoding="utf-8")
-    if re.match(r"^---\n.*?^name:\s*using-zorch\s*$.*?\n---\n", skill_md, re.MULTILINE | re.DOTALL) is None:
+    if (
+        re.match(
+            r"^---\n.*?^name:\s*using-zorch\s*$.*?\n---\n",
+            skill_md,
+            re.MULTILINE | re.DOTALL,
+        )
+        is None
+    ):
         problems.append("SKILL.md: frontmatter missing or name != using-zorch")
     return problems
 
@@ -73,7 +84,9 @@ def check_imports() -> list[str]:
     problems: list[str] = []
     lines: set[str] = set()
     for md in sorted(SKILL_DIR.rglob("*.md")):
-        for fence in re.findall(r"```python\n(.*?)```", md.read_text(encoding="utf-8"), re.DOTALL):
+        for fence in re.findall(
+            r"```python\n(.*?)```", md.read_text(encoding="utf-8"), re.DOTALL
+        ):
             for raw in fence.splitlines():
                 line = raw.split("#")[0].strip()
                 if line.startswith(("from zorch", "import zorch", "from zk_dtypes")):
