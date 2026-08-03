@@ -143,6 +143,8 @@ def _sha256_squeeze_zone(
     `zorch.sha256_squeeze` composite, so an eager caller fires a single fused FS
     kernel. `inline=True` keeps a call site already inside an outer jit
     byte-identical (mirrors `transcript._duplex_fs_zone`)."""
+    if nbytes == 0:
+        return _squeeze_hop(state, framing, nbytes)
     h, pending, counts, squeezed = fused_region(
         _sha256_squeeze_region,
         state.h,

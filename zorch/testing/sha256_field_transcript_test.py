@@ -66,6 +66,19 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         g, g_sl = g.observe(fnp.asarray(v).reshape(1)).sample(1)
         self.assertNotEqual(np.asarray(f_el).tobytes(), np.asarray(g_sl).tobytes())
 
+    def test_zero_width_slice_still_absorbs_framing(self) -> None:
+        b = ByteHashTranscript.new(b"dom", Sha256())
+        b, b_empty = b.sample_slice(0, 4)
+        b, b_next = b.sample_scalar(4)
+
+        f = Sha256FieldTranscript.new(b"dom", np.uint32)
+        f, f_empty = f.sample(0)
+        f, f_next = f.sample_scalar()
+
+        self.assertEqual(b_empty, b"")
+        self.assertEqual(f_empty.shape, (0,))
+        self.assertEqual(np.asarray(f_next).astype("<u4").tobytes(), b_next)
+
     def test_vector_observe_scalar_matches_scalar_chain(self) -> None:
         # observe_scalar of an [n] array frames each element as its own scalar
         # op, byte-identical to chaining n 0-d observes — same state, so the
