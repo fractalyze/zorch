@@ -55,9 +55,9 @@ python -c "import frx, zorch; print(frx.devices()); print(zorch.__version__)"
 them together; mixing a new zorch with an old plugin (or vice versa) is what
 produces the `stablehlo.composite` error above. To reproduce the exact
 toolchain this guide was verified against, pin the release:
-`pip install pyzorch==0.1.2` (plus `'frx[cuda12]'` and the extra index for
+`pip install pyzorch==0.2.0` (plus `'frx[cuda12]'` and the extra index for
 GPU).
 
 Contributor-mode setup (editable checkout, self-built toolchain, compile
 caches) is different and lives in
-[docs/reference/development.md](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/reference/development.md).
+[docs/reference/development.md](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/reference/development.md).

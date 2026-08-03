@@ -2,7 +2,7 @@
 name: using-zorch
 description: >
   Build proof systems with zorch — FRX-native (JAX-fork) building blocks for
-  SNARKs: rounds, Fiat-Shamir transcripts, polynomials, hashing, Merkle
+  SNARKs: rounds, stages, Fiat-Shamir transcripts, polynomials, hashing, Merkle
   commitment, codes, PCS, sumcheck, LogUp-GKR. Use when writing code that
   imports zorch, assembling or porting a prover on zorch blocks, installing
   pyzorch/frx, or debugging finite-field dtype and FRX toolchain errors in a
@@ -16,7 +16,7 @@ assembled from. It runs on **FRX**, Fractalyze's fork of JAX, lowered through
 Fractalyze XLA with native finite-field dtypes. Install as **`pyzorch`**,
 import as **`zorch`** (the `zorch` name on PyPI is an unrelated project).
 
-This guide is verified against **pyzorch 0.1.2** — the imports and links below
+This guide is verified against **pyzorch 0.2.0** — the imports and links below
 pin that release. `main` may be ahead of what pip installs.
 
 ## Install
@@ -33,23 +33,22 @@ python -c "import frx, zorch; print(frx.devices()); print(zorch.__version__)"
 Install problems, platform limits, and error symptoms:
 [references/setup.md](references/setup.md).
 
-## The unit: `Round`
+## The two units
 
-A **`Round`** is one prover↔verifier interaction — a message observed into the
-Fiat-Shamir transcript, a challenge sampled back — and rounds **nest**: a whole
-sumcheck is itself a `Round` of per-variable rounds. Two semantic markers
-organize a scheme: a **`Stage`** is a round that is one top-level phase
-(trace-commit, zero-check, a PCS opening); a **`Bridge`** is a transcript-only
-round (a grind, a framed observe, an RLC). A proof system is a `ProveChain` of
-stages; `VerifyChain` replays it against the messages and ANDs each round's
-verdict:
+A **round** is one step of a repeated recurrence; a **stage** is one claim
+reduction with separately deployable prover/verifier roles:
 
 ```text
-ProverRound:   (carry, transcript)      -> (carry, transcript, msg)
-VerifierRound: (carry, msg, transcript) -> (carry, transcript, ok)
+ProverRound:    (carry, transcript)          -> (carry, transcript, message)
+VerifierRound:  (carry, transcript, message) -> (carry, transcript, ok)
+ProverStage.prove(claim, witness, transcript)     -> ProveResult
+VerifierStage.verify(claim, reduction_proof, ...) -> VerifyResult
 ```
 
-Which blocks exist and where to import them from:
+Both roles derive the same **reduced claim**; the reduction proof establishes
+the source claim *conditional on* it. Stages chain — each stage's reduced
+claim is the next one's source claim — until `TrivialClaim`, which holds by
+construction. Which blocks exist and where to import them from:
 [references/blocks.md](references/blocks.md).
 
 ## Rules that prevent silent breakage
@@ -89,6 +88,6 @@ Which blocks exist and where to import them from:
 | [references/building-on-zorch.md](references/building-on-zorch.md) | assembling a prover; what goes in your repo vs upstream |
 
 Design docs (the WHY behind each block):
-[docs hub](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/README.md) ·
+[docs hub](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/README.md) ·
 worked full SNARK, shipped as importable code:
-[`zorch.spartan`](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/schemes/spartan.md).
+[`zorch.spartan`](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/schemes/spartan.md).
