@@ -21,8 +21,6 @@ theme:
   icon:
     logo: material/cube-outline
   features:
-    - navigation.tabs
-    - navigation.sections
     - navigation.top
     - navigation.indexes
     - content.code.copy
@@ -85,24 +83,20 @@ nav:
   - Reference:
       - Blocks & imports: guide/blocks.md
       - Field-dtype sharp bits: guide/field-dtypes.md
-      - API: api/
   - Design:
       - Overview & fusion north star: README.md
-      - Blocks:
-          - Polynomials: blocks/poly.md
-          - Hashing: blocks/hash.md
-          - Transcripts: blocks/transcript.md
-          - Merkle commitment: blocks/commit.md
-          - Linear codes: blocks/coding.md
-          - PCS: blocks/pcs.md
-          - Jagged: blocks/jagged.md
-          - Sumcheck: blocks/sumcheck.md
-          - LogUp-GKR: blocks/logup-gkr.md
-      - Schemes:
-          - Spartan: schemes/spartan.md
-      - Composition:
-          - Stage composition: composition/stage-composition.md
-      - Reference:
-          - Conventions: reference/conventions.md
-          - Dev environment: reference/development.md
-          - Thinking in JAX: reference/jax.md
+      - Polynomials: blocks/poly.md
+      - Hashing: blocks/hash.md
+      - Transcripts: blocks/transcript.md
+      - Merkle commitment: blocks/commit.md
+      - Linear codes: blocks/coding.md
+      - PCS: blocks/pcs.md
+      - Jagged: blocks/jagged.md
+      - Sumcheck: blocks/sumcheck.md
+      - LogUp-GKR: blocks/logup-gkr.md
+      - Spartan: schemes/spartan.md
+      - Stage composition: composition/stage-composition.md
+      - Conventions: reference/conventions.md
+      - Dev environment: reference/development.md
+      - Thinking in JAX: reference/jax.md
+  - API: api/
