@@ -1,0 +1,67 @@
+# Copyright 2026 The Zorch Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Docs site: build on every PR that can change it (a broken build fails the
+# PR, not the deploy), publish gh-pages on every main push. mkdocstrings
+# imports zorch to read signatures, so the job installs the CPU-tier runtime
+# stack from requirements-docs.in — no CUDA wheels, no GPU runner.
+#
+# This publishes a single `latest` off main. Per-release versioned docs (mike)
+# are a deliberate follow-up: they belong in release.yml next to the existing
+# version gates, not here.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - "zorch/**"
+      - "mkdocs.yml"
+      - "requirements-docs.in"
+      - "tools/gen_ref_pages.py"
+      - ".github/workflows/docs.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install docs toolchain
+        run: |
+          pip install -r requirements-docs.in \
+            --extra-index-url https://fractalyze.github.io/pypi/simple/
+      - name: Build
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: mkdocs build
+      - name: Deploy to gh-pages
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdocs gh-deploy --force

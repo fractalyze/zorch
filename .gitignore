@@ -35,3 +35,6 @@ venv/
 
 # Scratch / logs
 *.log
+
+# mkdocs build output
+site/

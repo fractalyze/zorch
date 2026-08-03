@@ -1,0 +1,79 @@
+# Docs site: the hand-written WHY pages under docs/ plus an API reference
+# generated from the source tree at build time (tools/gen_ref_pages.py).
+# Build: `mkdocs build` in a venv carrying requirements-docs.in.
+# Deploys: .github/workflows/docs.yml publishes gh-pages on every main push.
+site_name: zorch
+site_description: FRX-native building blocks for proof systems
+repo_url: https://github.com/fractalyze/zorch
+repo_name: fractalyze/zorch
+edit_uri: edit/main/
+
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        title: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        title: Light mode
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - tools/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            filters: ["!^_"]
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.arithmatex:
+      generic: true
+  - toc:
+      permalink: true
+
+nav:
+  - Overview: README.md
+  - Blocks:
+      - Polynomials: blocks/poly.md
+      - Hashing: blocks/hash.md
+      - Transcripts: blocks/transcript.md
+      - Merkle commitment: blocks/commit.md
+      - Linear codes: blocks/coding.md
+      - PCS: blocks/pcs.md
+      - Jagged: blocks/jagged.md
+      - Sumcheck: blocks/sumcheck.md
+      - LogUp-GKR: blocks/logup-gkr.md
+  - Schemes:
+      - Spartan: schemes/spartan.md
+  - Composition:
+      - Stage composition: composition/stage-composition.md
+  - Reference:
+      - Conventions: reference/conventions.md
+      - Dev environment: reference/development.md
+      - Thinking in JAX: reference/jax.md
+  - API reference: api/
