@@ -83,17 +83,12 @@ sequenceDiagram
 
     ***
 
-    Per-block design rationale: why each seam has its shape, the fusion
-    contract, conventions. Not needed to get running.
+    Per-block design rationale lives with the code, on GitHub: why each seam
+    has its shape, the fusion contract, conventions.
 
-    [:octicons-arrow-right-24: Overview & fusion north star](README.md)
+    [:octicons-arrow-right-24: Design docs on GitHub](https://github.com/fractalyze/zorch/blob/main/docs/README.md)
 
 </div>
-
-!!! note "How this is organized"
-    The four doors follow [Diátaxis](https://diataxis.fr/): a tutorial to
-    learn from, how-to guides for tasks, reference to look things up, and
-    explanation for understanding.
 
 !!! tip "Using an AI coding agent?"
     The Guide section doubles as an installable agent skill:

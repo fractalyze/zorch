@@ -81,4 +81,4 @@ python first_proof.py
 | Assemble a full prover | [Assembling a prover](guide/building-on-zorch.md) |
 | Use the GPU and keep code fused | [Keeping code fused](guide/frx-and-fusion.md) |
 | Avoid the field-dtype traps | [Field-dtype sharp bits](guide/field-dtypes.md) |
-| Understand why the blocks look this way | [Design docs](README.md) |
+| Understand why the blocks look this way | [Design docs on GitHub](https://github.com/fractalyze/zorch/blob/main/docs/README.md) |

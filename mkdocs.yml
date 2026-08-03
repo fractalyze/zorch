@@ -10,6 +10,17 @@ edit_uri: edit/main/
 
 docs_dir: docs
 
+# The hand-written design docs are contributor-facing prose; they render on
+# GitHub (linked from the Guide pages) and stay off the site, which is the
+# task-oriented consumer surface. Every site page is generated
+# (tools/gen_ref_pages.py), so the whole tree is excluded.
+exclude_docs: |
+  blocks/
+  schemes/
+  composition/
+  reference/
+  README.md
+
 # Rebuild the dev server when build-time page sources change too.
 watch:
   - tools/site
@@ -83,20 +94,4 @@ nav:
   - Reference:
       - Blocks & imports: guide/blocks.md
       - Field-dtype sharp bits: guide/field-dtypes.md
-  - Design:
-      - Overview & fusion north star: README.md
-      - Polynomials: blocks/poly.md
-      - Hashing: blocks/hash.md
-      - Transcripts: blocks/transcript.md
-      - Merkle commitment: blocks/commit.md
-      - Linear codes: blocks/coding.md
-      - PCS: blocks/pcs.md
-      - Jagged: blocks/jagged.md
-      - Sumcheck: blocks/sumcheck.md
-      - LogUp-GKR: blocks/logup-gkr.md
-      - Spartan: schemes/spartan.md
-      - Stage composition: composition/stage-composition.md
-      - Conventions: reference/conventions.md
-      - Dev environment: reference/development.md
-      - Thinking in JAX: reference/jax.md
   - API: api/
