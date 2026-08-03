@@ -583,7 +583,8 @@ def _absorb_chain(
     decomposition rebuilds a const-free permute from those operands so a
     `lax.composite` can't lift the constants and derail the ABI. Blocks at
     index >= `active_blocks` (int32 scalar) are padding and leave the sponge
-    unchanged. Caller gates on `has_dedicated_fusion`."""
+    unchanged. Caller gates on `has_dedicated_fusion` and a concrete
+    `num_blocks > 1` -- a chain of one is not a chain."""
     operands, permute_from_operands, perm_attrs = permutation.fused_region_spec(sponge)
     constants = operands[1:]
 
@@ -693,7 +694,19 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # thunk/launch machinery; where no emitter exists the marker inlines back
     # to the same masked scan. Chain markers need a concrete block count, so
     # the symbolic path (export) keeps the plain scan.
-    if permutation.has_dedicated_fusion and isinstance(num_blocks, int) and num_blocks:
+    #
+    # `num_blocks == 1` is NOT a chain -- there is no per-permute thunk chain to
+    # collapse, so the marker buys nothing and costs: it wraps the single permute
+    # in a composite whose whole point is sequencing. The scalar-witness absorb
+    # under `grind`'s outer `vmap` is exactly this case (m == 1 -> num_blocks ==
+    # 1), and wrapping it makes every witness lane carry a sequential-chain
+    # composite. The plain scan below is the same masked permute, already fully
+    # parallel across the `vmap`, and lowers to the same dedicated kernel.
+    if (
+        permutation.has_dedicated_fusion
+        and isinstance(num_blocks, int)
+        and num_blocks > 1
+    ):
         sponge = _absorb_chain(
             permutation, st.sponge_state, blocks, active_blocks, rate
         )
