@@ -103,16 +103,12 @@ def reinterpret_challenge(raw: Array, dtype: Any) -> Array:
 
     Fails loud on a packing mismatch: the squeezes are already consumed, so
     silently truncating to the first element would leave the stream advanced past
-    a challenge nobody received.
+    a challenge nobody received. The check runs at trace time (shapes are static),
+    so jitting does not cost the loud failure.
 
-    Jitted: the `view` + bounds-check + index are three ops that, called eagerly
-    per FS squeeze (every layer-boundary `lam`/`r`, head sample), each launch a
-    separate kernel -- the dominant "loose single-op dispatch" cost on the warm
-    prove. As one jit they fuse to a single dispatch (and XLA elides the identity
-    bitcast when `dtype` is the transcript's own field). The shape check runs at
-    trace time (shapes are static), so the loud failure is preserved. Nested
-    inside an outer jit/export (the round FS, sumcheck scan) it inlines, leaving
-    those paths byte-identical. `dtype` rides static."""
+    Jitted because these three ops are called eagerly once per FS squeeze, and
+    unjitted each one launches its own kernel -- loose single-op dispatch that
+    dominates a warm prove."""
     viewed = raw.view(dtype)
     if viewed.shape != (1,):
         raise ValueError(
@@ -170,8 +166,8 @@ class _FsBackend(Protocol):
     """The Fiat-Shamir sponge backend a `DuplexTranscript` dispatches every absorb /
     squeeze through — device (graph ops) or host (CPU callback, state-resident). A
     transcript meta-field, so the device/host choice is structural: every method
-    routes through it and none can silently forget to honor the host (the trap the
-    old per-method `if self.fs_on_host` invited -- `check_witness` once did)."""
+    routes through the backend and so cannot silently ignore the host placement.
+    Re-testing `fs_on_host` per method instead would let one method be missed."""
 
     @property
     def on_host(self) -> bool: ...
@@ -214,8 +210,7 @@ class _DeviceFs:
 
 @dataclass(frozen=True)
 class _HostFs:
-    """The host-FS backend: the serial sponge runs on the CPU and its state stays
-    host-resident across the stream (see the host-FS backend section below)."""
+    """The host-FS backend — see the host-FS backend section below."""
 
     on_host: bool = True
 
@@ -253,12 +248,9 @@ class DuplexTranscript:
     Every step is a device op — no host callback, no zkVM FFI.
 
     The `fs` backend (`_DeviceFs` / `_HostFs`) chooses where every absorb / squeeze
-    runs. `_HostFs` runs the serial Poseidon chain on the host CPU (a latency-bound
-    hash chain idles accelerator cores, so a host-driven, per-round-kernel consumer
-    offloads it), with the sponge state kept CPU-resident across the stream -- an
-    eager primitive (see the host-FS backend section below). `_DeviceFs` (the
-    default) leaves the device path and its compiled graph untouched. Pick one via
-    `new(..., fs_on_host=)`."""
+    runs; pick one via `new(..., fs_on_host=)`. `_DeviceFs` (the default) is the
+    in-graph path. `_HostFs` is an eager primitive -- see the host-FS backend
+    section below for what it trades and why."""
 
     permutation: Permutation
     rate: int
@@ -329,27 +321,21 @@ class DuplexTranscript:
         on the device it came from. Byte-identical to the same sequence of
         `observe` calls -- the same `_observe_body`, only relocated.
 
-        The win is per permutation, and it is placement, not algorithm. A
-        single sponge on an accelerator runs one warp-cooperative permute per
-        rate-block, where ~21 rounds of full-warp shuffle latency dominate a
-        few hundred field ops; a CPU pays none of that. Measured on
-        koalabear16 at rate 8: 5.4 us per permutation on an RTX 5090 against
-        1.0 us on the host. A short message is not worth the two crossings,
-        so the caller applies its own length threshold -- but a message of
-        thousands of blocks (a LogUp-GKR output-MLE observe on a wide shard)
-        spends milliseconds on placement alone.
+        The win is placement, not algorithm. A sponge on an accelerator runs one
+        warp-cooperative permute per rate-block, where ~21 rounds of full-warp
+        shuffle latency dominate a few hundred field ops; a CPU pays none of that.
+        Measured on koalabear16 at rate 8: 5.4 us per permutation on an RTX 5090
+        against 1.0 us on the host. Two host crossings are not worth a short
+        message, so the caller applies its own length threshold -- the call site
+        is where the message length that justifies relocating is known.
 
-        Scoped deliberately: `fs` still decides where the stream runs, and
-        only THIS absorb relocates. Re-deriving the choice per call from
-        `fs_on_host` is the trap the `fs` meta-field exists to close, so the
-        placement is named at the call site, which is where the message
-        length that justifies it is known.
+        Variadic because the crossing, not the absorb, is the repeated cost: a
+        Fiat-Shamir step is usually several messages in a fixed order (a length
+        prefix, then its payload), and absorbing them one call at a time drags the
+        state back to the device between each. The whole sequence costs one round
+        trip.
 
-        Variadic because the crossing, not the absorb, is what a caller would
-        otherwise pay repeatedly: a Fiat-Shamir step is usually several messages
-        in a fixed order (a length prefix, then its payload), and absorbing them
-        one call at a time drags the state back to the device between each. The
-        whole sequence costs one round trip.
+        Only THIS absorb relocates; `fs` still decides where the stream runs.
 
         Eager only -- it moves buffers across the host boundary, so it cannot
         run inside a traced region; `observe` is the in-graph form.
@@ -482,8 +468,8 @@ class DuplexTranscript:
 # the Python-loop `sample` re-traces its permutation graph on EVERY call, and
 # `observe`'s eager `lax.scan` pays the same. Routing through module-level jit
 # makes every eager call site hit one process-wide cache: `permutation`/`rate`
-# are static meta_fields with value-equality keys (#214), so fresh same-config
-# transcripts reuse the trace.
+# are static meta_fields with value-equality keys (fractalyze/zorch#214), so
+# fresh same-config transcripts reuse the trace.
 # `inline=True` keeps call sites already inside a jit zone byte-identical:
 # without it the zone stays a nested pjit call in the outer jaxpr, which stops
 # the permutation's round constants from auto-lifting into the
@@ -557,9 +543,7 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
 # A whole duplex-absorb chain (sequential rate-block permutes with a runtime
 # live-count mask) as one marked region, so a vendor with a chain emitter runs
 # it as a single kernel — the per-permute thunk/launch machinery of a scanned
-# chain is the dominant cost of a long host absorb, not the permute math. A
-# vendor without the emitter inlines the decomposition: the same masked scan,
-# rebuilt const-free from the ABI operands (cf. `zorch.sponge_hash`).
+# chain is the dominant cost of a long host absorb, not the permute math.
 ABSORB_CHAIN_MARKER = "zorch.absorb_chain"
 ABSORB_CHAIN_MARKER_VERSION = 1
 
@@ -594,11 +578,11 @@ def _absorb_chain(
         # Each block permute is RE-MARKED with the permutation's own dedicated
         # marker, fed the chain composite's operand parameters (not `perm`'s
         # closed-over arrays, which `lax.composite` would lift and derail the
-        # chain ABI). The inlined (unrecognized-marker) fallback thus keeps the
-        # dedicated per-permute kernels of an unmarked absorb — the raw
-        # decomposition body must NOT be the fallback: it is byte-DIVERGENT
-        # from the dedicated kernel on current wheels (kernel matches the SP1
-        # goldens; the never-executed decomposition does not).
+        # chain ABI). So the chain's own fallback still runs dedicated
+        # per-permute kernels, exactly as an unmarked absorb does. Keep it that
+        # way: the dedicated kernel is the byte-authority the goldens pin, and a
+        # raw permute body is not guaranteed to match it, so letting the raw body
+        # serve as the fallback would silently change what a fallback absorbs.
         def inner(s: Array, *c: Array, **_a: object) -> Array:
             return permute_from_operands(s, *c)
 
@@ -691,9 +675,8 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
 
     # A dedicated-fusion permutation routes the whole absorb to the chain
     # marker (one vendor kernel), sidestepping the scanned chain's per-permute
-    # thunk/launch machinery; where no emitter exists the marker inlines back
-    # to the same masked scan. Chain markers need a concrete block count, so
-    # the symbolic path (export) keeps the plain scan.
+    # thunk/launch machinery. Chain markers need a concrete block count, so the
+    # symbolic path (export) keeps the plain scan.
     #
     # `num_blocks == 1` is NOT a chain -- there is no per-permute thunk chain to
     # collapse, so the marker buys nothing and costs: it wraps the single permute
@@ -764,14 +747,13 @@ def _observe_and_sample_body(
 # whole hop so a vendor fuses it into one register-resident kernel -- fusion by
 # construction, the CLAUDE.md non-negotiable.
 #
-# The decomposition is the plain `_observe_and_sample_body`, so a marker no vendor
-# emits inlines byte-identically. Duplex `(in_pos, out_pos)` ride as runtime
-# OPERANDS (inside the threaded state), not compile-time attrs: they are scalars
-# shared by every thread, so the permute-firing test (`in_pos == rate`,
-# `out_pos == 0`) is a uniform branch -- zero warp divergence -- and one kernel
-# serves every round's phase. Only the message length and sample count `n` are
-# static (the absorb/squeeze loop bounds), so the binary is recompile-free per
-# shape, like the round-compute kernels. No host schedule mirror.
+# The decomposition is the plain `_observe_and_sample_body`. The duplex positions
+# `(in_pos, out_pos)` are runtime OPERANDS (inside the threaded state) rather than
+# compile-time attrs: they are scalars shared by every thread, so the
+# permute-firing test (`in_pos == rate`, `out_pos == 0`) is a uniform branch --
+# zero warp divergence -- and one kernel serves every round's phase. Only the
+# message length and sample count `n` are static (the absorb/squeeze loop bounds),
+# so the binary is recompile-free per shape, like the round-compute kernels.
 # ============================================================================
 DUPLEX_FS_MARKER = "zorch.duplex_fs"
 DUPLEX_FS_MARKER_VERSION = 1
@@ -827,10 +809,8 @@ def observe_and_sample_marked(
 ) -> tuple[DuplexTranscript, Array]:
     """`observe_and_sample` under a `zorch.duplex_fs` fusion marker so a vendor
     fuses the ~9-kernel hop (two permutes + duplex glue) into one register-resident
-    kernel. Positions ride as runtime operands, so one recompile-free kernel serves
-    every round. A marker no vendor emits inlines to the plain hop (byte-identical);
-    only a dedicated-fusion permutation is marked (a test `CheapPermutation` keeps
-    the plain path)."""
+    kernel. Only a dedicated-fusion permutation is marked, so a test
+    `CheapPermutation` keeps the plain path."""
     if not t.has_dedicated_fusion:
         return _observe_and_sample_body(t, values, n)
     return _duplex_fs_zone(t, values, n)
@@ -862,9 +842,9 @@ def _check_witness_body(
 # Byte-identical to the device sponge: the jit reconstructs a `DuplexTranscript`
 # (fs_on_host defaults False -> no recursion) and runs the SAME `_observe_body`/
 # `_sample_body`. The `permutation` must lower its `permute` to the host (a raw
-# permute, not one pinning an inner accelerator jit). State leaves cross as their
-# own field dtype -- frx#45 (FFI ABI carries ZK field types) retired the
-# uint32 bitcast workaround for the #44 abort.
+# permute, not one pinning an inner accelerator jit). State leaves cross the host
+# boundary as their own field dtype, which the FFI ABI carries directly
+# (fractalyze/jax#45) -- no uint32 bitcast around them.
 # ============================================================================
 
 

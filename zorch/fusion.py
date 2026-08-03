@@ -56,5 +56,11 @@ def fused_region(
     `composite.attributes`) — the structural metadata a recognizer parses, e.g. a
     sumcheck marker's `degree` / `num_vars`. Both default to absent (`version=0`,
     no attrs), so a plain straight-line region is unchanged.
+
+    A marker no vendor recognizes falls back to running `decomposition` inline, so
+    marking a region is byte-identical to not marking it. Callers rely on this:
+    it is why a marker can be added on a hot path without a golden re-bless, and
+    why `decomposition` must compute the real result rather than a placeholder the
+    emitter is expected to replace.
     """
     return composite(decomposition, *operands, name=name, version=version, **attrs)
