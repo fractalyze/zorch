@@ -387,13 +387,19 @@ class AbsorbChainGatingTest(absltest.TestCase):
         # The regression: each vmapped lane observes ONE scalar witness, so no
         # lane has a chain. A marker here also trips the FRX batching rewrite
         # (fractalyze/jax#178), which returns the unbatched `(width,)` shape.
+        # The window size is irrelevant to which marker the lane body emits, so
+        # keep it small -- lowering a wide vmap to text is the expensive part.
         t = self._new().observe(rand_field(7, (5,), F))
-        self.assertEqual(self._chain_count(lambda t: t._grind_search(8, 1 << 12), t), 0)
+        self.assertEqual(self._chain_count(lambda t: t._grind_search(8, 1 << 5), t), 0)
 
     def test_grind_witness_still_verifies(self) -> None:
+        # End-to-end through the newly-rerouted path: `GrindTest` runs on the
+        # cheap sponge, which has no dedicated fusion and so never reached the
+        # gate. A small window keeps the vmapped real permutation off the CPU
+        # runner's critical path -- 4 pow_bits clear well inside one window.
         t = self._new().observe(rand_field(7, (5,), F))
-        _, witness = t.grind(8)
-        _, ok = t.check_witness(witness, pow_bits=8)
+        _, witness = t.grind(4, chunk=1 << 8)
+        _, ok = t.check_witness(witness, pow_bits=4)
         self.assertTrue(bool(ok))
 
 
