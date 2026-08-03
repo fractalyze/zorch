@@ -1,8 +1,10 @@
 # Writing FRX code that fuses
 
 zorch's performance model assumes consumer code keeps its compute inside a few
-fused device kernels. FRX is JAX, so all JAX discipline applies — this page is
-the condensed authoring rules; the full mental models are in
+fused device kernels. FRX is JAX with the same API surface under the `frx`
+name — `@frx.jit`, `frx.vmap`, `frx.lax`, `frx.numpy` (imported as `fnp`) —
+so all JAX discipline applies. This page is the condensed authoring rules; the
+full mental models are in
 [jax.md](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/reference/jax.md)
 and the exact conventions in
 [conventions.md](https://github.com/fractalyze/zorch/blob/v0.1.2/docs/reference/conventions.md).
@@ -53,6 +55,12 @@ keyed on callable identity — bind with `functools.partial` or hoist).
 A `lax.scan` reached from eager code needs a **stable body callable** — one
 built per call recompiles an identical graph every time, silently.
 
+**Tiebreaker for a shrinking fold** (rows 3 and 4 both plausibly apply):
+default to the eager driver (row 4) and accept one recompile per shape — a
+halving table costs log₂(n) compiles once, then caches. Reach for the
+masked fixed-width-buffer scan only when the round count drives compile time
+or dispatch latency past the cost of the masking.
+
 ## Fusion-ready round bodies
 
 Inside a round body: element-wise field ops plus the one inherent `Σ`. No
@@ -72,13 +80,21 @@ JAX_LOG_COMPILES=1           # per-function trace/lower/compile time
 JAX_EXPLAIN_CACHE_MISSES=1   # names the function and line that re-traced
 ```
 
+The compile log includes toolchain-internal compiles (`jit(convert_element_type)`,
+`jit(dynamic_slice)`, …) — filter to your own function names. A *flood* of
+`jit(<op-name>)` lines is itself a smell: your compute is running eagerly,
+one dispatch per op, with no `@jit` boundary around it.
+
 - Re-trace on every call → a per-call callable or an identity-compared meta
   field.
 - Recompile on a "different" input → a shape changed.
 - Slow first call → an unrolled Python `for` that wanted a `scan`
   (`JAX_DUMP_IR_MODES=eqn_count_pprof` + `pprof -top` names the line).
-- For kernel-level ground truth, dump HLO (`XLA_FLAGS=--xla_dump_to=<dir>`)
-  and count the fusions your round lowered to.
+- For kernel-level ground truth, dump HLO (`XLA_FLAGS=--xla_dump_to=<dir>`).
+  Per module the dump has many files; read
+  `*after_optimizations.txt` for the fused module and `*thunk_sequence.txt`
+  for the cleanest answer to "how many kernel launches" — an element-wise
+  round body should show one `kLoop` fusion kernel.
 
 zorch's own tests pin compile count, runtime, and peak memory per stage so
 regressions fail loudly; do the same for your prover's hot path.
