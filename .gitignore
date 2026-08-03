@@ -37,4 +37,4 @@ venv/
 *.log
 
 # mkdocs build output
-site/
+/site/

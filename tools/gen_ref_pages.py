@@ -40,3 +40,28 @@ for path in sorted((REPO / "zorch").rglob("*.py")):
 
 with mkdocs_gen_files.open("api/SUMMARY.md", "w") as summary:
     summary.writelines(nav.build_literate_nav())
+
+# The landing page is site presentation, not repo documentation — it lives
+# beside this script (outside docs/, which tools/lint_docs.py polices for
+# tree-resolvable links; the landing links build-time virtual pages).
+with mkdocs_gen_files.open("index.md", "w") as page:
+    page.write((REPO / "tools" / "site" / "index.md").read_text(encoding="utf-8"))
+mkdocs_gen_files.set_edit_path("index.md", "tools/site/index.md")
+
+# Mirror the agent skill bundle as the site's task-oriented Guide section.
+# The skill is the single source (release-lockstep-gated); the site copy is
+# produced at build time, so the two can never drift.
+SKILL = REPO / "skills" / "using-zorch"
+
+skill_md = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+skill_md = skill_md.split("---\n", 2)[-1]  # drop the agent frontmatter
+skill_md = skill_md.replace("(references/", "(")
+with mkdocs_gen_files.open("guide/index.md", "w") as page:
+    page.write(skill_md)
+mkdocs_gen_files.set_edit_path("guide/index.md", "skills/using-zorch/SKILL.md")
+
+for ref in sorted((SKILL / "references").glob("*.md")):
+    out = f"guide/{ref.name}"
+    with mkdocs_gen_files.open(out, "w") as page:
+        page.write(ref.read_text(encoding="utf-8"))
+    mkdocs_gen_files.set_edit_path(out, ref.relative_to(REPO).as_posix())

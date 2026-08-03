@@ -10,11 +10,21 @@ edit_uri: edit/main/
 
 docs_dir: docs
 
+# Rebuild the dev server when build-time page sources change too.
+watch:
+  - tools/site
+  - skills/using-zorch
+  - tools/gen_ref_pages.py
+
 theme:
   name: material
+  icon:
+    logo: material/cube-outline
   features:
+    - navigation.tabs
     - navigation.sections
     - navigation.top
+    - navigation.indexes
     - content.code.copy
     - search.suggest
   palette:
@@ -49,31 +59,49 @@ plugins:
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - pymdownx.arithmatex:
       generic: true
   - toc:
       permalink: true
 
 nav:
-  - Overview: README.md
-  - Blocks:
-      - Polynomials: blocks/poly.md
-      - Hashing: blocks/hash.md
-      - Transcripts: blocks/transcript.md
-      - Merkle commitment: blocks/commit.md
-      - Linear codes: blocks/coding.md
-      - PCS: blocks/pcs.md
-      - Jagged: blocks/jagged.md
-      - Sumcheck: blocks/sumcheck.md
-      - LogUp-GKR: blocks/logup-gkr.md
-  - Schemes:
-      - Spartan: schemes/spartan.md
-  - Composition:
-      - Stage composition: composition/stage-composition.md
-  - Reference:
-      - Conventions: reference/conventions.md
-      - Dev environment: reference/development.md
-      - Thinking in JAX: reference/jax.md
-  - API reference: api/
+  - Home: index.md
+  - Guide:
+      - guide/index.md
+      - Setup: guide/setup.md
+      - Blocks & imports: guide/blocks.md
+      - Field dtypes: guide/field-dtypes.md
+      - FRX & fusion: guide/frx-and-fusion.md
+      - Building a prover: guide/building-on-zorch.md
+  - Design:
+      - Docs map: README.md
+      - Blocks:
+          - Polynomials: blocks/poly.md
+          - Hashing: blocks/hash.md
+          - Transcripts: blocks/transcript.md
+          - Merkle commitment: blocks/commit.md
+          - Linear codes: blocks/coding.md
+          - PCS: blocks/pcs.md
+          - Jagged: blocks/jagged.md
+          - Sumcheck: blocks/sumcheck.md
+          - LogUp-GKR: blocks/logup-gkr.md
+      - Schemes:
+          - Spartan: schemes/spartan.md
+      - Composition:
+          - Stage composition: composition/stage-composition.md
+      - Reference:
+          - Conventions: reference/conventions.md
+          - Dev environment: reference/development.md
+          - Thinking in JAX: reference/jax.md
+  - API: api/
