@@ -94,4 +94,5 @@ nav:
   - Reference:
       - Blocks & imports: guide/blocks.md
       - Field-dtype sharp bits: guide/field-dtypes.md
+  - Design digest: design.md
   - API: api/

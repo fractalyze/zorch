@@ -44,7 +44,7 @@ with mkdocs_gen_files.open("api/SUMMARY.md", "w") as summary:
 # The landing page is site presentation, not repo documentation — it lives
 # beside this script (outside docs/, which tools/lint_docs.py polices for
 # tree-resolvable links; the landing links build-time virtual pages).
-for site_page in ("index.md", "getting-started.md"):
+for site_page in ("index.md", "getting-started.md", "design.md"):
     src = REPO / "tools" / "site" / site_page
     with mkdocs_gen_files.open(site_page, "w") as page:
         page.write(src.read_text(encoding="utf-8"))

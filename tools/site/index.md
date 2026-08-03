@@ -83,10 +83,10 @@ sequenceDiagram
 
     ***
 
-    Per-block design rationale lives with the code, on GitHub: why each seam
-    has its shape, the fusion contract, conventions.
+    The load-bearing decisions on one page — the two non-negotiables, the
+    fusion contract, one line per block. Full prose lives on GitHub.
 
-    [:octicons-arrow-right-24: Design docs on GitHub](https://github.com/fractalyze/zorch/blob/main/docs/README.md)
+    [:octicons-arrow-right-24: Design digest](design.md)
 
 </div>
 
