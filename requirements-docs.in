@@ -1,0 +1,21 @@
+# Docs-site toolchain (mkdocs + the API-reference generator).
+#
+#   pip install -r requirements-docs.in \
+#     --extra-index-url https://fractalyze.github.io/pypi/simple/
+#
+# mkdocstrings *imports* zorch to read signatures and docstrings, so the build
+# needs the runtime stack too — the CPU tier is enough (no CUDA plugins), which
+# keeps the docs job light. frx/zk-dtypes ride the same pins as
+# requirements.in; bump them together.
+frx==0.10.1.dev20260803000037
+frxlib==0.10.1.dev20260803000037
+zk-dtypes==0.0.10
+absl-py
+numpy
+typing-extensions
+
+mkdocs-material==9.5.50
+mkdocstrings[python]==0.27.0
+mkdocs-gen-files==0.5.0
+mkdocs-literate-nav==0.6.1
+black  # mkdocstrings uses it to format the rendered signatures

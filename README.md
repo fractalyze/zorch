@@ -176,6 +176,7 @@ build, the FRX compile-cache rule — lives in [`docs/reference/development.md`]
 
 ## Documentation
 
+- **Docs site:** <https://fractalyze.github.io/zorch/>
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md) — indexes every
   design doc by what you're trying to do.
 
