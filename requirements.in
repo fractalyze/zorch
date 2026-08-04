@@ -15,10 +15,10 @@ absl-py
 numpy
 # PEP 696 TypeVar defaults, which `typing` gains only in 3.13.
 typing-extensions
-frx==0.10.1.dev20260803000037
-frxlib==0.10.1.dev20260803000037
-frx-cuda12-pjrt==0.10.1.dev20260803000037
-frx-cuda12-plugin==0.10.1.dev20260803000037
+frx==0.10.1.dev20260803201512
+frxlib==0.10.1.dev20260803201512
+frx-cuda12-pjrt==0.10.1.dev20260803201512
+frx-cuda12-plugin==0.10.1.dev20260803201512
 zk-dtypes==0.0.10
 
 # Benchmark harness (shared across fractalyze repos); used only by the
