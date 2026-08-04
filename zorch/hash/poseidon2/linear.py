@@ -36,11 +36,14 @@ def apply_external_m4(state: Array, m4: tuple[tuple[int, ...], ...]) -> Array:
             f"external layer needs a 1-D state with width a positive multiple of "
             f"4, got {state.shape}"
         )
+    # Hoist the lanes once: indexing `state` inside both loops reads the chained
+    # input w**2 times, against the chained-input rule in `zorch.hash.linear`.
+    lanes = [state[j] for j in range(w)]
     return fnp.stack(
         [
             unrolled_sum(
                 [
-                    m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) * state[j]
+                    m4[i % 4][j % 4] * (2 if i // 4 == j // 4 else 1) * lanes[j]
                     for j in range(w)
                 ]
             )

@@ -10,7 +10,7 @@ from zorch.hash.poseidon2.linear import (
     apply_matrix,
 )
 from zorch.hash.poseidon2.params import default_external_matrix
-from zorch.testkit.fusion import assert_fusion_ready
+from zorch.testkit.fusion import assert_fusion_ready, assert_input_uses
 from zorch.testkit.random_field import rand_field
 
 # Plonky3's M4 = circ(2,3,1,1) — the base M4 `default_external_matrix` builds from.
@@ -78,6 +78,18 @@ class LinearLayerTest(absltest.TestCase):
         # The matrix form reduces, so the gate must bite — else the check is vacuous.
         with self.assertRaises(AssertionError):
             assert_fusion_ready(lambda v: m @ v, s, reduces=0)
+
+    def test_state_reads_stay_linear_in_width(self) -> None:
+        # The chained-input rule in `zorch.hash.linear`: reading `state` inside
+        # both loops of a w*w layer costs w**2 reads, one hoist costs w.
+        for w in (8, 16):
+            m = rand_field(1, (w, w), F)
+            d = rand_field(3, (w,), F)
+            s = rand_field(2, (w,), F)
+            assert_input_uses(lambda v: apply_matrix(m, v), s, limit=w)
+            assert_input_uses(lambda v: apply_external_m4(v, _STD_M4), s, limit=w)
+            # The internal layer also sums every lane, hence the one extra.
+            assert_input_uses(lambda v: apply_internal(d, v), s, limit=w + 1)
 
 
 if __name__ == "__main__":
