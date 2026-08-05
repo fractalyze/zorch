@@ -109,17 +109,27 @@ def _xor_reduce_rows(x: Array) -> Array:
     return result
 
 
-# The elements reduction sums over all `n` selectors into a tiny `(W, L)` output.
-# Gridding on that output gives only `W*L` programs, each serial over `n` — at
-# flock m=28 that is 512 programs looping 16384 blocks, ~18x slower than the
-# sibling `bits` kernel purely from under-parallelization. Instead grid over `n`:
-# each program streams `iters` individual rows into one `(W, L)` accumulator,
-# reading every selector/value once and avoiding the integer-sum parity emulation
-# needed by a multi-row tile. The per-program partials are then XOR-combined.
-# `_ELEMENTS_TARGET_PROGRAMS` bounds the partials array so the large-`m` shapes
-# #504 cared about stay in memory.
 _ELEMENTS_BLOCK = 1
 _ELEMENTS_TARGET_PROGRAMS = 8192
+
+
+def _elements_grid(n: int) -> tuple[int, int, int, int]:
+    """The `n`-parallel grid plan both elements kernels share:
+    `(iters, rows_per_program, programs, padded_n)`.
+
+    Gridding on the tiny `(W, L)` output would give only `W*L` programs, each
+    serial over `n` — at flock m=28 that is 512 programs looping 16384 blocks,
+    ~18x slower than the sibling `bits` kernel purely from under-parallelization.
+    Instead grid over `n`: each program streams `iters` individual rows into one
+    accumulator, reading every selector/value once and avoiding the integer-sum
+    parity emulation a multi-row tile needs; the per-program partials are then
+    XOR-combined. `_ELEMENTS_TARGET_PROGRAMS` bounds the partials array so the
+    large-`m` shapes (#504) stay in memory."""
+    iters = max(1, -(-n // (_ELEMENTS_BLOCK * _ELEMENTS_TARGET_PROGRAMS)))
+    rows_per_program = _ELEMENTS_BLOCK * iters
+    programs = -(-n // rows_per_program)
+    padded_n = programs * rows_per_program
+    return iters, rows_per_program, programs, padded_n
 
 
 def _bit_select_reduce_elements_pallas(
@@ -128,10 +138,7 @@ def _bit_select_reduce_elements_pallas(
     """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output, parallel over n."""
     n = selectors.shape[0]
     block = _ELEMENTS_BLOCK
-    iters = max(1, -(-n // (block * _ELEMENTS_TARGET_PROGRAMS)))
-    rows_per_program = block * iters
-    programs = -(-n // rows_per_program)
-    padded_n = programs * rows_per_program
+    iters, rows_per_program, programs, padded_n = _elements_grid(n)
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
     values = fnp.pad(values, ((0, padded_n - n), (0, 0)))
 
@@ -162,6 +169,61 @@ def _bit_select_reduce_elements_pallas(
         name="bit_select_xor_reduce_elements",
     )(selectors, values)
     return lax.reduce_xor(partials, (0,))
+
+
+def _bit_select_reduce_elements_batched_pallas(
+    selectors: Array, values: Array, width: int, limbs: int
+) -> Array:
+    """Batched `(n,) selectors x (n, N) values -> (N, W, L)` limb output.
+
+    The single-claim [`_bit_select_reduce_elements_pallas`] with the selectors —
+    the shared packed witness — and their bit-decomposition read once per row and
+    XOR-accumulated against all `N` value vectors, so a batched ring-switch open
+    reads the witness once instead of once per claim. Parallel over `n`; the
+    per-program partials are XOR-combined.
+
+    `values` is selectors-major `(n, N, L)`: the shared row axis leads so the
+    device load is a leading-axis gather (`value_ref[rows]`), the one indexing
+    form the Triton lowering handles here. The batch `N` rides as a kernel-array
+    axis, which the lowering needs power-of-2 sized, so `N` is padded up to the
+    next power of two with zero value rows (a zero row XOR-reduces to zero) and
+    sliced back. `N` a power of two (the flock two-claim open) pads to itself."""
+    n, batch, _ = values.shape
+    batch_pad = 1 << (batch - 1).bit_length()
+    block = _ELEMENTS_BLOCK
+    iters, rows_per_program, programs, padded_n = _elements_grid(n)
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
+    # Pad rows (axis 0) to the grid and the batch (axis 1) up to a power of two.
+    values = fnp.pad(values, ((0, padded_n - n), (0, batch_pad - batch), (0, 0)))
+
+    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
+        program = pl.program_id(0)
+        shifts = fnp.arange(_LIMB_BITS, dtype=_LIMB)
+
+        def body(step: Array, acc: Array) -> Array:
+            rows = (
+                program * rows_per_program
+                + step * block
+                + fnp.arange(block, dtype=fnp.int32)
+            )
+            sel = selector_ref[rows, :]
+            bits = ((sel[:, :, None] >> shifts) & 1).reshape(width)
+            val = value_ref[rows, :, :].reshape(batch_pad, limbs)
+            # (W,) bit-select each of the N value rows -> (N, W, L).
+            return acc ^ bits[None, :, None] * val[:, None, :]
+
+        out_ref[program] = lax.fori_loop(
+            0, iters, body, fnp.zeros((batch_pad, width, limbs), _LIMB)
+        )
+
+    partials = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((programs, batch_pad, width, limbs), _LIMB),
+        grid=(programs,),
+        compiler_params=plgpu.CompilerParams(),
+        name="bit_select_xor_reduce_elements_batched",
+    )(selectors, values)
+    return lax.reduce_xor(partials, (0,))[:batch]
 
 
 def _bit_select_unpacked_bits_pallas(
@@ -345,6 +407,12 @@ def bit_select_xor_reduce(
     the result has the selectors' shape: each result `i` XORs `values[b]`
     wherever bit `b` of selector `i` is set.
 
+    `reduce="elements"` also batches: a selectors-major `values` of shape
+    `(n, N)` reduces all `N` columns against the shared selectors in one pass —
+    the result is `(N, W)`, row `k` the reduction against `values[:, k]`. A
+    batched ring-switch open uses this so the packed witness (the selectors) is
+    read once for all `N` claims instead of once per claim.
+
     For `reduce="bits"`, selectors may instead be an explicit Boolean/integer
     0/1 matrix of shape `(n, B)` with `values.shape == (B,)`. This is the form
     used when a consumer already holds unpacked witness rows.
@@ -354,10 +422,14 @@ def bit_select_xor_reduce(
     fixed-size register block. CPU uses the compact source-level expression so
     the primitive remains portable and easy to validate.
     """
-    if values.ndim != 1 or selectors.ndim not in (1, 2):
+    if selectors.ndim not in (1, 2):
         raise ValueError(
-            "bit-select XOR reduction expects 1D values and 1D packed or 2D "
-            "unpacked selectors"
+            "bit-select XOR reduction expects 1D packed or 2D unpacked selectors"
+        )
+    if values.ndim not in (1, 2):
+        raise ValueError(
+            "bit-select XOR reduction expects 1D values, or a 2D (n, N) stack "
+            'for batched reduce="elements"'
         )
     if selectors.shape[0] == 0:
         raise ValueError("bit-select XOR reduction requires at least one selector")
@@ -394,18 +466,32 @@ def bit_select_xor_reduce(
     values_l = _to_limbs(values)
 
     if reduce == "elements":
-        if values.shape != selectors.shape:
+        # `values` is `(n,)` for one claim or a selectors-major `(n, N)` stack
+        # for N claims that share the selectors (the ring-switch batched-open
+        # path: the packed witness is read once for all N). The reduced axis —
+        # the one matching the selectors — leads in both.
+        batched = values.ndim == 2
+        if values.shape[0] != selectors.shape[0]:
             raise ValueError(
-                f'values must match selectors for reduce="elements": '
-                f"{values.shape} vs {selectors.shape}"
+                f"values must match selectors on the reduced (leading) axis for "
+                f'reduce="elements": {values.shape} vs {selectors.shape}'
             )
         if frx.default_backend() == "gpu":
-            out_l = _bit_select_reduce_elements_pallas(
-                selectors_l, values_l, width, limbs
+            elements_pallas = (
+                _bit_select_reduce_elements_batched_pallas
+                if batched
+                else _bit_select_reduce_elements_pallas
             )
+            out_l = elements_pallas(selectors_l, values_l, width, limbs)
         else:
-            bits = _bits(selectors)
-            out_l = lax.reduce_xor(bits[:, :, None] * values_l[:, None, :], (0,))
+            bits = _bits(selectors)  # (n, width)
+            if batched:
+                # (n, width) x (n, N, limbs) -> (N, width, limbs)
+                out_l = lax.reduce_xor(
+                    bits[:, None, :, None] * values_l[:, :, None, :], (0,)
+                )
+            else:
+                out_l = lax.reduce_xor(bits[:, :, None] * values_l[:, None, :], (0,))
         return _from_limbs(out_l, values.dtype)
 
     if reduce == "bits":

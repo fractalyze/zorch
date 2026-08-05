@@ -79,6 +79,19 @@ class RingSwitchKernelsTest(parameterized.TestCase):
         np.testing.assert_array_equal(_np_lanes(got), want)
 
     @parameterized.named_parameters(FIELDS.items())
+    def test_bit_slice_evals_batches_over_shared_witness(self, dtype: Any) -> None:
+        """A selectors-major `(n, N)` tensor stack shares the one witness read:
+        row `k` equals the single-claim slice-evals against column `k`."""
+        w = field_bit_width(dtype)
+        witness = _rand(1, (8,), dtype)
+        tensors = _rand(2, (8, 3), dtype)
+        got = bit_slice_evals(witness, tensors)
+        self.assertEqual(got.shape, (3, w))
+        for k in range(3):
+            one = bit_slice_evals(witness, tensors[:, k])
+            np.testing.assert_array_equal(_np_lanes(got[k]), _np_lanes(one))
+
+    @parameterized.named_parameters(FIELDS.items())
     def test_rs_eq_ind_matches_bit_loop(self, dtype: Any) -> None:
         w = field_bit_width(dtype)
         tensor, eq_r = _rand(3, (8,), dtype), _rand(4, (w,), dtype)

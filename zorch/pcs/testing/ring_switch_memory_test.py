@@ -22,6 +22,9 @@ class RingSwitchMemoryTest(absltest.TestCase):
         n = 1 << 24
         compiled = (
             bit_slice_evals.lower(shape((n,), dtype), shape((n,), dtype)).compile(),
+            # Batched (n, N) share-the-witness path must stay bounded too — it
+            # accumulates into (N, W, L), never the (n, N, W, L) broadcast.
+            bit_slice_evals.lower(shape((n,), dtype), shape((n, 2), dtype)).compile(),
             rs_eq_ind.lower(shape((n,), dtype), shape((128,), dtype)).compile(),
             byte_select_xor_reduce.lower(
                 shape((1 << 25, 8), fnp.uint8), shape((64,), dtype)

@@ -78,6 +78,11 @@ def bit_slice_evals(packed_witness: Array, tensor: Array) -> Array:
 
     `(n,) × (n,) -> (W,)`. The memory-bounded bit-select reduction accumulates
     directly into the output without materializing its `(n, W, L)` broadcast.
+
+    Batches over claims that share the witness: a selectors-major `tensor` of
+    shape `(n, N)` gives `(N, W)`, row `k` the slice-evals against `tensor[:, k]`
+    — the packed witness is read once for all `N`. A batched ring-switch open
+    stacks its `N` suffix tensors this way to fold `N` witness passes into one.
     """
     return bf.bit_select_xor_reduce(packed_witness, tensor, reduce="elements")
 
