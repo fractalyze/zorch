@@ -257,9 +257,7 @@ class Sponge:
 # sponge_type, input aval) process-wide: `lax.composite` re-traces its
 # decomposition on every emission and again under every vmap batching (see
 # `zorch._composite`), and one PCS open emits hundreds of identical-aval
-# hashes — every leaf-hash vmap and every fold round's domain-separator bind
-# re-paid the full absorb+permute Python body, dominating the open's
-# trace+lower floor (#593). The sponge (permutation + rate + out, compared by
+# hashes. The sponge (permutation + rate + out, compared by
 # value) and the construction are the static key — together they fully
 # determine the decomposition; `inline=True` splices the cached jaxpr into
 # the enclosing trace, so the emitted module (one `zorch.sponge_hash` marker
