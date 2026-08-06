@@ -10,8 +10,11 @@ open (``zorch.pcs.jagged.open``) consumes.
 ``jit=True`` runs the commit as three ``@jit`` zones — the
 ``stacked_basefold_open`` zoning recipe. Only the encode + leaf-hash prologue's
 shapes carry K (the stacked column count); the Merkle fold's O(depth) compile —
-the dominant one — keys on the leaf count ``S*blowup`` alone, so it compiles
-once per process and is shared by every shard; the root/structure bind tail —
+the dominant one — keys on the leaf count ``S*blowup`` plus the
+identity-hashed ``smcs`` static, so it compiles once per leaf count for each
+long-lived ``SingleMatrixCommitmentScheme`` (the shard prover holds one for
+its lifetime; a fresh instance recompiles) and is shared by every shard of
+that height; the root/structure bind tail —
 the only counts-shaped work, a two-permute graph — recompiles per chip count
 without ever touching the fold. Byte-identical to eager either way (the zone
 cuts sit on the leaf-digest and raw-root layers both paths compute).
