@@ -109,24 +109,22 @@ def _xor_reduce_rows(x: Array) -> Array:
     return result
 
 
-_ELEMENTS_BLOCK = 1
 _ELEMENTS_TARGET_PROGRAMS = 8192
 
 
-def _elements_grid(n: int) -> tuple[int, int, int, int]:
+def _elements_grid(n: int, block: int) -> tuple[int, int, int, int]:
     """The `n`-parallel grid plan both elements kernels share:
     `(iters, rows_per_program, programs, padded_n)`.
 
     Gridding on the tiny `(W, L)` output would give only `W*L` programs, each
     serial over `n` — at flock m=28 that is 512 programs looping 16384 blocks,
     ~18x slower than the sibling `bits` kernel purely from under-parallelization.
-    Instead grid over `n`: each program streams `iters` individual rows into one
-    accumulator, reading every selector/value once and avoiding the integer-sum
-    parity emulation a multi-row tile needs; the per-program partials are then
-    XOR-combined. `_ELEMENTS_TARGET_PROGRAMS` bounds the partials array so the
-    large-`m` shapes (#504) stay in memory."""
-    iters = max(1, -(-n // (_ELEMENTS_BLOCK * _ELEMENTS_TARGET_PROGRAMS)))
-    rows_per_program = _ELEMENTS_BLOCK * iters
+    Instead grid over `n`: each program folds `iters` `block`-row steps into one
+    accumulator, reading every selector/value once; the per-program partials are
+    then XOR-combined. `_ELEMENTS_TARGET_PROGRAMS` bounds the partials array so
+    the large-`m` shapes (#504) stay in memory."""
+    iters = max(1, -(-n // (block * _ELEMENTS_TARGET_PROGRAMS)))
+    rows_per_program = block * iters
     programs = -(-n // rows_per_program)
     padded_n = programs * rows_per_program
     return iters, rows_per_program, programs, padded_n
@@ -135,31 +133,41 @@ def _elements_grid(n: int) -> tuple[int, int, int, int]:
 def _bit_select_reduce_elements_pallas(
     selectors: Array, values: Array, width: int, limbs: int
 ) -> Array:
-    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output, parallel over n."""
+    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output, parallel over n.
+
+    Each step reads a `block`-row tile of both streams into a `(block, W, L)`
+    accumulator, folded to `(W, L)` once per program by [`_xor_reduce_rows`]:
+    the in-loop update must stay elementwise, since per-row indexing does not
+    lower on Pallas GPU (`slice`) and an in-loop parity fold is shuffle-bound.
+    """
     n = selectors.shape[0]
-    block = _ELEMENTS_BLOCK
-    iters, rows_per_program, programs, padded_n = _elements_grid(n)
+    # block=2 balances load width against accumulator register pressure
+    # (measured optimum on the RTX 5090 target); wider tiles stream faster only
+    # with the accumulate removed, so the constraint is acc-stream interaction,
+    # not bandwidth.
+    block = 2
+    iters, rows_per_program, programs, padded_n = _elements_grid(n, block)
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
     values = fnp.pad(values, ((0, padded_n - n), (0, 0)))
 
     def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
         program = pl.program_id(0)
         shifts = fnp.arange(_LIMB_BITS, dtype=_LIMB)
+        base = program * rows_per_program + fnp.arange(block, dtype=fnp.int32)
 
         def body(step: Array, acc: Array) -> Array:
-            rows = (
-                program * rows_per_program
-                + step * block
-                + fnp.arange(block, dtype=fnp.int32)
-            )
+            rows = base + step * block
             sel = selector_ref[rows, :]
             val = value_ref[rows, :]
-            bits = ((sel[:, :, None] >> shifts) & 1).reshape(width)
-            return acc ^ bits[:, None] * val.reshape(limbs)[None, :]
+            bits = ((sel[:, :, None] >> shifts) & 1).reshape(block, width)
+            # 0/1 bits -> 0/~0 masks: the AND select keeps the hot loop in the
+            # LOP3 class instead of integer multiply, and a padded zero row
+            # selects nothing.
+            mask = _LIMB(0) - bits
+            return acc ^ (mask[:, :, None] & val[:, None, :])
 
-        out_ref[program] = lax.fori_loop(
-            0, iters, body, fnp.zeros((width, limbs), _LIMB)
-        )
+        acc = lax.fori_loop(0, iters, body, fnp.zeros((block, width, limbs), _LIMB))
+        out_ref[program] = _xor_reduce_rows(acc)
 
     partials = pl.pallas_call(
         kernel,
@@ -190,8 +198,11 @@ def _bit_select_reduce_elements_batched_pallas(
     sliced back. `N` a power of two (the flock two-claim open) pads to itself."""
     n, batch, _ = values.shape
     batch_pad = 1 << (batch - 1).bit_length()
-    block = _ELEMENTS_BLOCK
-    iters, rows_per_program, programs, padded_n = _elements_grid(n)
+    # One row per step: the batch axis already supplies the register-level
+    # width the single-claim kernel gets from its row tile; widening both
+    # regresses.
+    block = 1
+    iters, rows_per_program, programs, padded_n = _elements_grid(n, block)
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
     # Pad rows (axis 0) to the grid and the batch (axis 1) up to a power of two.
     values = fnp.pad(values, ((0, padded_n - n), (0, batch_pad - batch), (0, 0)))
