@@ -86,6 +86,29 @@ class BinaryFieldReprTest(parameterized.TestCase):
         np.testing.assert_array_equal(np.asarray(_to_limbs(by_bit)), want_by_bit)
 
     @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_elements_batches_over_shared_selectors(
+        self, dtype: Any
+    ) -> None:
+        """`reduce="elements"` accepts a selectors-major `(n, N)` values stack
+        against `(n,)` selectors and returns `(N, W)`: row `k` equals the
+        single-claim reduction against column `values[:, k]`. The ring-switch
+        batched-open path reads the shared selectors (the packed witness) once
+        for all `N` claims."""
+        width = field_bit_width(dtype)
+        n, batch = 11, 3
+        selectors = _rand_field(dtype, n, 20)
+        values = _rand_field(dtype, n * batch, 21).reshape(n, batch)
+
+        batched = bit_select_xor_reduce(selectors, values, reduce="elements")
+        self.assertEqual(batched.shape, (batch, width))
+
+        for k in range(batch):
+            one = bit_select_xor_reduce(selectors, values[:, k], reduce="elements")
+            np.testing.assert_array_equal(
+                np.asarray(_to_limbs(batched[k])), np.asarray(_to_limbs(one))
+            )
+
+    @parameterized.parameters(*_DTYPES)
     def test_bit_select_xor_reduce_accepts_unpacked_rows(self, dtype: Any) -> None:
         rows = fnp.asarray(
             np.random.default_rng(5).integers(0, 2, size=(13, 64), dtype=np.uint8)
