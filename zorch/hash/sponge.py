@@ -16,8 +16,10 @@ from __future__ import annotations
 import enum
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any
 
+import frx
 import frx.numpy as fnp
 from frx import Array, lax
 
@@ -248,10 +250,28 @@ class Sponge:
                 f"fills the capacity), got {self.rate} + {self.out} != "
                 f"{self._permutation.width}"
             )
-        # Dedicated-fusion → one `zorch.sponge_hash` region (built here); else the
-        # generic `while_loop` absorb over `permute`.
-        perm = self._permutation
-        if perm.has_dedicated_fusion:
-            return _fused_hash(perm, input, self.rate, self.out, sponge_type)
-        state = fnp.zeros(perm.width, dtype=input.dtype)
-        return _absorb(input, state, self.rate, self.out, perm.permute, sponge_type)
+        return _hash_body(self, input, sponge_type)
+
+
+# Module-level jit zone so the hash decomposition traces once per (sponge,
+# sponge_type, input aval) process-wide: `lax.composite` re-traces its
+# decomposition on every emission and again under every vmap batching (see
+# `zorch._composite`), and one PCS open emits hundreds of identical-aval
+# hashes — every leaf-hash vmap and every fold round's domain-separator bind
+# re-paid the full absorb+permute Python body, dominating the open's
+# trace+lower floor (#593). The sponge (permutation + rate + out, compared by
+# value) and the construction are the static key — together they fully
+# determine the decomposition; `inline=True` splices the cached jaxpr into
+# the enclosing trace, so the emitted module (one `zorch.sponge_hash` marker
+# per hash on the dedicated path) is unchanged and a recognizing emitter
+# still sees the composite form. Same hoist as
+# `zorch.hash.poseidon2.poseidon2._permute_body`.
+@partial(frx.jit, static_argnames=("sponge", "sponge_type"), inline=True)
+def _hash_body(sponge: Sponge, input: Array, sponge_type: SpongeType) -> Array:
+    # Dedicated-fusion → one `zorch.sponge_hash` region (built here); else the
+    # generic `while_loop` absorb over `permute`.
+    perm = sponge._permutation
+    if perm.has_dedicated_fusion:
+        return _fused_hash(perm, input, sponge.rate, sponge.out, sponge_type)
+    state = fnp.zeros(perm.width, dtype=input.dtype)
+    return _absorb(input, state, sponge.rate, sponge.out, perm.permute, sponge_type)
