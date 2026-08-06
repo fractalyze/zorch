@@ -10,6 +10,7 @@ from absl.testing import absltest, parameterized
 from frx import Array, lax
 
 from zorch.utils.binary_field import (
+    _ELEMENTS_TARGET_PROGRAMS,
     _to_limbs,
     bit_select_xor_reduce,
     byte_select_xor_reduce,
@@ -28,6 +29,14 @@ def _rand_field(dtype: Any, n: int, seed: int) -> Array:
         0, 1 << 32, size=(n, n_lanes), dtype=np.uint32
     )
     return lax.bitcast_convert_type(fnp.asarray(raw), dtype)
+
+
+def _selector_bits(selectors: Array, n: int) -> np.ndarray:
+    """`selectors`' bits as a {0,1} `(n, W)` array, LSB-first — the host-side view
+    of what `bit_select_xor_reduce` selects on."""
+    return np.unpackbits(
+        np.asarray(selectors).view(np.uint8).reshape(n, -1), axis=1, bitorder="little"
+    )
 
 
 def _coeff_u8(coeffs: Array) -> np.ndarray:
@@ -66,11 +75,7 @@ class BinaryFieldReprTest(parameterized.TestCase):
 
         by_element = bit_select_xor_reduce(selectors, element_values, reduce="elements")
         by_bit = bit_select_xor_reduce(selectors, bit_values, reduce="bits")
-        bits = np.unpackbits(
-            np.asarray(selectors).view(np.uint8).reshape(11, -1),
-            axis=1,
-            bitorder="little",
-        )
+        bits = _selector_bits(selectors, 11)
         element_limbs = np.asarray(_to_limbs(element_values))
         bit_limbs = np.asarray(_to_limbs(bit_values))
         want_by_element = np.zeros((width, element_limbs.shape[1]), np.uint32)
@@ -107,6 +112,32 @@ class BinaryFieldReprTest(parameterized.TestCase):
             np.testing.assert_array_equal(
                 np.asarray(_to_limbs(batched[k])), np.asarray(_to_limbs(one))
             )
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_elements_spans_multiple_tiles(
+        self, dtype: Any
+    ) -> None:
+        """The `elements` GPU kernel walks `n` in a serial loop and zero-pads the
+        tail, neither of which the 11-row shapes above reach — they fit in one
+        iteration with nothing to pad.
+
+        Size off `_ELEMENTS_TARGET_PROGRAMS` rather than a literal so the case
+        survives a grid retune. The 4x covers a row tile up to 4 (the kernels
+        pick their own `block`, so it is not importable); the odd remainder is
+        what forces the tail padding."""
+        n = 4 * _ELEMENTS_TARGET_PROGRAMS + 17
+
+        selectors = _rand_field(dtype, n, 8)
+        values = _rand_field(dtype, n, 9)
+
+        got = bit_select_xor_reduce(selectors, values, reduce="elements")
+
+        bits = _selector_bits(selectors, n)
+        limbs = np.asarray(_to_limbs(values))
+        want = np.bitwise_xor.reduce(
+            np.where(bits[..., None], limbs[:, None, :], np.uint32(0)), axis=0
+        )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
 
     @parameterized.parameters(*_DTYPES)
     def test_bit_select_xor_reduce_accepts_unpacked_rows(self, dtype: Any) -> None:
