@@ -91,6 +91,33 @@ class BinaryFieldReprTest(parameterized.TestCase):
         np.testing.assert_array_equal(np.asarray(_to_limbs(by_bit)), want_by_bit)
 
     @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_elements_spans_device_tiles(
+        self, dtype: Any
+    ) -> None:
+        """`n` crossing several 128-row device tiles plus a partial tail — the
+        shapes where a tiled lowering can drop, double-count, or misalign
+        rows (the small-`n` tests above never leave the first tile)."""
+        width = field_bit_width(dtype)
+        n = 3 * 128 + 37
+        selectors = _rand_field(dtype, n, 7)
+        values = _rand_field(dtype, n, 8)
+
+        got = bit_select_xor_reduce(selectors, values, reduce="elements")
+
+        bits = np.unpackbits(
+            np.asarray(selectors).view(np.uint8).reshape(n, -1),
+            axis=1,
+            bitorder="little",
+        )
+        value_limbs = np.asarray(_to_limbs(values))
+        want = np.zeros((width, value_limbs.shape[1]), np.uint32)
+        for i in range(n):
+            for bit in range(width):
+                if bits[i, bit]:
+                    want[bit] ^= value_limbs[i]
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
+
+    @parameterized.parameters(*_DTYPES)
     def test_bit_select_xor_reduce_elements_batches_over_shared_selectors(
         self, dtype: Any
     ) -> None:
