@@ -154,6 +154,13 @@ class StandardRound(ProverRound[Any, Array, TranscriptT], Generic[TranscriptT]):
         domain = self.domain or natural_domain(self.summand.degree, folded.dtype)
         return summand_evals(folded, self.summand._combine, domain)
 
+    def round_poly_pair(self, witness: Array, basis: Array) -> Array:
+        """The two-factor round poly with the factors as separate operands —
+        the seam `CompressedProductRound.round_poly_pair` keeps concat-free;
+        here the stacked m-factor reduction is the only form, so pair callers
+        just restack."""
+        return self._round_poly(fnp.stack([witness, basis]))
+
     def __call__(
         self, carry: FoldingClaim, transcript: TranscriptT
     ) -> tuple[FoldingClaim, TranscriptT, Array]:
@@ -200,7 +207,19 @@ class CompressedProductRound(
                 f"compressed product round takes exactly 2 factors, got "
                 f"{folded.shape[0]}"
             )
-        (f0, f1), (b0, b1) = fnp.reshape(folded, (2, 2, -1))
+        witness, basis = folded
+        return self.round_poly_pair(witness, basis)
+
+    def round_poly_pair(self, witness: Array, basis: Array) -> Array:
+        """`_round_poly` with the two factors as separate operands. Same values;
+        the pair form exists because a caller that just folded `witness` and
+        `basis` per factor must not restack them: a concatenate between the
+        fold roots and the product inputs is what stops the GPU multi-output
+        fuser from merging the fold with this reduction (a whole folded factor
+        and the (2, n/2) product stack have equal element counts, which is the
+        loop-shape compatibility that pass checks)."""
+        f0, f1 = fnp.reshape(witness, (2, -1))
+        b0, b1 = fnp.reshape(basis, (2, -1))
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
     def __call__(

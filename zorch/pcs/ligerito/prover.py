@@ -293,7 +293,7 @@ def _open_jit(
     eager = chor.eager_messages
 
     def emit(t: TranscriptT, witness: Array, basis: Array) -> TranscriptT:
-        msg = round_._round_poly(fnp.stack([witness, basis]))
+        msg = round_.round_poly_pair(witness, basis)
         sumcheck_messages.append(msg)
         return chor.observe_message(t, msg)
 
@@ -315,15 +315,24 @@ def _open_jit(
         for i in range(k_j):
             msg: Array | None = None  # eager: this round's is already absorbed
             if not eager:
-                msg = round_._round_poly(fnp.stack([W, B]))
+                msg = round_.round_poly_pair(W, B)
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = fold(fnp.stack([W, B]), r)
+            W = fold(W, r)
+            B = fold(B, r)
             if eager:
                 # The freshly folded state's — the terminal residual state's
                 # included (the verifier recomputes that one in the clear).
                 t = emit(t, W, B)
+            # Pin the folded carry. Left free, the GPU fuser recomputes folds
+            # inside downstream consumers and batch-materializes the state
+            # every couple of rounds, so each round message re-streams up to
+            # twice its state. Pinned, the whole per-factor fold must
+            # materialize here, and the multi-output fuser merges it with the
+            # round message's reduction (their element counts match) — fold,
+            # products, and partial sums land in ONE kernel per round.
+            W, B = frx.lax.optimization_barrier((W, B))
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---

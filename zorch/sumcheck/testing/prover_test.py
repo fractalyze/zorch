@@ -109,6 +109,22 @@ class CompressedProductRoundTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             prover.CompressedProductRound(challenges=_CH)._round_poly(f[None])
 
+    def test_round_poly_pair_matches_stacked(self) -> None:
+        # The pair form is the same message as the stacked entry — for both
+        # round flavours (CompressedProductRound computes it concat-free,
+        # StandardRound restacks).
+        a = rand_field(37, (8,), KB)
+        b = rand_field(38, (8,), KB)
+        stacked = fnp.stack([a, b])
+        for round_ in (
+            prover.CompressedProductRound(challenges=_CH),
+            _product_round(2),
+        ):
+            paired = round_.round_poly_pair(a, b)
+            reference = round_._round_poly(stacked)
+            self.assertEqual(paired.shape, reference.shape)
+            self.assertTrue(bool(fnp.all(paired == reference)))
+
 
 class FoldTest(absltest.TestCase):
     def test_split_halves_splits_contiguous_halves(self) -> None:
