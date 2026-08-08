@@ -21,6 +21,7 @@ from functools import partial
 from typing import Any, Literal
 
 import frx
+import frx.ffi
 import frx.numpy as fnp
 from frx import Array, lax
 from frx.experimental import pallas as pl
@@ -177,6 +178,23 @@ def _bit_select_reduce_elements_pallas(
         name="bit_select_xor_reduce_elements",
     )(selectors, values)
     return lax.reduce_xor(partials, (0,))
+
+
+def _bit_select_reduce_elements_ffi(selectors_l: Array, values_l: Array) -> Array:
+    """Plugin custom-call lowering for the `(n,) x (n,) -> (W, L)` reduce at
+    `W = 128`.
+
+    The hand CUDA kernel holds the XOR accumulator in registers while both
+    operand streams pass through shared memory — decoupling the accumulate
+    from the load stream, which the Pallas lowerings cannot express (Triton
+    has no scratch memory; Mosaic-GPU cannot partition rows across warps).
+    XOR commutes, so the result is byte-identical to
+    [`_bit_select_reduce_elements_pallas`] for any kernel grid.
+    """
+    return frx.ffi.ffi_call(
+        "frx_bit_select_xor_reduce_elements",
+        frx.ShapeDtypeStruct((128, 4), _LIMB),
+    )(selectors_l, values_l)
 
 
 def _bit_select_reduce_elements_batched_pallas(
@@ -488,12 +506,15 @@ def bit_select_xor_reduce(
                 f'reduce="elements": {values.shape} vs {selectors.shape}'
             )
         if frx.default_backend() == "gpu":
-            elements_pallas = (
-                _bit_select_reduce_elements_batched_pallas
-                if batched
-                else _bit_select_reduce_elements_pallas
-            )
-            out_l = elements_pallas(selectors_l, values_l, width, limbs)
+            if not batched and width == 128:
+                out_l = _bit_select_reduce_elements_ffi(selectors_l, values_l)
+            else:
+                elements_pallas = (
+                    _bit_select_reduce_elements_batched_pallas
+                    if batched
+                    else _bit_select_reduce_elements_pallas
+                )
+                out_l = elements_pallas(selectors_l, values_l, width, limbs)
         else:
             bits = _bits(selectors)  # (n, width)
             if batched:
