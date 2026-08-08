@@ -28,13 +28,15 @@ from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_params
 from zorch.hash.sponge import Sponge, SpongeParams
 
 
-def _u32(a) -> np.ndarray:
+def _u32(a: frx.Array) -> np.ndarray:
     return np.asarray(a).view(np.uint32)
 
 
-def _rand_bf(seed: int, shape) -> frx.Array:
+def _rand_bf(seed: int, shape: tuple[int, ...]) -> frx.Array:
     key = frx.random.PRNGKey(seed)
-    return frx.random.randint(key, shape, 0, pfinfo(F).modulus, dtype=fnp.uint32).view(F)
+    return frx.random.randint(key, shape, 0, pfinfo(F).modulus, dtype=fnp.uint32).view(
+        F
+    )
 
 
 def _single_constant_variant() -> tuple[Sponge, Sponge]:
@@ -49,7 +51,7 @@ def _single_constant_variant() -> tuple[Sponge, Sponge]:
 
 
 class ZoneKeyingTest(absltest.TestCase):
-    def test_single_round_constant_divergence_and_no_clobber(self):
+    def test_single_round_constant_divergence_and_no_clobber(self) -> None:
         sa, sb = _single_constant_variant()
         x = _rand_bf(424242, (11,))
         da1 = _u32(sa.hash(x))
@@ -58,13 +60,13 @@ class ZoneKeyingTest(absltest.TestCase):
         self.assertFalse(np.array_equal(da1, db))
         np.testing.assert_array_equal(da1, da2)
 
-    def test_interleaved_configs_inside_one_trace_match_eager(self):
+    def test_interleaved_configs_inside_one_trace_match_eager(self) -> None:
         sa, sb = _single_constant_variant()
         x = _rand_bf(424242, (11,))
         da, db = _u32(sa.hash(x)), _u32(sb.hash(x))
 
         @frx.jit
-        def interleaved(inp):
+        def interleaved(inp: frx.Array) -> tuple[frx.Array, frx.Array, frx.Array]:
             return sa.hash(inp), sb.hash(inp), sa.hash(inp)
 
         ja, jb, ja2 = interleaved(x)
@@ -72,7 +74,7 @@ class ZoneKeyingTest(absltest.TestCase):
         np.testing.assert_array_equal(_u32(jb), db)
         np.testing.assert_array_equal(_u32(ja2), da)
 
-    def test_value_equal_shares_distinct_config_never_shares(self):
+    def test_value_equal_shares_distinct_config_never_shares(self) -> None:
         body = sponge_mod._hash_body
         x = _rand_bf(424242, (11,))
         base = Sponge(Poseidon2(koalabear16_params()), SpongeParams(rate=8, out=8))
