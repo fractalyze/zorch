@@ -17,7 +17,7 @@ from frx import Array
 from zk_dtypes import goldilocks_mont
 from zk_dtypes import koalabear_mont as F
 
-from zorch.commit.merkle import MerkleTree, Opening
+from zorch.commit.merkle import MERKLE_FOLD_MARKER, MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.hash.compression import Compression, CompressionParams
 from zorch.hash.poseidon2.params import default_external_matrix
@@ -483,6 +483,121 @@ class CommitDtypeRejectionTest(absltest.TestCase):
         wrong_field = fnp.arange(8 * 8, dtype=goldilocks_mont).reshape(8, 8)
         with self.assertRaises(TypeError):
             MerkleTree(sponge, comp).commit(wrong_field)
+
+
+class FusedLevelsMerkleTest(absltest.TestCase):
+    """`fused_levels > 1` folds runs of whole levels as one `zorch.merkle_fold`
+    region instead of one `vmap` per level (the flock-challenge `parent_hash3`
+    port). The BYTE GATE: the fused commit must be bit-identical to the per-level
+    one — same root, same every layer, same openings — because the region
+    decomposes to the per-level fold (a vendor emitter later collapses it to one
+    kernel; the seam must never move a byte). Trees are kept shallow so the
+    per-shape XLA compile stays cheap."""
+
+    def _plain_and_fused(
+        self, *, arity: int = 2, chunk: int = 8, out: int = 8, rate: int = 8
+    ) -> tuple[MerkleTree, MerkleTree]:
+        sponge, comp, _ = koalabear16_merkle(
+            rate=rate, out=out, arity=arity, chunk=chunk
+        )
+        return (
+            MerkleTree(sponge, comp, fused_levels=1),
+            MerkleTree(sponge, comp, fused_levels=3),
+        )
+
+    def _assert_commit_byte_identical(self, matrix: Array, **kw: int) -> None:
+        plain, fused = self._plain_and_fused(**kw)
+        r0, layers0 = plain.commit(matrix)
+        r1, layers1 = fused.commit(matrix)
+        self.assertTrue(bool(fnp.array_equal(r0, r1)))
+        self.assertEqual([l.shape for l in layers0], [l.shape for l in layers1])
+        for lp, lf in zip(layers0, layers1):
+            self.assertTrue(bool(fnp.array_equal(lp, lf)))
+        # Openings ride the identical stored layers, so every path + verify holds.
+        n = matrix.shape[0]
+        for i in {0, n // 2, n - 1}:
+            op0 = plain.open(matrix, layers0, i)
+            op1 = fused.open(matrix, layers1, i)
+            self.assertTrue(bool(fnp.array_equal(op0.row, op1.row)))
+            for sp, sf in zip(op0.path, op1.path):
+                self.assertTrue(bool(fnp.array_equal(sp, sf)))
+            self.assertTrue(bool(fused.verify(r1, i, op1)))
+
+    def test_fused_commit_byte_identical_binary(self) -> None:
+        # Depth 4: one fused triple (16->8->4->2) then the per-level tail (2->1),
+        # so the fused/per-level splice boundary is exercised.
+        self._assert_commit_byte_identical(fnp.arange(16 * 8, dtype=F).reshape(16, 8))
+
+    def test_fused_commit_byte_identical_deeper_binary(self) -> None:
+        # Depth 6 (64 leaves): two fused triples end-to-end, no per-level tail.
+        self._assert_commit_byte_identical(fnp.arange(64 * 8, dtype=F).reshape(64, 8))
+
+    def test_fused_commit_byte_identical_arity4_with_padding(self) -> None:
+        # 32 leaves arity 4: 32->8 fuse whole, then 2 pads to 4 -> 1 per-level, so
+        # the byte gate covers the padding tail falling back out of the region.
+        self._assert_commit_byte_identical(
+            fnp.arange(32 * 8, dtype=F).reshape(32, 8),
+            arity=4,
+            chunk=4,
+            out=4,
+        )
+
+    def test_fused_commit_matches_plonky3_golden(self) -> None:
+        # The fused path must still hit the Plonky3 golden root, not just agree
+        # with our own per-level path.
+        _, fused = self._plain_and_fused()
+        raw_root, _ = fused.commit(fnp.arange(32, dtype=F).reshape(4, 8))
+        self.assertTrue(bool(fnp.array_equal(raw_root, _PLONKY3_MERKLE_ROOT_4X8)))
+
+    def test_fused_lowers_to_merkle_fold_nesting_poseidon2(self) -> None:
+        # Structural: the fold emits the region marker, and the per-level permute
+        # markers survive nested inside it — the exact shape (outer region marker
+        # + nested poseidon2) the vendor emitter reads to build the fused kernel.
+        _, fused = self._plain_and_fused()
+        leaf = fused.hash_leaves(fnp.arange(64 * 8, dtype=F).reshape(64, 8))
+        text = frx.jit(fused.fold_digests).lower(leaf).as_text()
+        self.assertIn(f'"{MERKLE_FOLD_MARKER}"', text)
+        self.assertIn(f'"{POSEIDON2_MARKER}"', text)
+
+    def test_per_level_fold_emits_no_region_marker(self) -> None:
+        # fused_levels=1 (the default) is unchanged: no region marker at all.
+        plain, _ = self._plain_and_fused()
+        leaf = plain.hash_leaves(fnp.arange(64 * 8, dtype=F).reshape(64, 8))
+        text = frx.jit(plain.fold_digests).lower(leaf).as_text()
+        self.assertNotIn(MERKLE_FOLD_MARKER, text)
+
+    def test_fused_falls_back_without_dedicated_fusion(self) -> None:
+        # The wrapper is gated on a dedicated-fusion compressor: a non-standard
+        # permutation stays per-level (no marker), still byte-identical.
+        perm = _non_standard_perm()
+        sponge = Sponge(perm, SpongeParams(rate=8, out=8))
+        comp = Compression(perm, CompressionParams(arity=2, chunk=8))
+        tree = MerkleTree(sponge, comp, fused_levels=3)
+        self.assertFalse(tree._fused_fold)
+        matrix = fnp.arange(16 * 8, dtype=F).reshape(16, 8)
+        r_fl, layers_fl = tree.commit(matrix)
+        r_pl, layers_pl = MerkleTree(sponge, comp).commit(matrix)
+        self.assertTrue(bool(fnp.array_equal(r_fl, r_pl)))
+        for a, b in zip(layers_fl, layers_pl):
+            self.assertTrue(bool(fnp.array_equal(a, b)))
+        text = frx.jit(tree.fold_digests).lower(layers_fl[0]).as_text()
+        self.assertNotIn(MERKLE_FOLD_MARKER, text)
+
+    def test_fused_levels_joins_value_identity(self) -> None:
+        # fused_levels traces a different body, so it must join the jit-zone key:
+        # differ in it -> not equal; agree -> equal + equal hash (#214).
+        sponge, comp, _ = koalabear16_merkle()
+        a = MerkleTree(sponge, comp, fused_levels=3)
+        b = MerkleTree(sponge, comp, fused_levels=3)
+        c = MerkleTree(sponge, comp, fused_levels=1)
+        self.assertEqual(a, b)
+        self.assertEqual(hash(a), hash(b))
+        self.assertNotEqual(a, c)
+
+    def test_fused_levels_must_be_positive(self) -> None:
+        sponge, comp, _ = koalabear16_merkle()
+        with self.assertRaises(ValueError):
+            MerkleTree(sponge, comp, fused_levels=0)
 
 
 if __name__ == "__main__":
