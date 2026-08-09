@@ -541,83 +541,6 @@ def _sample_body(t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
     return t._with_state(final_state), fnp.stack(outs)
 
 
-# A whole duplex-absorb chain (sequential rate-block permutes with a runtime
-# live-count mask) as one marked region, so a vendor with a chain emitter runs
-# it as a single kernel — the per-permute thunk/launch machinery of a scanned
-# chain is the dominant cost of a long host absorb, not the permute math.
-ABSORB_CHAIN_MARKER = "zorch.absorb_chain"
-ABSORB_CHAIN_MARKER_VERSION = 1
-
-
-# Module-level jit zone for the same reason as poseidon2's `_permute_body`:
-# `lax.composite` re-traces its decomposition per emission, and one prove
-# absorbs many identical-aval messages. `permutation` (value-hashable) and
-# `rate` ride static.
-@partial(jit, static_argnames=("permutation", "rate"), inline=True)
-def _absorb_chain(
-    permutation: Permutation,
-    sponge: Array,
-    blocks: Array,
-    active_blocks: Array,
-    rate: int,
-) -> Array:
-    """Absorb `blocks` (`(num_blocks, rate)`) into `sponge` (`(width,)`) as one
-    `zorch.absorb_chain` region, generic over the permutation via its
-    `fused_region_spec` (the `zorch.sponge_hash` pattern): the ABI operands and
-    the `permutation`-discriminated attrs come from the spec, and the
-    decomposition rebuilds a const-free permute from those operands so a
-    `lax.composite` can't lift the constants and derail the ABI. Blocks at
-    index >= `active_blocks` (int32 scalar) are padding and leave the sponge
-    unchanged. Caller gates on `has_dedicated_fusion` and a concrete
-    `num_blocks > 1` -- a chain of one is not a chain."""
-    operands, permute_from_operands, perm_attrs = permutation.fused_region_spec(sponge)
-    constants = operands[1:]
-
-    def chain(
-        spg: Array, blocks: Array, active: Array, *consts: Array, **_attrs: object
-    ) -> Array:
-        # Each block permute is RE-MARKED with the permutation's own dedicated
-        # marker, fed the chain composite's operand parameters (not `perm`'s
-        # closed-over arrays, which `lax.composite` would lift and derail the
-        # chain ABI). So the chain's own fallback still runs dedicated
-        # per-permute kernels, exactly as an unmarked absorb does. Keep it that
-        # way: the dedicated kernel is the byte-authority the goldens pin, and a
-        # raw permute body is not guaranteed to match it, so letting the raw body
-        # serve as the fallback would silently change what a fallback absorbs.
-        def inner(s: Array, *c: Array, **_a: object) -> Array:
-            return permute_from_operands(s, *c)
-
-        def _absorb(
-            carry: tuple[Array, Array], block: Array
-        ) -> tuple[tuple[Array, Array], None]:
-            s, k = carry
-            permuted = fused_region(
-                inner,
-                fnp.concatenate([block, s[rate:]]),
-                *consts,
-                name=permutation.fused_region_name,
-                version=permutation.fused_region_version,
-                **perm_attrs,
-            )
-            # Blocks past the live count are padding-only: sponge unchanged.
-            return (fnp.where(k < active, permuted, s), k + fnp.int32(1)), None
-
-        (s, _), _ = lax.scan(_absorb, (spg, fnp.int32(0)), blocks)
-        return s
-
-    return fused_region(
-        chain,
-        sponge,
-        blocks,
-        active_blocks,
-        *constants,
-        name=ABSORB_CHAIN_MARKER,
-        version=ABSORB_CHAIN_MARKER_VERSION,
-        rate=rate,
-        **perm_attrs,
-    )
-
-
 @partial(jit, inline=True)
 def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     base_dtype = t.state.sponge_state.dtype
@@ -674,40 +597,25 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # needs no `arange`, one path for concrete and symbolic `num_blocks` (export).
     blocks = combined[: num_blocks * rate].reshape(num_blocks, rate)
 
-    # A dedicated-fusion permutation routes the whole absorb to the chain
-    # marker (one vendor kernel), sidestepping the scanned chain's per-permute
-    # thunk/launch machinery. Chain markers need a concrete block count, so the
-    # symbolic path (export) keeps the plain scan.
-    #
-    # `num_blocks == 1` is NOT a chain -- there is no per-permute thunk chain to
-    # collapse, so the marker buys nothing and costs: it wraps the single permute
-    # in a composite whose whole point is sequencing. The scalar-witness absorb
-    # under `grind`'s outer `vmap` is exactly this case (m == 1 -> num_blocks ==
-    # 1), and wrapping it makes every witness lane carry a sequential-chain
-    # composite. The plain scan below is the same masked permute, already fully
-    # parallel across the `vmap`, and lowers to the same dedicated kernel.
-    if (
-        permutation.has_dedicated_fusion
-        and isinstance(num_blocks, int)
-        and num_blocks > 1
-    ):
-        sponge = _absorb_chain(
-            permutation, st.sponge_state, blocks, active_blocks, rate
-        )
-    else:
+    # A masked scan of per-block permutes: ONE permute body regardless of block
+    # count, each carrying the permutation's own dedicated marker so the vendor
+    # runs its per-permute kernel. A `zorch.absorb_chain` marker used to wrap
+    # the whole chain into a single vendor kernel; it was removed (xla#409)
+    # after measurement put it at ~8% on a long host absorb -- on CPU a
+    # dispatch is a function call, so the loop scaffolding it collapsed is
+    # ~275 cycles against a ~3230-cycle serial permute.
+    def _absorb(
+        carry: tuple[Array, Array], block: Array
+    ) -> tuple[tuple[Array, Array], None]:
+        sponge, k = carry
+        permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
+        # Blocks past the live count are padding-only: sponge unchanged.
+        return (
+            fnp.where(k < active_blocks, permuted, sponge),
+            k + fnp.int32(1),
+        ), None
 
-        def _absorb(
-            carry: tuple[Array, Array], block: Array
-        ) -> tuple[tuple[Array, Array], None]:
-            sponge, k = carry
-            permuted = permutation.permute(fnp.concatenate([block, sponge[rate:]]))
-            # Blocks past the live count are padding-only: sponge unchanged.
-            return (
-                fnp.where(k < active_blocks, permuted, sponge),
-                k + fnp.int32(1),
-            ), None
-
-        (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
+    (sponge, _), _ = lax.scan(_absorb, (st.sponge_state, fnp.int32(0)), blocks)
 
     # The `length % rate` tail of the combined stream stays pending in the input
     # buffer (positions [0:in_pos_out]); higher slots are zero (overwrite mode

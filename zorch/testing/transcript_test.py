@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import functools
-from collections.abc import Callable
 from dataclasses import replace
 
 import frx
@@ -19,7 +18,6 @@ from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import (
-    ABSORB_CHAIN_MARKER,
     DUPLEX_FS_MARKER,
     DuplexState,
     DuplexTranscript,
@@ -352,51 +350,21 @@ class GrindTest(absltest.TestCase):
             cheap_transcript(wide).check_witness(fnp.zeros((), wide), pow_bits=8)
 
 
-class AbsorbChainGatingTest(absltest.TestCase):
-    """`_observe_body` routes to the `zorch.absorb_chain` marker only when there
-    is an actual chain to collapse (more than one rate-block). A one-block
-    absorb has no per-permute thunk chain to sidestep, so the marker is pure
-    overhead there -- and under `grind`, whose scalar witness is exactly the
-    one-block case, it puts a sequential-chain composite inside every vmapped
-    witness lane."""
+class GrindAbsorbTest(absltest.TestCase):
+    """`grind` vmaps a per-witness predicate whose absorb is a single rate-block.
+    That lane used to route through the `zorch.absorb_chain` marker, which the
+    FRX rewrite mis-shaped into an unbatched `(width,)` result
+    (fractalyze/jax#178). The marker is gone (xla#409) and every absorb is the
+    plain masked scan, so this holds the end-to-end behavior that regressed."""
 
     def _new(self) -> DuplexTranscript:
         return DuplexTranscript.new(koalabear16_perm(), rate=8)
 
-    def _chain_count(self, fn: Callable[..., object], *args: object) -> int:
-        return frx.jit(fn).lower(*args).as_text().count(ABSORB_CHAIN_MARKER)
-
-    def test_one_block_absorb_skips_the_chain_marker(self) -> None:
-        # rate 8: 1..8 elements from a fresh sponge is at most one full block.
-        for mlen in (1, 5, 8):
-            v = rand_field(mlen, (mlen,), F)
-            self.assertEqual(
-                self._chain_count(DuplexTranscript.observe, self._new(), v),
-                0,
-                f"observe(len={mlen}) emitted a chain marker for a single block",
-            )
-
-    def test_multi_block_absorb_keeps_the_chain_marker(self) -> None:
-        # The gate must not swallow the case the marker exists for.
-        v = rand_field(40, (40,), F)
-        self.assertGreater(
-            self._chain_count(DuplexTranscript.observe, self._new(), v), 0
-        )
-
-    def test_grind_search_carries_no_chain_marker(self) -> None:
-        # The regression: each vmapped lane observes ONE scalar witness, so no
-        # lane has a chain. A marker here also trips the FRX batching rewrite
-        # (fractalyze/jax#178), which returns the unbatched `(width,)` shape.
-        # The window size is irrelevant to which marker the lane body emits, so
-        # keep it small -- lowering a wide vmap to text is the expensive part.
-        t = self._new().observe(rand_field(7, (5,), F))
-        self.assertEqual(self._chain_count(lambda t: t._grind_search(8, 1 << 5), t), 0)
-
     def test_grind_witness_still_verifies(self) -> None:
-        # End-to-end through the newly-rerouted path: `GrindTest` runs on the
-        # cheap sponge, which has no dedicated fusion and so never reached the
-        # gate. A small window keeps the vmapped real permutation off the CPU
-        # runner's critical path -- 4 pow_bits clear well inside one window.
+        # `GrindTest` runs on the cheap sponge, which has no dedicated fusion,
+        # so it never exercised this lane. A small window keeps the vmapped real
+        # permutation off the CPU runner's critical path -- 4 pow_bits clear
+        # well inside one window.
         t = self._new().observe(rand_field(7, (5,), F))
         _, witness = t.grind(4, chunk=1 << 8)
         _, ok = t.check_witness(witness, pow_bits=4)

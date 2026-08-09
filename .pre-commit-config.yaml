@@ -40,7 +40,7 @@ repos:
         # types; the frx (Field, Ring Accelerated) / zk_dtypes / zkbench / absl imports are
         # ignored in pyproject (no usable stubs).
         pass_filenames: false
-        additional_dependencies: [numpy]
+        additional_dependencies: [numpy==2.4.6]
 -   repo: https://github.com/keith/pre-commit-buildifier
     rev: 8.0.1
     hooks:
