@@ -47,6 +47,25 @@ class ExpandEqTest(absltest.TestCase):
         self.assertTrue(bool(fnp.all(out == ref)))
         self.assertEqual(int(out.sum()), 1)  # still a partition of unity
 
+    def test_outer_split_matches_doubling_chain(self) -> None:
+        # At _OUTER_SPLIT_MIN variables the table is built as an outer product
+        # of two half tables; it must stay exactly equal to the pure doubling
+        # chain for both index conventions. The chain reference runs eagerly, so
+        # the case list is kept minimal: the split/seed logic is per-call, and
+        # one extension-field case covers the ones()-seeded second half (the
+        # software GF(2^128) multiply is what makes a wider sweep time out on
+        # the small-size CI budget).
+        cases = [(KB, False), (KB, True), (zk_dtypes.binary_field_ghash, True)]
+        for dtype, msb in cases:
+            x = fnp.array(list(range(1, 17)), dtype=dtype)
+            scalar = fnp.array(3, dtype=dtype)
+            out = expand_eq_to_hypercube(x, scalar, msb=msb)
+            ref = fnp.atleast_1d(scalar)
+            for j in range(x.shape[0]):
+                ref = expand_hypercube_step(ref, x[j], msb=msb)
+            self.assertEqual(out.shape, ref.shape)
+            self.assertTrue(bool(fnp.all(out == ref)), f"dtype={dtype} msb={msb}")
+
 
 class EqFactorTest(absltest.TestCase):
     def test_matches_eval_eq_on_length_one_points(self) -> None:
