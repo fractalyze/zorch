@@ -71,12 +71,20 @@ jobs:
           set -euo pipefail
           if [ "${{ matrix.backend }}" = "gpu" ]; then
             prealloc='--test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false'
+            # Both passes run unconditionally, then the step fails if either
+            # did. Letting `set -e` stop at the first would make the tagged
+            # pass — the only GPU coverage those tests get — silently
+            # conditional on every other test being green.
+            status=0
             bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} "$prealloc" \
               --test_tag_filters=-local_only,-needs_cpu_backend \
-              --test_env=FRX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
+              --test_env=FRX_PLATFORMS=${{ matrix.jax_platforms }} -- //... \
+              || status=$?
             bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} "$prealloc" \
               --test_tag_filters=-local_only,needs_cpu_backend \
-              --test_env=FRX_PLATFORMS=cuda,cpu -- //...
+              --test_env=FRX_PLATFORMS=cuda,cpu -- //... \
+              || status=$?
+            exit "$status"
           else
             bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} \
               --test_env=FRX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
