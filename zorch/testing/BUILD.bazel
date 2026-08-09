@@ -166,11 +166,9 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
-# `needs_cpu_backend`: `fs_on_host=True` runs the duplex sponge on the host
-# CPU and compares it against the device path in the same test, so the test
-# needs a CPU backend alongside cuda. The GPU CI leg runs strict `cuda`
-# everywhere else; this tag routes such host-split tests to a `cuda,cpu`
-# sub-leg (see .github/workflows/ci.yml).
+# `fs_on_host=True` compares the host sponge against the device path in one
+# process, so this test needs a CPU backend alongside cuda; .github/workflows/
+# ci.yml runs the needs_cpu_backend tag in its own pass (full rationale there).
 py_test(
     name = "transcript_host_fs_test",
     size = "medium",

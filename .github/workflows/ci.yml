@@ -59,10 +59,13 @@ jobs:
       # tests CI's wheel can't run.
       #
       # GPU leg = two passes: strict `cuda` for the bulk, then `cuda,cpu` for
-      # `needs_cpu_backend` (lax.pairing_check legalizes CPU-only beside the
-      # GPU-only lax.msm). Prealloc-off avoids a spurious OOM once the CPU
-      # backend also inits. CLI `--test_tag_filters` *replaces* .bazelrc.ci's,
-      # so restate `-local_only`.
+      # `needs_cpu_backend` — tests that split one computation across both
+      # devices, so strict `cuda` leaves them with no CPU backend to reach. Two
+      # ways that happens: an op pair where one half legalizes CPU-only
+      # (lax.pairing_check beside the GPU-only lax.msm), and a test that runs a
+      # host path and a device path side by side to compare them. Prealloc-off
+      # avoids a spurious OOM once the CPU backend also inits. CLI
+      # `--test_tag_filters` *replaces* .bazelrc.ci's, so restate `-local_only`.
       - name: Run bazel test
         run: |
           set -euo pipefail
