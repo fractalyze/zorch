@@ -21,7 +21,7 @@ py_test(
         "//zorch/hash:byte_hash",
         "//zorch/hash:sha256",
         requirement("absl_py"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -38,7 +38,7 @@ py_test(
         requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -166,10 +166,14 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+# `fs_on_host=True` compares the host sponge against the device path in one
+# process, so this test needs a CPU backend alongside cuda; .github/workflows/
+# ci.yml runs the needs_cpu_backend tag in its own pass (full rationale there).
 py_test(
     name = "transcript_host_fs_test",
     size = "medium",
     srcs = ["transcript_host_fs_test.py"],
+    tags = ["needs_cpu_backend"],
     deps = [
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",

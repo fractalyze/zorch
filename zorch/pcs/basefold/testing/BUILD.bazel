@@ -72,7 +72,7 @@ py_test(
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -86,7 +86,7 @@ py_test(
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(

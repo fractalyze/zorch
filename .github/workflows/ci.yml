@@ -59,21 +59,32 @@ jobs:
       # tests CI's wheel can't run.
       #
       # GPU leg = two passes: strict `cuda` for the bulk, then `cuda,cpu` for
-      # `needs_cpu_backend` (lax.pairing_check legalizes CPU-only beside the
-      # GPU-only lax.msm). Prealloc-off avoids a spurious OOM once the CPU
-      # backend also inits. CLI `--test_tag_filters` *replaces* .bazelrc.ci's,
-      # so restate `-local_only`.
+      # `needs_cpu_backend` — tests that split one computation across both
+      # devices, so strict `cuda` leaves them with no CPU backend to reach. Two
+      # ways that happens: an op pair where one half legalizes CPU-only
+      # (lax.pairing_check beside the GPU-only lax.msm), and a test that runs a
+      # host path and a device path side by side to compare them. Prealloc-off
+      # avoids a spurious OOM once the CPU backend also inits. CLI
+      # `--test_tag_filters` *replaces* .bazelrc.ci's, so restate `-local_only`.
       - name: Run bazel test
         run: |
           set -euo pipefail
           if [ "${{ matrix.backend }}" = "gpu" ]; then
             prealloc='--test_env=XLA_PYTHON_CLIENT_PREALLOCATE=false'
+            # Both passes run unconditionally, then the step fails if either
+            # did. Letting `set -e` stop at the first would make the tagged
+            # pass — the only GPU coverage those tests get — silently
+            # conditional on every other test being green.
+            status=0
             bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} "$prealloc" \
               --test_tag_filters=-local_only,-needs_cpu_backend \
-              --test_env=FRX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
+              --test_env=FRX_PLATFORMS=${{ matrix.jax_platforms }} -- //... \
+              || status=$?
             bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} "$prealloc" \
               --test_tag_filters=-local_only,needs_cpu_backend \
-              --test_env=FRX_PLATFORMS=cuda,cpu -- //...
+              --test_env=FRX_PLATFORMS=cuda,cpu -- //... \
+              || status=$?
+            exit "$status"
           else
             bazel --bazelrc=.bazelrc.ci test ${{ matrix.rbe }} \
               --test_env=FRX_PLATFORMS=${{ matrix.jax_platforms }} -- //...
