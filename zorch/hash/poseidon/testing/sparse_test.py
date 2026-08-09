@@ -254,6 +254,16 @@ class SparsePoseidonManyPartialRoundsTest(absltest.TestCase):
     https://github.com/fractalyze/zorch/issues/565.
     """
 
+    @absltest.skipIf(
+        frx.default_backend() == "gpu",
+        "quarantined: frx.jit miscompiles the goldilocks square-of-add"
+        " (u+v)*(u+v) on cuda — every full round's power(s + rc, alpha)"
+        " contains it, so the whole permutation is wrong on the gpu backend"
+        " regardless of schedule size; the cpu run keeps validating this"
+        " byte-match. Tracked on the fractalyze xla work board:"
+        " 'fix(gpu/codegen): jitted goldilocks mul(add,add) miscompiles on"
+        " cuda'. Remove this skip with that fix's frx pin bump.",
+    )
     def test_byte_matches_reference_at_production_scale(self) -> None:
         sched = _big_schedule()
         perm = SparsePoseidon(sched.params(goldilocks_mont))
