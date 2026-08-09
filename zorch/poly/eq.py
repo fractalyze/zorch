@@ -72,6 +72,15 @@ def contract_hypercube_step(state: Array) -> Array:
     return state[..., 0::2] + state[..., 1::2]
 
 
+# Above this variable count, the table is built as an outer product of two
+# half tables instead of one doubling chain. XLA fuses a chain's tail layers
+# into a single concatenate fusion that recomputes each output element's
+# ancestor factors (one multiply per fused layer per element), so a long chain
+# pays several multiplies per entry and re-materializes every doubling; the
+# outer product is exactly one multiply per entry over two small inputs.
+_OUTER_SPLIT_MIN = 16
+
+
 def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Array:
     """scalar·eq(w, x) for all w in {0,1}^n. `msb=False` interleaves each new share
     (default, `w[0]` the MSB); `msb=True` concatenates `[low, high]`, placing
@@ -80,8 +89,20 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
     NOTE: explicit indexing instead of `for coord in x` — iterating a JAX array
     of an extension-field dtype dispatches `lax.sign`, a XLA gotcha.
     """
+    n = x.shape[0]
+    if n >= _OUTER_SPLIT_MIN:
+        # out[w] factors over any coordinate split, so the full table is the
+        # outer product of the two half tables — with the slow-axis half being
+        # whichever slice owns the high index bits (x[:k] when w[0] is the MSB,
+        # x[k:] when msb=True places x[j] at bit j). GF multiplication is
+        # exact, so the product is byte-equal to the chain.
+        k = n // 2
+        first = expand_eq_to_hypercube(x[:k], scalar, msb=msb)
+        rest = expand_eq_to_hypercube(x[k:], fnp.ones((), x.dtype), msb=msb)
+        outer, inner = (rest, first) if msb else (first, rest)
+        return (outer[:, None] * inner[None, :]).reshape(-1)
     state = fnp.atleast_1d(scalar)
-    for j in range(x.shape[0]):
+    for j in range(n):
         state = expand_hypercube_step(state, x[j], msb=msb)
     return state
 
