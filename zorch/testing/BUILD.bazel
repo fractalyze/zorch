@@ -21,12 +21,14 @@ py_test(
         "//zorch/hash:byte_hash",
         "//zorch/hash:sha256",
         requirement("absl_py"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
     name = "sha256_field_transcript_test",
-    size = "small",
+    # ~54 s on the CI runners — the small-size 60 s budget times it out
+    # whenever the runner is loaded.
+    size = "medium",
     srcs = ["sha256_field_transcript_test.py"],
     deps = [
         "//zorch:byte_transcript",
@@ -38,7 +40,7 @@ py_test(
         requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -170,6 +172,10 @@ py_test(
     name = "transcript_host_fs_test",
     size = "medium",
     srcs = ["transcript_host_fs_test.py"],
+    # The scoped host absorb runs on frx.devices("cpu"); under the GPU lane's
+    # strict FRX_PLATFORMS=cuda that backend does not exist, so this target
+    # needs the cuda,cpu invocation.
+    tags = ["needs_cpu_backend"],
     deps = [
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
