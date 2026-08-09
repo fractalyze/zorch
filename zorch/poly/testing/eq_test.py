@@ -4,6 +4,7 @@ from __future__ import annotations
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
+from frx import Array
 
 from zorch.poly.eq import (
     contract_hypercube_step,
@@ -68,24 +69,29 @@ class ExpandEqTest(absltest.TestCase):
             self.assertTrue(bool(fnp.all(out == ref)), f"dtype={dtype} msb={msb}")
 
 
+def _chain_family(cs: Array, *, msb: bool, suffix: bool) -> list[Array]:
+    """Reference doubling chain over `cs`, retaining every layer."""
+    order = range(cs.shape[0] - 1, -1, -1) if suffix else range(cs.shape[0])
+    state = fnp.ones(1, dtype=cs.dtype)
+    tables = []
+    for j in order:
+        state = expand_hypercube_step(state, cs[j], msb=msb)
+        tables.append(state)
+    return tables
+
+
 class ExpandEqFamilyTest(absltest.TestCase):
     def test_small_families_match_the_step_loops(self) -> None:
-        # Below the split every member comes off one doubling chain; pin the
-        # slice each entry covers and its placement for all four combinations.
+        # Each member is re-derived from its slice alone so the contract does
+        # not lean on chain nesting.
         cs = fnp.array([2, 5, 7], dtype=KB)
-        one = fnp.ones([], dtype=KB)
         for msb in (False, True):
             for suffix in (False, True):
                 fam = expand_eq_family(cs, msb=msb, suffix=suffix)
                 self.assertEqual([t.shape for t in fam], [(2,), (4,), (8,)])
                 for i, table in enumerate(fam):
                     s = cs[3 - 1 - i :] if suffix else cs[: i + 1]
-                    order = (
-                        range(s.shape[0] - 1, -1, -1) if suffix else range(s.shape[0])
-                    )
-                    ref = fnp.atleast_1d(one)
-                    for j in order:
-                        ref = expand_hypercube_step(ref, s[j], msb=msb)
+                    ref = _chain_family(s, msb=msb, suffix=suffix)[-1]
                     self.assertTrue(
                         bool(fnp.all(table == ref)), f"msb={msb} suffix={suffix} i={i}"
                     )
@@ -95,9 +101,9 @@ class ExpandEqFamilyTest(absltest.TestCase):
         # emitted as an outer product of the shared half; the whole family must
         # stay exactly equal to the retained doubling chain. KB carries the
         # four direction/placement combinations and one extension-field case
-        # covers the compute_eq_evaluations combo — the eager software
-        # GF(2^128) chain reference is what a wider sweep would spend the CI
-        # budget on (the expand_eq_to_hypercube test above learned this).
+        # covers the compute_eq_evaluations combo — the eager GF(2^128) chain
+        # reference is the CI cost that keeps the case list minimal (see the
+        # expand_eq_to_hypercube split test above).
         cases = [
             (KB, False, False),
             (KB, False, True),
@@ -108,15 +114,8 @@ class ExpandEqFamilyTest(absltest.TestCase):
         for dtype, msb, suffix in cases:
             cs = fnp.array(list(range(1, 17)), dtype=dtype)
             fam = expand_eq_family(cs, msb=msb, suffix=suffix)
-            n = cs.shape[0]
-            state = fnp.ones(1, dtype=dtype)
-            refs = []
-            order = range(n - 1, -1, -1) if suffix else range(n)
-            for j in order:
-                state = expand_hypercube_step(state, cs[j], msb=msb)
-                refs.append(state)
-            self.assertEqual(len(fam), len(refs))
-            for i, (table, ref) in enumerate(zip(fam, refs)):
+            refs = _chain_family(cs, msb=msb, suffix=suffix)
+            for i, (table, ref) in enumerate(zip(fam, refs, strict=True)):
                 self.assertEqual(table.shape, ref.shape)
                 self.assertTrue(
                     bool(fnp.all(table == ref)),

@@ -81,6 +81,11 @@ def contract_hypercube_step(state: Array) -> Array:
 _OUTER_SPLIT_MIN = 16
 
 
+def _flat_outer(slow: Array, fast: Array) -> Array:
+    """Flattened outer product; `slow` owns the high index bits."""
+    return (slow[:, None] * fast[None, :]).reshape(-1)
+
+
 def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Array:
     """scalar·eq(w, x) for all w in {0,1}^n. `msb=False` interleaves each new share
     (default, `w[0]` the MSB); `msb=True` concatenates `[low, high]`, placing
@@ -100,7 +105,7 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
         first = expand_eq_to_hypercube(x[:k], scalar, msb=msb)
         rest = expand_eq_to_hypercube(x[k:], fnp.ones((), x.dtype), msb=msb)
         outer, inner = (rest, first) if msb else (first, rest)
-        return (outer[:, None] * inner[None, :]).reshape(-1)
+        return _flat_outer(outer, inner)
     state = fnp.atleast_1d(scalar)
     for j in range(n):
         state = expand_hypercube_step(state, x[j], msb=msb)
@@ -119,13 +124,13 @@ def expand_eq_family(
     combinations, at the LSB for the other two.
 
     Past `_OUTER_SPLIT_MIN` each large member is emitted as ONE outer product
-    of a shared half instead of a retained doubling chain (which XLA re-fuses
-    into ancestor-recomputing input fusions — see `_OUTER_SPLIT_MIN`): every
-    member factors over the family's first-added half — for the suffix family,
-    eq(cs[i:]) = eq(cs[i:k]) ⊗ eq(cs[k:]) for every i < k — so both halves
-    recurse on half-size families and each large table is one write-only GF
-    multiply per element over two small inputs. GF multiplication is exact, so
-    every member stays byte-equal to its chain."""
+    of a shared half instead of a retained doubling chain (see
+    `_OUTER_SPLIT_MIN` for why): every member factors over the family's
+    first-added half — for the suffix family, eq(cs[i:]) = eq(cs[i:k]) ⊗
+    eq(cs[k:]) for every i < k — so both halves recurse on half-size families
+    and each large table is one write-only GF multiply per element over two
+    small inputs. GF multiplication is exact, so every member stays byte-equal
+    to its chain."""
     n = cs.shape[0]
     if n < _OUTER_SPLIT_MIN:
         state = fnp.ones(1, dtype=cs.dtype)
@@ -143,10 +148,9 @@ def expand_eq_family(
     # low bits — the fast axis — msb=False at the high bits).
     base, growth = (tail, head) if suffix else (head, tail)
     shared = base[-1]
-    if msb:
-        products = [(g[:, None] * shared[None, :]).reshape(-1) for g in growth]
-    else:
-        products = [(shared[:, None] * g[None, :]).reshape(-1) for g in growth]
+    products = [
+        _flat_outer(g, shared) if msb else _flat_outer(shared, g) for g in growth
+    ]
     return base + products
 
 
