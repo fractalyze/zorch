@@ -170,6 +170,10 @@ py_test(
     name = "transcript_host_fs_test",
     size = "medium",
     srcs = ["transcript_host_fs_test.py"],
+    # The scoped host absorb runs on frx.devices("cpu"); under the GPU lane's
+    # strict FRX_PLATFORMS=cuda that backend does not exist, so this target
+    # needs the cuda,cpu invocation.
+    tags = ["needs_cpu_backend"],
     deps = [
         "//zorch:transcript",
         "//zorch/hash/poseidon2/testing:koalabear16",
