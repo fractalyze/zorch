@@ -156,7 +156,9 @@ py_test(
     srcs = ["transcript_test.py"],
     deps = [
         "//zorch:transcript",
+        "//zorch/hash/poseidon2",
         "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/testkit:fusion",
         "//zorch/testkit:jit_cache",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",

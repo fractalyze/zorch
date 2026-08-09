@@ -11,10 +11,10 @@ new op in the fusion-critical body gets a conscious look. Cheap proxy for XLA's
 
 ``assert_fusion_ready`` is not for the hash permutation: poseidon2 fuses via the
 ``zorch.fused_region`` marker and normal-form linear layers (no dot for XLA to
-optimize) -- a different fusion shape. ``assert_input_uses`` and
-``primitive_count`` are scheme-agnostic traced-graph accounting, so they apply
-to any body whose trace size matters -- a hash layer, a sumcheck round, a fold
-step.
+optimize) -- a different fusion shape, whose assertion is
+``assert_marker_recognized``. ``assert_input_uses`` and ``primitive_count`` are
+scheme-agnostic traced-graph accounting, so they apply to any body whose trace
+size matters -- a hash layer, a sumcheck round, a fold step.
 """
 from __future__ import annotations
 
@@ -55,6 +55,50 @@ def assert_fusion_ready(fn: Callable[..., Any], *args: Any, reduces: int = 0) ->
     offenders = sorted({o for o in ops if o != "reduce" and o not in _FUSION_SAFE})
     if offenders:
         raise AssertionError(f"non-fusion-safe ops in body: {offenders}")
+
+
+def custom_fusion_names(fn: Callable[..., Any], *args: Any) -> list[str]:
+    """The routing keys of ``fn``'s compiled custom fusions, in module order.
+
+    The compiled module is the only place a RECOGNIZED marker is visible.
+    Emitting a marker and having a vendor emitter route it are different
+    properties, and the difference does not show in the output: an unrecognized
+    name is not an error, it inlines back to the decomposition and computes
+    identical bytes. So every value-level test passes either way, and a lowered
+    module (``.lower(...).as_text()``) proves only that zorch wrote the string.
+    """
+    compiled = frx.jit(fn).lower(*args).compile().as_text()
+    names = []
+    for line in compiled.splitlines():
+        if "kind=kCustom" not in line:
+            continue
+        # `ROOT ` prefixes the entry computation's own fusion, and XLA appends a
+        # `.N` disambiguator once a name repeats -- neither changes the key.
+        m = re.match(
+            r"\s*(?:ROOT\s+)?%([A-Za-z0-9_-]+(?:\.[A-Za-z_-][A-Za-z0-9_-]*)*)", line
+        )
+        if m:
+            names.append(m.group(1))
+    return names
+
+
+def assert_marker_recognized(
+    routing_key: str, fn: Callable[..., Any], *args: Any
+) -> None:
+    """Assert ``fn`` compiles to a custom fusion named ``routing_key``.
+
+    Marker names are a wire ABI shared with Fractalyze XLA, so this is what
+    catches a rename here that the pinned toolchain does not accept, and a
+    toolchain bump that drops a name zorch still emits. The instruction name is
+    matched whole rather than by substring: ``poseidon`` is a prefix of
+    ``poseidon2``, so a substring match would let either emitter satisfy the
+    other's assertion.
+    """
+    names = custom_fusion_names(fn, *args)
+    if not names:
+        raise AssertionError(f"no custom fusion at all: {routing_key} is unrecognized")
+    if routing_key not in names:
+        raise AssertionError(f"recognized, but not as {routing_key}: {names}")
 
 
 def assert_input_uses(

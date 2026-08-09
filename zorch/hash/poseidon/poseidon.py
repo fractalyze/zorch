@@ -63,9 +63,8 @@ class Poseidon:
         # Classic Poseidon always applies its dense MDS via integer literals and
         # routes to the dedicated `zorch.poseidon` emitter — there is no
         # free-form fallback (the MDS rides as a marker attribute either way).
+        self.fused_region_marker = (POSEIDON_MARKER, POSEIDON_MARKER_VERSION)
         self.has_dedicated_fusion = True
-        self.fused_region_name = POSEIDON_MARKER
-        self.fused_region_version = POSEIDON_MARKER_VERSION
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
@@ -159,11 +158,12 @@ def _permute_body(perm: Poseidon, state: Array) -> Array:
     # `dense<[..]>:tensor<N*Nxi64>` the recognizer parses with
     # GetCompositeAttrIntArray; a plain list lowers to an unparsed ArrayAttr.
     marker_attrs: dict[str, object] = _poseidon_marker_attrs(perm)
+    name, version = perm.fused_region_marker
     return fused_region(
         permutation,
         *operands,
-        name=POSEIDON_MARKER,
-        version=POSEIDON_MARKER_VERSION,
+        name=name,
+        version=version,
         **marker_attrs,
     )
 

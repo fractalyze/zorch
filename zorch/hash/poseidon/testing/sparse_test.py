@@ -343,7 +343,7 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         # covered by SparsePoseidonDedicatedMarkerTest.
         perm = SparsePoseidon(_wide_field_params())
         self.assertFalse(perm.has_dedicated_fusion)
-        self.assertEqual(perm.fused_region_version, 0)
+        self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
         txt = (
             frx.jit(perm.permute)
             .lower(fnp.arange(_WIDTH, dtype=goldilocks_mont))

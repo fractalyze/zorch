@@ -11,10 +11,12 @@ import zk_dtypes
 from absl.testing import absltest
 from frx import Array, lax, tree_util
 
+from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
 from zorch.hash.poseidon2.testing.koalabear16 import (
     koalabear16_perm,
     koalabear16_scaled_perm,
 )
+from zorch.testkit.fusion import assert_marker_recognized, custom_fusion_names
 from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
@@ -391,6 +393,39 @@ class AbsorbChainGatingTest(absltest.TestCase):
         # keep it small -- lowering a wide vmap to text is the expensive part.
         t = self._new().observe(rand_field(7, (5,), F))
         self.assertEqual(self._chain_count(lambda t: t._grind_search(8, 1 << 5), t), 0)
+
+    def test_a_multi_block_absorb_never_compiles_to_zero_dedicated_kernels(
+        self,
+    ) -> None:
+        # The gating tests above read the LOWERED module, which proves only that
+        # zorch wrote the name. An unrouted marker is not an error -- it inlines
+        # back to the decomposition and absorbs identical bytes -- so those tests
+        # would still pass with the absorb compiled to no dedicated kernel at all.
+        # The COMPILED module is where emitted and recognized separate.
+        #
+        # Which of the two names survives is a property of the backend, not of
+        # this code: on CPU the chain itself routes (`absorb_chain`), on GPU it
+        # inlines and the re-marked per-permute kernels carry it (`poseidon2`).
+        # Either is correct; NEITHER is the silent failure -- an absorb running
+        # raw permute bodies, which is the fallback `_absorb_chain` re-marks to
+        # avoid, since the dedicated kernel is the byte authority the goldens pin.
+        v = rand_field(40, (40,), F)
+        names = custom_fusion_names(DuplexTranscript.observe, self._new(), v)
+        self.assertTrue(
+            {"absorb_chain", "poseidon2"} & set(names),
+            f"a multi-block absorb compiled to no dedicated kernel: {names}",
+        )
+
+    def test_the_re_marked_permute_names_the_permutations_own_marker(self) -> None:
+        # `_absorb_chain` re-marks each inner permute off
+        # `Permutation.fused_region_marker`, which is exactly what makes the GPU
+        # case above land on `poseidon2` rather than a raw body. Pin that the
+        # marker the seam reports is the one XLA routes -- the two are otherwise
+        # free to drift, and drift costs kernels without failing anything.
+        perm = koalabear16_perm()
+        name, _version = perm.fused_region_marker
+        self.assertEqual(name, POSEIDON2_MARKER)
+        assert_marker_recognized("poseidon2", perm.permute, fnp.arange(16, dtype=F))
 
     def test_grind_witness_still_verifies(self) -> None:
         # End-to-end through the newly-rerouted path: `GrindTest` runs on the

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 import frx.numpy as fnp
 from frx import Array
 
+from zorch.fusion import FUSED_REGION_MARKER
 from zorch.transcript import DuplexTranscript
 
 if TYPE_CHECKING:
@@ -36,8 +37,7 @@ class CheapPermutation:
         self.dtype = dtype
         # Keep test transcripts on prove's unmarked path.
         self.has_dedicated_fusion = False
-        self.fused_region_name = "zorch.fused_region"
-        self.fused_region_version = 0
+        self.fused_region_marker = (FUSED_REGION_MARKER, 0)
 
     def __eq__(self, other: object) -> bool:
         # Pytree-aux value equality, mirroring `Poseidon2`
