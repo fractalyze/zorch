@@ -81,6 +81,11 @@ def contract_hypercube_step(state: Array) -> Array:
 _OUTER_SPLIT_MIN = 16
 
 
+def _flat_outer(slow: Array, fast: Array) -> Array:
+    """Flattened outer product; `slow` owns the high index bits."""
+    return (slow[:, None] * fast[None, :]).reshape(-1)
+
+
 def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Array:
     """scalar·eq(w, x) for all w in {0,1}^n. `msb=False` interleaves each new share
     (default, `w[0]` the MSB); `msb=True` concatenates `[low, high]`, placing
@@ -100,11 +105,53 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
         first = expand_eq_to_hypercube(x[:k], scalar, msb=msb)
         rest = expand_eq_to_hypercube(x[k:], fnp.ones((), x.dtype), msb=msb)
         outer, inner = (rest, first) if msb else (first, rest)
-        return (outer[:, None] * inner[None, :]).reshape(-1)
+        return _flat_outer(outer, inner)
     state = fnp.atleast_1d(scalar)
     for j in range(n):
         state = expand_hypercube_step(state, x[j], msb=msb)
     return state
+
+
+def expand_eq_family(
+    cs: Array, *, msb: bool = False, suffix: bool = False
+) -> list[Array]:
+    """The nested eq tables [eq(s₁), …, eq(sₙ)] over every prefix s_k = cs[:k]
+    (`suffix=True`: every suffix s_k = cs[n-k:]), entry k-1 of shape (2ᵏ,) —
+    the prefix family appends each coordinate walking forwards, the suffix
+    family prepends walking backwards, and `msb` is the placement of each added
+    coordinate as in `expand_hypercube_step`. The slice's first coordinate
+    lands at the MSB for the (prefix, msb=False) and (suffix, msb=True)
+    combinations, at the LSB for the other two.
+
+    Past `_OUTER_SPLIT_MIN` each large member is emitted as ONE outer product
+    of a shared half instead of a retained doubling chain (see
+    `_OUTER_SPLIT_MIN` for why): every member factors over the family's
+    first-added half — for the suffix family, eq(cs[i:]) = eq(cs[i:k]) ⊗
+    eq(cs[k:]) for every i < k — so both halves recurse on half-size families
+    and each large table is one write-only GF multiply per element over two
+    small inputs. GF multiplication is exact, so every member stays byte-equal
+    to its chain."""
+    n = cs.shape[0]
+    if n < _OUTER_SPLIT_MIN:
+        state = fnp.ones(1, dtype=cs.dtype)
+        tables = []
+        order = range(n - 1, -1, -1) if suffix else range(n)
+        for j in order:
+            state = expand_hypercube_step(state, cs[j], msb=msb)
+            tables.append(state)
+        return tables
+    k = n // 2
+    head = expand_eq_family(cs[:k], msb=msb, suffix=suffix)
+    tail = expand_eq_family(cs[k:], msb=msb, suffix=suffix)
+    # The first-added half is the one every larger member shares; `msb` says
+    # which index bits it owns (msb=True places first-added coordinates at the
+    # low bits — the fast axis — msb=False at the high bits).
+    base, growth = (tail, head) if suffix else (head, tail)
+    shared = base[-1]
+    products = [
+        _flat_outer(g, shared) if msb else _flat_outer(shared, g) for g in growth
+    ]
+    return base + products
 
 
 def expand_monomial_step(state: Array, coord: Array) -> Array:
