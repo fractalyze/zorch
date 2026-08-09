@@ -21,7 +21,7 @@ py_test(
         "//zorch/hash:byte_hash",
         "//zorch/hash:sha256",
         requirement("absl_py"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
@@ -38,7 +38,7 @@ py_test(
         requirement("frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(
