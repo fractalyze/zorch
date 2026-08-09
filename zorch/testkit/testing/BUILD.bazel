@@ -16,9 +16,10 @@ py_test(
 
 py_test(
     name = "fusion_test",
-    size = "small",
+    size = "medium",
     srcs = ["fusion_test.py"],
     deps = [
+        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/testkit:fusion",
         requirement("absl_py"),
         requirement("frx"),

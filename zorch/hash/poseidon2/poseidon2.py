@@ -61,15 +61,18 @@ class Poseidon2:
         # the marker name and the const-free (literal-M4) external layer.
         self._is_m4_structured = params.is_m4_block_structured
         self._external_m4 = params.external_m4 if self._is_m4_structured else None
-        self.fused_region_name = self._select_fused_region_name()
+        name = self._select_fused_region_name()
+        # A generic region carries no version: the recognizer reads only the name
+        # there, so a version would claim a contract the marker does not have.
+        self.fused_region_marker = (
+            name,
+            POSEIDON2_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
+        )
         # Dedicated == permute lowers to a hash-named marker, not the generic
         # region one (which a vendor can't route, so a whole-region composite
         # around it is unexpandable). Derived from the marker choice itself so the
         # two can't drift if `_select_fused_region_name` grows another case.
-        self.has_dedicated_fusion = self.fused_region_name != FUSED_REGION_MARKER
-        self.fused_region_version = (
-            POSEIDON2_MARKER_VERSION if self.has_dedicated_fusion else 0
-        )
+        self.has_dedicated_fusion = name != FUSED_REGION_MARKER
 
     def __eq__(self, other: object) -> bool:
         # Value identity IS the params surface — required for the pytree-aux
@@ -233,8 +236,8 @@ def _internal_j_scale_attr(perm: Poseidon2) -> int:
     return int(np.asarray(perm._p.internal_j_scale).astype(object))
 
 
-def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
-    """The dedicated marker's `composite.attributes` + version. The permutation
+def _marker_attrs(perm: Poseidon2) -> dict[str, object]:
+    """The dedicated marker's `composite.attributes`. The permutation
     shape rides as attributes — the XLA recognizer's contract: the four
     shape ints (it maps `alpha` to its s-box degree) plus `external_m4`, the 4×4
     base M4. The
@@ -243,8 +246,8 @@ def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
     attr is what identifies the matrix. The body ignores these attrs (metadata
     only); the generic marker stays attrs-free."""
     if not perm.has_dedicated_fusion:
-        return {}, 0
-    attrs: dict[str, object] = {
+        return {}
+    return {
         "width": perm.width,
         "external_rounds": perm._p.external_rounds,
         "internal_rounds": perm._p.internal_rounds,
@@ -252,7 +255,6 @@ def _marker_attrs(perm: Poseidon2) -> tuple[dict[str, object], int]:
         "external_m4": _external_m4_attr(perm),
         "internal_j_scale": _internal_j_scale_attr(perm),
     }
-    return attrs, POSEIDON2_MARKER_VERSION
 
 
 # Module-level jit zone so the permutation body traces once per (params, state
@@ -279,13 +281,13 @@ def _permute_body(perm: Poseidon2, state: Array) -> Array:
         # single-kernel requirement allows no call).
         return _permutation_body(perm, s, ext_init_rc, int_rc, ext_term_rc, diag)
 
-    attrs, version = _marker_attrs(perm)
+    name, version = perm.fused_region_marker
     return fused_region(
         decomposition,
         *_abi_operands(perm, state),
-        name=perm.fused_region_name,
+        name=name,
         version=version,
-        **attrs,
+        **_marker_attrs(perm),
     )
 
 

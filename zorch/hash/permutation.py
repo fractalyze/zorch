@@ -31,13 +31,16 @@ class Permutation(Protocol):
     # wrapping on it without naming a concrete hash.
     has_dedicated_fusion: bool
     # The composite name + version `permute`'s marker carries — what a consumer
-    # needs to RE-MARK a permute inside its own composite decomposition (e.g.
-    # the absorb chain), so the inlined fallback keeps the dedicated
-    # per-permute kernels instead of raw permute bodies. Meaningful only when
-    # `has_dedicated_fusion`; an undedicated permutation reports the generic
-    # marker at version 0.
-    fused_region_name: str
-    fused_region_version: int
+    # needs to RE-MARK a permute inside its own composite decomposition (a duplex
+    # absorb chain is one), so the inlined fallback keeps the dedicated
+    # per-permute kernels instead of raw permute bodies.
+    #
+    # Name and version travel together because they are one ABI coordinate: a
+    # contract change stages through `composite.version` rather than a rename (see
+    # `zorch.fusion`), so a consumer holding the name alone can re-mark against a
+    # stale contract. An undedicated permutation reports the generic marker at
+    # version 0, which is what `has_dedicated_fusion` is read off.
+    fused_region_marker: tuple[str, int]
 
     def permute(self, state: Array) -> Array:
         """Apply the permutation: (width,) over `dtype` -> (width,).

@@ -90,14 +90,17 @@ class SparsePoseidon:
             params.partial_dot_rows,
             params.partial_col_rows,
         )
-        self.fused_region_name = self._select_fused_region_name(rows)
+        name = self._select_fused_region_name(rows)
+        # A generic region carries no version: the recognizer reads only the name
+        # there, so a version would claim a contract the marker does not have.
+        self.fused_region_marker = (
+            name,
+            POSEIDON_SPARSE_MARKER_VERSION if name != FUSED_REGION_MARKER else 0,
+        )
         # Dedicated == permute lowers to the hash-named marker, not the generic
         # region one. Derived from the marker choice itself so the two can't drift
         # (mirrors Poseidon2).
-        self.has_dedicated_fusion = self.fused_region_name != FUSED_REGION_MARKER
-        self.fused_region_version = (
-            POSEIDON_SPARSE_MARKER_VERSION if self.has_dedicated_fusion else 0
-        )
+        self.has_dedicated_fusion = name != FUSED_REGION_MARKER
         if self.has_dedicated_fusion:
             (
                 self._mds_rows,
@@ -157,7 +160,7 @@ class SparsePoseidon:
         so consumers never route a whole-region composite through it)."""
         if not self.has_dedicated_fusion:
             return (leading,), (lambda state, *ops: self.permute(state)), {}
-        attrs, _version = _marker_attrs(self)
+        attrs = _marker_attrs(self)
         return (
             _abi_operands(self, leading),
             partial(_permute_from_operands, self),
@@ -275,17 +278,17 @@ def _rows_to_i64(rows: tuple[tuple[int, ...], ...]) -> np.ndarray:
     return np.array(rows, dtype=np.int64).flatten()
 
 
-def _marker_attrs(perm: "SparsePoseidon") -> tuple[dict[str, object], int]:
-    """The dedicated marker's `composite.attributes` + version: the schedule shape
+def _marker_attrs(perm: "SparsePoseidon") -> dict[str, object]:
+    """The dedicated marker's `composite.attributes`: the schedule shape
     ints (the recognizer maps `alpha` to its s-box degree) plus the four matrices
     flattened row-major as int64 dense attrs. The marker NAME disambiguates the
     permutation, so no `permutation` discriminator here (that rides only in
     `fused_region_spec`, where a region could wrap any permutation). The body
     ignores these (metadata only); the generic marker stays attrs-free."""
     if not perm.has_dedicated_fusion:
-        return {}, 0
+        return {}
     p = perm._p
-    attrs: dict[str, object] = {
+    return {
         "width": perm.width,
         "half_full_rounds": p.half_full_rounds,
         "n_partial_rounds": p.n_partial_rounds,
@@ -295,7 +298,6 @@ def _marker_attrs(perm: "SparsePoseidon") -> tuple[dict[str, object], int]:
         "partial_dot": _rows_to_i64(perm._partial_dot_rows),
         "partial_col": _rows_to_i64(perm._partial_col_rows),
     }
-    return attrs, POSEIDON_SPARSE_MARKER_VERSION
 
 
 # Module-level jit zone so the permutation body traces once per (params, state
@@ -328,13 +330,13 @@ def _permute_body(perm: SparsePoseidon, state: Array) -> Array:
             perm, s, initial_arc, full_rc_pre, transition_rc, partial_rc, full_rc_post
         )
 
-    attrs, version = _marker_attrs(perm)
+    name, version = perm.fused_region_marker
     return fused_region(
         dedicated,
         *_abi_operands(perm, state),
-        name=perm.fused_region_name,
+        name=name,
         version=version,
-        **attrs,
+        **_marker_attrs(perm),
     )
 
 

@@ -572,6 +572,7 @@ def _absorb_chain(
     `num_blocks > 1` -- a chain of one is not a chain."""
     operands, permute_from_operands, perm_attrs = permutation.fused_region_spec(sponge)
     constants = operands[1:]
+    perm_name, perm_version = permutation.fused_region_marker
 
     def chain(
         spg: Array, blocks: Array, active: Array, *consts: Array, **_attrs: object
@@ -595,8 +596,8 @@ def _absorb_chain(
                 inner,
                 fnp.concatenate([block, s[rate:]]),
                 *consts,
-                name=permutation.fused_region_name,
-                version=permutation.fused_region_version,
+                name=perm_name,
+                version=perm_version,
                 **perm_attrs,
             )
             # Blocks past the live count are padding-only: sponge unchanged.
