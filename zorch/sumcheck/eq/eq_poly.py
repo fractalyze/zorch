@@ -23,7 +23,7 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.challenge import ChallengePolicy
-from zorch.poly.eq import eq_factor, expand_hypercube_step
+from zorch.poly.eq import eq_factor, expand_eq_family, expand_hypercube_step
 from zorch.prove import fold_rounds
 from zorch.round import ProverRound, RunningClaim
 from zorch.sumcheck.domain import (
@@ -44,15 +44,11 @@ EqPolyState = tuple[Array, Array]
 
 
 def compute_eq_evaluations(w: Array) -> list[Array]:
-    """Suffix eq tables [eq(w[-1:], ·), …, eq(w, ·)], entry i over {0,1}ⁱ.
+    """Suffix eq tables [eq(w[-1:], ·), …, eq(w, ·)], entry i over {0,1}ⁱ⁺¹.
 
-    Scans w backwards, prepending each coordinate as the MSB."""
-    v = fnp.ones(1, dtype=w.dtype)
-    v_list = []
-    for i in range(w.shape[0] - 1, -1, -1):
-        v = expand_hypercube_step(v, w[i], msb=True)
-        v_list.append(v)
-    return v_list
+    Scans w backwards, prepending each coordinate as the MSB; large members are
+    emitted outer-split (see `expand_eq_family`)."""
+    return expand_eq_family(w, msb=True, suffix=True)
 
 
 def compute_eq_prefixes(w: Array) -> list[Array]:
@@ -61,12 +57,7 @@ def compute_eq_prefixes(w: Array) -> list[Array]:
     Scans w forwards, appending each coordinate as the LSB, so `w[0]` stays the
     MSB of every table. The dual of compute_eq_evaluations: a round that binds
     the LOW variable consumes w from the back, so what it has left is a prefix."""
-    v = fnp.ones(1, dtype=w.dtype)
-    v_list = []
-    for i in range(w.shape[0]):
-        v = expand_hypercube_step(v, w[i], msb=False)
-        v_list.append(v)
-    return v_list
+    return expand_eq_family(w, msb=False, suffix=False)
 
 
 def _split_slope(p_stacked: Array, *, msb: bool = True) -> tuple[Array, Array]:
