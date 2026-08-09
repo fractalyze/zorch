@@ -20,6 +20,15 @@ frxlib==0.10.1.dev20260809035234
 frx-cuda12-pjrt==0.10.1.dev20260809035234
 frx-cuda12-plugin==0.10.1.dev20260809035234
 zk-dtypes==0.0.10
+# The symmetric layer (permutations, sponges, compressions, byte hashes) and the
+# `fused_region` / `composite` marker seam they lower through. It sits BELOW
+# zorch so `sig-frx` can share it without taking a proving-block dependency, so
+# zorch imports it rather than owning a copy.
+#
+# It pulls in `blake3` (the BLAKE3 team's Rust binding) transitively, because
+# hash-frx ships host byte-hash rows that the standard library cannot back.
+# Prebuilt wheels on every platform zorch supports, so no Rust toolchain.
+hash-frx==0.1.0.dev20260809073704
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
