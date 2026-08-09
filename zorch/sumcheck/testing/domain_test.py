@@ -170,6 +170,40 @@ class DomainTest(absltest.TestCase):
             reduces=1,
         )
 
+    def test_sample_points_matches_sample(self) -> None:
+        # `sample_points` is `sample` as separate per-point arrays: same values,
+        # same order, for a finite-only domain and every ∞ placement.
+        p0 = fnp.array([1, 2, 3], dtype=KB)
+        p1 = fnp.array([7, 5, 9], dtype=KB)
+        for dom in (
+            EvalDomain(fnp.array([0, 1, 2], dtype=KB)),
+            EvalDomain(fnp.array([0, 1], dtype=KB), inf_index=0),
+            EvalDomain(fnp.array([0, 1], dtype=KB), inf_index=-1),
+            compressed_domain(1, KB),
+        ):
+            stacked = dom.sample(p0, p1)
+            points = dom.sample_points(p0, p1)
+            self.assertEqual(len(points), stacked.shape[0])
+            for k, pt in enumerate(points):
+                self.assertTrue(bool(fnp.all(pt == stacked[k])))
+
+    def test_summand_evals_unstacked_matches_stacked(self) -> None:
+        # Unstacked factors compute the identical message — both bind orders,
+        # weighted and not, on the compressed (∞-carrying) domain.
+        a = fnp.arange(1, 9, dtype=KB)
+        b = fnp.arange(9, 17, dtype=KB)
+        prod = lambda x, y: x * y  # noqa: E731
+        w = fnp.array([2, 3, 4, 5], dtype=KB)
+        dom = compressed_domain(1, KB)
+        for msb in (True, False):
+            for weight in (None, w):
+                ref = summand_evals(
+                    fnp.stack([a, b]), prod, dom, weight=weight, msb=msb
+                )
+                got = summand_evals((a, b), prod, dom, weight=weight, msb=msb)
+                self.assertEqual(got.shape, ref.shape)
+                self.assertTrue(bool(fnp.all(got == ref)))
+
     def test_product_coeffs_verify(self) -> None:
         # The coefficient form of each product round verifies against
         # CoeffsSumcheckRound and reduces the claim down to Π_k P_k(r).

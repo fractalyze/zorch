@@ -14,7 +14,7 @@ it (the prover Rounds that emit them live in sqrt_space).
 from __future__ import annotations
 
 import operator
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from functools import cache, reduce
 from typing import Any
@@ -105,6 +105,20 @@ class EvalDomain:
         pos = self.inf_index % (finite.shape[0] + 1)
         return fnp.concatenate([finite[:pos], diff[None], finite[pos:]])
 
+    def sample_points(self, p0: Array, p1: Array) -> tuple[Array, ...]:
+        """`sample` as one array per domain point, same values in the same order,
+        with no concatenate in the graph. The concat matters: it sits between a
+        caller's just-folded factor and the round message's products, which is
+        exactly where it stops the GPU multi-output fuser from merging the fold
+        into the message reduction (see `summand_evals` on unstacked factors)."""
+        assert self.nodes is not None, "a sampling domain needs an explicit node set"
+        diff = p1 - p0
+        finite = [p0 + node * diff for node in self.nodes]
+        if self.inf_index is None:
+            return tuple(finite)
+        pos = self.inf_index % (len(finite) + 1)
+        return tuple(finite[:pos]) + (diff,) + tuple(finite[pos:])
+
 
 def extend_to_round_domain(
     p0: Array, p1: Array, d: int, *, skip_one: bool = False
@@ -174,7 +188,7 @@ def split_pairs(arr: Array) -> tuple[Array, Array]:
 
 
 def summand_evals(
-    stacked: Array,
+    stacked: Array | Sequence[Array],
     combine: Callable[..., Array],
     domain: EvalDomain,
     *,
@@ -197,9 +211,21 @@ def summand_evals(
     only for a HOMOGENEOUS combine — every monomial a product of exactly `degree`
     factors (a plain product, or the LogUp combine); a mixed-degree combine like
     eq·(â◦b̂ − ĉ) is not. A finite domain carries no such restriction — any summand
-    samples cleanly on it."""
-    p0, p1 = split_halves(stacked) if msb else split_pairs(stacked)
-    combined = combine(*frx.vmap(domain.sample)(p0, p1))
+    samples cleanly on it.
+
+    Passing the factors UNSTACKED (a tuple/list instead of the (m, N) stack)
+    computes the same values through `sample_points`, keeping every factor a
+    separate operand: no concatenate then sits between the factors and the
+    products, which is what lets the GPU multi-output fuser merge a just-folded
+    factor's materialization into this reduction — a caller that folds and then
+    reduces (a sumcheck round boundary) wants that single kernel."""
+    if isinstance(stacked, (tuple, list)):
+        split = split_halves if msb else split_pairs
+        per_factor = [domain.sample_points(*split(f)) for f in stacked]
+        combined = fnp.stack([combine(*pts) for pts in zip(*per_factor)])
+    else:
+        p0, p1 = split_halves(stacked) if msb else split_pairs(stacked)
+        combined = combine(*frx.vmap(domain.sample)(p0, p1))
     if weight is not None:
         combined = combined * weight
     return fnp.sum(combined, axis=1)
