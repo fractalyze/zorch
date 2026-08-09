@@ -1,9 +1,15 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """koalabear-16 reference fixture — TEST ONLY (never re-exported from the package).
 
-A single golden parameterization + vector pinned to one Plonky3 revision.
-Generated from Plonky3 p3_commit=4318eba062fd1cbca3dbe98904ad18ad950f3b49.
-Exists only to prove the agnostic engine against a known vector; named instances
-are a consumer concern, not zorch API.
+A single golden parameterization pinned to one Plonky3 revision, generated from
+p3_commit=4318eba062fd1cbca3dbe98904ad18ad950f3b49. Named instances are a
+consumer concern rather than zorch API, so this exists only to give zorch's own
+tests one real permutation to run the agnostic engine against.
+
+It lives here rather than in `hash_frx` because the hash-frx wheel ships no test
+tree; its copy of these constants backs hash-frx's byte-match against Plonky3,
+which is the assertion that keeps this instance honest. Zorch needs only the
+instance, so the expected permute output stays there.
 """
 
 from __future__ import annotations
@@ -12,10 +18,9 @@ from dataclasses import replace
 
 import frx.numpy as fnp
 import numpy as np
+from hash_frx.poseidon2.params import Poseidon2Params
+from hash_frx.poseidon2.poseidon2 import Poseidon2
 from zk_dtypes import koalabear_mont as F
-
-from zorch.hash.poseidon2.params import Poseidon2Params
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
 
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
@@ -227,28 +232,6 @@ _INTERNAL_DIAG = [
     133169152,
     127,
 ]
-
-KOALABEAR16_EXPECTED = fnp.array(
-    [
-        1259554834,
-        663463928,
-        1989430097,
-        476523442,
-        836740795,
-        1803459961,
-        1229318262,
-        2023956904,
-        2054405130,
-        1556655036,
-        1455339712,
-        1471465890,
-        423337459,
-        353979748,
-        1203410294,
-        1592576868,
-    ],
-    dtype=F,
-)
 
 
 def koalabear16_params() -> Poseidon2Params:

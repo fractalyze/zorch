@@ -39,8 +39,8 @@ from functools import cache, partial
 import frx
 import frx.numpy as fnp
 from frx import Array
+from hash_frx._composite import composite
 
-from zorch._composite import composite
 from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER,
     SUMCHECK_ROUND_MARKER_VERSION,

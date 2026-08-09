@@ -20,7 +20,6 @@ from frx import Array
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.basefold.prover import BasefoldProver
 from zorch.pcs.basefold.verifier import BasefoldVerifier
 from zorch.pcs.fri.config import FriParams
@@ -36,6 +35,7 @@ from zorch.pcs.stage import (
     OpeningWitness,
 )
 from zorch.stage import TrivialClaim, VerifierStage
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_ext_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import (

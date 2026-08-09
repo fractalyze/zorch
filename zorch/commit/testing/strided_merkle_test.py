@@ -13,14 +13,14 @@ import frx
 import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.poseidon2.poseidon2 import POSEIDON2_MARKER
+from hash_frx.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.strided_merkle import StridedMerkleTree
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
+from zorch.testkit.koalabear16 import koalabear16_perm
 
 
 def _stack(rows_per_query: int) -> tuple[Sponge, Compression, StridedMerkleTree]:

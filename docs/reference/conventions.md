@@ -39,7 +39,9 @@ fused region (`stablehlo.composite`) + XLA emitter will lower to one kernel
 A round body needs **exactly one** `@jit` boundary around it — never zero (eager
 dispatch *decomposes* the fused composite, so the boundary is the perf lever, not
 just a cache) and never two (a nested `@jit` lowers to a *call* the single-kernel
-rewriter rejects, [`fusion.py`](../../zorch/fusion.py)). Two shapes satisfy this,
+rewriter rejects,
+[`fusion.py`](https://github.com/fractalyze/hash-frx/blob/main/hash_frx/fusion.py)).
+Two shapes satisfy this,
 and which one a scheme uses is **forced by whether a host-side op interleaves the
 round loop**, not chosen for style:
 

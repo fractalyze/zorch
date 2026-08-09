@@ -14,9 +14,9 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
+from hash_frx.sha256 import HostSha256, Sha256
 
 from zorch.byte_transcript import KIND_SCALAR, OP_SQUEEZE, ByteHashTranscript
-from zorch.hash.sha256 import HostSha256, Sha256
 from zorch.sha256_field_transcript import (
     SHA256_SQUEEZE_MARKER,
     Sha256FieldTranscript,

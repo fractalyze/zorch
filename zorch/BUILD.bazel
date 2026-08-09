@@ -1,31 +1,12 @@
 load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
-# The CompositeOp-absent fallback every composite marker shares (frxlib-compat
-# shim; auto-retires once the composite-capable wheel ships).
-py_library(
-    name = "_composite",
-    srcs = ["_composite.py"],
-    visibility = ["//visibility:public"],
-    deps = [requirement("frx")],
-)
-
-py_library(
-    name = "fusion",
-    srcs = ["fusion.py"],
-    visibility = ["//visibility:public"],
-    deps = [
-        ":_composite",
-        requirement("frx"),
-    ],
-)
-
 py_library(
     name = "constraint_eval",
     srcs = ["constraint_eval.py"],
     visibility = ["//visibility:public"],
     deps = [
-        ":_composite",
+        requirement("hash_frx"),
         requirement("frx"),
     ],
 )
@@ -54,9 +35,8 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        ":fusion",
+        requirement("hash_frx"),
         ":grind",
-        "//zorch/hash:permutation",
         requirement("frx"),
         requirement("typing_extensions"),
         requirement("zk_dtypes"),
@@ -77,7 +57,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "//zorch/hash:byte_hash",
+        requirement("hash_frx"),
         requirement("numpy"),
     ],
 )
@@ -94,7 +74,7 @@ py_library(
     deps = [
         ":byte_transcript",
         ":grind",
-        "//zorch/hash:sha256",
+        requirement("hash_frx"),
         requirement("frx"),
         requirement("numpy"),
     ],

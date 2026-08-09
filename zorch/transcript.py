@@ -17,12 +17,12 @@ import frx
 import frx.numpy as fnp
 from frx import Array, jit, lax, vmap
 from frx.tree_util import register_dataclass, tree_map
+from hash_frx.fusion import fused_region
+from hash_frx.permutation import Permutation
 from typing_extensions import TypeVar as TypeVarWithDefault
 from zk_dtypes import pfinfo
 
-from zorch.fusion import fused_region
 from zorch.grind import grind_search
-from zorch.hash.permutation import Permutation
 
 # Candidate window for the grind search: each `lax.while_loop` step tests this
 # many witnesses at once (static shape), trading device memory for fewer
@@ -943,7 +943,7 @@ def _state_on_device(state: DuplexState, device: frx.Device) -> DuplexState:
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
     """`observe` on the host sponge; the state stays host-resident."""
     s = _state_on_host(transcript.state)
-    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)  # type: ignore[arg-type]
+    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
     return transcript._with_state(f(s, frx.device_put(values, _host_cpu())))
 
 
@@ -953,7 +953,7 @@ def _sample_host(
     """`sample` n raw squeezes on the host sponge; the state stays host-resident,
     the challenge returns to the compute device."""
     s = _state_on_host(transcript.state)
-    f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
+    f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s)
     return (
         transcript._with_state(state),
@@ -971,7 +971,7 @@ def _observe_and_sample_host(
     is CPU-resident in steady state, so its device can't name the compute one)."""
     compute_device = next(iter(values.devices()))
     s = _state_on_host(transcript.state)
-    f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)  # type: ignore[arg-type]
+    f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s, frx.device_put(values, _host_cpu()))
     return (
         transcript._with_state(state),

@@ -11,8 +11,8 @@ result.
 
 Agnostic: `eval_fn` is opaque — its body belongs to the caller — and the marker
 and fold carry no proving-scheme or zkVM knowledge. Sibling of
-`zorch.fusion::fused_region`, and shares the `lax.composite` emission in
-`zorch._composite.composite`.
+`hash_frx.fusion::fused_region`, and shares the `lax.composite` emission in
+`hash_frx._composite.composite`.
 
 The RLC is emitted as an unrolled fold (`acc += alpha_k * C_k`), not `fnp.dot`
 / `@`: a reduction in the marked body would split the region under the
@@ -39,8 +39,7 @@ from collections.abc import Callable
 
 import frx.numpy as fnp
 from frx import Array, lax
-
-from zorch._composite import composite
+from hash_frx._composite import composite
 
 CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
@@ -435,7 +434,7 @@ def constraint_eval(
             if acc.ndim == 0:
                 raise ValueError("live_width needs a result with a leading row axis")
             # lax.select, not fnp.where — the single-kernel body rule; see
-            # zorch/fusion.py's module docstring.
+            # hash_frx.fusion's module docstring.
             # The mask comes LAST — select(rows < live_width, rlc + dot, 0) —
             # so the column term's dead rows zero out too. A window into a
             # compact-packed shared buffer straddles the NEXT chip's live rows,

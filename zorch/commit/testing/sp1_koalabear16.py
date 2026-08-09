@@ -22,9 +22,8 @@ from __future__ import annotations
 
 import frx.numpy as fnp
 import numpy as np
+from hash_frx.poseidon2.params import Poseidon2Params
 from zk_dtypes import koalabear_mont as F
-
-from zorch.hash.poseidon2.params import Poseidon2Params
 
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 

@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 
 from absl.testing import absltest
+from hash_frx.byte_hash import ByteHash
+from hash_frx.sha256 import HostSha256, Sha256
 
 from zorch.byte_transcript import (
     KIND_SCALAR,
@@ -22,8 +24,6 @@ from zorch.byte_transcript import (
     OP_SQUEEZE,
     ByteHashTranscript,
 )
-from zorch.hash.byte_hash import ByteHash
-from zorch.hash.sha256 import HostSha256, Sha256
 
 
 def _new(domain: bytes) -> ByteHashTranscript:

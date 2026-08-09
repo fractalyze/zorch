@@ -29,12 +29,19 @@ classifiers = [
 # its `TypeVar` at module scope for PEP 696 defaults, which `typing` gains only
 # in 3.13, and that module sits on the import path of every scheme seam.
 #
+# `hash-frx` is the symmetric layer — permutations, sponge, compression, and the
+# `fused_region` marker seam. It is a hard runtime dependency, not an optional
+# one: `zorch.transcript` and `zorch.commit` import it at module scope, so
+# nothing in zorch imports without it. Unpinned here, as frx is, because the
+# exact build is a consuming workspace's choice; requirements.in pins it.
+#
 # The GPU plugins (frx-cuda12-*) stay undeclared: they are an install-time
 # platform choice, offered through frx's own `cuda12` extra.
 dependencies = [
     "absl-py",
     "numpy",
     "frx>=0.10.0.dev0",
+    "hash-frx",
     "typing-extensions",
 ]
 

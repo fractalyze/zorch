@@ -4,8 +4,8 @@ from __future__ import annotations
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
+from hash_frx.permutation import Permutation
 
-from zorch.hash.permutation import Permutation
 from zorch.testkit.transcript import CheapPermutation, cheap_transcript
 from zorch.transcript import DuplexTranscript
 

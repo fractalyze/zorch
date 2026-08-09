@@ -28,7 +28,9 @@ re-absorb) over an injected hash. "Host vs device" is not two classes but *which
 `DuplexSponge` delegates to its `Permutation`. Both injections are byte-identical.
 
 `Sha256FieldTranscript` is the **scan-threadable** surface: it keeps SHA-256's
-incremental state (`Sha256State`, a fixed-shape pytree in `hash/sha256.py`) instead
+incremental state (`Sha256State`, a fixed-shape pytree in
+[hash-frx's `sha256.py`](https://github.com/fractalyze/hash-frx/blob/main/hash_frx/sha256.py))
+instead
 of a growing buffer, so a byte-Fiat-Shamir round loop folds through one device
 program (`zorch.sumcheck.prove`'s `lax.scan`). Its slice framing is byte-identical
 to `ByteHashTranscript`'s `observe_slice` / `sample_slice` — the field surface *is*

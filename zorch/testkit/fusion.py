@@ -110,7 +110,7 @@ def assert_input_uses(
     requires. Each extra read is a separate expression the compiler re-derives
     the value for, so where the value is loop-carried -- a permutation's rounds,
     a fold's iterations -- the cost compounds per iteration rather than adding.
-    ``zorch.hash.linear`` tells the story that produced this rule.
+    ``hash_frx.linear`` tells the story that produced this rule.
 
     ``limit`` is where the scaling law goes: pass ``limit=width`` for a layer
     whose lanes each legitimately touch the state once, or the measured constant

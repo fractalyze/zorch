@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Protocol, Self
 import numpy as np
 
 if TYPE_CHECKING:
-    from zorch.hash.byte_hash import ByteHash
+    from hash_frx.byte_hash import ByteHash
 
 # Wire vocabulary — the Merlin-over-hash framing (op byte, then operands).
 OP_DOMAIN = 0x01

@@ -9,8 +9,8 @@ from functools import partial
 
 import frx.numpy as fnp
 from frx import Array
+from hash_frx._composite import composite
 
-from zorch._composite import composite
 from zorch.logup_gkr._jagged_rounds import (
     _bind_planes,
     _fix_last,

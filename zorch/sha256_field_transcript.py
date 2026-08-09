@@ -41,6 +41,13 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
+from hash_frx.fusion import fused_region
+from hash_frx.sha256 import (
+    Sha256State,
+    sha256_stream_absorb,
+    sha256_stream_finalize,
+    sha256_stream_init,
+)
 
 from zorch.byte_transcript import (
     KIND_SCALAR,
@@ -52,14 +59,7 @@ from zorch.byte_transcript import (
     OP_SQUEEZE,
     _validate_pow_bits,
 )
-from zorch.fusion import fused_region
 from zorch.grind import GRIND_WINDOW, grind_search
-from zorch.hash.sha256 import (
-    Sha256State,
-    sha256_stream_absorb,
-    sha256_stream_finalize,
-    sha256_stream_init,
-)
 
 # SHA-256 digest width — the PoW state digest and every squeeze block are 32 B.
 _DIGEST_BYTES = 32

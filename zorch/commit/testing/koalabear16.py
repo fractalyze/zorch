@@ -7,10 +7,11 @@ fixture stays free of a back-dependency on the commit layer.
 
 from __future__ import annotations
 
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.sponge import Sponge, SpongeParams
+
 from zorch.commit.merkle import MerkleTree
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.testkit.koalabear16 import koalabear16_perm
 
 
 def koalabear16_merkle(

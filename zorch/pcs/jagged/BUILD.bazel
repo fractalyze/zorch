@@ -11,7 +11,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":dense",
-        "//zorch:fusion",
+        requirement("hash_frx"),
         "//zorch/poly",
         "//zorch/utils:bits",
         requirement("frx"),

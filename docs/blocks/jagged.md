@@ -37,7 +37,7 @@ a `lax.fori_loop` layer loop instead of host-driven shapes.
 The opening proves the evaluation of the original sparse, variable-height
 polynomial via the committed dense poly `D` (the [BaseFold matrix](pcs.md#basefold-transparent-multilinear)
 commitment) and `J̃`. It is **two sumchecks plus a stacked dense open**, all
-zorch-native (natural-order fold, [transcript](hash.md), no domain separators or
+zorch-native (natural-order fold, [transcript](transcript.md), no domain separators or
 PoW — mathematical fidelity, not byte-equality with any external prover):
 
 - **Outer Hadamard sumcheck** `Σ_i D(i)·J̃(i)` (degree 2) reduces to a point

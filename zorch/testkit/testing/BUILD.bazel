@@ -19,8 +19,8 @@ py_test(
     size = "medium",
     srcs = ["fusion_test.py"],
     deps = [
-        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/testkit:fusion",
+        "//zorch/testkit:koalabear16",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
@@ -33,7 +33,7 @@ py_test(
     srcs = ["transcript_test.py"],
     deps = [
         "//zorch:transcript",
-        "//zorch/hash:permutation",
+        requirement("hash_frx"),
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("frx"),

@@ -10,8 +10,8 @@ point-eval a jagged opening is checked against — is documented separately.
 ## Why the shape
 
 **Layer-by-layer binary tree on Sponge + Compression.** `commit` hashes each
-matrix row to a leaf digest (the [Sponge](hash.md)), then folds sibling pairs per
-layer (the [Compression](hash.md)) down to a single root, returning
+matrix row to a leaf digest (the [Sponge](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md)), then folds sibling pairs per
+layer (the [Compression](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md)) down to a single root, returning
 `(raw_root, digest_layers)` leaf-first. The two halves agree by contract —
 `leaf_hasher.out == compressor.chunk`, and the compressor is 2-to-1 (`arity == 2`)
 — so the tree is just "a leaf hasher and a 2-to-1 compressor", nothing about which
@@ -29,6 +29,6 @@ mechanics, not a scheme's soundness story.
 Each Merkle layer is one `vmap` over its nodes — internally one `compress`, at the
 leaf one `hash`, i.e. one permute per node-batch — and the fold unrolls (layer
 count is static), so no host-driven loop appears. The permute is the fusion unit
-([hash.md](hash.md#fusion-by-construction)): once it is captured to a kernel (the
+([hash-frx](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md#fusion-by-construction)): once it is captured to a kernel (the
 poseidon2 path, [#25](https://github.com/fractalyze/zorch/issues/25)), a whole
 layer is one GPU kernel. See the hub [fusion north star](../README.md#fusion-north-star).

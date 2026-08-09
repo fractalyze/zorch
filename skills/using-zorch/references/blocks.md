@@ -52,15 +52,15 @@ Doc: [poly.md](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/blocks/poly.
 ## Hashing
 
 ```python
-from zorch.hash.permutation import Permutation          # the seam (Protocol)
-from zorch.hash.poseidon2.poseidon2 import Poseidon2    # a Permutation instance
-from zorch.hash.sponge import Sponge, SpongeParams
-from zorch.hash.compression import Compression, CompressionParams
+from hash_frx.permutation import Permutation          # the seam (Protocol)
+from hash_frx.poseidon2.poseidon2 import Poseidon2    # a Permutation instance
+from hash_frx.sponge import Sponge, SpongeParams
+from hash_frx.compression import Compression, CompressionParams
 ```
 
 Your project supplies the pinned params (width, field, constants) for *its*
 permutation; sponge/compression code is shared.
-Doc: [hash.md](https://github.com/fractalyze/zorch/blob/v0.2.0/docs/blocks/hash.md).
+Doc: [hash-frx](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md) (the symmetric layer is a separate repo).
 
 ## Merkle commitment
 

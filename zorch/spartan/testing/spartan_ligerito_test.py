@@ -10,7 +10,6 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.challenge import ChallengePolicy
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.ligerito.config import LigeritoConfig
 from zorch.spartan.spartan import (
     SpartanClaim,
@@ -23,6 +22,7 @@ from zorch.spartan.testing.ligerito_pcs import (
     LigeritoSpartanVerifier,
 )
 from zorch.spartan.testing.toy import toy_r1cs
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.transcript import DuplexTranscript
 
 KB = zk_dtypes.koalabear_mont

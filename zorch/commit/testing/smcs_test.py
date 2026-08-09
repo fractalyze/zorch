@@ -11,15 +11,15 @@ byte-match equivalence against the reference prover is the FFI slice.
 import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.poseidon2.poseidon2 import Poseidon2
+from hash_frx.sponge import Sponge, SpongeParams
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.commit.merkle import MerkleTree
 from zorch.commit.smcs import SingleMatrixCommitmentScheme, VerifyCode
 from zorch.commit.testing.sp1_koalabear16 import koalabear16_params
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
-from zorch.hash.sponge import Sponge, SpongeParams
 
 # SP1-form koalabear16 root over arange(32).reshape(4, 8) — before the
 # separator.

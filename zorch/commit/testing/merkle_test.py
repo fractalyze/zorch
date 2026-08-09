@@ -14,23 +14,23 @@ import frx
 import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.poseidon2.params import default_external_matrix
+from hash_frx.poseidon2.poseidon2 import (
+    POSEIDON2_MARKER,
+    Poseidon2,
+)
+from hash_frx.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 from zk_dtypes import goldilocks_mont
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.params import default_external_matrix
-from zorch.hash.poseidon2.poseidon2 import (
-    POSEIDON2_MARKER,
-    Poseidon2,
-)
-from zorch.hash.poseidon2.testing.koalabear16 import (
+from zorch.testkit.koalabear16 import (
     KOALABEAR16_POSEIDON2_ATTRS,
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 
 
 def _non_standard_perm() -> Poseidon2:
