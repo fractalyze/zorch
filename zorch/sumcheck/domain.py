@@ -202,7 +202,39 @@ def summand_evals(
     combined = combine(*frx.vmap(domain.sample)(p0, p1))
     if weight is not None:
         combined = combined * weight
-    return fnp.sum(combined, axis=1)
+    return _sum_over_hypercube(combined)
+
+
+def _sum_over_hypercube(combined: Array) -> Array:
+    """Σ over the hypercube axis for every domain point, in ONE traversal.
+
+    `combined` is `(num_points, hypercube, *batch)`, so the obvious
+    `fnp.sum(combined, axis=1)` reduces an array whose LEADING axis is the
+    domain — and the GPU emitter then gives each domain point its own reduction
+    row, each traversing the state independently. The state is therefore read
+    once PER POINT.
+
+    Measured on flock's m32 multilinear round (a two-point domain, operands
+    2²⁶ GF(2¹²⁸) elements): the kernel moved 5.376 GB where its operands total
+    2.684 GB — exactly 2.00× — while running at 95% of DRAM peak. It was never
+    slow; it was reading everything twice. An n-point domain costs n×, so the
+    higher the round degree, the more it pays.
+
+    A variadic reduce carries one accumulator per domain point through a single
+    traversal, which removes the amplification by construction rather than
+    hoping the emitter fuses the rows: 3.24 ms → 1.70 ms on that kernel's
+    shapes, landing at the same 89% of peak the neighbouring fold achieves.
+
+    Reducing dimension 0 of each point's slice is exactly the old `axis=1`, so
+    batch axes survive untouched. See fractalyze/zorch#607.
+    """
+    zero = fnp.zeros((), combined.dtype)
+    per_point = tuple(combined[i] for i in range(combined.shape[0]))
+
+    def add(lhs: tuple[Array, ...], rhs: tuple[Array, ...]) -> tuple[Array, ...]:
+        return tuple(l + r for l, r in zip(lhs, rhs))
+
+    return fnp.stack(frx.lax.reduce(per_point, (zero,) * len(per_point), add, (0,)))
 
 
 def product_round_poly(stacked: Array) -> Array:

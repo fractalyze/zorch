@@ -1,6 +1,7 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import frx
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
@@ -169,6 +170,33 @@ class DomainTest(absltest.TestCase):
             stacked,
             reduces=1,
         )
+
+    def test_summand_evals_carries_one_accumulator_per_domain_point(self) -> None:
+        # The whole round message must come out of ONE variadic reduce, with an
+        # accumulator per domain point, so the state is traversed once.
+        #
+        # Reducing an array whose LEADING axis is the domain instead gives each
+        # point its own reduction row, and the GPU emitter then re-reads the
+        # state per point: measured 2.00x on a two-point domain at flock's m32
+        # shapes -- 5.376 GB moved against 2.684 GB of operands, while sitting
+        # at 95% of DRAM peak, i.e. not slow, just reading everything twice.
+        # An n-point domain costs n x, so pin the accumulator count and not
+        # merely the reduce count (fusion-readiness already covers the latter).
+        stacked = fnp.stack([fnp.arange(1, 9, dtype=KB), fnp.arange(9, 17, dtype=KB)])
+        prod = lambda x, y: x * y  # noqa: E731
+        # Two points and three, so the assertion tracks the domain rather
+        # than pinning one magic number.
+        for domain, n_points in (
+            (compressed_domain(1, KB), 2),
+            (uhat_domain(3, KB), 3),
+        ):
+            with self.subTest(points=n_points):
+                jaxpr = frx.make_jaxpr(lambda s, d=domain: summand_evals(s, prod, d))(
+                    stacked
+                ).jaxpr
+                reduces = [e for e in jaxpr.eqns if e.primitive.name == "reduce"]
+                self.assertLen(reduces, 1)
+                self.assertLen(reduces[0].outvars, n_points)
 
     def test_product_coeffs_verify(self) -> None:
         # The coefficient form of each product round verifies against

@@ -38,6 +38,17 @@ _FUSION_SAFE = frozenset(
         "slice",
         "concatenate",
         "transpose",
+        # Region terminator, not an operation. A reduce whose accumulator is a
+        # single known op prints in StableHLO's shorthand ("applies
+        # stablehlo.add across dimensions = ...") and shows no region at all,
+        # but a VARIADIC reduce -- one accumulator per domain point, which is
+        # how a round message avoids re-traversing the state per point -- must
+        # spell its body out, and that body ends in `stablehlo.return`. Since
+        # the scan below is a text match over the whole lowering, the
+        # terminator surfaces as if it were a body op. Every construct that
+        # actually introduces a boundary (`while`, `case`, `if`, `gather`, …)
+        # is still caught by its own name.
+        "return",
     }
 )
 
