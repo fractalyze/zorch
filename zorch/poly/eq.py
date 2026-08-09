@@ -107,6 +107,49 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
     return state
 
 
+def expand_eq_family(
+    cs: Array, *, msb: bool = False, suffix: bool = False
+) -> list[Array]:
+    """The nested eq tables [eq(s₁), …, eq(sₙ)] over every prefix s_k = cs[:k]
+    (`suffix=True`: every suffix s_k = cs[n-k:]), entry k-1 of shape (2ᵏ,) —
+    the prefix family appends each coordinate walking forwards, the suffix
+    family prepends walking backwards, and `msb` is the placement of each added
+    coordinate as in `expand_hypercube_step`. The slice's first coordinate
+    lands at the MSB for the (prefix, msb=False) and (suffix, msb=True)
+    combinations, at the LSB for the other two.
+
+    Past `_OUTER_SPLIT_MIN` each large member is emitted as ONE outer product
+    of a shared half instead of a retained doubling chain (which XLA re-fuses
+    into ancestor-recomputing input fusions — see `_OUTER_SPLIT_MIN`): every
+    member factors over the family's first-added half — for the suffix family,
+    eq(cs[i:]) = eq(cs[i:k]) ⊗ eq(cs[k:]) for every i < k — so both halves
+    recurse on half-size families and each large table is one write-only GF
+    multiply per element over two small inputs. GF multiplication is exact, so
+    every member stays byte-equal to its chain."""
+    n = cs.shape[0]
+    if n < _OUTER_SPLIT_MIN:
+        state = fnp.ones(1, dtype=cs.dtype)
+        tables = []
+        order = range(n - 1, -1, -1) if suffix else range(n)
+        for j in order:
+            state = expand_hypercube_step(state, cs[j], msb=msb)
+            tables.append(state)
+        return tables
+    k = n // 2
+    head = expand_eq_family(cs[:k], msb=msb, suffix=suffix)
+    tail = expand_eq_family(cs[k:], msb=msb, suffix=suffix)
+    # The first-added half is the one every larger member shares; `msb` says
+    # which index bits it owns (msb=True places first-added coordinates at the
+    # low bits — the fast axis — msb=False at the high bits).
+    base, growth = (tail, head) if suffix else (head, tail)
+    shared = base[-1]
+    if msb:
+        products = [(g[:, None] * shared[None, :]).reshape(-1) for g in growth]
+    else:
+        products = [(shared[:, None] * g[None, :]).reshape(-1) for g in growth]
+    return base + products
+
+
 def expand_monomial_step(state: Array, coord: Array) -> Array:
     """(2^k,) -> (2^{k+1},): add a new variable as the LSB, monomial basis.
     result[2j] = state[j], result[2j+1] = state[j]·coord — the ⊗(1, coord)
