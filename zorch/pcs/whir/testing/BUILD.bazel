@@ -20,12 +20,12 @@ py_test(
         "//zorch:transcript",
         "//zorch/coding:reed_solomon",
         "//zorch/commit:strided_merkle",
-        requirement("hash_frx"),
         "//zorch/pcs/whir",
         "//zorch/testkit:koalabear16",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

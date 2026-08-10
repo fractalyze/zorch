@@ -19,7 +19,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:challenge",
-        requirement("hash_frx"),
         "//zorch:prove",
         "//zorch:round",
         "//zorch:stage",

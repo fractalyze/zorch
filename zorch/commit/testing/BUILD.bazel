@@ -11,8 +11,8 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [
         "//zorch/commit:merkle",
-        requirement("hash_frx"),
         "//zorch/testkit:koalabear16",
+        requirement("hash_frx"),
     ],
 )
 
@@ -21,8 +21,8 @@ py_library(
     srcs = ["sp1_koalabear16.py"],
     visibility = ["//zorch:__subpackages__"],
     deps = [
-        requirement("hash_frx"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ],
@@ -38,9 +38,9 @@ py_test(
         ":sp1_koalabear16",
         "//zorch/commit:merkle",
         "//zorch/commit:smcs",
-        requirement("hash_frx"),
         requirement("absl_py"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -56,11 +56,12 @@ py_test(
     tags = ["local_only"],
     deps = [
         ":koalabear16",
-        requirement("hash_frx"),
         "//zorch/commit:merkle",
+        "//zorch/testkit:jit_cache",
         "//zorch/testkit:koalabear16",
         requirement("absl_py"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -72,12 +73,12 @@ py_test(
     # composite-vmap; CI's published frxlib can't run it (see merkle_test).
     tags = ["local_only"],
     deps = [
-        requirement("hash_frx"),
         "//zorch/commit:merkle",
         "//zorch/commit:strided_merkle",
         "//zorch/testkit:koalabear16",
         requirement("absl_py"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

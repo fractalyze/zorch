@@ -25,10 +25,12 @@ from zk_dtypes import koalabear_mont as F
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
 # This parameterization's marker metadata as StableHLO prints it (dict keys
-# alphabetical) — shared by the emission contract test and the vmap/auto-lift
-# survival test so the expected text lives once. `external_m4` is the base M4
-# (Plonky3's circ(2,3,1,1)) flattened row-major, which the emitter applies per
-# 4-block.
+# alphabetical). The emission-contract test that shared it left with the
+# permutation, so hash-frx now pins this text against its own emitter and the
+# one consumer left here is the vmap/auto-lift survival check — it asserts the
+# attrs survive a batching rewrite, not that the emitter produces them.
+# `external_m4` is the base M4 (Plonky3's circ(2,3,1,1)) flattened row-major,
+# which the emitter applies per 4-block.
 # The default (identity) internal_j_scale carries its canonical value (1); the
 # recognizer value-encodes it per field.
 KOALABEAR16_POSEIDON2_ATTRS = (

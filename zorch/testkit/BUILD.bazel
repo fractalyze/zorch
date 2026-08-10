@@ -51,8 +51,8 @@ py_library(
     srcs = ["transcript.py"],
     visibility = ["//visibility:public"],
     deps = [
-        requirement("hash_frx"),
         "//zorch:transcript",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )

@@ -32,5 +32,6 @@ py_library(
         "//zorch/sumcheck/jagged",
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )

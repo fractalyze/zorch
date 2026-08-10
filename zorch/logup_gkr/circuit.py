@@ -39,7 +39,7 @@ from functools import cache, partial
 import frx
 import frx.numpy as fnp
 from frx import Array
-from hash_frx._composite import composite
+from hash_frx.fusion import fused_region
 
 from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER,
@@ -392,7 +392,7 @@ def _jagged_transition_core(
     intermediates); an unclaiming compiler runs the decomposition inline,
     byte-identical. The compile keys on (input width, output width, batch
     count, dtypes) alone -- capacity constants, never one input's layout."""
-    return composite(
+    return fused_region(
         partial(_transition_composite_decomp, out_width=out_width),
         numerator_0,
         numerator_1,

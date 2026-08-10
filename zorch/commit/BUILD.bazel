@@ -9,9 +9,9 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        requirement("hash_frx"),
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )
 
@@ -21,9 +21,9 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":merkle",
-        requirement("hash_frx"),
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )
 
@@ -33,9 +33,9 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch/commit:merkle",
-        requirement("hash_frx"),
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ],
 )
