@@ -6,6 +6,9 @@ eq(w, x) = Π_i (1 - x_i - w_i + 2·x_i·w_i); Σ_{w∈{0,1}^n} eq(w,x) = 1.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import overload
+
 import frx.numpy as fnp
 from frx import Array
 
@@ -112,9 +115,25 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
     return state
 
 
+@overload
 def expand_eq_family(
-    cs: Array, *, msb: bool = False, suffix: bool = False
-) -> list[Array]:
+    cs: Array, *, msb: bool = ..., suffix: bool = ..., keep: None = ...
+) -> list[Array]: ...
+
+
+@overload
+def expand_eq_family(
+    cs: Array, *, msb: bool = ..., suffix: bool = ..., keep: Callable[[int], bool]
+) -> list[Array | None]: ...
+
+
+def expand_eq_family(
+    cs: Array,
+    *,
+    msb: bool = False,
+    suffix: bool = False,
+    keep: Callable[[int], bool] | None = None,
+) -> list[Array] | list[Array | None]:
     """The nested eq tables [eq(s₁), …, eq(sₙ)] over every prefix s_k = cs[:k]
     (`suffix=True`: every suffix s_k = cs[n-k:]), entry k-1 of shape (2ᵏ,) —
     the prefix family appends each coordinate walking forwards, the suffix
@@ -130,7 +149,29 @@ def expand_eq_family(
     eq(cs[k:]) for every i < k — so both halves recurse on half-size families
     and each large table is one write-only GF multiply per element over two
     small inputs. GF multiplication is exact, so every member stays byte-equal
-    to its chain."""
+    to its chain.
+
+    `keep` is an optional predicate on the family index — the members the
+    caller will read. Kept members are always present and byte-identical to
+    the `keep=None` build; un-kept members come back as None, and past the
+    outer-product split their emissions are skipped entirely (below it the
+    chain computes every layer anyway as its successor's building block, and
+    XLA drops what nothing consumes). Why a caller can afford to drop members
+    is the caller's story — e.g. a round schedule that reads every other
+    member of the family."""
+    tables = _eq_family(cs, msb, suffix, (lambda i: True) if keep is None else keep)
+    if keep is None:
+        return tables
+    return [t if keep(i) else None for i, t in enumerate(tables)]
+
+
+def _eq_family(
+    cs: Array, msb: bool, suffix: bool, keep: Callable[[int], bool]
+) -> list[Array | None]:
+    """The recursion behind `expand_eq_family`. May return un-kept members
+    that exist as building blocks anyway (chain layers, shared halves) — the
+    public wrapper masks those to None, so the keep contract stays
+    predicate-defined rather than split-regime-defined."""
     n = cs.shape[0]
     if n < _OUTER_SPLIT_MIN:
         state = fnp.ones(1, dtype=cs.dtype)
@@ -141,15 +182,25 @@ def expand_eq_family(
             tables.append(state)
         return tables
     k = n // 2
-    head = expand_eq_family(cs[:k], msb=msb, suffix=suffix)
-    tail = expand_eq_family(cs[k:], msb=msb, suffix=suffix)
     # The first-added half is the one every larger member shares; `msb` says
     # which index bits it owns (msb=True places first-added coordinates at the
-    # low bits — the fast axis — msb=False at the high bits).
-    base, growth = (tail, head) if suffix else (head, tail)
+    # low bits — the fast axis — msb=False at the high bits). Its local
+    # indices ARE the family's low indices, so `keep` passes through with the
+    # last member (the shared half every product multiplies) forced as a
+    # building block; the growth half's members only feed the products at the
+    # family indices past the base, so its predicate shifts by the base size.
+    base_cs, growth_cs = (cs[k:], cs[:k]) if suffix else (cs[:k], cs[k:])
+    n_base = base_cs.shape[0]
+    base = _eq_family(base_cs, msb, suffix, lambda i: keep(i) or i == n_base - 1)
+    growth = _eq_family(growth_cs, msb, suffix, lambda j: keep(n_base + j))
     shared = base[-1]
     products = [
-        _flat_outer(g, shared) if msb else _flat_outer(shared, g) for g in growth
+        (
+            (_flat_outer(g, shared) if msb else _flat_outer(shared, g))
+            if keep(n_base + j)
+            else None
+        )
+        for j, g in enumerate(growth)
     ]
     return base + products
 

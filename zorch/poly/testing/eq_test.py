@@ -123,6 +123,67 @@ class ExpandEqFamilyTest(absltest.TestCase):
                 )
 
 
+class ExpandEqFamilyKeepTest(absltest.TestCase):
+    def test_chain_regime_masks_unkept_and_preserves_kept(self) -> None:
+        # Below the split: kept members byte-equal the keep=None build for
+        # every direction/placement combination; un-kept come back as None.
+        cs = fnp.array([2, 5, 7], dtype=KB)
+        keep = lambda i: i % 2 == 1  # noqa: E731
+        for msb in (False, True):
+            for suffix in (False, True):
+                full = expand_eq_family(cs, msb=msb, suffix=suffix)
+                fam = expand_eq_family(cs, msb=msb, suffix=suffix, keep=keep)
+                self.assertEqual(len(fam), len(full))
+                for i, (table, ref) in enumerate(zip(fam, full, strict=True)):
+                    if keep(i):
+                        self.assertTrue(
+                            bool(fnp.all(table == ref)),
+                            f"msb={msb} suffix={suffix} i={i}",
+                        )
+                    else:
+                        self.assertIsNone(table, f"msb={msb} suffix={suffix} i={i}")
+
+    def test_outer_split_keeps_alternating_reads(self) -> None:
+        # At _OUTER_SPLIT_MIN with an alternating-read schedule (odd members
+        # plus the last — the shape a two-rounds-per-read consumer wants):
+        # kept members must stay byte-equal to the retained doubling chain
+        # even though un-kept siblings, shared building blocks included in
+        # the small halves, were never emitted. One KB case per direction;
+        # the eager chain reference is the CI cost that keeps this minimal.
+        n = 16
+        keep = lambda i: i % 2 == 1 or i == n - 1  # noqa: E731
+        for suffix in (False, True):
+            cs = fnp.array(list(range(1, n + 1)), dtype=KB)
+            fam = expand_eq_family(cs, suffix=suffix, keep=keep)
+            refs = _chain_family(cs, msb=False, suffix=suffix)
+            self.assertEqual(len(fam), n)
+            for i, (table, ref) in enumerate(zip(fam, refs, strict=True)):
+                if keep(i):
+                    assert table is not None
+                    self.assertEqual(table.shape, ref.shape)
+                    self.assertTrue(
+                        bool(fnp.all(table == ref)), f"suffix={suffix} i={i}"
+                    )
+                else:
+                    self.assertIsNone(table, f"suffix={suffix} i={i}")
+
+    def test_outer_split_drops_the_largest_member(self) -> None:
+        # keep that excludes every product of the top-level split (the largest
+        # tables) — the shared half is still forced internally as a building
+        # block of nothing here, and the returned family must mask everything
+        # past the split point to None while the kept small members stay exact.
+        n = 16
+        keep = lambda i: i < 4  # noqa: E731
+        cs = fnp.array(list(range(1, n + 1)), dtype=KB)
+        fam = expand_eq_family(cs, suffix=True, keep=keep)
+        refs = _chain_family(cs, msb=False, suffix=True)
+        for i, (table, ref) in enumerate(zip(fam, refs, strict=True)):
+            if keep(i):
+                self.assertTrue(bool(fnp.all(table == ref)), f"i={i}")
+            else:
+                self.assertIsNone(table, f"i={i}")
+
+
 class EqFactorTest(absltest.TestCase):
     def test_matches_eval_eq_on_length_one_points(self) -> None:
         t = fnp.array(5, dtype=KB)
