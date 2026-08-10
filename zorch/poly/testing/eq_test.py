@@ -7,6 +7,7 @@ from absl.testing import absltest
 from frx import Array
 
 from zorch.poly.eq import (
+    _OUTER_SPLIT_MIN,
     contract_hypercube_step,
     eq_factor,
     eq_root,
@@ -121,6 +122,37 @@ class ExpandEqFamilyTest(absltest.TestCase):
                     bool(fnp.all(table == ref)),
                     f"dtype={dtype} msb={msb} suffix={suffix} i={i}",
                 )
+
+    def test_keep_masks_and_skips_dead_members(self) -> None:
+        # The keep contract is predicate-defined, not split-regime-defined:
+        # every kept member stays byte-equal to the full build (whose
+        # arithmetic the split test above pins per-dtype — keep is list
+        # plumbing on top of the same emissions, hence KB only), every
+        # un-kept slot is None. Two predicate shapes:
+        #   * n straddling the split, odd indices: chains masked below,
+        #     product emissions skipped above;
+        #   * n at the split, one kept product: its shared base factor
+        #     (index n//2 - 1) is un-kept publicly yet must still be built
+        #     as a building block — in BOTH orientations (the odd case hits
+        #     this only for suffix families, whose base is the back half).
+        cases = [
+            (_OUTER_SPLIT_MIN + 1, lambda i: i % 2 == 1),
+            (_OUTER_SPLIT_MIN, lambda i: i == _OUTER_SPLIT_MIN // 2),
+        ]
+        for n, keep in cases:
+            cs = fnp.array(list(range(1, n + 1)), dtype=KB)
+            for msb in (False, True):
+                for suffix in (False, True):
+                    full = expand_eq_family(cs, msb=msb, suffix=suffix)
+                    kept = expand_eq_family(cs, msb=msb, suffix=suffix, keep=keep)
+                    self.assertLen(kept, n)
+                    for i, (table, ref) in enumerate(zip(kept, full, strict=True)):
+                        ctx = f"n={n} msb={msb} suffix={suffix} i={i}"
+                        if not keep(i):
+                            self.assertIsNone(table, ctx)
+                            continue
+                        self.assertIsNotNone(table, ctx)
+                        self.assertTrue(bool(fnp.all(table == ref)), ctx)
 
 
 class EqFactorTest(absltest.TestCase):
