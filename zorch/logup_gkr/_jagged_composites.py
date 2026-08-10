@@ -29,7 +29,7 @@ from zorch.sumcheck.prover import (
 
 # --- FS-less compute-only round composites -----------------------------------
 # The host loop wraps each round's fold+sum in a `zorch.sumcheck.round` marker;
-# Fiat-Shamir stays the separate `zorch.poseidon2` composite the transcript emits
+# Fiat-Shamir stays the separate `hash_frx.poseidon2` composite the transcript emits
 # between rounds. When no emitter claims the marker (CPU, or a pre-#327 pin), the
 # `lax.composite` decomposition runs inline, so the marked path is byte-identical
 # to the eager body. All five round bodies are marked: first (round 0, jagged),

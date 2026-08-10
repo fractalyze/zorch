@@ -563,7 +563,7 @@ def _absorb_chain(
 ) -> Array:
     """Absorb `blocks` (`(num_blocks, rate)`) into `sponge` (`(width,)`) as one
     `zorch.absorb_chain` region, generic over the permutation via its
-    `fused_region_spec` (the `zorch.sponge_hash` pattern): the ABI operands and
+    `fused_region_spec` (the `hash_frx.sponge_hash` pattern): the ABI operands and
     the `permutation`-discriminated attrs come from the spec, and the
     decomposition rebuilds a const-free permute from those operands so a
     `lax.composite` can't lift the constants and derail the ABI. Blocks at
@@ -743,7 +743,7 @@ def _observe_and_sample_body(
 # ============================================================================
 # Device-FS Fiat-Shamir fusion marker (`zorch.duplex_fs`)
 #
-# One absorb+squeeze hop otherwise scatters ~9 GPU kernels: two `zorch.poseidon2`
+# One absorb+squeeze hop otherwise scatters ~9 GPU kernels: two `hash_frx.poseidon2`
 # permute composites plus ~7 unfused loop/input fusions for the duplex buffer glue
 # (rate-block merge, position select, output extraction). This marker wraps the
 # whole hop so a vendor fuses it into one register-resident kernel -- fusion by

@@ -36,7 +36,7 @@ from zorch.testkit.koalabear16 import (
 def _non_standard_perm() -> Poseidon2:
     """A Poseidon2 whose external matrix is NOT the standard M4-circulant, so its
     permute carries only the generic fusion marker (`has_dedicated_fusion` False)
-    rather than the dedicated `zorch.poseidon2` one."""
+    rather than the dedicated `hash_frx.poseidon2` one."""
     params = koalabear16_params()
     perturbed = default_external_matrix(16, F).at[0, 0].add(fnp.ones((), F))
     return Poseidon2(dataclasses.replace(params, external_matrix=perturbed))

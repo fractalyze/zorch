@@ -18,8 +18,8 @@ root; the strided levels below are not stored — a verifier recomputes them by
 re-hashing the opened rows. ``rows_per_query = 1`` adds no strided level and is
 exactly the plain binary tree (`zorch.commit.merkle.MerkleTree`, arity 2).
 
-Like `MerkleTree`, the leaf hash lowers to a `zorch.sponge_hash` marker
-and each fold layer's `compress` to a `zorch.poseidon2` marker, so the strided
+Like `MerkleTree`, the leaf hash lowers to a `hash_frx.sponge_hash` marker
+and each fold layer's `compress` to a `hash_frx.poseidon2` marker, so the strided
 tree commits by its plain vmap/fold body.
 
 This carries the prover-side commitment and opening accessors plus the

@@ -17,14 +17,14 @@ reached through a context object.
 | I/O                    | field elements (`Array`); `observe` bitcast-flattens to the base field                        | opaque `bytes`; the consumer serializes its own field↔bytes                                | field elements (`Array`); the byte surface, made scan-threadable                   |
 | Substrate              | **device**: `observe`/`sample` are device ops, threadable through `@jit` / a `lax.scan` carry | **host**: a `bytes` buffer; the injected `ByteHash.digest` runs on `hashlib` or the marker | **device**: a streaming `Sha256State` pytree — threads `@jit` / a `lax.scan` carry |
 | Squeeze                | sponge rate read                                                                              | `HASH(buffer ‖ ctr)` counter stream (a hash is not an XOF) + re-absorb                     | same `SHA256(buffer ‖ ctr)` counter stream over the streaming midstate             |
-| `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `zorch.sha256` marker)                |
+| `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `hash_frx.sha256` marker)                |
 | Seam                   | `Transcript` (field-element, canonical-bit PoW)                                               | `ByteTranscript` (byte, leading-zero-bit nonce PoW)                                        | `Transcript` (field-element)                                                       |
 
 The byte transcript is **one class parameterized by a `ByteHash`**: the same
 Merlin-over-hash framing (op-tagged absorb, `HASH(buffer ‖ ctr)` counter-squeeze,
 re-absorb) over an injected hash. "Host vs device" is not two classes but *which
 `ByteHash`* you inject — `HostSha256()` for the host chain, `Sha256()` for the
-`zorch.sha256` marker — and `has_dedicated_fusion` delegates to it, exactly as
+`hash_frx.sha256` marker — and `has_dedicated_fusion` delegates to it, exactly as
 `DuplexSponge` delegates to its `Permutation`. Both injections are byte-identical.
 
 `Sha256FieldTranscript` is the **scan-threadable** surface: it keeps SHA-256's
@@ -52,7 +52,7 @@ Two of the three transcripts are device and **meet it**:
   device carry over the streaming `Sha256State`, so the whole Fiat-Shamir round
   loop folds into one device program with **no per-round host sync** — what a
   cuda-graph-unified scheme (e.g. flock) needs. The SHA-256 compression lowers via
-  the `zorch.sha256` marker. Two honest caveats: there is no single whole-hop
+  the `hash_frx.sha256` marker. Two honest caveats: there is no single whole-hop
   fusion marker yet (it leans on the per-compression marker + XLA), and per-hash
   SHA-256 is a worse GPU fit than Poseidon2's field mults — the win is keeping FS
   *in* the graph, not raw hash throughput.

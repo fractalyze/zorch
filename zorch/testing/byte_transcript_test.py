@@ -179,7 +179,7 @@ class ByteTranscriptTest(absltest.TestCase):
 
     # ---- the marker (device) substrate is byte-identical to host hashlib ----
     def test_device_substrate_matches_host(self) -> None:
-        # `ByteHashTranscript` over the `zorch.sha256` marker reproduces the host
+        # `ByteHashTranscript` over the `hash_frx.sha256` marker reproduces the host
         # `hashlib` chain exactly — the collapse's core invariant. Exercises every
         # framing branch plus a PoW grind.
         def run(byte_hash: ByteHash) -> tuple[bytes, bytes, bytes, int]:
