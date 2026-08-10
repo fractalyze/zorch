@@ -347,14 +347,15 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
     def test_matrix_wider_than_i64_falls_back_to_generic(self) -> None:
         # A matrix entry above 2^63 can only ride the attributes as a u64
         # bit-cast, and that wide range is gated on
-        # `_WIDE_ATTR_EMITTER_AVAILABLE` (off until the pinned plugin carries
-        # the sponge-hash sparse arm) — so the instance marks its region with
-        # the generic "zorch.fused_region" name instead; the normal-form body
+        # `_WIDE_ATTR_EMITTER_AVAILABLE` — with the gate off (a plugin without
+        # the sponge-hash sparse arm) the instance marks its region with the
+        # generic "zorch.fused_region" name instead; the normal-form body
         # still fuses. Constructing it must not raise: the gate establishes
         # representability before `_rows_to_i64` builds an attribute, where an
         # out-of-range entry is an OverflowError. The dedicated (default) path
         # is covered by SparsePoseidonDedicatedMarkerTest.
-        perm = SparsePoseidon(_wide_field_params())
+        with mock.patch.object(sparse_mod, "_WIDE_ATTR_EMITTER_AVAILABLE", False):
+            perm = SparsePoseidon(_wide_field_params())
         self.assertFalse(perm.has_dedicated_fusion)
         self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
         txt = (
@@ -371,18 +372,18 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
     def test_wide_matrix_takes_dedicated_marker_when_emitter_available(
         self,
     ) -> None:
-        # With the wide-attr gate flipped, the same Goldilocks instance selects
-        # the dedicated marker, and the >= 2^63 entry encodes as the negative
-        # i64 carrying identical bits (the emitter reinterprets as uint64).
-        # Attribute-level only: compiling the marker needs the sponge-arm
-        # plugin the gate stages.
-        with mock.patch.object(sparse_mod, "_WIDE_ATTR_EMITTER_AVAILABLE", True):
-            perm = SparsePoseidon(_wide_field_params())
+        # With the wide-attr gate on (the default since the sponge-arm plugin
+        # pin), the same Goldilocks instance selects the dedicated marker, and
+        # the >= 2^63 entry encodes as the negative i64 carrying identical
+        # bits (the emitter reinterprets as uint64).
+        perm = SparsePoseidon(_wide_field_params())
         self.assertTrue(perm.has_dedicated_fusion)
-        self.assertEqual(perm.fused_region_version, POSEIDON_SPARSE_MARKER_VERSION)
-        attrs, version = sparse_mod._marker_attrs(perm)
-        self.assertEqual(version, POSEIDON_SPARSE_MARKER_VERSION)
-        mds = attrs["mds"]
+        self.assertEqual(
+            perm.fused_region_marker,
+            (POSEIDON_SPARSE_MARKER, POSEIDON_SPARSE_MARKER_VERSION),
+        )
+        attrs = sparse_mod._marker_attrs(perm)
+        mds = np.asarray(attrs["mds"])
         self.assertEqual(mds.dtype, np.int64)
         self.assertLess(int(mds[0]), 0)
         self.assertEqual(int(mds.view(np.uint64)[0]), _GOLDILOCKS_P - 1)
@@ -394,13 +395,12 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         # (caught live on the first Goldilocks dedicated permute). The marker
         # and its 6-operand ABI must survive `_scale`'s in-field constant
         # assembly (nothing lifted).
-        with mock.patch.object(sparse_mod, "_WIDE_ATTR_EMITTER_AVAILABLE", True):
-            perm = SparsePoseidon(_wide_field_params())
-            txt = (
-                frx.jit(perm.permute)
-                .lower(fnp.arange(_WIDTH).astype(goldilocks_mont))
-                .as_text()
-            )
+        perm = SparsePoseidon(_wide_field_params())
+        txt = (
+            frx.jit(perm.permute)
+            .lower(fnp.arange(_WIDTH).astype(goldilocks_mont))
+            .as_text()
+        )
         composite_line = next(
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )

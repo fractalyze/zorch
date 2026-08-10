@@ -62,10 +62,10 @@ if TYPE_CHECKING:
 POSEIDON_SPARSE_MARKER = "zorch.sparse_poseidon"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
-# a future contract change can be staged without renaming the marker. Bump to 2
-# when `_WIDE_ATTR_EMITTER_AVAILABLE` flips: that is the point wide (bit-cast)
-# matrix attributes start flowing.
-POSEIDON_SPARSE_MARKER_VERSION = 1
+# a future contract change can be staged without renaming the marker. Version 2
+# is the point wide (bit-cast) matrix attributes started flowing
+# (`_WIDE_ATTR_EMITTER_AVAILABLE`).
+POSEIDON_SPARSE_MARKER_VERSION = 2
 
 # Bounds of the dedicated marker's int64 matrix attributes. Values below
 # `_I64_MAX` ride as literal ints; values up to `_U64_MAX` ride as a u64
@@ -79,9 +79,10 @@ _U64_MAX = 2**64 - 1
 # END — the standalone permute always did (the emitter reads the attrs as
 # uint64), but `Sponge.hash` emits a `zorch.sponge_hash` marker for any
 # dedicated permutation, and a plugin without the sponge-hash sparse arm fails
-# that compile outright. Flip together with the frx pin that carries the arm
+# that compile outright. True since the 0.10.1.dev20260810011544 pin carries
+# the sponge-hash sparse arm (xla#440); flipped together with that pin
 # (mirrors the `#523` staging of the emitter itself).
-_WIDE_ATTR_EMITTER_AVAILABLE = False
+_WIDE_ATTR_EMITTER_AVAILABLE = True
 
 
 class SparsePoseidon:
@@ -155,13 +156,13 @@ class SparsePoseidon:
         # params must not collide in the permute jit cache.
         if not isinstance(other, SparsePoseidon):
             return NotImplemented
-        return (self._p, self.fused_region_name) == (
+        return (self._p, self.fused_region_marker) == (
             other._p,
-            other.fused_region_name,
+            other.fused_region_marker,
         )
 
     def __hash__(self) -> int:
-        return hash((self._p, self.fused_region_name))
+        return hash((self._p, self.fused_region_marker))
 
     def permute(self, state: Array) -> Array:
         if state.ndim != 1 or state.shape[0] != self.width:
