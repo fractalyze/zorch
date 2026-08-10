@@ -15,7 +15,7 @@ ______________________________________________________________________
 | Question                                                                                    | Where                                   |
 | ------------------------------------------------------------------------------------------- | --------------------------------------- |
 | Polynomial primitives — `eq`, multilinear eval/fold, and the field-dtype gotchas            | [`poly.md`](blocks/poly.md)             |
-| Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2               | [`hash.md`](blocks/hash.md)             |
+| Symmetric primitives — the `Permutation` seam, Sponge, Compression, Poseidon2               | [hash-frx](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md) (separate repo)        |
 | Fiat-Shamir transcripts — the device-algebraic vs host-byte (SHA-256) taxonomy              | [`transcript.md`](blocks/transcript.md) |
 | Merkle commitment — binary tree on Sponge + Compression                                     | [`commit.md`](blocks/commit.md)         |
 | Linear codes — `LinearCode` seam, Reed-Solomon encode + FRI fold on the native NTT          | [`coding.md`](blocks/coding.md)         |

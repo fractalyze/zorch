@@ -18,8 +18,8 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from frx import Array
+from hash_frx.fusion import fused_region
 
-from zorch.fusion import fused_region
 from zorch.pcs.jagged.dense import log_area_tier
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.utils.bits import log2_ceil_usize

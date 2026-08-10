@@ -15,7 +15,7 @@ from absl.testing import absltest, parameterized
 from frx import tree_util
 
 from zorch import transcript as transcript_mod
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import (
     DuplexState,

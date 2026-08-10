@@ -10,9 +10,9 @@ tensor; an unrecognizing compiler inlines the decomposition to the identical
 result.
 
 Agnostic: `eval_fn` is opaque — its body belongs to the caller — and the marker
-and fold carry no proving-scheme or zkVM knowledge. Sibling of
-`zorch.fusion::fused_region`, and shares the `lax.composite` emission in
-`zorch._composite.composite`.
+and fold carry no proving-scheme or zkVM knowledge. The emission goes through
+`hash_frx.fusion::fused_region`, which owns the `lax.composite` seam; this
+module only supplies the name and the decomposition.
 
 The RLC is emitted as an unrolled fold (`acc += alpha_k * C_k`), not `fnp.dot`
 / `@`: a reduction in the marked body would split the region under the
@@ -39,8 +39,7 @@ from collections.abc import Callable
 
 import frx.numpy as fnp
 from frx import Array, lax
-
-from zorch._composite import composite
+from hash_frx.fusion import fused_region
 
 CONSTRAINT_EVAL_MARKER = "zorch.constraint_eval"
 
@@ -435,7 +434,7 @@ def constraint_eval(
             if acc.ndim == 0:
                 raise ValueError("live_width needs a result with a leading row axis")
             # lax.select, not fnp.where — the single-kernel body rule; see
-            # zorch/fusion.py's module docstring.
+            # hash_frx.fusion's module docstring.
             # The mask comes LAST — select(rows < live_width, rlc + dot, 0) —
             # so the column term's dead rows zero out too. A window into a
             # compact-packed shared buffer straddles the NEXT chip's live rows,
@@ -503,10 +502,10 @@ def constraint_eval(
     # conditional within a single call. The no-aux branch keeps the attribute
     # off entirely, which the emitter routes on.
     if not aux_operands:
-        return composite(decomposition, *operands, name=name, **attrs)
+        return fused_region(decomposition, *operands, name=name, **attrs)
     # Trailing operands at dynamic indices; the emitter finds them by these.
     aux_operand_idxs = list(range(len(operands), len(operands) + n_aux))
     operands += aux_operands
-    return composite(
+    return fused_region(
         decomposition, *operands, name=name, aux_operand_idxs=aux_operand_idxs, **attrs
     )

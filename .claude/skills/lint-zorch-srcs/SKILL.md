@@ -132,7 +132,7 @@ Flag a subsystem that ships source but no tests.
   the check flags a *second* reduction or a gather. A genuinely batched single
   reduction is not a split.
 - **Helper-hidden ops escape the body grep (S3).** The op scan is lexical — the
-  fused body only, not the helpers it calls (`apply_matrix`, `_combine`,
-  `summand_evals`). A split factored into a helper won't match. Helpers
-  self-enforce element-wise via `linear.py`'s no-`dot`/`reduce`/`gather`
-  contract; a periodic manual check of them is the backstop.
+  fused body only, not the helpers it calls (`_combine`, `summand_evals`). A
+  split factored into a helper won't match. Helpers self-enforce element-wise via
+  the same no-`dot`/`reduce`/`gather` contract the fused bodies are held to; a
+  periodic manual check of them is the backstop.

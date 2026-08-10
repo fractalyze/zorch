@@ -19,7 +19,6 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:challenge",
-        "//zorch:fusion",
         "//zorch:prove",
         "//zorch:round",
         "//zorch:stage",

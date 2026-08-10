@@ -9,8 +9,8 @@ from functools import partial
 
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.fusion import fused_region
 
-from zorch._composite import composite
 from zorch.logup_gkr._jagged_rounds import (
     _bind_planes,
     _fix_last,
@@ -29,7 +29,7 @@ from zorch.sumcheck.prover import (
 
 # --- FS-less compute-only round composites -----------------------------------
 # The host loop wraps each round's fold+sum in a `zorch.sumcheck.round` marker;
-# Fiat-Shamir stays the separate `zorch.poseidon2` composite the transcript emits
+# Fiat-Shamir stays the separate `hash_frx.poseidon2` composite the transcript emits
 # between rounds. When no emitter claims the marker (CPU, or a pre-#327 pin), the
 # `lax.composite` decomposition runs inline, so the marked path is byte-identical
 # to the eager body. All five round bodies are marked: first (round 0, jagged),
@@ -98,7 +98,7 @@ def _composite_fix_and_sum_dense(
     live to `2 * live[0]`. Byte-identical to `_fix_and_sum_int` on the live
     prefix whenever the marker is unclaimed (`lax.composite` runs the
     decomposition)."""
-    return composite(
+    return fused_region(
         _round_composite_dense_decomp,
         planes,
         eq_int,
@@ -192,7 +192,7 @@ def _composite_fix_and_sum_row(
     prefixes whenever the marker is unclaimed (`lax.composite` runs the
     decomposition)."""
     decomp = partial(_round_composite_row_decomp, out_pairs=out_pairs)
-    return composite(
+    return fused_region(
         decomp,
         planes,
         eq_row,
@@ -234,7 +234,7 @@ def _composite_fix_last(
     `_fix_last` so `_finalize_layer` can select it in place. Byte-identical to
     `_fix_last` whenever the marker is unclaimed (`lax.composite` runs the
     decomposition)."""
-    return composite(
+    return fused_region(
         _round_composite_final_decomp,
         planes,
         alpha,
@@ -298,7 +298,7 @@ def _composite_fix_and_sum_boundary(
     from outside the marker (not a composite output). Byte-identical to
     `_fix_and_sum_boundary` on the live prefix whenever the marker is unclaimed
     (`lax.composite` runs the decomposition)."""
-    poly, planes = composite(
+    poly, planes = fused_region(
         _round_composite_boundary_decomp,
         planes,
         eq_int,
@@ -377,7 +377,7 @@ def _composite_sum_as_poly_row(
     Byte-identical to `_round_poly_row` on the live prefixes whenever the
     marker is unclaimed (`lax.composite` runs the decomposition)."""
     decomp = partial(_round_composite_first_row_decomp, out_pairs=out_pairs)
-    return composite(
+    return fused_region(
         decomp,
         planes,
         eq_row,

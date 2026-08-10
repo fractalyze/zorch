@@ -9,11 +9,9 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
-        "//zorch:fusion",
-        "//zorch/hash:compression",
-        "//zorch/hash:sponge",
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )
 
@@ -23,11 +21,9 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":merkle",
-        "//zorch:fusion",
-        "//zorch/hash:compression",
-        "//zorch/hash:sponge",
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )
 
@@ -37,10 +33,9 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch/commit:merkle",
-        "//zorch/hash:compression",
-        "//zorch/hash:sponge",
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ],
 )

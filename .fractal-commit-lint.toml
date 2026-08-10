@@ -57,7 +57,6 @@ round = ["zorch/round.py", "zorch/testing/round_test.py"]
 scan_body = ["zorch/scan_body.py"]
 prove = ["zorch/prove.py", "zorch/testing/prove_test.py"]
 verify = ["zorch/verify.py", "zorch/testing/verify_test.py"]
-fusion = ["zorch/fusion.py", "zorch/testing/fusion_test.py"]
 grind = ["zorch/grind.py", "zorch/testing/grind_test.py"]
 transcript = [
   "zorch/transcript.py",

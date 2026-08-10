@@ -1,16 +1,18 @@
 """koalabear-16 Merkle stack fixture — TEST only.
 
 The Poseidon2(koalabear-16) -> Sponge -> Compression -> MerkleTree wiring used by
-merkle_test. Lives under commit/ rather than poseidon2/testing so the poseidon2
-fixture stays free of a back-dependency on the commit layer.
+merkle_test. Lives under commit/ rather than next to the permutation fixture in
+`zorch/testkit/koalabear16.py`, so that fixture stays free of a back-dependency
+on the commit layer.
 """
 
 from __future__ import annotations
 
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.sponge import Sponge, SpongeParams
+
 from zorch.commit.merkle import MerkleTree
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.hash.sponge import Sponge, SpongeParams
+from zorch.testkit.koalabear16 import koalabear16_perm
 
 
 def koalabear16_merkle(

@@ -16,15 +16,15 @@ so the arity-2 layout is exactly the historical one.
 
 Each layer is one `vmap` over its nodes: an internal layer batches one
 `compress` = one permute; the leaf layer batches one `hash`, which lowers as one
-`zorch.sponge_hash` region per leaf (the whole rate-block absorb fused
+`hash_frx.sponge_hash` region per leaf (the whole rate-block absorb fused
 into a single register-resident kernel, not a per-block permute chain). Those
 collapse to one GPU kernel per node-batch once the permutation is captured to a
 kernel (the poseidon2 fusion path, #25). The tree folds the layers one
 right-sized level at a time (`_fold_to_root`) — see `_build` for why this beats a
 full-width `scan`.
 
-`commit` lowers each leaf hash to a `zorch.sponge_hash` marker and each
-fold layer's `compress` to a `zorch.poseidon2` permute marker, which the vendor
+`commit` lowers each leaf hash to a `hash_frx.sponge_hash` marker and each
+fold layer's `compress` to a `hash_frx.poseidon2` permute marker, which the vendor
 lowers to kernels directly. Committing by this plain vmap/fold body keeps the fast
 per-permute kernels and lowers under symbolic dims for recompile-free export.
 """
@@ -37,9 +37,9 @@ from functools import partial
 import frx
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.compression import Compression
+from hash_frx.sponge import Sponge
 
-from zorch.hash.compression import Compression
-from zorch.hash.sponge import Sponge
 from zorch.utils.bits import is_power_of_two
 
 

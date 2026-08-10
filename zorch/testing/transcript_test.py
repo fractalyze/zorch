@@ -10,14 +10,14 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 from frx import Array, lax, tree_util
+from hash_frx.poseidon2.poseidon2 import POSEIDON2_MARKER
 
-from zorch.hash.poseidon2.poseidon2 import POSEIDON2_MARKER
-from zorch.hash.poseidon2.testing.koalabear16 import (
+from zorch.testkit.fusion import assert_marker_recognized, custom_fusion_names
+from zorch.testkit.jit_cache import assert_single_trace
+from zorch.testkit.koalabear16 import (
     koalabear16_perm,
     koalabear16_scaled_perm,
 )
-from zorch.testkit.fusion import assert_marker_recognized, custom_fusion_names
-from zorch.testkit.jit_cache import assert_single_trace
 from zorch.testkit.random_field import rand_field
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import (

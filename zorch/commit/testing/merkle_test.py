@@ -9,34 +9,37 @@ vectors are added in the golden-vector slice.
 from __future__ import annotations
 
 import dataclasses
+import functools
 
 import frx
 import frx.numpy as fnp
+import hash_frx.sponge
 from absl.testing import absltest
 from frx import Array
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.poseidon2.params import default_external_matrix
+from hash_frx.poseidon2.poseidon2 import (
+    POSEIDON2_MARKER,
+    Poseidon2,
+)
+from hash_frx.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 from zk_dtypes import goldilocks_mont
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.params import default_external_matrix
-from zorch.hash.poseidon2.poseidon2 import (
-    POSEIDON2_MARKER,
-    Poseidon2,
-)
-from zorch.hash.poseidon2.testing.koalabear16 import (
+from zorch.testkit.jit_cache import assert_single_trace
+from zorch.testkit.koalabear16 import (
     KOALABEAR16_POSEIDON2_ATTRS,
     koalabear16_params,
     koalabear16_perm,
 )
-from zorch.hash.sponge import SPONGE_HASH_MARKER, Sponge, SpongeParams
 
 
 def _non_standard_perm() -> Poseidon2:
     """A Poseidon2 whose external matrix is NOT the standard M4-circulant, so its
     permute carries only the generic fusion marker (`has_dedicated_fusion` False)
-    rather than the dedicated `zorch.poseidon2` one."""
+    rather than the dedicated `hash_frx.poseidon2` one."""
     params = koalabear16_params()
     perturbed = default_external_matrix(16, F).at[0, 0].add(fnp.ones((), F))
     return Poseidon2(dataclasses.replace(params, external_matrix=perturbed))
@@ -82,6 +85,20 @@ class MerkleTreeTest(absltest.TestCase):
         _, layers = tree.commit(matrix)
         for i in range(4):
             self.assertTrue(bool(fnp.array_equal(layers[0][i], sponge.hash(matrix[i]))))
+
+    def test_leaf_hash_reuses_one_trace_across_instances(self) -> None:
+        # The zone lives in hash-frx now, but the pin that decides which version
+        # of it zorch gets is a zorch-side action. Losing it is invisible to
+        # every other gate here — byte-identity holds and the lowered module is
+        # unchanged — so a trace count is the only detector, and it belongs on
+        # this side of the pin. It has been lost once already (hash-frx#108).
+        row = fnp.arange(8, dtype=F)
+        self.assertIsNot(koalabear16_merkle()[0], koalabear16_merkle()[0])
+        assert_single_trace(
+            self,
+            hash_frx.sponge._hash_body,
+            [functools.partial(koalabear16_merkle()[0].hash, row) for _ in (0, 1)],
+        )
 
     def test_open_verify_roundtrip_reconstructs_root(self) -> None:
         _, _, tree = koalabear16_merkle()

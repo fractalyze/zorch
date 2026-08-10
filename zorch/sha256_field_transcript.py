@@ -41,6 +41,13 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
+from hash_frx.fusion import fused_region
+from hash_frx.sha256 import (
+    Sha256State,
+    sha256_stream_absorb,
+    sha256_stream_finalize,
+    sha256_stream_init,
+)
 
 from zorch.byte_transcript import (
     KIND_SCALAR,
@@ -52,14 +59,7 @@ from zorch.byte_transcript import (
     OP_SQUEEZE,
     _validate_pow_bits,
 )
-from zorch.fusion import fused_region
 from zorch.grind import GRIND_WINDOW, grind_search
-from zorch.hash.sha256 import (
-    Sha256State,
-    sha256_stream_absorb,
-    sha256_stream_finalize,
-    sha256_stream_init,
-)
 
 # SHA-256 digest width — the PoW state digest and every squeeze block are 32 B.
 _DIGEST_BYTES = 32
@@ -82,13 +82,13 @@ def _u32_le_bytes(values: Array) -> Array:
 
 
 # ============================================================================
-# Squeeze-hop fusion marker. `zorch.sha256` marks the COMPRESSION; this marks
+# Squeeze-hop fusion marker. `hash_frx.sha256` marks the COMPRESSION; this marks
 # the whole squeeze around it — the same layering `zorch.duplex_fs` adds over
-# `zorch.poseidon2`, for the same reason.
+# `hash_frx.poseidon2`, for the same reason.
 #
 # A squeeze is `absorb(framing) -> counter-squeeze -> re-absorb`. The streaming
 # state is branchless, so each absorb compresses speculatively and selects and
-# finalize emits both padding candidates: four `zorch.sha256` regions, each a
+# finalize emits both padding candidates: four `hash_frx.sha256` regions, each a
 # fusion barrier, so the scalar bookkeeping between them cannot merge either.
 # That is ~14 GPU launches per `sample_scalar`, and on a latency-bound prove the
 # cost is the launch count, not the arithmetic.
@@ -186,7 +186,7 @@ class Sha256FieldTranscript:
 
     @property
     def has_dedicated_fusion(self) -> bool:
-        # The COMPRESSION lowers to a GPU kernel via the zorch.sha256 marker.
+        # The COMPRESSION lowers to a GPU kernel via the hash_frx.sha256 marker.
         # Says nothing about the hop above it: a squeeze also carries the
         # zorch.sha256_squeeze marker, which only fuses where a vendor emits it.
         return True

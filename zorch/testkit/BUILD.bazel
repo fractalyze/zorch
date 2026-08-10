@@ -27,6 +27,23 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
 )
 
+# The one concrete permutation zorch's own tests run the agnostic engine
+# against. Lives here because the hash-frx wheel ships no test tree.
+py_library(
+    name = "koalabear16",
+    srcs = [
+        "__init__.py",
+        "koalabear16.py",
+    ],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        requirement("frx"),
+        requirement("hash_frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ],
+)
+
 # Public: consumers' IOP tests reuse the same cheap test transcript as
 # zorch's own tests (promoted per-target, like logup_gkr/testing).
 py_library(
@@ -34,8 +51,8 @@ py_library(
     srcs = ["transcript.py"],
     visibility = ["//visibility:public"],
     deps = [
-        "//zorch:fusion",
         "//zorch:transcript",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )

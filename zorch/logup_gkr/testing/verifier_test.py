@@ -17,7 +17,6 @@ import zk_dtypes
 from absl.testing import absltest
 
 from zorch.challenge import ChallengePolicy
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.logup_gkr.circuit import (
     GkrLayer,
     _interleave,
@@ -37,6 +36,7 @@ from zorch.logup_gkr.testing import (
     verify_gkr_with_transcript,
 )
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.transcript import cheap_transcript
 from zorch.transcript import DuplexTranscript
 

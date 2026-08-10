@@ -141,11 +141,11 @@ py_test(
     srcs = ["spartan_ligerito_test.py"],
     deps = [
         "//zorch:transcript",
-        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/pcs/ligerito",
         "//zorch/spartan",
         "//zorch/spartan/testing",
         "//zorch/spartan/testing:ligerito_pcs",
+        "//zorch/testkit:koalabear16",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),

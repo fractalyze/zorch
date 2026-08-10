@@ -5,8 +5,8 @@ import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.testkit.fusion import assert_fusion_ready, assert_marker_recognized
+from zorch.testkit.koalabear16 import koalabear16_perm
 
 KB = zk_dtypes.koalabear_mont
 

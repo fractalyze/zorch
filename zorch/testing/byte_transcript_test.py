@@ -11,6 +11,8 @@ from __future__ import annotations
 import hashlib
 
 from absl.testing import absltest
+from hash_frx.byte_hash import ByteHash
+from hash_frx.sha256 import HostSha256, Sha256
 
 from zorch.byte_transcript import (
     KIND_SCALAR,
@@ -22,8 +24,6 @@ from zorch.byte_transcript import (
     OP_SQUEEZE,
     ByteHashTranscript,
 )
-from zorch.hash.byte_hash import ByteHash
-from zorch.hash.sha256 import HostSha256, Sha256
 
 
 def _new(domain: bytes) -> ByteHashTranscript:
@@ -179,7 +179,7 @@ class ByteTranscriptTest(absltest.TestCase):
 
     # ---- the marker (device) substrate is byte-identical to host hashlib ----
     def test_device_substrate_matches_host(self) -> None:
-        # `ByteHashTranscript` over the `zorch.sha256` marker reproduces the host
+        # `ByteHashTranscript` over the `hash_frx.sha256` marker reproduces the host
         # `hashlib` chain exactly — the collapse's core invariant. Exercises every
         # framing branch plus a PoW grind.
         def run(byte_hash: ByteHash) -> tuple[bytes, bytes, bytes, int]:

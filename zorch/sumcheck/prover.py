@@ -258,7 +258,7 @@ class SumcheckSummand(Protocol):
 
 # The FS-less compute-only round marker: the jagged LogUp-GKR host
 # loop wraps each round's fold+sum (no Fiat-Shamir) in this composite, while the
-# separate `zorch.poseidon2` marker carries FS between rounds. The composite
+# separate `hash_frx.poseidon2` marker carries FS between rounds. The composite
 # attributes the recognizing emitter parses:
 #   phase   -- "first" (round 0, no fold), "mid" (fold-by-alpha then sum),
 #              "boundary" (the row->interaction handoff: fold-by-alpha then sum

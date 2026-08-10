@@ -14,12 +14,12 @@ from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.fusion import FUSED_REGION_MARKER
 
-from zorch.fusion import FUSED_REGION_MARKER
 from zorch.transcript import DuplexTranscript
 
 if TYPE_CHECKING:
-    from zorch.hash.permutation import Permutation
+    from hash_frx.permutation import Permutation
 
 
 class CheapPermutation:

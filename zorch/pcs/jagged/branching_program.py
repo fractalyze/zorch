@@ -19,8 +19,8 @@ from dataclasses import dataclass
 import frx
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.fusion import fused_region
 
-from zorch.fusion import fused_region
 from zorch.poly.eq import expand_eq_to_hypercube
 
 NUM_MEMORY_STATES = 4  # (carry, comparison_so_far)

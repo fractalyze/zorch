@@ -18,10 +18,10 @@ from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.ligero.prover import LigeroProver, LigeroProverData
 from zorch.pcs.ligero.verifier import LigeroVerifier
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 

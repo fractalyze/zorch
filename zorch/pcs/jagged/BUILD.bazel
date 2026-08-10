@@ -11,10 +11,10 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":dense",
-        "//zorch:fusion",
         "//zorch/poly",
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("numpy"),
     ],
 )

@@ -18,9 +18,8 @@ py_test(
     srcs = ["byte_transcript_test.py"],
     deps = [
         "//zorch:byte_transcript",
-        "//zorch/hash:byte_hash",
-        "//zorch/hash:sha256",
         requirement("absl_py"),
+        requirement("hash_frx"),
     ] + GPU_PLUGIN_DEPS,
 )
 
@@ -34,36 +33,11 @@ py_test(
         "//zorch:byte_transcript",
         "//zorch:prove",
         "//zorch:sha256_field_transcript",
-        "//zorch/hash:sha256",
         "//zorch/sumcheck",
         requirement("absl_py"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("numpy"),
-        requirement("zk_dtypes"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "_composite_test",
-    size = "small",
-    srcs = ["_composite_test.py"],
-    deps = [
-        "//zorch:_composite",
-        requirement("absl_py"),
-        requirement("frx"),
-    ] + GPU_PLUGIN_DEPS,
-)
-
-py_test(
-    name = "fusion_test",
-    size = "small",
-    srcs = ["fusion_test.py"],
-    deps = [
-        "//zorch:_composite",
-        "//zorch:fusion",
-        "//zorch/testkit:random_field",
-        requirement("absl_py"),
-        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -73,7 +47,6 @@ py_test(
     size = "small",
     srcs = ["constraint_eval_test.py"],
     deps = [
-        "//zorch:_composite",
         "//zorch:constraint_eval",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
@@ -158,14 +131,14 @@ py_test(
     srcs = ["transcript_test.py"],
     deps = [
         "//zorch:transcript",
-        "//zorch/hash/poseidon2",
-        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/testkit:fusion",
         "//zorch/testkit:jit_cache",
+        "//zorch/testkit:koalabear16",
         "//zorch/testkit:random_field",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -180,7 +153,7 @@ py_test(
     tags = ["needs_cpu_backend"],
     deps = [
         "//zorch:transcript",
-        "//zorch/hash/poseidon2/testing:koalabear16",
+        "//zorch/testkit:koalabear16",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("frx"),
