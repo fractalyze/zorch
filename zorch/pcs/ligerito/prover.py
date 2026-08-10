@@ -116,7 +116,7 @@ def _commit(
             f"{rho} (= 2^(vars - interleave))"
         )
     matrix = witness.reshape(kappa, rho)
-    cm, _ = commit_matrix(code, tree, matrix, pre=basis.pre)
+    cm = commit_matrix(code, tree, matrix, pre=basis.pre)
     return cm
 
 

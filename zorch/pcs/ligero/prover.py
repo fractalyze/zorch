@@ -145,7 +145,7 @@ def _commit_body(
     matrix = f.reshape(rows, cols)
     # Commit the columns (each length rows): `commit_matrix` encodes along the
     # message axis, so pass `matrix.T` `[cols, rows]` as the [batch, message_len].
-    cm, _ = commit_matrix(code, tree, matrix.T)
+    cm = commit_matrix(code, tree, matrix.T)
     return cm.root, LigeroProverData(
         root=cm.root,
         matrix=matrix,

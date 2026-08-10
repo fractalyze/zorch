@@ -51,13 +51,17 @@ def commit_matrix(
     message_matrix: Array,
     *,
     pre: Callable[[Array], Array] = _identity,
-) -> tuple[CommittedMatrix, Array]:
+) -> CommittedMatrix:
     """Encode `pre(message_matrix)` (`[batch, message_len]`) along its message
     axis, reinterpret the `[batch, block_len]` codeword's rows as base-field
-    Merkle leaves `[block_len, batch*limbs]`, and commit. Returns the
-    `CommittedMatrix` plus the raw codeword (for schemes that fold it; ignore it
-    otherwise)."""
+    Merkle leaves `[block_len, batch*limbs]`, and commit.
+
+    Only the leaf orientation is returned. This used to hand back the raw
+    codeword alongside it, speculatively, "for schemes that fold it" — no such
+    scheme ever arrived and both callers discarded it. A scheme that needs the
+    codeword should encode it itself; re-add a second return only with a
+    consumer in the same change."""
     codeword = code.encode(pre(message_matrix))  # [batch, block_len]
     leaves = to_base_field(codeword.T)  # [block_len, batch*limbs]
     root, layers = tree.commit(leaves)
-    return CommittedMatrix(root, leaves, layers), codeword
+    return CommittedMatrix(root, leaves, layers)
