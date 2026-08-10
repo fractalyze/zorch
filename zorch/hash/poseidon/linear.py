@@ -13,7 +13,8 @@ Two matrix forms, by where the matrix rides:
   name-routed `fused_region`, where a closed-over array lifts to a leading operand
   and breaks the emitter's ABI (the structure rides as an int64 marker attribute
   instead). The dedicated `zorch.sparse_poseidon` emitter's reference body uses
-  these; it supports only fields whose canonical values fit an int64 literal.
+  these; entries past the int-literal staging cap are assembled in field
+  arithmetic by `_scale`, so any u64-representable field works.
 - **Field-array** (`apply_matrix` (shared), `apply_sparse_partial`) — the matrix
   stays a field array, which the generic `zorch.fused_region` marker lifts to an
   operand harmlessly (no name-routed ABI). This is the optimized-sparse variant's
@@ -27,6 +28,35 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.hash.linear import unrolled_sum
+
+# Widest canonical constant that can ride as a bare Python-int literal: without
+# x64, frx stages a plain int operand as an int32. A wider constant is
+# assembled in field arithmetic by `_scale` instead.
+_LITERAL_MAX = 2**31 - 1
+
+
+def _scale(c: int, x: Array) -> Array:
+    """`c * x` for a canonical int `c` of any width the field holds.
+
+    Below `_LITERAL_MAX` this is the plain literal multiply. A wider `c` —
+    Goldilocks canonical values reach `2^64 - 2^32` — cannot stage as an int
+    literal, and staging it as an array constant would have the composite lift
+    it to a leading operand and break the dedicated emitter's ABI. So it is
+    rebuilt in field arithmetic from 16-bit literals: Horner over base `2^16`,
+    seeded from the const-free field zero `x - x`. All intermediates are `< p`
+    reductions of the same integer, so the assembled value is exactly `c`.
+    """
+    if c <= _LITERAL_MAX:
+        return c * x
+    limbs = []  # little-endian base-2^16
+    v = c
+    while v:
+        limbs.append(v & 0xFFFF)
+        v >>= 16
+    acc = (x - x) + limbs[-1]
+    for limb in reversed(limbs[:-1]):
+        acc = acc * 0x10000 + limb
+    return acc * x
 
 
 def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Array:
@@ -51,7 +81,10 @@ def apply_dense_mds(mds_rows: tuple[tuple[int, ...], ...], state: Array) -> Arra
     # in `zorch.hash.linear` forbids, squared.
     lanes = [state[j] for j in range(w)]
     return fnp.stack(
-        [unrolled_sum([mds_rows[i][j] * lanes[j] for j in range(w)]) for i in range(w)]
+        [
+            unrolled_sum([_scale(mds_rows[i][j], lanes[j]) for j in range(w)])
+            for i in range(w)
+        ]
     )
 
 
@@ -119,12 +152,9 @@ def apply_sparse_partial_ints(
     Unlike its twin this reads `active` once per lane, against the chained-input
     rule in `zorch.hash.linear`. Broadcasting `active` to a vector first would
     hold the rule without capturing an array, but costs ~23% more traced
-    equations, and nothing chains this body at a width where that matters: the
-    int64 literals confine it to fields under 2^63, and those route to the
-    dedicated emitter, which replaces it. **That safety is incidental** — the
-    gate is about marker attribute width, not fan-out — so a field between 2^32
-    and 2^63 would put a real permutation back on this shape. Give it the
-    broadcast then.
+    equations, and nothing chains this body: every field that reaches it routes
+    to the dedicated emitter, which replaces this reference form at compile
+    time. Give it the broadcast if a consumer ever executes this shape.
     """
     w = len(dot_row)
     if len(col_vec) != w - 1:
@@ -141,7 +171,8 @@ def apply_sparse_partial_ints(
             f"width {w}"
         )
     out0 = unrolled_sum(
-        [dot_row[0] * active] + [dot_row[j] * tail[j - 1] for j in range(1, w)]
+        [_scale(dot_row[0], active)]
+        + [_scale(dot_row[j], tail[j - 1]) for j in range(1, w)]
     )
-    out_rest = fnp.stack([tail[t] + col_vec[t] * active for t in range(w - 1)])
+    out_rest = fnp.stack([tail[t] + _scale(col_vec[t], active) for t in range(w - 1)])
     return fnp.concatenate([out0[None], out_rest])

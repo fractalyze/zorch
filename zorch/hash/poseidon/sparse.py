@@ -25,9 +25,14 @@ There is also a dedicated `zorch.sparse_poseidon` name-routed marker — mirrori
 plugin) exploits the sparse structure: the schedule shape and the four matrices
 (`mds`, `transition_matrix`, and the per-round `partial_dot` / `partial_col`
 pairs) ride as int64 marker attributes, the additive round constants as operands.
-`_select_fused_region_name` gates that path on the matrices fitting those
-attributes; a field too wide for them takes the generic marker, which fuses this
-body to one kernel just the same. Either way the dedicated path's attributes and
+Canonical values in `[2**63, 2**64)` — Goldilocks, `p = 2^64 - 2^32 + 1` — ride
+those attributes as a u64 bit-cast (negative i64 bit patterns the emitter
+reinterprets); `_select_fused_region_name` gates the wide range on
+`_WIDE_ATTR_EMITTER_AVAILABLE` until the pinned plugin carries the sponge-hash
+sparse arm, since `Sponge.hash` emits a `zorch.sponge_hash` marker for any
+dedicated permutation and an older plugin hard-fails on an unknown permutation
+arm. A field wider than a u64 takes the generic marker, which fuses this body to
+one kernel just the same. Either way the dedicated path's attributes and
 reference body are exercised directly by `testing/sparse_test.py`.
 """
 
@@ -57,13 +62,26 @@ if TYPE_CHECKING:
 POSEIDON_SPARSE_MARKER = "zorch.sparse_poseidon"
 # Marker revision riding as `composite.version`. XLA recognizes the marker by
 # name + attributes and deliberately does not gate on the version; it exists so
-# a future contract change can be staged without renaming the marker.
+# a future contract change can be staged without renaming the marker. Bump to 2
+# when `_WIDE_ATTR_EMITTER_AVAILABLE` flips: that is the point wide (bit-cast)
+# matrix attributes start flowing.
 POSEIDON_SPARSE_MARKER_VERSION = 1
 
-# Bounds of the dedicated marker's int64 matrix attributes. A field whose
-# canonical values leave this range cannot ride that contract at all — see
-# `_select_fused_region_name`.
-_I64_MIN, _I64_MAX = -(2**63), 2**63 - 1
+# Bounds of the dedicated marker's int64 matrix attributes. Values below
+# `_I64_MAX` ride as literal ints; values up to `_U64_MAX` ride as a u64
+# bit-cast (a negative i64 the emitter's uint64 reinterpretation restores). A
+# field whose canonical values exceed a u64 cannot ride the contract at all —
+# see `_select_fused_region_name`.
+_I64_MAX = 2**63 - 1
+_U64_MAX = 2**64 - 1
+
+# Whether the pinned plugin accepts the wide (bit-cast) attribute range END TO
+# END — the standalone permute always did (the emitter reads the attrs as
+# uint64), but `Sponge.hash` emits a `zorch.sponge_hash` marker for any
+# dedicated permutation, and a plugin without the sponge-hash sparse arm fails
+# that compile outright. Flip together with the frx pin that carries the arm
+# (mirrors the `#523` staging of the emitter itself).
+_WIDE_ATTR_EMITTER_AVAILABLE = False
 
 
 class SparsePoseidon:
@@ -113,29 +131,37 @@ class SparsePoseidon:
         self, rows: tuple[tuple[tuple[int, ...], ...], ...]
     ) -> str:
         """The marker `permute` emits, given the four matrices as canonical-int
-        rows: the dedicated `SparsePoseidonFusion` name when every entry fits its
-        int64 attributes, else the generic one.
+        rows: the dedicated `SparsePoseidonFusion` name when every entry is
+        representable in its int64 attributes, else the generic one.
 
         Every linear layer here is a matrix of field elements (unlike Poseidon2,
-        whose one matrix attribute is the small structural M4), so a field whose
-        canonical values exceed an int64 — Goldilocks, `p = 2^64 - 2^32 + 1` — has
-        nothing those attributes can carry. Widening them is an emitter-side change
-        (a u64 bit-cast and a version bump)."""
+        whose one matrix attribute is the small structural M4). Values below 2^63
+        ride as literal ints; values in `[2^63, 2^64)` — Goldilocks,
+        `p = 2^64 - 2^32 + 1` — ride as a u64 bit-cast, gated on
+        `_WIDE_ATTR_EMITTER_AVAILABLE` (see its rationale). A wider field has
+        nothing the attributes can carry and takes the generic marker."""
         if all(_fits_i64(m) for m in rows):
+            return POSEIDON_SPARSE_MARKER
+        if _WIDE_ATTR_EMITTER_AVAILABLE and all(_fits_u64(m) for m in rows):
             return POSEIDON_SPARSE_MARKER
         return FUSED_REGION_MARKER
 
     def __eq__(self, other: object) -> bool:
-        # Value identity IS the params surface — required for the pytree-aux seat
+        # Value identity is the params surface — required for the pytree-aux seat
         # in `DuplexTranscript` (docs/reference/conventions.md "Pytree
-        # registration"). The marker name needs no seat of its own: it is a
-        # function of the params (as Poseidon2's M4 gate is).
+        # registration") — PLUS the marker name: while the wide range is staged
+        # behind `_WIDE_ATTR_EMITTER_AVAILABLE`, the marker is not a pure
+        # function of the params, and a dedicated and a generic perm on the same
+        # params must not collide in the permute jit cache.
         if not isinstance(other, SparsePoseidon):
             return NotImplemented
-        return self._p == other._p
+        return (self._p, self.fused_region_name) == (
+            other._p,
+            other.fused_region_name,
+        )
 
     def __hash__(self) -> int:
-        return hash(self._p)
+        return hash((self._p, self.fused_region_name))
 
     def permute(self, state: Array) -> Array:
         if state.ndim != 1 or state.shape[0] != self.width:
@@ -262,20 +288,28 @@ def _abi_operands(perm: "SparsePoseidon", state: Array) -> tuple[Array, ...]:
 
 
 def _fits_i64(rows: tuple[tuple[int, ...], ...]) -> bool:
-    """Whether every canonical entry is representable as an int64 marker attribute.
-    Checked before `_rows_to_i64` builds one, which would otherwise raise
-    `OverflowError: Python int too large to convert to C long` at construction."""
-    return all(_I64_MIN <= v <= _I64_MAX for row in rows for v in row)
+    """Whether every canonical entry rides the int64 marker attributes as a
+    literal (no bit-cast). Canonical values are non-negative."""
+    return all(0 <= v <= _I64_MAX for row in rows for v in row)
+
+
+def _fits_u64(rows: tuple[tuple[int, ...], ...]) -> bool:
+    """Whether every canonical entry is representable at all — as a literal or
+    as the u64 bit-cast `_rows_to_i64` encodes. Checked before it builds an
+    attribute, which would otherwise raise OverflowError at construction."""
+    return all(0 <= v <= _U64_MAX for row in rows for v in row)
 
 
 def _rows_to_i64(rows: tuple[tuple[int, ...], ...]) -> np.ndarray:
     """Canonical-int rows flattened row-major as a numpy int64 array — a numpy
     value (not a Python list) so the marker attribute lowers to a
     `dense<[..]> : tensor<Nxi64>` the recognizer parses, not an unparsed ArrayAttr.
-    Mirrors `Poseidon._poseidon_marker_attrs`' `mds`; the emitter supports only
-    fields whose canonical values fit an int64 literal, which
-    `_select_fused_region_name` has already established for a dedicated perm."""
-    return np.array(rows, dtype=np.int64).flatten()
+    Mirrors `Poseidon._poseidon_marker_attrs`' `mds`. Encoded through uint64 and
+    bit-cast to int64: identity for values below 2^63, and a value in
+    `[2^63, 2^64)` becomes the negative i64 with the same bits, which the
+    emitter's uint64 reinterpretation restores. `_select_fused_region_name` has
+    already established representability for a dedicated perm."""
+    return np.array(rows, dtype=np.uint64).flatten().view(np.int64)
 
 
 def _marker_attrs(perm: "SparsePoseidon") -> dict[str, object]:

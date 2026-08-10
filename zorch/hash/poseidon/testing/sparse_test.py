@@ -15,6 +15,7 @@ from __future__ import annotations
 import dataclasses
 from collections.abc import Sequence
 from typing import Any
+from unittest import mock
 
 import frx
 import frx.numpy as fnp
@@ -344,13 +345,15 @@ class SparsePoseidonParamsValidationTest(absltest.TestCase):
 
 class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
     def test_matrix_wider_than_i64_falls_back_to_generic(self) -> None:
-        # A matrix over a field wider than an int64 has nothing the dedicated
-        # marker's attribute contract can carry, so the instance marks its region
-        # with the generic "zorch.fused_region" name instead; the normal-form body
+        # A matrix entry above 2^63 can only ride the attributes as a u64
+        # bit-cast, and that wide range is gated on
+        # `_WIDE_ATTR_EMITTER_AVAILABLE` (off until the pinned plugin carries
+        # the sponge-hash sparse arm) — so the instance marks its region with
+        # the generic "zorch.fused_region" name instead; the normal-form body
         # still fuses. Constructing it must not raise: the gate establishes
         # representability before `_rows_to_i64` builds an attribute, where an
-        # out-of-range entry is an OverflowError. The dedicated (default) path is
-        # covered by SparsePoseidonDedicatedMarkerTest.
+        # out-of-range entry is an OverflowError. The dedicated (default) path
+        # is covered by SparsePoseidonDedicatedMarkerTest.
         perm = SparsePoseidon(_wide_field_params())
         self.assertFalse(perm.has_dedicated_fusion)
         self.assertEqual(perm.fused_region_marker, (FUSED_REGION_MARKER, 0))
@@ -364,6 +367,57 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
             ln for ln in txt.splitlines() if "stablehlo.composite" in ln
         )
         self.assertIn(f'"{FUSED_REGION_MARKER}"', composite_line)
+
+    def test_wide_matrix_takes_dedicated_marker_when_emitter_available(
+        self,
+    ) -> None:
+        # With the wide-attr gate flipped, the same Goldilocks instance selects
+        # the dedicated marker, and the >= 2^63 entry encodes as the negative
+        # i64 carrying identical bits (the emitter reinterprets as uint64).
+        # Attribute-level only: compiling the marker needs the sponge-arm
+        # plugin the gate stages.
+        with mock.patch.object(sparse_mod, "_WIDE_ATTR_EMITTER_AVAILABLE", True):
+            perm = SparsePoseidon(_wide_field_params())
+        self.assertTrue(perm.has_dedicated_fusion)
+        self.assertEqual(perm.fused_region_version, POSEIDON_SPARSE_MARKER_VERSION)
+        attrs, version = sparse_mod._marker_attrs(perm)
+        self.assertEqual(version, POSEIDON_SPARSE_MARKER_VERSION)
+        mds = attrs["mds"]
+        self.assertEqual(mds.dtype, np.int64)
+        self.assertLess(int(mds[0]), 0)
+        self.assertEqual(int(mds.view(np.uint64)[0]), _GOLDILOCKS_P - 1)
+
+    def test_wide_dedicated_permute_lowers(self) -> None:
+        # Lowering (not just attribute inspection): the wide ABI reference body
+        # must TRACE — a bare Python-int literal past the staging cap raises
+        # OverflowError at trace time, which attribute-level checks never see
+        # (caught live on the first Goldilocks dedicated permute). The marker
+        # and its 6-operand ABI must survive `_scale`'s in-field constant
+        # assembly (nothing lifted).
+        with mock.patch.object(sparse_mod, "_WIDE_ATTR_EMITTER_AVAILABLE", True):
+            perm = SparsePoseidon(_wide_field_params())
+            txt = (
+                frx.jit(perm.permute)
+                .lower(fnp.arange(_WIDTH).astype(goldilocks_mont))
+                .as_text()
+            )
+        composite_line = next(
+            ln for ln in txt.splitlines() if "stablehlo.composite" in ln
+        )
+        self.assertIn(f'"{POSEIDON_SPARSE_MARKER}"', composite_line)
+        operands = composite_line.split(f'"{POSEIDON_SPARSE_MARKER}"')[1].split("{")[0]
+        self.assertEqual(operands.count("%"), 6, composite_line)
+
+    def test_rows_to_i64_bitcasts_wide_values(self) -> None:
+        # The encoding is identity below 2^63 and a bit-cast above: round-trip
+        # through uint64 recovers every canonical value exactly.
+        rows = ((2**63, _GOLDILOCKS_P - 1), (1, 0))
+        enc = sparse_mod._rows_to_i64(rows)
+        self.assertEqual(enc.dtype, np.int64)
+        self.assertEqual(
+            [int(v) for v in enc.view(np.uint64)],
+            [2**63, _GOLDILOCKS_P - 1, 1, 0],
+        )
 
 
 class SparsePoseidonDedicatedMarkerTest(absltest.TestCase):
