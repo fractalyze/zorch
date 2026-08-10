@@ -6,6 +6,9 @@ eq(w, x) = Π_i (1 - x_i - w_i + 2·x_i·w_i); Σ_{w∈{0,1}^n} eq(w,x) = 1.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import overload
+
 import frx.numpy as fnp
 from frx import Array
 
@@ -112,9 +115,25 @@ def expand_eq_to_hypercube(x: Array, scalar: Array, *, msb: bool = False) -> Arr
     return state
 
 
+@overload
 def expand_eq_family(
-    cs: Array, *, msb: bool = False, suffix: bool = False
-) -> list[Array]:
+    cs: Array, *, msb: bool = ..., suffix: bool = ..., keep: None = ...
+) -> list[Array]: ...
+
+
+@overload
+def expand_eq_family(
+    cs: Array, *, msb: bool = ..., suffix: bool = ..., keep: Callable[[int], bool]
+) -> list[Array | None]: ...
+
+
+def expand_eq_family(
+    cs: Array,
+    *,
+    msb: bool = False,
+    suffix: bool = False,
+    keep: Callable[[int], bool] | None = None,
+) -> list[Array] | list[Array | None]:
     """The nested eq tables [eq(s₁), …, eq(sₙ)] over every prefix s_k = cs[:k]
     (`suffix=True`: every suffix s_k = cs[n-k:]), entry k-1 of shape (2ᵏ,) —
     the prefix family appends each coordinate walking forwards, the suffix
@@ -130,28 +149,69 @@ def expand_eq_family(
     eq(cs[k:]) for every i < k — so both halves recurse on half-size families
     and each large table is one write-only GF multiply per element over two
     small inputs. GF multiplication is exact, so every member stays byte-equal
-    to its chain."""
+    to its chain.
+
+    keep: optional predicate on the member index — the entries the caller
+    will read. Kept entries are always present and exact; un-kept entries
+    come back as None, and past the outer-product split their emissions are
+    skipped entirely — an un-read half recurses no further. The elision must
+    live here in the emitter: families are built eagerly in round
+    constructors (`zorch.sumcheck.eq.eq_poly`), where every emission
+    materializes, and even under jit an explicit skip keeps the contract
+    instead of leaning on compiler DCE. Below the split the chain layers are
+    each other's building blocks, so nothing can be skipped — un-kept
+    entries are only masked."""
+    n = cs.shape[0]
+    if keep is None:
+        return _expand_family(cs, msb, suffix, [True] * n)
+    sel = [keep(i) for i in range(n)]
+    family = _expand_family(cs, msb, suffix, sel)
+    return [t if s else None for t, s in zip(family, sel, strict=True)]
+
+
+def _expand_family(
+    cs: Array, msb: bool, suffix: bool, sel: list[bool]
+) -> list[Array | None]:
+    """The recursion behind `expand_eq_family`: selected ⇒ present and exact,
+    un-selected ⇒ None — except entries that exist as building blocks anyway
+    (chain layers, a forced shared factor), which the public wrapper masks,
+    keeping the contract predicate-defined rather than split-regime-defined."""
     n = cs.shape[0]
     if n < _OUTER_SPLIT_MIN:
         state = fnp.ones(1, dtype=cs.dtype)
-        tables = []
+        tables: list[Array | None] = []
         order = range(n - 1, -1, -1) if suffix else range(n)
         for j in order:
             state = expand_hypercube_step(state, cs[j], msb=msb)
             tables.append(state)
         return tables
     k = n // 2
-    head = expand_eq_family(cs[:k], msb=msb, suffix=suffix)
-    tail = expand_eq_family(cs[k:], msb=msb, suffix=suffix)
-    # The first-added half is the one every larger member shares; `msb` says
-    # which index bits it owns (msb=True places first-added coordinates at the
-    # low bits — the fast axis — msb=False at the high bits).
-    base, growth = (tail, head) if suffix else (head, tail)
+    # The first-added half (base) is the one every larger member shares. Base
+    # members keep their global indices; growth member i grows the product at
+    # global index b + i, so the halves split `sel` at b. An entirely un-read
+    # growth half recurses no further, and only a read one forces the base's
+    # largest member into existence as the shared factor.
+    base_cs, growth_cs = (cs[k:], cs[:k]) if suffix else (cs[:k], cs[k:])
+    b = n - k if suffix else k
+    if not any(sel[b:]):
+        return _expand_family(base_cs, msb, suffix, sel[:b]) + [None] * (n - b)
+    base_sel = sel[:b]
+    base_sel[b - 1] = True
+    base = _expand_family(base_cs, msb, suffix, base_sel)
+    growth = _expand_family(growth_cs, msb, suffix, sel[b:])
     shared = base[-1]
-    products = [
-        _flat_outer(g, shared) if msb else _flat_outer(shared, g) for g in growth
+    assert shared is not None  # forced selected just above
+    # `msb` says which index bits the shared half owns (msb=True places
+    # first-added coordinates at the low bits — the fast axis — msb=False at
+    # the high bits). Selected ⇒ g present; the None check only narrows.
+    return base + [
+        (
+            (_flat_outer(g, shared) if msb else _flat_outer(shared, g))
+            if s and g is not None
+            else None
+        )
+        for g, s in zip(growth, sel[b:], strict=True)
     ]
-    return base + products
 
 
 def expand_monomial_step(state: Array, coord: Array) -> Array:
