@@ -15,10 +15,10 @@ absl-py
 numpy
 # PEP 696 TypeVar defaults, which `typing` gains only in 3.13.
 typing-extensions
-frx==0.10.1.dev20260810011544
-frxlib==0.10.1.dev20260810011544
-frx-cuda12-pjrt==0.10.1.dev20260810011544
-frx-cuda12-plugin==0.10.1.dev20260810011544
+frx==0.10.1.dev20260811100738
+frxlib==0.10.1.dev20260811100738
+frx-cuda12-pjrt==0.10.1.dev20260811100738
+frx-cuda12-plugin==0.10.1.dev20260811100738
 zk-dtypes==0.0.10
 # The symmetric layer (permutations, sponges, compressions, byte hashes) and the
 # `fused_region` / `composite` marker seam they lower through. It sits BELOW
