@@ -203,6 +203,65 @@ class CompressedProductRound(
         (f0, f1), (b0, b1) = fnp.reshape(folded, (2, 2, -1))
         return fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
 
+    def _round_poly_pair(self, folded: Array) -> tuple[Array, Array]:
+        """This round's `[c_0, c_2]` plus the NEXT round's message as a
+        quadratic in this round's challenge — one pass over the state.
+
+        Quarter the state by the top two variables (this round's split bit,
+        then the next round's). Every reduction below — this message's two
+        coefficients and the next message's `[c_0', c_2']` expanded in the
+        challenge `r` that folds this round — is a product of quarter
+        combinations summed over the same quarter-length domain, so the family
+        lowers toward one multi-output reduction instead of a second pass over
+        the folded state. The identities use only ring algebra (fold is
+        `q_0 + r·(q_1 - q_0)` per quarter pair), so the deferred message is
+        EXACTLY the one `_round_poly` would compute after the fold — the char-2
+        consumers keep their bytes.
+
+        Returns `(msg, deferred)`: `msg` as `_round_poly`; `deferred` of shape
+        (2, 3), row k holding `[a, b, c]` with next-message component
+        `k = a + r·b + r²·c` (see `eval_deferred`)."""
+        if folded.shape[0] != 2:
+            raise ValueError(
+                f"compressed product round takes exactly 2 factors, got "
+                f"{folded.shape[0]}"
+            )
+        (f0, f1, f2, f3), (b0, b1, b2, b3) = fnp.reshape(folded, (2, 4, -1))
+        # This round's halves, expressed over quarters: lo = (f0|f1), hi = (f2|f3).
+        df0, df1 = f2 - f0, f3 - f1
+        db0, db1 = b2 - b0, b3 - b1
+        c0 = fnp.sum(f0 * b0) + fnp.sum(f1 * b1)
+        c2 = fnp.sum(df0 * db0) + fnp.sum(df1 * db1)
+        # Next round's state: lo' = f0 + r·df0, hi' = f1 + r·df1 (b alike).
+        # c0' = Σ lo'_f·lo'_b and c2' = Σ (hi'-lo')_f·(hi'-lo')_b, expanded in r.
+        uf, ub = f1 - f0, b1 - b0
+        vf, vb = df1 - df0, db1 - db0
+        deferred = fnp.stack(
+            [
+                fnp.stack(
+                    [
+                        fnp.sum(f0 * b0),
+                        fnp.sum(f0 * db0) + fnp.sum(df0 * b0),
+                        fnp.sum(df0 * db0),
+                    ]
+                ),
+                fnp.stack(
+                    [
+                        fnp.sum(uf * ub),
+                        fnp.sum(uf * vb) + fnp.sum(vf * ub),
+                        fnp.sum(vf * vb),
+                    ]
+                ),
+            ]
+        )
+        return fnp.stack([c0, c2]), deferred
+
+    @staticmethod
+    def eval_deferred(deferred: Array, r: Array) -> Array:
+        """The deferred next-round message at the sampled challenge: Horner on
+        the (2, 3) coefficient rows `_round_poly_pair` held back."""
+        return deferred[:, 0] + r * (deferred[:, 1] + r * deferred[:, 2])
+
     def __call__(
         self, carry: FoldingClaim, transcript: TranscriptT
     ) -> tuple[FoldingClaim, TranscriptT, Array]:

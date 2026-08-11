@@ -109,6 +109,29 @@ class CompressedProductRoundTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             prover.CompressedProductRound(challenges=_CH)._round_poly(f[None])
 
+    def test_pair_defers_the_next_message_exactly(self) -> None:
+        # The held-back quadratic at any challenge must equal what a second
+        # `_round_poly` pass over the folded state computes — the exactness the
+        # ligerito pairing relies on for its unchanged wire. Checked at several
+        # challenges over a prime field (the claim is ring algebra, not char-2).
+        rnd = prover.CompressedProductRound(challenges=_CH)
+        a = rand_field(37, (16,), KB)
+        b = rand_field(38, (16,), KB)
+        stacked = fnp.stack([a, b])
+        msg, deferred = rnd._round_poly_pair(stacked)
+        self.assertTrue(bool(fnp.all(msg == rnd._round_poly(stacked))))
+        self.assertEqual(deferred.shape, (2, 3))
+        for seed in (39, 40, 41):
+            r = rand_field(seed, (), KB)
+            want = rnd._round_poly(fold(stacked, r))
+            got = rnd.eval_deferred(deferred, r)
+            self.assertTrue(bool(fnp.all(got == want)))
+
+    def test_pair_rejects_wrong_factor_count(self) -> None:
+        f = rand_field(42, (16,), KB)
+        with self.assertRaises(ValueError):
+            prover.CompressedProductRound(challenges=_CH)._round_poly_pair(f[None])
+
 
 class FoldTest(absltest.TestCase):
     def test_split_halves_splits_contiguous_halves(self) -> None:

@@ -307,11 +307,21 @@ def _open_jit(
     if eager:
         t = emit(t, W, B)
 
+    # Pairing (eager + compressed only): every second intra-level message is
+    # held back by `_round_poly_pair` as a quadratic in the challenge between
+    # them and absorbed by `eval_deferred` — no second pass over the state, and
+    # the two folds it separated become adjacent and fuse. The transcript event
+    # sequence (observe/grind/sample order) and every message value are
+    # unchanged — the deferral is exact ring algebra — so the wire cannot move.
+    paired = round_ if eager and isinstance(round_, CompressedProductRound) else None
+
     current = initial  # M_j
     num_vars = cfg.num_vars
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck ---
+        deferred: Array | None = None
+        skip_emit = False  # the next round's message was absorbed via deferral
         for i in range(k_j):
             msg: Array | None = None  # eager: this round's is already absorbed
             if not eager:
@@ -319,11 +329,24 @@ def _open_jit(
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
+            if paired is not None and deferred is not None:
+                nxt_msg = paired.eval_deferred(deferred, r)
+                deferred = None
+                sumcheck_messages.append(nxt_msg)
+                t = chor.observe_message(t, nxt_msg)
+                skip_emit = True
             W, B = fold(fnp.stack([W, B]), r)
             if eager:
-                # The freshly folded state's — the terminal residual state's
-                # included (the verifier recomputes that one in the clear).
-                t = emit(t, W, B)
+                if skip_emit:
+                    skip_emit = False
+                elif paired is not None and i + 2 <= k_j - 1:
+                    pair_msg, deferred = paired._round_poly_pair(fnp.stack([W, B]))
+                    sumcheck_messages.append(pair_msg)
+                    t = chor.observe_message(t, pair_msg)
+                else:
+                    # The freshly folded state's — the terminal residual state's
+                    # included (the verifier recomputes that one in the clear).
+                    t = emit(t, W, B)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---
