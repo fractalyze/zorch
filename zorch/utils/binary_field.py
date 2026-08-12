@@ -32,6 +32,23 @@ _LIMB_BITS = 32
 _BIT = fnp.binary_field_t0  # F_2 = GF(2)
 _SELECT_BLOCK = 128
 
+# `frx.default_backend()` reports the CUDA backend as `"gpu"`, not `"cuda"`.
+#
+# The accelerated select-XOR paths branch on which backend, not merely on "not
+# CPU", and this comment is the one place that says why — the branches
+# themselves only note what is local to them.
+#
+# The two backends differ in *route*: CUDA reaches its kernels through Pallas
+# plus one hand kernel behind FFI, Metal through plugin custom calls only,
+# having no Pallas at all. They also differ in *coverage*, which is what makes
+# the branches asymmetric rather than a single "is accelerated" test. Metal has
+# kernels for the unbatched 128-bit `elements` reduce and for the packed-byte
+# gather; it takes the portable oracle for the batched stack, the non-128
+# widths, and the unpacked 0/1 selector matrix. Anything that is neither
+# backend takes the portable oracle throughout.
+_CUDA = "gpu"
+_METAL = "metal"
+
 BitSelectReduction = Literal["bits", "elements"]
 
 
@@ -184,17 +201,35 @@ def _bit_select_reduce_elements_ffi(selectors_l: Array, values_l: Array) -> Arra
     """Plugin custom-call lowering for the `(n,) x (n,) -> (W, L)` reduce at
     `W = 128`.
 
-    The hand CUDA kernel holds the XOR accumulator in registers while both
-    operand streams pass through shared memory — decoupling the accumulate
-    from the load stream, which the Pallas lowerings cannot express (Triton
-    has no scratch memory; Mosaic-GPU cannot partition rows across warps).
-    XOR commutes, so the result is byte-identical to
-    [`_bit_select_reduce_elements_pallas`] for any kernel grid.
+    CUDA and Metal both register a handler for this target and XLA selects by
+    platform, so this is one lowering rather than two. The call site still has
+    to name those platforms: an unregistered one raises rather than falling
+    back to the portable expression. Each hand kernel
+    holds the XOR accumulator in registers while both operand streams pass
+    through on-chip scratch — shared memory on CUDA, threadgroup memory on
+    Metal — decoupling the accumulate from the load stream, which the Pallas
+    lowerings cannot express (Triton has no scratch memory; Mosaic-GPU cannot
+    partition rows across warps). XOR commutes, so the result is byte-identical
+    to [`_bit_select_reduce_elements_pallas`] for any kernel grid.
     """
     return frx.ffi.ffi_call(
         "frx_bit_select_xor_reduce_elements",
         frx.ShapeDtypeStruct((128, 4), _LIMB),
     )(selectors_l, values_l)
+
+
+def _bit_select_packed_bytes_ffi(selectors: Array, values: Array, limbs: int) -> Array:
+    """Plugin custom-call lowering for packed-byte `(n, B/8) x (B,) -> (n, L)`.
+
+    Drop-in for [`_bit_select_packed_bytes_pallas`], down to sharing its
+    [`_byte_xor_table`]: `reduce="bits"` and [`byte_select_xor_reduce`] are the
+    same reduction over the bit axis, so one kernel serves both.
+    """
+    table = _byte_xor_table(values, selectors.shape[1], limbs)
+    return frx.ffi.ffi_call(
+        "frx_bit_select_xor_reduce_packed_bytes",
+        frx.ShapeDtypeStruct((selectors.shape[0], limbs), _LIMB),
+    )(selectors, table)
 
 
 def _bit_select_reduce_elements_batched_pallas(
@@ -379,10 +414,10 @@ def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
     bits `8*j .. 8*j+7` least-significant-bit first. `values` is a binary-field
     vector `(B,)`; the result `(n,)` XORs `values[b]` wherever row bit `b` is set.
 
-    On GPU a 256-entry XOR table per byte position feeds a Pallas gather, matching
-    flock-core's `UniSkipFoldTable`: the kernel reads `B/8` selector bytes per row
-    and never expands the `(n, B)` bit matrix. CPU keeps a compact source-level
-    expression as the portable oracle.
+    Where a kernel exists, a 256-entry XOR table per byte position feeds the
+    gather, matching flock-core's `UniSkipFoldTable`: the kernel reads `B/8`
+    selector bytes per row and never expands the `(n, B)` bit matrix. Backends
+    without one keep a compact source-level expression as the portable oracle.
     """
     if selectors.ndim != 2 or values.ndim != 1:
         raise ValueError("packed-byte bit selection expects 2D selectors and 1D values")
@@ -404,11 +439,16 @@ def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
 
     limbs = field_bit_width(values.dtype) // _LIMB_BITS
     values_l = _to_limbs(values)
-    if frx.default_backend() == "gpu":
+    backend = frx.default_backend()
+    if backend == _CUDA:
         if selectors.shape[1] <= 16:
             out_l = _bit_select_packed_bytes_pallas(selectors, values_l, limbs)
         else:
             out_l = _bit_select_wide_packed_bytes_pallas(selectors, values_l, limbs)
+    elif backend == _METAL:
+        # One kernel covers every row width, so Metal needs no wide/narrow
+        # split: the gather is `S` table loads per row either way.
+        out_l = _bit_select_packed_bytes_ffi(selectors, values_l, limbs)
     else:
         shifts = fnp.arange(8, dtype=fnp.uint8)
         unpacked = ((selectors[:, :, None] >> shifts) & 1).reshape(
@@ -446,10 +486,11 @@ def bit_select_xor_reduce(
     0/1 matrix of shape `(n, B)` with `values.shape == (B,)`. This is the form
     used when a consumer already holds unpacked witness rows.
 
-    On GPU the Pallas lowering streams directly into the limb output. It never
-    materializes the broadcast `(n, W, L)` selection; its working set is one
-    fixed-size register block. CPU uses the compact source-level expression so
-    the primitive remains portable and easy to validate.
+    Where a kernel exists, the lowering streams directly into the limb output.
+    It never materializes the broadcast `(n, W, L)` selection; its working set
+    is one fixed-size register block. Backends without one use the compact
+    source-level expression so the primitive remains portable and easy to
+    validate.
     """
     if selectors.ndim not in (1, 2):
         raise ValueError(
@@ -477,7 +518,12 @@ def bit_select_xor_reduce(
             )
         limbs = field_bit_width(values.dtype) // _LIMB_BITS
         values_l = _to_limbs(values)
-        if frx.default_backend() == "gpu":
+        # Metal is deliberately absent: its accelerated lowering gathers packed
+        # selector bytes, and these selectors are an explicit 0/1 matrix whose
+        # bit count need not be a multiple of 8. Packing it to reach the kernel
+        # would cost a pass over the (n, B) matrix the kernel exists to avoid
+        # materializing, so Metal keeps the portable expression here.
+        if frx.default_backend() == _CUDA:
             out_l = _bit_select_unpacked_bits_pallas(selectors, values_l, limbs)
         else:
             selected = selectors.astype(_LIMB)
@@ -505,16 +551,22 @@ def bit_select_xor_reduce(
                 f"values must match selectors on the reduced (leading) axis for "
                 f'reduce="elements": {values.shape} vs {selectors.shape}'
             )
-        if frx.default_backend() == "gpu":
-            if not batched and width == 128:
-                out_l = _bit_select_reduce_elements_ffi(selectors_l, values_l)
-            else:
-                elements_pallas = (
-                    _bit_select_reduce_elements_batched_pallas
-                    if batched
-                    else _bit_select_reduce_elements_pallas
-                )
-                out_l = elements_pallas(selectors_l, values_l, width, limbs)
+        backend = frx.default_backend()
+        # One lowering, not two: both backends register a handler for this
+        # target and XLA selects by platform. The set stays explicit because an
+        # unregistered platform raises rather than falling back, so it has to
+        # name exactly who has a handler. Metal appears in no arm below, which
+        # is why its batched stacks and non-128 widths take the portable
+        # expression until one is measured to matter.
+        if backend in (_CUDA, _METAL) and not batched and width == 128:
+            out_l = _bit_select_reduce_elements_ffi(selectors_l, values_l)
+        elif backend == _CUDA:
+            elements_pallas = (
+                _bit_select_reduce_elements_batched_pallas
+                if batched
+                else _bit_select_reduce_elements_pallas
+            )
+            out_l = elements_pallas(selectors_l, values_l, width, limbs)
         else:
             bits = _bits(selectors)  # (n, width)
             if batched:
@@ -532,11 +584,17 @@ def bit_select_xor_reduce(
                 f'values must have shape ({width},) for reduce="bits", got '
                 f"{values.shape}"
             )
-        if frx.default_backend() == "gpu":
+        backend = frx.default_backend()
+        if backend in (_CUDA, _METAL):
             selector_bytes = lax.bitcast_convert_type(selectors_l, fnp.uint8).reshape(
                 selectors.shape[0], width // 8
             )
-            out_l = _bit_select_packed_bytes_pallas(selector_bytes, values_l, limbs)
+            packed_bytes = (
+                _bit_select_packed_bytes_pallas
+                if backend == _CUDA
+                else _bit_select_packed_bytes_ffi
+            )
+            out_l = packed_bytes(selector_bytes, values_l, limbs)
         else:
             bits = _bits(selectors)
             out_l = lax.reduce_xor(bits[:, :, None] * values_l[None, :, :], (1,))
