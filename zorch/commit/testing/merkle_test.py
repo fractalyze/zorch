@@ -352,8 +352,8 @@ class MerkleTreeTest(absltest.TestCase):
         text = frx.jit(tree.commit).lower(matrix).as_text()
         self.assertIn(f'"{SPONGE_HASH_MARKER}"', text)
         self.assertIn(f'"{POSEIDON2_MARKER}"', text)
-        # vmap auto-lifts the round constants to operands; check the attributes
-        # survive that lift — the vendor recognizer parses them off the marker.
+        # Check the attributes survive the batching rewrite — the vendor
+        # recognizer parses them off the marker.
         self.assertIn(KOALABEAR16_POSEIDON2_ATTRS, text)
 
     def test_value_equality_across_fresh_instances(self) -> None:

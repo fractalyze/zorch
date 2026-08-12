@@ -52,9 +52,9 @@ def _round_composite_dense_decomp(
     phase -- the byte-exact fallback a recognizing emitter replaces. `_attrs`
     (phase / variant / degree / poly_form) are composite metadata the emitter
     parses; the decomposition needs only the operands. The interp constants ride
-    as operands (`naturals` / `inv_vand`) rather than a lifted closure -- the
-    emitter may instead rebuild them from `degree` + `poly_form` and drop the two
-    trailing operands.
+    as operands (`naturals` / `inv_vand`) rather than a closure so the ABI names
+    them -- the emitter may instead rebuild them from `degree` + `poly_form` and
+    drop the two trailing operands.
 
     Width-preserving (size-invariant): the state enters live to
     `4 * live[0]` elements (`live[0]` = the round's live reduce pairs) in

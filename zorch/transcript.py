@@ -472,9 +472,9 @@ class DuplexTranscript:
 # are static meta_fields with value-equality keys (fractalyze/zorch#214), so
 # fresh same-config transcripts reuse the trace.
 # `inline=True` keeps call sites already inside a jit zone byte-identical:
-# without it the zone stays a nested pjit call in the outer jaxpr, which stops
-# the permutation's round constants from auto-lifting into the
-# `zorch.sumcheck` composite envelope (the operand layout XLA expands).
+# without it the zone stays a nested pjit call in the outer jaxpr, changing
+# the emitted module around the `zorch.sumcheck` composite envelope (the
+# operand layout XLA expands).
 
 
 @partial(jit, static_argnames=("n",), inline=True)
@@ -565,8 +565,8 @@ def _absorb_chain(
     `zorch.absorb_chain` region, generic over the permutation via its
     `fused_region_spec` (the `hash_frx.sponge_hash` pattern): the ABI operands and
     the `permutation`-discriminated attrs come from the spec, and the
-    decomposition rebuilds a const-free permute from those operands so a
-    `lax.composite` can't lift the constants and derail the ABI. Blocks at
+    decomposition rebuilds the permute from those operands — the emitter's
+    operand contract names the constants there. Blocks at
     index >= `active_blocks` (int32 scalar) are padding and leave the sponge
     unchanged. Caller gates on `has_dedicated_fusion` and a concrete
     `num_blocks > 1` -- a chain of one is not a chain."""
@@ -578,11 +578,11 @@ def _absorb_chain(
         spg: Array, blocks: Array, active: Array, *consts: Array, **_attrs: object
     ) -> Array:
         # Each block permute is RE-MARKED with the permutation's own dedicated
-        # marker, fed the chain composite's operand parameters (not `perm`'s
-        # closed-over arrays, which `lax.composite` would lift and derail the
-        # chain ABI). So the chain's own fallback still runs dedicated
-        # per-permute kernels, exactly as an unmarked absorb does. Keep it that
-        # way: the dedicated kernel is the byte-authority the goldens pin, and a
+        # marker, fed the chain composite's operand parameters — the per-permute
+        # emitter ABI names the constants as operands, so they must thread
+        # through rather than close over. So the chain's own fallback still runs
+        # dedicated per-permute kernels, exactly as an unmarked absorb does. Keep
+        # it that way: the dedicated kernel is the byte-authority the goldens pin, and a
         # raw permute body is not guaranteed to match it, so letting the raw body
         # serve as the fallback would silently change what a fallback absorbs.
         def inner(s: Array, *c: Array, **_a: object) -> Array:
