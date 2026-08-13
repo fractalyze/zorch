@@ -135,8 +135,8 @@ frxlib==0.10.2.dev20260813130737 \
     # via
     #   -r requirements.in
     #   frx
-hash-frx==0.2.0.dev20260813101544 \
-    --hash=sha256:fd3d6a63cee405929dd42b536b36ec8491a8ab0d337e84cedcf0396aa7beabd6
+hash-frx==0.2.0.dev20260813120032 \
+    --hash=sha256:847a4c369208626373e8649a463346a58ab38013bf029f1c6184085239c6922a
     # via -r requirements.in
 ml-dtypes==0.5.4 \
     --hash=sha256:0d2ffd05a2575b1519dc928c0b93c06339eb67173ff53acb00724502cda231cf \
