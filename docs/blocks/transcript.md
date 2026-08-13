@@ -49,10 +49,16 @@ consumer has to agree with. It rides the transcript as `pow_preimage_bytes` —
 defaulting to the unpadded wire `ByteHashTranscript.grind_pow` already speaks —
 rather than a per-call argument, so a prover and its verifier cannot pick
 differently op by op. Its only bound is the lower one — below `state_digest ‖
-nonce_le8` the nonce does not fit. There is no upper bound because the row hashes
-the pre-image as a whole message through hash-frx rather than assembling a
-compression itself, so the padded and unpadded wires are one kernel by
-construction rather than by a width restriction.
+nonce_le8` the nonce does not fit. There is no upper bound on *correctness*,
+because the row hashes the pre-image as a whole message through hash-frx rather
+than assembling a compression itself, so any width is the same code.
+
+Fusion does have an upper bound, at one block. Up to it the row takes hash-frx's
+marked entry, which a recognizing emitter collapses to one kernel per hashed
+batch; past it the row takes the unmarked entry instead, because a marked call
+compiles its whole unrolled body and that stops being affordable somewhere
+between a block and a chunk. A consumer padding past 64 bytes keeps the same
+wire and the same bytes, and gives up the single kernel — nothing else.
 
 ## Device fusion: which transcripts meet it, and the host exemption
 
@@ -78,10 +84,10 @@ Three of the four transcripts are device and **meet it**:
   are device ops on a fixed-shape state, so the round loop folds into one device
   program with no per-round host sync, which is the win the SHA-256 row is here
   for. Two things it does not match, and a consumer swapping the rows should read
-  both from here rather than from a profile. It has no marker at either layer —
-  hash-frx marks BLAKE3's whole-message hash, not the resumable state's
-  compressions, and no emitter recognizes that composite yet — so
-  `has_dedicated_fusion` reads `False` and consumers take their plain
+  both from here rather than from a profile. Its Fiat-Shamir hop has no marker at
+  either layer — hash-frx marks BLAKE3's whole-message hash, not the resumable
+  state's compressions — so `has_dedicated_fusion` reads `False` and consumers
+  take their plain
   decomposition paths. And its substrate is not branchless the way
   `Sha256State` is: `Blake3Stream` carries data-dependent `while_loop`s for the
   subtree merges (the merge count follows the chunk count) plus a per-block
