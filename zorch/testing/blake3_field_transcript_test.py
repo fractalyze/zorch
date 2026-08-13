@@ -29,6 +29,8 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
+from hash_frx.blake3 import blake3
+from hash_frx.blake3.blake3 import BLAKE3_MARKER
 from hash_frx.blake3.byte_hashes import HostBlake3
 
 from zorch.blake3_field_transcript import Blake3FieldTranscript
@@ -40,8 +42,10 @@ from zorch.byte_transcript import (
 
 _DIGEST_BYTES = 32
 _NO_PADDING = _DIGEST_BYTES + 8
-_ONE_BLOCK = 64
-_TWO_BLOCKS = 128
+# The width at which `_pow_digests` stops taking the marked entry, so these two
+# straddle that boundary rather than merely being wide.
+_ONE_BLOCK = blake3.BLOCK_LEN
+_TWO_BLOCKS = 2 * blake3.BLOCK_LEN
 # The grinds here run at bits <= 8, so a hit lands far inside one window. The
 # default 2^16 would compress 64x more candidates per call for the same answer;
 # `grind_search` tiles windows, so a wider search would still return this nonce.
@@ -365,6 +369,24 @@ class Blake3ProofOfWorkTest(absltest.TestCase):
         _, cross = self._pair(_ONE_BLOCK)
         _, ok = cross.check_witness(w_unpadded, pow_bits=8)
         self.assertFalse(bool(ok))
+
+    def test_marker_rides_the_pre_image_only_up_to_one_block(self) -> None:
+        # The width guard is invisible to every other test here: both arms hash
+        # the same bytes, so only the lowering tells them apart. Up to a block the
+        # pre-image carries hash-frx's marker for an emitter to collapse; past it
+        # the unmarked body is taken instead, because a marked call compiles that
+        # body and it stops being affordable at a chunk.
+        for pow_preimage, marked in (
+            (_NO_PADDING, True),
+            (_ONE_BLOCK, True),
+            (_TWO_BLOCKS, False),
+        ):
+            with self.subTest(pow_preimage=pow_preimage, marked=marked):
+                _, t = self._pair(pow_preimage)
+                hlo = (
+                    frx.jit(lambda x: x.grind(8, chunk=_TEST_WINDOW)).lower(t).as_text()
+                )
+                self.assertEqual(BLAKE3_MARKER in hlo, marked)
 
     def test_grind_bits_out_of_range_rejected(self) -> None:
         # Mirrors the byte transcript: > 256 (or negative) leading-zero bits on a

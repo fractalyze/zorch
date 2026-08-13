@@ -64,7 +64,8 @@ _DIGEST_BYTES = 32
 # The unpadded PoW pre-image: `state_digest ‖ nonce_le8`, as on the byte
 # transcript. `pow_preimage_bytes` zero-pads beyond it.
 _POW_PREIMAGE_BYTES = _DIGEST_BYTES + 8
-# Hash mode, hoisted so it is not rebuilt on every trace of the grind body.
+# Hash mode, hoisted so it is not rebuilt per trace. Only the wide-pre-image arm
+# of `_pow_digests` passes it — the marked entry is hash-mode by construction.
 _MODE = blake3.hash_mode()
 
 
@@ -100,7 +101,10 @@ def _blake3_squeeze_zone(
     Wrapping them re-emits nothing: the inner zones stay their own pjits.
     `inline=True` keeps a call site already inside an outer jit byte-identical,
     mirroring `_sha256_squeeze_zone`. That one additionally carries a fusion
-    marker; there is none to carry here, BLAKE3 having no dedicated emitter."""
+    marker; there is none to carry here, because hash-frx marks a whole message
+    and these compressions are entered through the resumable state. (`grind`'s
+    pre-image is a whole message, so it does take the marker — see
+    `_pow_digests`.)"""
     absorbed = state.absorb(framing)
     squeezed = absorbed.finalize(nbytes)
     return absorbed.absorb(squeezed), squeezed
@@ -129,11 +133,12 @@ class Blake3FieldTranscript:
 
     @property
     def has_dedicated_fusion(self) -> bool:
-        # False where the SHA-256 row reads True, and for two reasons at once:
-        # the compressions here are entered through the resumable state rather
-        # than through hash-frx's marked whole-message region, and hash-frx's own
-        # BLAKE3 rows report False regardless while no emitter recognizes that
-        # composite. Consumers take their plain decomposition paths.
+        # False where the SHA-256 row reads True: this flag is about the FS hop,
+        # whose compressions are entered through the resumable state rather than
+        # through hash-frx's marked whole-message region, and hash-frx's own
+        # BLAKE3 rows report False regardless. Consumers take their plain
+        # decomposition paths. `_pow_digests` is the one path that does reach the
+        # marked region — it hashes a whole message — and it is not an FS hop.
         return False
 
     @classmethod
@@ -256,12 +261,20 @@ class Blake3FieldTranscript:
         `unmarked_hash` keeps being right past that without this knowing BLAKE3's
         flag schedule.
 
-        Unmarked rather than `blake3.digest`: hash-frx notes a marked call
-        compiles its whole unrolled body, "affordable at a block and not at a
-        chunk", and the width here is a caller's knob that can reach a chunk.
-        The trade is a re-traced body per call against a compile that grows with
-        the widest pre-image any consumer picks; worth measuring if a consumer
-        ever pads past a block.
+        **Marked while the pre-image is that one compression.** `xof` carries
+        the `hash_frx.blake3` marker a recognizing emitter collapses into a
+        single kernel — the fusion north star (`docs/README.md`) applied to a
+        hash permutation — and it traces cheaper besides, `tree_hash` being a
+        value-keyed jit zone where `unmarked_hash` re-traces its body per call
+        site. Past a block the unmarked arm takes over, because a marked call
+        compiles that whole unrolled body, "affordable at a block and not at a
+        chunk" in hash-frx's terms, and the width is the caller's knob. The
+        guard reads bytes rather than compressions because `_DIGEST_BYTES` keeps
+        the root's own output inside one block too.
+
+        Both arms hash the same bytes; only the lowering differs. The saving is
+        per LAUNCH rather than per byte — ~23 launches a window at the default —
+        so a narrower `GRIND_WINDOW` multiplies it. Re-measure if that moves.
         """
         batch = counters.shape[0]
         rows = fnp.concatenate(
@@ -274,7 +287,9 @@ class Blake3FieldTranscript:
             ],
             axis=1,
         )
-        return blake3.unmarked_hash(rows, _MODE, _DIGEST_BYTES)
+        if self.pow_preimage_bytes > blake3.BLOCK_LEN:
+            return blake3.unmarked_hash(rows, _MODE, _DIGEST_BYTES)
+        return blake3.xof(rows, _DIGEST_BYTES)
 
     def _absorb_witness(self, witness: Array) -> Blake3FieldTranscript:
         nonce8 = _nonce8(fnp.asarray(witness, fnp.uint32).reshape(1))[0]
