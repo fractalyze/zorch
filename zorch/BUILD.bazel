@@ -62,6 +62,25 @@ py_library(
     ],
 )
 
+# Field-element `Transcript` surface over the streaming BLAKE3 core: the same
+# construction as the SHA-256 row, with BLAKE3's XOF squeeze and a proof-of-work
+# pre-image width the consumer's verifier fixes.
+py_library(
+    name = "blake3_field_transcript",
+    srcs = [
+        "__init__.py",
+        "blake3_field_transcript.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":byte_transcript",
+        ":grind",
+        requirement("frx"),
+        requirement("hash_frx"),
+        requirement("numpy"),
+    ],
+)
+
 # Field-element `Transcript` surface over the streaming SHA-256 core: the device
 # SHA-256 sibling of the algebraic `DuplexTranscript`, scan-threadable under @jit.
 py_library(

@@ -28,7 +28,7 @@ zk-dtypes==0.0.10
 # It pulls in `blake3` (the BLAKE3 team's Rust binding) transitively, because
 # hash-frx ships host byte-hash rows that the standard library cannot back.
 # Prebuilt wheels on every platform zorch supports, so no Rust toolchain.
-hash-frx==0.2.0.dev20260812232949
+hash-frx==0.2.0.dev20260813101544
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.

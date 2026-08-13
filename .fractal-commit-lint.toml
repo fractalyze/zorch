@@ -62,9 +62,11 @@ transcript = [
   "zorch/transcript.py",
   "zorch/byte_transcript.py",
   "zorch/sha256_field_transcript.py",
+  "zorch/blake3_field_transcript.py",
   "zorch/testing/transcript_test.py",
   "zorch/testing/transcript_host_fs_test.py",
   "zorch/testing/byte_transcript_test.py",
   "zorch/testing/sha256_field_transcript_test.py",
+  "zorch/testing/blake3_field_transcript_test.py",
 ]
 release = ["zorch/__init__.py"]
