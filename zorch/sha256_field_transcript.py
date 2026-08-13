@@ -57,18 +57,13 @@ from zorch.byte_transcript import (
     OP_LABEL,
     OP_OBSERVE,
     OP_SQUEEZE,
+    _len8,
     _validate_pow_bits,
 )
-from zorch.grind import GRIND_WINDOW, grind_search
+from zorch.grind import GRIND_WINDOW, grind_search, leading_zero_bits_ok
 
 # SHA-256 digest width — the PoW state digest and every squeeze block are 32 B.
 _DIGEST_BYTES = 32
-
-
-def _len8(n: int) -> bytes:
-    """A length / count as 8 little-endian bytes (the transcript's only integer
-    encoding — fixint u64-LE everywhere)."""
-    return int(n).to_bytes(8, "little")
 
 
 def _const_u8(data: bytes) -> Array:
@@ -156,17 +151,6 @@ def _sha256_squeeze_zone(
         nbytes=nbytes,
     )
     return Sha256State(h, pending, counts), squeezed
-
-
-def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
-    """Whether each digest (uint8 `[B, 32]`) has >= `bits` leading zero bits,
-    big-endian (digest[..., 0] most significant). Traceable; byte-identical to
-    `byte_transcript._leading_zero_bits_ok`."""
-    full, extra = divmod(bits, 8)
-    ok = fnp.all(digests[:, :full] == 0, axis=1)
-    if extra:
-        ok = ok & ((digests[:, full] >> np.uint8(8 - extra)) == 0)
-    return ok
 
 
 @partial(register_dataclass, data_fields=["state"], meta_fields=["dtype"])
@@ -309,7 +293,7 @@ class Sha256FieldTranscript:
                 [_u32_le_bytes(counters), fnp.zeros((counters.shape[0], 4), fnp.uint8)],
                 axis=1,
             )
-            return _leading_zero_bits_ok(
+            return leading_zero_bits_ok(
                 sha256_stream_finalize(pow_state, nonce8), pow_bits
             )
 
@@ -330,7 +314,7 @@ class Sha256FieldTranscript:
         else:
             nonce8 = self._witness_bytes(witness)[None, :]
             digs = sha256_stream_finalize(self._pow_state(), nonce8)
-            ok = _leading_zero_bits_ok(digs, pow_bits)[0]
+            ok = leading_zero_bits_ok(digs, pow_bits)[0]
         return self._absorb_witness(witness), ok
 
     # ---- element <-> byte serde ----

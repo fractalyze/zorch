@@ -7,11 +7,11 @@ and keeps the lowest-index hit; the loop tiles windows only because the full
 space cannot be tested at once, and it early-exits at the first window that
 hits — for a typical difficulty the hit is in the first window, so the loop
 runs once. What "candidate" means is the caller's: the algebraic duplex checks
-the challenge its observe+sample induces, the SHA-256 transcript checks the
-digest of `state_digest || counter_le8`. On exhaustion the trailing fallback 0
-is returned unchecked — the caller's verify/check-witness is the soundness
-gate, so which counter the search returns is soundness-neutral (the
-`DuplexTranscript.grind` contract).
+the challenge its observe+sample induces, a byte-framed transcript checks the
+digest of a pre-image built from `state_digest` and the counter. On exhaustion
+the trailing fallback 0 is returned unchecked — the caller's verify/check-witness
+is the soundness gate, so which counter the search returns is soundness-neutral
+(the `DuplexTranscript.grind` contract).
 """
 from __future__ import annotations
 
@@ -23,6 +23,21 @@ from frx import Array, lax
 # Counters a while_loop step tests in parallel: one window covers any practical
 # difficulty (expected work 2^bits), so the loop normally runs once.
 GRIND_WINDOW = 1 << 16
+
+
+def leading_zero_bits_ok(digests: Array, bits: int) -> Array:
+    """Whether each digest (uint8 `[B, digest_size]`) has >= `bits` leading zero
+    bits, big-endian (digest[..., 0] most significant). Lives here for the same
+    reason the search does: it is the predicate every byte-framed transcript's
+    `check_batch` ends in, whatever hash built the digest. Traceable, so it
+    composes into the search's one device program; byte-identical to
+    `byte_transcript._leading_zero_bits_ok`, its host twin."""
+    full, extra = divmod(bits, 8)
+    ok = fnp.all(digests[:, :full] == 0, axis=1)
+    if extra:
+        # Weakly-typed literal: a uint8 shift operand would be a device array.
+        ok = ok & ((digests[:, full] >> (8 - extra)) == 0)
+    return ok
 
 
 def grind_search(
