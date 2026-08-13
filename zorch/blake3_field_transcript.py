@@ -1,0 +1,345 @@
+# Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
+"""Field-element `Transcript` surface over the streaming BLAKE3 core.
+
+The BLAKE3 row of what `sha256_field_transcript.py` is for SHA-256, and shaped
+like it: a frozen pytree dataclass whose methods are plain traced state
+transitions — jit-first, scan-threadable, no host substrate anywhere. It keeps
+the Merlin byte framing (op tag, u64-LE count, squeeze, re-absorb) on the
+fixed-shape `Blake3Stream`
+([hash-frx's `blake3/streaming.py`](https://github.com/fractalyze/hash-frx/blob/main/hash_frx/blake3/streaming.py)),
+so a slice observe / sample is byte-identical to `ByteHashTranscript`'s
+`observe_slice` / `sample_slice` over the same hash, and the proof-of-work grind
+is `grind`/`check_witness` with `DuplexTranscript`'s exact semantics (device
+windowed search via `zorch.grind`; the transcript absorbs the witness
+regardless, and `check_witness` is the soundness gate).
+
+Two things are BLAKE3's rather than the framing's, and only one of them is a
+choice:
+
+- **The squeeze is an XOF read**, not `byte_transcript`'s
+  `HASH(buffer ‖ ctr_le8)` counter chain. Unconditional, no seam.
+- **`pow_preimage_bytes`** is the width `state_digest ‖ nonce_le8` is zero-padded
+  to before hashing, defaulting to no padding — the pre-image
+  `ByteHashTranscript.grind_pow` hashes. Fixed at construction, not per call.
+
+Why each is shaped that way, and the four-row comparison a caller choosing
+between transcripts wants, are in `docs/blocks/transcript.md`.
+
+Scheme-agnostic: `dtype` is the challenge element's (scalar) type. `observe`
+bitcasts values to bytes and `sample` reinterprets squeezed bytes back, so the
+element width is `dtype.itemsize`. The observe/sample surface is one method per
+Merlin op tag, for the reason `sha256_field_transcript` states at length: the
+tag is transcript-semantic, so it is arity rather than a mode argument.
+`byte_transcript` names the wire vocabulary.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from functools import partial
+from typing import TYPE_CHECKING, Any
+
+import frx.numpy as fnp
+import numpy as np
+from frx import Array, jit, lax
+from frx.tree_util import register_dataclass
+from hash_frx.blake3 import blake3
+from hash_frx.blake3.streaming import Blake3Stream, blake3_stream_init
+
+from zorch.byte_transcript import (
+    KIND_SCALAR,
+    KIND_SLICE,
+    OP_BYTES,
+    OP_DOMAIN,
+    OP_LABEL,
+    OP_OBSERVE,
+    OP_SQUEEZE,
+    _len8,
+    _validate_pow_bits,
+)
+from zorch.grind import GRIND_WINDOW, grind_search, leading_zero_bits_ok
+
+# BLAKE3's default digest width — the PoW state digest is 32 B, and it is the
+# width `_validate_pow_bits` bounds a difficulty against.
+_DIGEST_BYTES = 32
+# The unpadded PoW pre-image: `state_digest ‖ nonce_le8`, as on the byte
+# transcript. `pow_preimage_bytes` zero-pads beyond it.
+_POW_PREIMAGE_BYTES = _DIGEST_BYTES + 8
+# Hash mode, hoisted so it is not rebuilt on every trace of the grind body.
+_MODE = blake3.hash_mode()
+
+
+def _const_u8(data: bytes) -> Array:
+    """A compile-time-constant byte payload as a device uint8 array."""
+    return fnp.asarray(np.frombuffer(data, dtype=np.uint8))
+
+
+def _nonce8(counters: Array) -> Array:
+    """uint32 `[B]` nonces on the u64-LE wire: uint8 `[B, 8]`.
+
+    The high four bytes are zero because the search domain is uint32, as in
+    `DuplexTranscript._grind_search`. The bitcast is `_elem_bytes`' and the
+    SHA-256 row's spelling of the same conversion — one wire, one spelling."""
+    return fnp.concatenate(
+        [
+            lax.bitcast_convert_type(counters, fnp.uint8),
+            fnp.zeros((counters.shape[0], 4), fnp.uint8),
+        ],
+        axis=1,
+    )
+
+
+@partial(jit, static_argnames=("nbytes",), inline=True)
+def _blake3_squeeze_zone(
+    state: Blake3Stream, framing: Array, nbytes: int
+) -> tuple[Blake3Stream, Array]:
+    """The squeeze hop — absorb `framing`, read `nbytes` of extendable output,
+    re-absorb it — as ONE dispatch rather than three.
+
+    `Blake3Stream.absorb` and `.finalize` are each their own jit zone, so an
+    eager draw would otherwise pay three host dispatches and three syncs.
+    Wrapping them re-emits nothing: the inner zones stay their own pjits.
+    `inline=True` keeps a call site already inside an outer jit byte-identical,
+    mirroring `_sha256_squeeze_zone`. That one additionally carries a fusion
+    marker; there is none to carry here, BLAKE3 having no dedicated emitter."""
+    absorbed = state.absorb(framing)
+    squeezed = absorbed.finalize(nbytes)
+    return absorbed.absorb(squeezed), squeezed
+
+
+@partial(
+    register_dataclass,
+    data_fields=["state"],
+    meta_fields=["dtype", "pow_preimage_bytes"],
+)
+@dataclass(frozen=True)
+class Blake3FieldTranscript:
+    """Device BLAKE3 transcript satisfying `transcript.Transcript`, threadable
+    through a `lax.scan` / `@jit` like `DuplexTranscript`. `state` is the only
+    data field, so the pytree structure is fixed however much has been absorbed
+    — the property that lets a round loop carry it. `dtype` (static) is the
+    challenge element type; `pow_preimage_bytes` (static) is the PoW wire."""
+
+    state: Blake3Stream
+    dtype: Any
+    pow_preimage_bytes: int = _POW_PREIMAGE_BYTES
+
+    @property
+    def field(self) -> Any:
+        return self.dtype
+
+    @property
+    def has_dedicated_fusion(self) -> bool:
+        # False where the SHA-256 row reads True, and for two reasons at once:
+        # the compressions here are entered through the resumable state rather
+        # than through hash-frx's marked whole-message region, and hash-frx's own
+        # BLAKE3 rows report False regardless while no emitter recognizes that
+        # composite. Consumers take their plain decomposition paths.
+        return False
+
+    @classmethod
+    def new(
+        cls,
+        domain: bytes,
+        dtype: Any,
+        *,
+        pow_preimage_bytes: int = _POW_PREIMAGE_BYTES,
+    ) -> Blake3FieldTranscript:
+        # Validated here rather than in `__post_init__`: the width is fixed at
+        # construction, and `__post_init__` would re-check it on every `replace`
+        # the framing does and on every pytree unflatten.
+        if pow_preimage_bytes < _POW_PREIMAGE_BYTES:
+            raise ValueError(
+                f"pow_preimage_bytes must be at least {_POW_PREIMAGE_BYTES} — "
+                f"the nonce does not fit below it — got {pow_preimage_bytes}"
+            )
+        seed = _const_u8(bytes([OP_DOMAIN]) + _len8(len(domain)) + bytes(domain))
+        return cls(
+            blake3_stream_init().absorb(seed), np.dtype(dtype), pow_preimage_bytes
+        )
+
+    def _item_bytes(self) -> int:
+        return int(np.dtype(self.dtype).itemsize)
+
+    def _absorb(self, payload: Array) -> Blake3FieldTranscript:
+        return replace(self, state=self.state.absorb(payload))
+
+    def observe(self, values: Array) -> Blake3FieldTranscript:
+        """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
+        len8(count) || serialized bytes`. Byte-identical to the byte
+        transcript's `observe_slice` of the same serialized bytes."""
+        vals_u8 = self._elem_bytes(values).reshape(-1)
+        count = int(vals_u8.shape[0]) // self._item_bytes()
+        framing = _const_u8(bytes([OP_OBSERVE, KIND_SLICE]) + _len8(count))
+        return self._absorb(fnp.concatenate([framing, vals_u8]))
+
+    def observe_scalar(self, value: Array) -> Blake3FieldTranscript:
+        """Absorb under scalar framing `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
+        — no length prefix, a scalar's width being implicit in the dtype. A 0-d
+        `value` is one op; an `[n]` array is n ops (one per element, in order),
+        built as ONE absorb payload. Distinct from `observe` (the KIND tag
+        differs)."""
+        vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
+        framing = fnp.broadcast_to(
+            _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
+        )
+        return self._absorb(fnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
+
+    def observe_label(self, label: bytes) -> Blake3FieldTranscript:
+        """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
+        A compile-time host constant (labels are literals), so the whole absorb
+        is one constant payload."""
+        return self._absorb(
+            _const_u8(bytes([OP_LABEL]) + _len8(len(label)) + bytes(label))
+        )
+
+    def observe_bytes(self, data: Array) -> Blake3FieldTranscript:
+        """Absorb opaque bytes (e.g. a Merkle root computed on-device) under
+        `[OP_BYTES] || len8(len) || data`. `data` is a uint8 array whose length
+        is static (it rides the framing prefix)."""
+        data = fnp.asarray(data, fnp.uint8).reshape(-1)
+        framing = _const_u8(bytes([OP_BYTES]) + _len8(int(data.shape[0])))
+        return self._absorb(fnp.concatenate([framing, data]))
+
+    def _squeeze(
+        self, framing: Array, nbytes: int
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        """Absorb `framing`, read `nbytes` of extendable output, re-absorb it.
+
+        Finalizing does not end the stream, so the state a caller gets back is
+        the absorbed one and nothing is spent by squeezing.
+        """
+        if nbytes == 0:
+            # A zero-width draw still frames, matching the byte transcript's
+            # empty squeeze; the XOF read itself refuses a zero length.
+            return self._absorb(framing), fnp.zeros((0,), fnp.uint8)
+        state, squeezed = _blake3_squeeze_zone(self.state, framing, nbytes)
+        return replace(self, state=state), squeezed
+
+    def sample(self, n: int = 1) -> tuple[Blake3FieldTranscript, Array]:
+        """Squeeze `n` challenge elements: absorb `[OP_SQUEEZE, KIND_SLICE] ||
+        len8(n)`, read `n * itemsize` bytes of extendable output, re-absorb them,
+        and reinterpret to `n` elements of `dtype`."""
+        framing = _const_u8(bytes([OP_SQUEEZE, KIND_SLICE]) + _len8(n))
+        t, squeezed = self._squeeze(framing, n * self._item_bytes())
+        return t, t._u8_to_elems(squeezed, n)
+
+    def sample_scalar(self) -> tuple[Blake3FieldTranscript, Array]:
+        """Squeeze one challenge under scalar framing: absorb `[OP_SQUEEZE,
+        KIND_SCALAR]`, read `itemsize` bytes, re-absorb, reinterpret to one
+        `dtype` element (0-D). Distinct from `sample(1)` (the KIND tag
+        differs)."""
+        framing = _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))
+        t, squeezed = self._squeeze(framing, self._item_bytes())
+        return t, t._u8_to_elems(squeezed, 1)[0]
+
+    def observe_and_sample(
+        self, values: Array, n: int = 1
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        return self.observe(values).sample(n)
+
+    # ---- proof-of-work (DuplexTranscript's grind/check_witness shape) ----
+    def _state_digest(self) -> Array:
+        """`BLAKE3(buffer)` at the digest width — the first 32 bytes of every PoW
+        pre-image, matching the byte transcript's `HASH(state_digest ||
+        nonce_le8)`. The same finalize a squeeze reads, so the grind opens with
+        no digest construction of its own."""
+        return self.state.finalize(_DIGEST_BYTES)
+
+    def _pow_digests(self, state_digest: Array, counters: Array) -> Array:
+        """PoW candidate digests for a uint32 `[B]` counter batch: uint8
+        `[B, 32]`.
+
+        The rows are the wire spelled out: `state_digest ‖ nonce_le8` zero-padded
+        to `pow_preimage_bytes`, hashed as a whole message. Hashing it rather
+        than assembling a compression is what lets the width be a free parameter
+        — the pre-image is only one compression while it fits in a block, and
+        `unmarked_hash` keeps being right past that without this knowing BLAKE3's
+        flag schedule.
+
+        Unmarked rather than `blake3.digest`: hash-frx notes a marked call
+        compiles its whole unrolled body, "affordable at a block and not at a
+        chunk", and the width here is a caller's knob that can reach a chunk.
+        The trade is a re-traced body per call against a compile that grows with
+        the widest pre-image any consumer picks; worth measuring if a consumer
+        ever pads past a block.
+        """
+        batch = counters.shape[0]
+        rows = fnp.concatenate(
+            [
+                fnp.broadcast_to(state_digest, (batch, _DIGEST_BYTES)),
+                _nonce8(counters),
+                fnp.zeros(
+                    (batch, self.pow_preimage_bytes - _POW_PREIMAGE_BYTES), fnp.uint8
+                ),
+            ],
+            axis=1,
+        )
+        return blake3.unmarked_hash(rows, _MODE, _DIGEST_BYTES)
+
+    def _absorb_witness(self, witness: Array) -> Blake3FieldTranscript:
+        nonce8 = _nonce8(fnp.asarray(witness, fnp.uint32).reshape(1))[0]
+        framing = _const_u8(bytes([OP_BYTES]) + _len8(8))
+        return self._absorb(fnp.concatenate([framing, nonce8]))
+
+    def grind(
+        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        """Find a proof-of-work witness — the lowest nonce whose pre-image digest
+        has `pow_bits` leading zero bits — and return the transcript advanced
+        past it (the nonce absorbed under the `OP_BYTES` wire), plus the witness.
+        Fully traceable (`zorch.grind.grind_search` windowed device search); does
+        not raise on an exhausted search: `check_witness` is the soundness gate,
+        so which witness the search returns is soundness-neutral."""
+        _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        if chunk < 1:
+            raise ValueError(f"chunk must be >= 1, got {chunk}")
+        if pow_bits == 0:
+            # No work required: the canonical zero witness always passes.
+            witness = fnp.zeros((), fnp.uint32)
+            return self._absorb_witness(witness), witness
+        state_digest = self._state_digest()
+
+        def check_batch(counters: Array) -> Array:
+            return leading_zero_bits_ok(
+                self._pow_digests(state_digest, counters), pow_bits
+            )
+
+        witness = grind_search(check_batch, 2**32, chunk)
+        return self._absorb_witness(witness), witness
+
+    def check_witness(
+        self, witness: Array, *, pow_bits: int
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        """Verifier mirror of `grind`: check the PoW (`pow_bits == 0` requires
+        the canonical witness 0), then absorb the witness REGARDLESS so the
+        transcript stays in lockstep. Returns the advanced transcript and the
+        device boolean verdict."""
+        _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        witness = fnp.asarray(witness, fnp.uint32).reshape(())
+        if pow_bits == 0:
+            ok = witness == fnp.uint32(0)
+        else:
+            digests = self._pow_digests(self._state_digest(), witness.reshape(1))
+            ok = leading_zero_bits_ok(digests, pow_bits)[0]
+        return self._absorb_witness(witness), ok
+
+    # ---- element <-> byte serde ----
+    def _elem_bytes(self, values: Array) -> Array:
+        """Element array -> uint8 `[..., itemsize]` — a direct bitcast to bytes."""
+        return lax.bitcast_convert_type(values, fnp.uint8)
+
+    def _u8_to_elems(self, u8: Array, n: int) -> Array:
+        """Flat uint8 `[n * itemsize]` -> `[n]` `dtype` elements (inverse of
+        `_elem_bytes`)."""
+        return lax.bitcast_convert_type(
+            u8.reshape(n, self._item_bytes()), self.dtype
+        ).reshape(n)
+
+
+if TYPE_CHECKING:
+    from zorch.transcript import Transcript
+
+    # Seam-conformance pin (docs/reference/conventions.md). Neither field
+    # transcript has an in-tree consumer, so without this `Transcript` drift
+    # would fail nowhere rather than late.
+    _t: type[Transcript] = Blake3FieldTranscript

@@ -1,24 +1,24 @@
 # Transcripts — the transcript taxonomy
 
 A Fiat-Shamir transcript turns prover messages into verifier challenges. zorch
-carries **three** kinds, by construction-and-substrate, not by scheme:
-`zorch/transcript.py`, `zorch/byte_transcript.py`, and
-`zorch/sha256_field_transcript.py`, with the squeeze width policy in
-`zorch/challenge.py`.
+carries **four** kinds, by construction-and-substrate, not by scheme:
+`zorch/transcript.py`, `zorch/byte_transcript.py`,
+`zorch/sha256_field_transcript.py`, and `zorch/blake3_field_transcript.py`, with
+the squeeze width policy in `zorch/challenge.py`.
 
 A transcript is neither a stage nor a round: it reduces no claim and repeats no
 recurrence. It is the state both roles thread — explicit in every round call and
 every stage result — which is why it appears in each signature rather than being
 reached through a context object.
 
-|                        | `transcript.py` — `DuplexTranscript`                                                          | `byte_transcript.py` — `ByteHashTranscript(ByteHash)`                                      | `sha256_field_transcript.py` — `Sha256FieldTranscript`                             |
-| ---------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| Primitive              | algebraic `Permutation` (Poseidon2) over a prime-field dtype                                  | a byte hash injected as a `ByteHash` — host `HostSha256` or the device `Sha256` marker     | device SHA-256 streaming Merkle–Damgård midstate                                   |
-| I/O                    | field elements (`Array`); `observe` bitcast-flattens to the base field                        | opaque `bytes`; the consumer serializes its own field↔bytes                                | field elements (`Array`); the byte surface, made scan-threadable                   |
-| Substrate              | **device**: `observe`/`sample` are device ops, threadable through `@jit` / a `lax.scan` carry | **host**: a `bytes` buffer; the injected `ByteHash.digest` runs on `hashlib` or the marker | **device**: a streaming `Sha256State` pytree — threads `@jit` / a `lax.scan` carry |
-| Squeeze                | sponge rate read                                                                              | `HASH(buffer ‖ ctr)` counter stream (a hash is not an XOF) + re-absorb                     | same `SHA256(buffer ‖ ctr)` counter stream over the streaming midstate             |
-| `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `hash_frx.sha256` marker)                |
-| Seam                   | `Transcript` (field-element, canonical-bit PoW)                                               | `ByteTranscript` (byte, leading-zero-bit nonce PoW)                                        | `Transcript` (field-element)                                                       |
+|                        | `transcript.py` — `DuplexTranscript`                                                          | `byte_transcript.py` — `ByteHashTranscript(ByteHash)`                                      | `sha256_field_transcript.py` — `Sha256FieldTranscript`                             | `blake3_field_transcript.py` — `Blake3FieldTranscript`                              |
+| ---------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Primitive              | algebraic `Permutation` (Poseidon2) over a prime-field dtype                                  | a byte hash injected as a `ByteHash` — host `HostSha256` or the device `Sha256` marker     | device SHA-256 streaming Merkle–Damgård midstate                                   | device BLAKE3 resumable chunk state + subtree stack                                  |
+| I/O                    | field elements (`Array`); `observe` bitcast-flattens to the base field                        | opaque `bytes`; the consumer serializes its own field↔bytes                                | field elements (`Array`); the byte surface, made scan-threadable                   | field elements (`Array`); the same byte surface, made scan-threadable                |
+| Substrate              | **device**: `observe`/`sample` are device ops, threadable through `@jit` / a `lax.scan` carry | **host**: a `bytes` buffer; the injected `ByteHash.digest` runs on `hashlib` or the marker | **device**: a streaming `Sha256State` pytree — threads `@jit` / a `lax.scan` carry | **device**: a streaming `Blake3Stream` pytree — threads `@jit` / a `lax.scan` carry  |
+| Squeeze                | sponge rate read                                                                              | `HASH(buffer ‖ ctr)` counter stream (a hash is not an XOF) + re-absorb                     | same `SHA256(buffer ‖ ctr)` counter stream over the streaming midstate             | one XOF read of the finalized state (BLAKE3 *is* an XOF) + re-absorb                 |
+| `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `hash_frx.sha256` marker)                | **`False`** (the resumable state's compressions carry no marker any emitter reads)   |
+| Seam                   | `Transcript` (field-element, canonical-bit PoW)                                               | `ByteTranscript` (byte, leading-zero-bit nonce PoW)                                        | `Transcript` (field-element)                                                       | `Transcript` (field-element)                                                         |
 
 The byte transcript is **one class parameterized by a `ByteHash`**: the same
 Merlin-over-hash framing (op-tagged absorb, `HASH(buffer ‖ ctr)` counter-squeeze,
@@ -36,6 +36,24 @@ program (`zorch.sumcheck.prove`'s `lax.scan`). Its slice framing is byte-identic
 to `ByteHashTranscript`'s `observe_slice` / `sample_slice` — the field surface *is*
 the byte surface, made scan-threadable.
 
+`Blake3FieldTranscript` is that same construction over BLAKE3's resumable state,
+and the interesting part is which of its two BLAKE3-specific behaviours is a
+choice. The **XOF squeeze is not one**: the counter chain exists only because a
+fixed-width hash cannot stretch its output, so over an XOF the counter
+construction would be a deliberately wrong wire rather than a variant, and the
+row reads the stream unconditionally with no seam. The **proof-of-work pre-image
+width is** one: BLAKE3 hashes a message's length along with its bytes, so
+`state_digest ‖ nonce_le8` padded to a whole block is a different search from the
+unpadded 40 bytes, and which one is right is fixed by whichever verifier the
+consumer has to agree with. It rides the transcript as `pow_preimage_bytes` —
+defaulting to the unpadded wire `ByteHashTranscript.grind_pow` already speaks —
+rather than a per-call argument, so a prover and its verifier cannot pick
+differently op by op. Its only bound is the lower one — below `state_digest ‖
+nonce_le8` the nonce does not fit. There is no upper bound because the row hashes
+the pre-image as a whole message through hash-frx rather than assembling a
+compression itself, so the padded and unpadded wires are one kernel by
+construction rather than by a width restriction.
+
 ## Device fusion: which transcripts meet it, and the host exemption
 
 The fusion non-negotiable (CLAUDE.md) puts `absorb`/`squeeze` under the same
@@ -43,7 +61,7 @@ one-unit rule as a round body ([fusion north star](../README.md#fusion-north-sta
 It governs **device-lowered** Fiat-Shamir — the per-round `observe`/`sample`
 that thread the round body's `@jit` region.
 
-Two of the three transcripts are device and **meet it**:
+Three of the four transcripts are device and **meet it**:
 
 - `DuplexTranscript` (Poseidon2) — `observe`/`sample` are device ops; a whole
   absorb+squeeze hop rides one `zorch.duplex_fs` marker.
@@ -56,6 +74,19 @@ Two of the three transcripts are device and **meet it**:
   fusion marker yet (it leans on the per-compression marker + XLA), and per-hash
   SHA-256 is a worse GPU fit than Poseidon2's field mults — the win is keeping FS
   *in* the graph, not raw hash throughput.
+- `Blake3FieldTranscript` — device-lowered on the same terms: `observe`/`sample`
+  are device ops on a fixed-shape state, so the round loop folds into one device
+  program with no per-round host sync, which is the win the SHA-256 row is here
+  for. Two things it does not match, and a consumer swapping the rows should read
+  both from here rather than from a profile. It has no marker at either layer —
+  hash-frx marks BLAKE3's whole-message hash, not the resumable state's
+  compressions, and no emitter recognizes that composite yet — so
+  `has_dedicated_fusion` reads `False` and consumers take their plain
+  decomposition paths. And its substrate is not branchless the way
+  `Sha256State` is: `Blake3Stream` carries data-dependent `while_loop`s for the
+  subtree merges (the merge count follows the chunk count) plus a per-block
+  `lax.cond`, so "one device program" here is not the same claim as
+  capturable-by-construction. That is BLAKE3's tree shape, not an omission.
 
 The **exemption is only `ByteHashTranscript`** — the *host* byte transcript. It
 holds a growing `bytes` buffer and orchestrates the chain per-op on the host (one
@@ -72,16 +103,19 @@ single-dispatching the whole loop is the real win, and that is
 
 ## Status / ratification
 
-The SHA-256 family is **device-first**: `Sha256FieldTranscript` is the prover
+The byte-hash family is **device-first**: the field transcripts are the prover
 path, and the host `ByteHashTranscript` is a **shrinking** surface — correctness
 oracle (`test_device_substrate_matches_host` pins the device marker to stdlib
-`hashlib`), verifier-side replay, and flock's legacy challenger — retired
-incrementally as consumers move on-device. Its grind runs the shared
-`zorch.grind` windowed device search with `DuplexTranscript`'s exact semantics,
-with no host path anywhere in the field transcript.
+`hashlib`), verifier-side replay, and legacy consumer challengers — retired
+incrementally as consumers move on-device. Both field transcripts grind on the
+shared `zorch.grind` windowed device search with `DuplexTranscript`'s exact
+semantics, over `zorch.grind.leading_zero_bits_ok` as the one PoW predicate, with
+no host path anywhere in either.
 
 Admitting this family widens zorch's remit beyond algebraic device-resident
 Fiat-Shamir; that scope decision is **flagged for ratification on epic
 [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1)**. If declined,
-the four modules move to the consumer with no rework — they depend on nothing in
-zorch beyond each other.
+these modules move to the consumer, but not untouched: both field transcripts
+depend on `byte_transcript` for the Merlin wire vocabulary and on `grind` for
+the windowed search and its PoW predicate. A move either takes those two along
+or leaves them as a build boundary the consumer re-crosses.

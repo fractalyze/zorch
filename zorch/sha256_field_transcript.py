@@ -35,7 +35,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 import numpy as np
@@ -331,3 +331,12 @@ class Sha256FieldTranscript:
         return lax.bitcast_convert_type(
             u8.reshape(n, self._item_bytes()), self.dtype
         ).reshape(n)
+
+
+if TYPE_CHECKING:
+    from zorch.transcript import Transcript
+
+    # Seam-conformance pin (docs/reference/conventions.md). Neither field
+    # transcript has an in-tree consumer, so without this `Transcript` drift
+    # would fail nowhere rather than late.
+    _t: type[Transcript] = Sha256FieldTranscript
