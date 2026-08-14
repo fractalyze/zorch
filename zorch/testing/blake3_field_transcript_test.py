@@ -386,7 +386,13 @@ class Blake3ProofOfWorkTest(absltest.TestCase):
                 hlo = (
                     frx.jit(lambda x: x.grind(8, chunk=_TEST_WINDOW)).lower(t).as_text()
                 )
-                self.assertEqual(BLAKE3_MARKER in hlo, marked)
+                # Quoted, because `BLAKE3_MARKER` is a PREFIX of
+                # `hash_frx.blake3_compress`, which every arm now carries on its
+                # streaming compressions — a bare substring reads those as the
+                # whole-message marker and reports the two-block arm as marked.
+                # The lowering renders it `stablehlo.composite "hash_frx.blake3"`,
+                # so the closing quote is what separates the two names.
+                self.assertEqual(f'"{BLAKE3_MARKER}"' in hlo, marked)
 
     def test_grind_bits_out_of_range_rejected(self) -> None:
         # Mirrors the byte transcript: > 256 (or negative) leading-zero bits on a
