@@ -3,18 +3,21 @@ from __future__ import annotations
 
 from typing import Any
 
+import frx
 import frx.numpy as fnp
 import numpy as np
 import zk_dtypes  # noqa: F401  (registers the binary_field_* dtypes)
 from absl.testing import absltest, parameterized
 from frx import Array, lax
 
+from zorch.sumcheck.domain import fold
 from zorch.utils.binary_field import (
     _ELEMENTS_TARGET_PROGRAMS,
     _to_limbs,
     bit_select_xor_reduce,
     byte_select_xor_reduce,
     field_bit_width,
+    ghash_round_fold_reduce,
     pack,
     unpack,
 )
@@ -209,6 +212,69 @@ class BinaryFieldReprTest(parameterized.TestCase):
             self.skipTest("no sub-32-bit binary tower dtype available")
         with self.assertRaises(ValueError):
             field_bit_width(narrow[0])
+
+
+class GhashRoundFoldReduceTest(absltest.TestCase):
+    """The fused round against the portable fold + compressed round poly.
+
+    The fused arm only exists on the CUDA backend; everywhere else (and for
+    every fallback condition) the helper must return None so callers keep
+    their portable expressions."""
+
+    @staticmethod
+    def _portable(W: Array, B: Array, r: Array) -> tuple[Array, Array, Array]:
+        folded = fold(fnp.stack([W, B]), r)
+        (f0, f1), (b0, b1) = fnp.reshape(folded, (2, 2, -1))
+        msg = fnp.sum(fnp.stack([f0 * b0, (f1 - f0) * (b1 - b0)]), axis=-1)
+        return folded[0], folded[1], msg
+
+    def test_matches_portable_round(self) -> None:
+        n = 1 << 13
+        W = _rand_field(fnp.binary_field_ghash, n, 1)
+        B = _rand_field(fnp.binary_field_ghash, n, 2)
+        r = _rand_field(fnp.binary_field_ghash, 1, 3)[0]
+        fused = ghash_round_fold_reduce(W, B, r)
+        if fused is None:
+            self.assertNotEqual(frx.default_backend(), "gpu")
+            self.skipTest("the fused GHASH round kernel needs the CUDA backend")
+        assert fused is not None  # skipTest raised above; narrow for mypy
+        expected = self._portable(W, B, r)
+        for got, want, name in zip(fused, expected, ("W", "B", "msg")):
+            np.testing.assert_array_equal(
+                np.asarray(_to_limbs(got)),
+                np.asarray(_to_limbs(want)),
+                err_msg=f"fused round diverges from the portable path on {name}",
+            )
+
+    def test_small_state_returns_none(self) -> None:
+        W = _rand_field(fnp.binary_field_ghash, 64, 4)
+        B = _rand_field(fnp.binary_field_ghash, 64, 5)
+        r = _rand_field(fnp.binary_field_ghash, 1, 6)[0]
+        self.assertIsNone(ghash_round_fold_reduce(W, B, r))
+
+    def test_non_ghash_returns_none(self) -> None:
+        # binary_field_t7 is also 128-bit, so this pins the dtype check to
+        # identity, not width.
+        W = _rand_field(fnp.binary_field_t7, 1 << 13, 7)
+        B = _rand_field(fnp.binary_field_t7, 1 << 13, 8)
+        r = _rand_field(fnp.binary_field_t7, 1, 9)[0]
+        self.assertIsNone(ghash_round_fold_reduce(W, B, r))
+
+    def test_invalid_operands_return_none(self) -> None:
+        W = _rand_field(fnp.binary_field_ghash, 1 << 13, 10)
+        B = _rand_field(fnp.binary_field_ghash, 1 << 13, 11)
+        r = _rand_field(fnp.binary_field_ghash, 1, 12)[0]
+        # Mismatched column lengths.
+        self.assertIsNone(ghash_round_fold_reduce(W, B[: 1 << 12], r))
+        # A vector challenge where the contract wants a scalar.
+        self.assertIsNone(ghash_round_fold_reduce(W, B, r.reshape(1)))
+        # A non-1-D state.
+        two_d = W.reshape(2, -1)
+        self.assertIsNone(ghash_round_fold_reduce(two_d, two_d, r))
+        # Columns of different dtypes.
+        self.assertIsNone(
+            ghash_round_fold_reduce(W, _rand_field(fnp.binary_field_t7, 1 << 13, 13), r)
+        )
 
 
 if __name__ == "__main__":

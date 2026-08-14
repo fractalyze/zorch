@@ -26,6 +26,7 @@ import frx.numpy as fnp
 from frx import Array, lax
 from frx.experimental import pallas as pl
 from frx.experimental.pallas import triton as plgpu
+from zk_dtypes import binary_field_ghash
 
 _LIMB = fnp.uint32
 _LIMB_BITS = 32
@@ -619,3 +620,59 @@ def pack(coeffs: Array, dtype: Any) -> Array:
     field_bit_width(dtype)  # validate W is a whole number of limbs
     bit = (coeffs == _f2(1)).astype(_LIMB)
     return _from_limbs(_limbs_from_bits(bit), dtype)
+
+
+# Below this many state elements the fused round kernel's launch and per-block
+# challenge-table build cost more than the multiplies they save.
+_ROUND_FFI_MIN_ELEMS = 4096
+
+
+def ghash_round_fold_reduce(
+    W: Array, B: Array, r: Array
+) -> tuple[Array, Array, Array] | None:
+    """Fold `(W, B)` at `r` and take the compressed product round poly of the
+    folded state in one fused device pass, or return None where the fused
+    kernel does not apply (the caller keeps its portable expressions).
+
+    The CUDA plugin's `frx_ghash_round_fold_reduce` runs the whole sumcheck
+    round in one kernel: the multiply by the grid-uniform challenge rides
+    per-block shared-memory nibble tables instead of the ~150-integer-op
+    software carryless product, only the two Gruen products pay the generic
+    multiply, and the folded columns come out of the same pass — so the fold
+    the portable path re-runs for the next round's input disappears. XOR sums
+    are order-independent and the generic multiply is the same
+    grouped-integer-multiply lowering the compiler emits, so all three outputs
+    are byte-identical to the portable path on every toolchain.
+
+    GHASH-only: the kernel bakes the x^128 + x^7 + x^2 + x + 1 reduction.
+    Metal has no variant yet, so it takes the portable path with every other
+    backend.
+    """
+    if frx.default_backend() != _CUDA or W.ndim != 1:
+        return None
+    n = W.shape[0]
+    ghash_dtype = fnp.dtype(binary_field_ghash)
+    if (
+        fnp.dtype(W.dtype) != ghash_dtype
+        or fnp.dtype(B.dtype) != ghash_dtype
+        or fnp.dtype(r.dtype) != ghash_dtype
+        or B.shape != W.shape
+        or r.ndim != 0
+        or n < _ROUND_FFI_MIN_ELEMS
+        or n % 4 != 0
+    ):
+        return None
+    half = n // 2
+    folded_w, folded_b, sums = frx.ffi.ffi_call(
+        "frx_ghash_round_fold_reduce",
+        (
+            frx.ShapeDtypeStruct((half, 4), _LIMB),
+            frx.ShapeDtypeStruct((half, 4), _LIMB),
+            frx.ShapeDtypeStruct((2, 4), _LIMB),
+        ),
+    )(_to_limbs(W), _to_limbs(B), _to_limbs(r))
+    return (
+        _from_limbs(folded_w, W.dtype),
+        _from_limbs(folded_b, W.dtype),
+        _from_limbs(sums, W.dtype),
+    )

@@ -31,6 +31,7 @@ py_test(
     size = "small",
     srcs = ["binary_field_test.py"],
     deps = [
+        "//zorch/sumcheck",
         "//zorch/utils:binary_field",
         requirement("absl_py"),
         requirement("frx"),
