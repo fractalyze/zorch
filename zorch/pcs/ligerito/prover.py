@@ -69,6 +69,7 @@ from zorch.sumcheck.prover import (
     StandardRound,
 )
 from zorch.transcript import TranscriptT
+from zorch.utils import binary_field
 from zorch.utils.bits import log2_strict_usize
 
 # A code factory: (message_len, log_inv_rate) -> the level's TensorCode. Keeping
@@ -266,6 +267,10 @@ def _open_jit(
     round_ = (
         _compressed_round(dtype) if cfg.compressed_sumcheck_messages else _round(dtype)
     )
+    # The fused round kernel emits the compressed [c_0, c_2] wire form; the
+    # natural-evals wire (compressed_sumcheck_messages=False) must keep the
+    # portable round poly or the transcript would carry the wrong message.
+    fuse_rounds = cfg.compressed_sumcheck_messages
     basis = select_commit_basis(cfg.monomial_commit)
 
     # The continuous sumcheck state: witness W (folds) and basis B (glued +
@@ -312,18 +317,53 @@ def _open_jit(
     for j in range(cfg.num_levels):
         k_j = cfg.fold_ks[j]
         # --- fold this level's k_j lane variables through the product sumcheck ---
+        # A round is "fold at the previous challenge, then this round's poly of
+        # the folded state" — exactly the fused GHASH round kernel's shape
+        # (binary_field.ghash_round_fold_reduce), so wherever a fold and a
+        # round poly are adjacent the pair routes through it and the portable
+        # fold + _round_poly expressions stay as the byte-identical fallback.
+        r: Array
         for i in range(k_j):
             msg: Array | None = None  # eager: this round's is already absorbed
             if not eager:
-                msg = round_._round_poly(fnp.stack([W, B]))
+                if i == 0:
+                    msg = round_._round_poly(fnp.stack([W, B]))
+                else:
+                    # `r` is the previous iteration's challenge: the fold the
+                    # portable path runs below is deferred into this round.
+                    fused = (
+                        binary_field.ghash_round_fold_reduce(W, B, r)
+                        if fuse_rounds
+                        else None
+                    )
+                    if fused is None:
+                        W, B = fold(fnp.stack([W, B]), r)
+                        msg = round_._round_poly(fnp.stack([W, B]))
+                    else:
+                        W, B, msg = fused
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = fold(fnp.stack([W, B]), r)
             if eager:
-                # The freshly folded state's — the terminal residual state's
-                # included (the verifier recomputes that one in the clear).
-                t = emit(t, W, B)
+                fused = (
+                    binary_field.ghash_round_fold_reduce(W, B, r)
+                    if fuse_rounds
+                    else None
+                )
+                if fused is None:
+                    W, B = fold(fnp.stack([W, B]), r)
+                    # The freshly folded state's — the terminal residual
+                    # state's included (the verifier recomputes that one in
+                    # the clear).
+                    t = emit(t, W, B)
+                else:
+                    W, B, fused_msg = fused
+                    sumcheck_messages.append(fused_msg)
+                    t = chor.observe_message(t, fused_msg)
+        if not eager and k_j > 0:
+            # The deferred tail fold: the portable loop folded once per round;
+            # the fused path leaves the last challenge's fold to run here.
+            W, B = fold(fnp.stack([W, B]), r)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---

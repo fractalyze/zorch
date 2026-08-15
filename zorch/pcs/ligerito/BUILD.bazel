@@ -23,6 +23,7 @@ py_library(
         "//zorch/pcs/basefold",  # staggered batching (alpha-RLC)
         "//zorch/poly",
         "//zorch/sumcheck",  # degree-2 product round message
+        "//zorch/utils:binary_field",  # fused GHASH round kernel dispatch
         "//zorch/utils:bits",
         requirement("frx"),
     ],
