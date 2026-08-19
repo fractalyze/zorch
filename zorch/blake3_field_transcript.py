@@ -44,6 +44,7 @@ from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
 from hash_frx.blake3 import blake3
 from hash_frx.blake3.streaming import Blake3Stream, blake3_stream_init
+from hash_frx.fusion import fused_region
 
 from zorch.byte_transcript import (
     KIND_SCALAR,
@@ -89,25 +90,102 @@ def _nonce8(counters: Array) -> Array:
     )
 
 
+# ============================================================================
+# The squeeze marker, mirroring `zorch.sha256_squeeze`.
+#
+# A squeeze is absorb -> finalize -> absorb, and each of those is its own jit
+# zone entered through the resumable state, so unmarked it lowers to a long
+# chain of tiny launches. The SHA-256 row measured ~14 launches per
+# `sample_scalar` and notes that on a latency-bound prove the cost is the launch
+# count, not the arithmetic. BLAKE3 had no marker at all, and it shows: a
+# sequential `sample_scalar` chain measures 16.6x the SHA-256 transcript
+# (150.2 ms vs 9.0 ms for 256 squeezes on Metal), which is worth ~177 ms of a
+# 429 ms m=28 prove on the blake3 arm — the arm the flock-challenge harness
+# uses. See flock-zorch#298.
+#
+# hash-frx's own marker covers a whole message, which a squeeze is not: it is
+# entered mid-stream at a runtime position. So the state rides as OPERANDS (the
+# seven `Blake3Stream` leaves) and only the squeeze width is an attr, which
+# keeps one kernel serving every stream position instead of recompiling per
+# `block_len`. With no emitter installed the decomposition inlines and is
+# byte-identical, so this is safe to land before the kernel exists.
+# ============================================================================
+BLAKE3_SQUEEZE_MARKER = "zorch.blake3_squeeze"
+BLAKE3_SQUEEZE_MARKER_VERSION = 1
+
+
+def _blake3_squeeze_hop(
+    state: Blake3Stream, framing: Array, nbytes: int
+) -> tuple[Blake3Stream, Array]:
+    """The plain hop: absorb `framing`, read `nbytes` of extendable output,
+    re-absorb it. Returns the advanced state and the raw squeezed bytes;
+    reinterpreting those to field elements stays with the caller, so the region
+    carries no dtype."""
+    absorbed = state.absorb(framing)
+    squeezed = absorbed.finalize(nbytes)
+    return absorbed.absorb(squeezed), squeezed
+
+
+def _blake3_squeeze_region(
+    cv_stack: Array,
+    stack_len: Array,
+    chunk_cv: Array,
+    counter: Array,
+    block: Array,
+    block_len: Array,
+    compressed: Array,
+    framing: Array,
+    *,
+    nbytes: int,
+) -> tuple[Array, ...]:
+    """The `zorch.blake3_squeeze` decomposition, entered at the runtime stream
+    position carried in the state leaves."""
+    state, squeezed = _blake3_squeeze_hop(
+        Blake3Stream(
+            cv_stack, stack_len, chunk_cv, counter, block, block_len, compressed
+        ),
+        framing,
+        nbytes,
+    )
+    return (
+        state.cv_stack,
+        state.stack_len,
+        state.chunk_cv,
+        state.counter,
+        state.block,
+        state.block_len,
+        state.compressed,
+        squeezed,
+    )
+
+
 @partial(jit, static_argnames=("nbytes",), inline=True)
 def _blake3_squeeze_zone(
     state: Blake3Stream, framing: Array, nbytes: int
 ) -> tuple[Blake3Stream, Array]:
-    """The squeeze hop — absorb `framing`, read `nbytes` of extendable output,
-    re-absorb it — as ONE dispatch rather than three.
+    """The marked hop as ONE dispatch rather than three, so an eager draw fires
+    a single fused FS kernel instead of three host dispatches and three syncs.
 
-    `Blake3Stream.absorb` and `.finalize` are each their own jit zone, so an
-    eager draw would otherwise pay three host dispatches and three syncs.
-    Wrapping them re-emits nothing: the inner zones stay their own pjits.
     `inline=True` keeps a call site already inside an outer jit byte-identical,
-    mirroring `_sha256_squeeze_zone`. That one additionally carries a fusion
-    marker; there is none to carry here, because hash-frx marks a whole message
-    and these compressions are entered through the resumable state. (`grind`'s
-    pre-image is a whole message, so it does take the marker — see
-    `_pow_digests`.)"""
-    absorbed = state.absorb(framing)
-    squeezed = absorbed.finalize(nbytes)
-    return absorbed.absorb(squeezed), squeezed
+    mirroring `_sha256_squeeze_zone`. (`grind`'s pre-image is a whole message,
+    so it takes hash-frx's own marker instead — see `_pow_digests`.)"""
+    if nbytes == 0:
+        return _blake3_squeeze_hop(state, framing, nbytes)
+    *leaves, squeezed = fused_region(
+        _blake3_squeeze_region,
+        state.cv_stack,
+        state.stack_len,
+        state.chunk_cv,
+        state.counter,
+        state.block,
+        state.block_len,
+        state.compressed,
+        framing,
+        name=BLAKE3_SQUEEZE_MARKER,
+        version=BLAKE3_SQUEEZE_MARKER_VERSION,
+        nbytes=nbytes,
+    )
+    return Blake3Stream(*leaves), squeezed
 
 
 @partial(
