@@ -3,7 +3,7 @@
 
 `cheap_transcript` returns a real `DuplexTranscript` over `CheapPermutation` — a
 genuine Fiat-Shamir sponge whose challenges derive from observations, but cheap
-enough for unit tests and gated `has_dedicated_fusion=False` so `prove` keeps it
+enough for unit tests and gated `fusion_path=GENERIC` so `prove` keeps it
 on the unmarked path (no `zorch.sumcheck` marker).
 """
 
@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 from frx import Array
-from hash_frx.fusion import FUSED_REGION_MARKER
+from hash_frx.fusion import FUSED_REGION_MARKER, FusionPath
 
 from zorch.transcript import DuplexTranscript
 
@@ -27,7 +27,7 @@ class CheapPermutation:
 
     Implements the `Permutation` seam so a `DuplexTranscript` runs a real
     (sound-shaped) Fiat-Shamir sponge in unit tests without a full poseidon2
-    permute. `has_dedicated_fusion` is False, so `prove` keeps such a transcript
+    permute. `fusion_path` is GENERIC, so `prove` keeps such a transcript
     on its unmarked path (no `zorch.sumcheck` marker). The mixing is not a secure
     permutation and need not be bijective — never use outside tests.
     """
@@ -36,7 +36,7 @@ class CheapPermutation:
         self.width = width
         self.dtype = dtype
         # Keep test transcripts on prove's unmarked path.
-        self.has_dedicated_fusion = False
+        self.fusion_path = FusionPath.GENERIC
         self.fused_region_marker = (FUSED_REGION_MARKER, 0)
 
     def __eq__(self, other: object) -> bool:

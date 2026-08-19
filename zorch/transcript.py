@@ -272,7 +272,7 @@ class DuplexTranscript:
         (`zorch.logup_gkr.jagged_prover`) reads it to mark its sumcheck scan as one
         register-resident kernel (mirrors `Sponge`/`Compression`). False for a test
         `CheapPermutation`, so unit tests keep the plain scan."""
-        return self.permutation.has_dedicated_fusion
+        return self.permutation.fusion_path.is_one_kernel
 
     @classmethod
     def new(
@@ -568,7 +568,7 @@ def _absorb_chain(
     decomposition rebuilds the permute from those operands — the emitter's
     operand contract names the constants there. Blocks at
     index >= `active_blocks` (int32 scalar) are padding and leave the sponge
-    unchanged. Caller gates on `has_dedicated_fusion` and a concrete
+    unchanged. Caller gates on `fusion_path.is_one_kernel` and a concrete
     `num_blocks > 1` -- a chain of one is not a chain."""
     operands, permute_from_operands, perm_attrs = permutation.fused_region_spec(sponge)
     constants = operands[1:]
@@ -688,7 +688,7 @@ def _observe_body(t: DuplexTranscript, values: Array) -> DuplexTranscript:
     # composite. The plain scan below is the same masked permute, already fully
     # parallel across the `vmap`, and lowers to the same dedicated kernel.
     if (
-        permutation.has_dedicated_fusion
+        permutation.fusion_path.is_one_kernel
         and isinstance(num_blocks, int)
         and num_blocks > 1
     ):

@@ -38,7 +38,7 @@ from zorch.testkit.koalabear16 import (
 
 def _non_standard_perm() -> Poseidon2:
     """A Poseidon2 whose external matrix is NOT the standard M4-circulant, so its
-    permute carries only the generic fusion marker (`has_dedicated_fusion` False)
+    permute carries only the generic fusion marker (`fusion_path` GENERIC)
     rather than the dedicated `hash_frx.poseidon2` one."""
     params = koalabear16_params()
     perturbed = default_external_matrix(16, F).at[0, 0].add(fnp.ones((), F))
@@ -338,12 +338,16 @@ class MerkleTreeTest(absltest.TestCase):
         # its permutation lowers permute to a hash-named marker. Standard koalabear
         # poseidon2 qualifies; a non-standard external matrix does not.
         sponge, comp, _ = koalabear16_merkle()
-        self.assertTrue(sponge.has_dedicated_fusion)
-        self.assertTrue(comp.has_dedicated_fusion)
+        self.assertTrue(sponge.fusion_path.is_one_kernel)
+        self.assertTrue(comp.fusion_path.is_one_kernel)
         perm = _non_standard_perm()
-        self.assertFalse(Sponge(perm, SpongeParams(rate=8, out=8)).has_dedicated_fusion)
         self.assertFalse(
-            Compression(perm, CompressionParams(arity=2, chunk=8)).has_dedicated_fusion
+            Sponge(perm, SpongeParams(rate=8, out=8)).fusion_path.is_one_kernel
+        )
+        self.assertFalse(
+            Compression(
+                perm, CompressionParams(arity=2, chunk=8)
+            ).fusion_path.is_one_kernel
         )
 
     def test_commit_lowers_to_nested_poseidon2_markers(self) -> None:

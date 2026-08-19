@@ -14,13 +14,15 @@ KB = zk_dtypes.koalabear_mont
 
 class CheapPermutationTest(absltest.TestCase):
     def test_satisfies_permutation_protocol(self) -> None:
-        # runtime_checkable: width / dtype / has_dedicated_fusion / permute.
+        # runtime_checkable checks attribute existence only, so this is what
+        # catches the stub falling behind a hash-frx seam change (e.g. a
+        # renamed protocol member) before a prove path trips on it.
         self.assertIsInstance(CheapPermutation(width=8, dtype=KB), Permutation)
 
     def test_stays_off_the_dedicated_fusion_path(self) -> None:
         # The whole point: prove gates marking on this, so a test transcript must
-        # report False and stay on the unmarked path.
-        self.assertFalse(CheapPermutation(width=8, dtype=KB).has_dedicated_fusion)
+        # report a non-one-kernel path and stay on the unmarked path.
+        self.assertFalse(CheapPermutation(width=8, dtype=KB).fusion_path.is_one_kernel)
 
     def test_permute_preserves_shape_and_is_deterministic(self) -> None:
         perm = CheapPermutation(width=8, dtype=KB)
