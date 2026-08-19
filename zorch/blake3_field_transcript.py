@@ -113,6 +113,77 @@ def _nonce8(counters: Array) -> Array:
 BLAKE3_SQUEEZE_MARKER = "zorch.blake3_squeeze"
 BLAKE3_SQUEEZE_MARKER_VERSION = 1
 
+# The absorb half of the same story. Once the squeeze is fused, `observe` is
+# what is left: it goes through the plain streaming absorb, and at n=256 rounds
+# it measures 44.2 ms against the SHA-256 transcript's 0.36 ms — 123x, and the
+# whole residual FS deficit on the blake3 arm.
+#
+# `length` is an attr, as `nbytes` is for the squeeze. That is affordable here
+# because a real m=28 prove uses only twelve distinct payload lengths across 90
+# absorbs, and 79 of those are 17 or 18 bytes — so a handful of kernel variants
+# serve everything, and the hot ones are under a block.
+BLAKE3_ABSORB_MARKER = "zorch.blake3_absorb"
+BLAKE3_ABSORB_MARKER_VERSION = 1
+
+
+def _blake3_absorb_region(
+    cv_stack: Array,
+    stack_len: Array,
+    chunk_cv: Array,
+    counter: Array,
+    block: Array,
+    block_len: Array,
+    compressed: Array,
+    payload: Array,
+    **_attrs: object,
+) -> tuple[Array, ...]:
+    """The `zorch.blake3_absorb` decomposition, entered at the runtime stream
+    position carried in the state leaves."""
+    state = Blake3Stream(
+        cv_stack, stack_len, chunk_cv, counter, block, block_len, compressed
+    ).absorb(payload)
+    return (
+        state.cv_stack,
+        state.stack_len,
+        state.chunk_cv,
+        state.counter,
+        state.block,
+        state.block_len,
+        state.compressed,
+    )
+
+
+@partial(jit, static_argnames=("length",), inline=True)
+def _blake3_absorb_zone_impl(
+    state: Blake3Stream, payload: Array, length: int
+) -> Blake3Stream:
+    return Blake3Stream(
+        *fused_region(
+            _blake3_absorb_region,
+            state.cv_stack,
+            state.stack_len,
+            state.chunk_cv,
+            state.counter,
+            state.block,
+            state.block_len,
+            state.compressed,
+            payload,
+            name=BLAKE3_ABSORB_MARKER,
+            version=BLAKE3_ABSORB_MARKER_VERSION,
+            length=length,
+        )
+    )
+
+
+def _blake3_absorb_zone(state: Blake3Stream, payload: Array) -> Blake3Stream:
+    """One marked absorb. The payload length is static at every call site (it
+    comes from a framing constant plus a fixed-width serialization), so it rides
+    as an attr and the emitter gets a compile-time block count."""
+    length = int(payload.shape[0])
+    if length == 0:
+        return state
+    return _blake3_absorb_zone_impl(state, payload, length)
+
 
 def _blake3_squeeze_hop(
     state: Blake3Stream, framing: Array, nbytes: int
@@ -244,7 +315,7 @@ class Blake3FieldTranscript:
         return int(np.dtype(self.dtype).itemsize)
 
     def _absorb(self, payload: Array) -> Blake3FieldTranscript:
-        return replace(self, state=self.state.absorb(payload))
+        return replace(self, state=_blake3_absorb_zone(self.state, payload))
 
     def observe(self, values: Array) -> Blake3FieldTranscript:
         """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
