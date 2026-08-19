@@ -590,14 +590,14 @@ def bit_select_xor_reduce(
                 f"{values.shape}"
             )
         backend = frx.default_backend()
-        if backend in (_CUDA, _METAL):
+        if backend in (_CUDA, _METAL, _CPU):
             selector_bytes = lax.bitcast_convert_type(selectors_l, fnp.uint8).reshape(
                 selectors.shape[0], width // 8
             )
             packed_bytes = (
                 _bit_select_packed_bytes_pallas
                 if backend == _CUDA
-                else _bit_select_packed_bytes_ffi
+                else _bit_select_packed_bytes_ffi  # Metal and CPU share the FFI
             )
             out_l = packed_bytes(selector_bytes, values_l, limbs)
         else:
