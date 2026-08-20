@@ -31,6 +31,7 @@ py_test(
     deps = [
         "//zorch:blake3_field_transcript",
         "//zorch:sha256_field_transcript",
+        requirement("absl_py"),
         requirement("frx"),
         requirement("hash_frx"),
         requirement("numpy"),

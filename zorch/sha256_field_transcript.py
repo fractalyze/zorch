@@ -214,19 +214,22 @@ class Sha256FieldTranscript:
         )
         return fnp.concatenate([framing, vals_u8], axis=1).reshape(-1)
 
-    def observe_scalar_and_sample(
-        self, value: Array
+    def _sample_scalar_after(
+        self, payload: Array
     ) -> tuple[Sha256FieldTranscript, Array]:
-        """`observe_scalar` then `sample_scalar`, as ONE marked region — the
-        BLAKE3 row's method on this wire."""
+        """Put `payload` on the stream and draw a scalar, as ONE marked region —
+        the BLAKE3 row's `_sample_scalar_after`, on this wire."""
         framing = fnp.concatenate(
-            [
-                self._scalar_observe_wire(value),
-                _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])),
-            ]
+            [payload, _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
         )
         state, squeezed = _sha256_squeeze_zone(self.state, framing, self._item_bytes())
         return replace(self, state=state), self._u8_to_elems(squeezed, 1)[0]
+
+    def observe_scalar_and_sample(
+        self, value: Array
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """`observe_scalar` then `sample_scalar`, as one marked region."""
+        return self._sample_scalar_after(self._scalar_observe_wire(value))
 
     def observe_label(self, label: bytes) -> Sha256FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -334,20 +337,11 @@ class Sha256FieldTranscript:
     def grind_and_sample(
         self, pow_bits: int, *, chunk: int = GRIND_WINDOW
     ) -> tuple[Sha256FieldTranscript, Array, Array]:
-        """Grind, then draw one scalar challenge, as ONE marked region.
-
-        The BLAKE3 row's `grind_and_sample`, on this wire. Byte-identical to
-        `grind(...)` then `sample_scalar()` by construction: absorb is a stream,
-        so `absorb(a); absorb(b)` and `absorb(a || b)` leave the same state, and
-        the squeeze zone already absorbs its framing before counter-squeezing.
-        """
+        """Grind, then draw one scalar challenge, as ONE marked region — the
+        BLAKE3 row's `grind_and_sample`, on this wire."""
         witness = self._find_witness(pow_bits, chunk)
-        framing = fnp.concatenate(
-            [self._witness_wire(witness), _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
-        )
-        state, squeezed = _sha256_squeeze_zone(self.state, framing, self._item_bytes())
-        t = replace(self, state=state)
-        return t, witness, t._u8_to_elems(squeezed, 1)[0]
+        t, challenge = self._sample_scalar_after(self._witness_wire(witness))
+        return t, witness, challenge
 
     def check_witness(
         self, witness: Array, *, pow_bits: int

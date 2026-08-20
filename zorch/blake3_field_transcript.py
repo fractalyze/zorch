@@ -344,23 +344,28 @@ class Blake3FieldTranscript:
         )
         return fnp.concatenate([framing, vals_u8], axis=1).reshape(-1)
 
-    def observe_scalar_and_sample(
-        self, value: Array
+    def _sample_scalar_after(
+        self, payload: Array
     ) -> tuple[Blake3FieldTranscript, Array]:
-        """`observe_scalar` then `sample_scalar`, as ONE marked region.
+        """Put `payload` on the stream and draw a scalar, as ONE marked region.
 
-        The same stream identity `grind_and_sample` uses: the observe's bytes
-        ride the draw's framing, so the wire is unchanged and the pair costs one
-        region instead of two.
+        This is the merge every fused pair on this row is made of. Absorb is a
+        stream, so `absorb(P); squeeze(F)` and `squeeze(P || F)` leave the same
+        state, and `_squeeze` already absorbs its framing before reading — so a
+        payload that would have been its own absorb can ride the draw instead.
+        Byte-identical by construction, and one marked region rather than two.
         """
         framing = fnp.concatenate(
-            [
-                self._scalar_observe_wire(value),
-                _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])),
-            ]
+            [payload, _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
         )
         t, squeezed = self._squeeze(framing, self._item_bytes())
         return t, t._u8_to_elems(squeezed, 1)[0]
+
+    def observe_scalar_and_sample(
+        self, value: Array
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        """`observe_scalar` then `sample_scalar`, as one marked region."""
+        return self._sample_scalar_after(self._scalar_observe_wire(value))
 
     def observe_label(self, label: bytes) -> Blake3FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -508,26 +513,12 @@ class Blake3FieldTranscript:
     def grind_and_sample(
         self, pow_bits: int, *, chunk: int = GRIND_WINDOW
     ) -> tuple[Blake3FieldTranscript, Array, Array]:
-        """Grind, then draw one scalar challenge, as ONE marked region.
-
-        Byte-identical to `grind(...)` followed by `sample_scalar()`, by
-        construction rather than by a golden's permission: absorb is a stream,
-        so `absorb(a); absorb(b)` and `absorb(a || b)` leave the same state, and
-        `_squeeze` already absorbs its framing before reading the XOF. The
-        witness therefore rides the draw's framing instead of costing a marked
-        region of its own.
-
-        That is the whole point. A marked region costs milliseconds where it
-        sits between the prover's compute kernels, against microseconds of
-        hashing -- so the count of regions is what the prover pays for, and this
-        halves it for every round that grinds before it draws.
-        """
+        """Grind, then draw one scalar challenge, as ONE marked region — the
+        witness rides the draw's framing (see `_sample_scalar_after`). Byte-
+        identical to `grind(...)` followed by `sample_scalar()`."""
         witness = self._find_witness(pow_bits, chunk)
-        framing = fnp.concatenate(
-            [self._witness_wire(witness), _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
-        )
-        t, squeezed = self._squeeze(framing, self._item_bytes())
-        return t, witness, t._u8_to_elems(squeezed, 1)[0]
+        t, challenge = self._sample_scalar_after(self._witness_wire(witness))
+        return t, witness, challenge
 
     def check_witness(
         self, witness: Array, *, pow_bits: int

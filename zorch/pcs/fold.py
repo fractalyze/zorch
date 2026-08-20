@@ -326,12 +326,13 @@ class FoldChoreography(Generic[TranscriptT]):
         """Absorb a round message and draw the challenge that immediately
         follows it. Returns `(transcript, challenge)`.
 
-        The OOD and induce blocks both end this way, and the two calls are
-        adjacent on the stream, so a wire whose squeeze absorbs a payload first
-        can spend one marked region on them instead of two. The default
-        composes, so a wire that cannot merge is unchanged.
+        The default is the transcript's own `observe_and_sample`, which is the
+        seam that already means "this absorb and this draw are one region" —
+        the same one `fold_challenge` takes above. Byte-identical to
+        `observe_message` then `sample`, since the default `observe_message` IS
+        `transcript.observe`.
         """
-        return self.observe_message(transcript, msg).sample()
+        return transcript.observe_and_sample(msg, 1)
 
     def grind_and_fold_challenge(
         self,
@@ -348,12 +349,8 @@ class FoldChoreography(Generic[TranscriptT]):
         witness on the wire as one marked region and the draw as another. A wire
         whose squeeze absorbs a payload before reading can do both in ONE region
         by carrying the witness in the draw's framing — byte-identical, because
-        absorb is a stream — and should override this to say so.
-
-        Worth the seam: a marked region costs milliseconds where it sits between
-        a prover's compute kernels, against microseconds of hashing. Ablating
-        29% of the regions in flock's `open` recovered 50% of that phase's
-        Fiat-Shamir cost, so the count of regions is what a prover pays for.
+        absorb is a stream — and should override this to say so. Region count is
+        what a prover pays for; the measurements behind that are on epic #1.
         """
         transcript, witness = self.grind(transcript, bits)
         transcript, challenge = self.fold_challenge(transcript, msg, level, fold_idx)

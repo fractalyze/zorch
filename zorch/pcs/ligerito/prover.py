@@ -337,19 +337,39 @@ def _open_jit(
     # never both.
     eager = chor.eager_messages
 
-    def emit(t: TranscriptT, witness: Array, basis: Array) -> TranscriptT:
+    def fold_hop(
+        t: TranscriptT, msg: Array | None, level: int, fold_idx: int
+    ) -> tuple[TranscriptT, Array]:
+        """This round's proof of work and its fold challenge. The two are
+        adjacent on the stream, so the choreography may spend one hop on them;
+        the witness-order invariant `num_pow_witnesses` mirrors stays owned
+        here, in one place."""
+        bits = chor.fold_grind_bits(level, fold_idx)
+        if bits is None:
+            return chor.fold_challenge(t, msg, level, fold_idx)
+        t, witness, r = chor.grind_and_fold_challenge(t, msg, level, fold_idx, bits)
+        pow_witnesses.append(witness)
+        return t, r
+
+    def round_message(witness: Array, basis: Array) -> Array:
         msg = round_._round_poly(fnp.stack([witness, basis]))
         sumcheck_messages.append(msg)
-        return chor.observe_message(t, msg)
+        return msg
 
-    def emit_and_sample(
+    def emit(t: TranscriptT, witness: Array, basis: Array) -> TranscriptT:
+        return chor.observe_message(t, round_message(witness, basis))
+
+    def separation(
         t: TranscriptT, witness: Array, basis: Array
     ) -> tuple[TranscriptT, Array]:
-        """`emit` and the separation draw that follows it, as one hop where the
-        wire allows it — the two are adjacent on the stream."""
-        msg = round_._round_poly(fnp.stack([witness, basis]))
-        sumcheck_messages.append(msg)
-        return chor.observe_message_and_sample(t, msg)
+        """The OOD and induce blocks both end by drawing a separation challenge,
+        preceded under the eager policy by this state's message. The two are
+        adjacent on the stream, so the choreography may spend one hop on them."""
+        if eager:
+            t, sep = chor.observe_message_and_sample(t, round_message(witness, basis))
+        else:
+            t, sep = t.sample()
+        return t, sep.reshape(())
 
     def grind(t: TranscriptT, bits: int | None) -> TranscriptT:
         if bits is None:
@@ -371,16 +391,7 @@ def _open_jit(
             if not eager:
                 msg = round_._round_poly(fnp.stack([W, B]))
                 sumcheck_messages.append(msg)
-            # The grind and the draw are one hop where the wire allows it:
-            # the witness rides the draw's framing instead of costing a marked
-            # region of its own. `grind_and_fold_challenge`'s default still
-            # composes the two, so a wire that cannot merge is unchanged.
-            bits = chor.fold_grind_bits(j, i)
-            if bits is None:
-                t, r = chor.fold_challenge(t, msg, j, i)
-            else:
-                t, witness, r = chor.grind_and_fold_challenge(t, msg, j, i, bits)
-                pow_witnesses.append(witness)
+            t, r = fold_hop(t, msg, j, i)
             if eager:
                 # Fold and the freshly folded state's message in ONE marked
                 # region. Unmarked they are two full passes over the state —
@@ -420,11 +431,7 @@ def _open_jit(
                 y = (W * b_ood).sum()
                 t = t.observe(y)
                 ood_values.append(y)
-                if eager:
-                    t, sep = emit_and_sample(t, W, b_ood)
-                else:
-                    t, sep = t.sample()
-                sep = sep.reshape(())
+                t, sep = separation(t, W, b_ood)
                 B = B + sep * b_ood
         else:
             # Bind the in-clear residual before sampling the final level's queries
@@ -459,11 +466,7 @@ def _open_jit(
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
         eqps = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
-        if eager:
-            t, sep = emit_and_sample(t, W, b_new)
-        else:
-            t, sep = t.sample()
-        sep = sep.reshape(())
+        t, sep = separation(t, W, b_new)
         B = B + sep * b_new
         current = nxt
 
