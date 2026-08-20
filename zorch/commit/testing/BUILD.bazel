@@ -29,6 +29,19 @@ py_library(
 )
 
 py_test(
+    name = "ajtai_test",
+    size = "small",
+    srcs = ["ajtai_test.py"],
+    deps = [
+        "//zorch/commit:ajtai",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "smcs_test",
     size = "small",
     srcs = ["smcs_test.py"],

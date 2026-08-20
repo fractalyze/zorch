@@ -7,9 +7,11 @@
 # needs the runtime stack too — the CPU tier is enough (no CUDA plugins), which
 # keeps the docs job light. frx/zk-dtypes ride the same pins as
 # requirements.in; bump them together.
-frx==0.10.1.dev20260803000037
-frxlib==0.10.1.dev20260803000037
-zk-dtypes==0.0.10
+frx==0.10.2.dev20260820091735
+frxlib==0.10.2.dev20260820091735
+zk-dtypes==0.0.14
+# mkdocstrings imports zorch.commit.ajtai, which imports lattice_frx.
+lattice-frx==0.0.1.dev20260820110543
 absl-py
 numpy
 typing-extensions

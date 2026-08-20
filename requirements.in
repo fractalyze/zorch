@@ -19,7 +19,9 @@ frx==0.10.2.dev20260820091735
 frxlib==0.10.2.dev20260820091735
 frx-cuda12-pjrt==0.10.2.dev20260820091735
 frx-cuda12-plugin==0.10.2.dev20260820091735
-zk-dtypes==0.0.10
+# 0.0.14 is lattice-frx's floor (`prime_field` arrives there); the frx floors
+# above (>= 0.0.6, >= 0.0.10) are satisfied a fortiori.
+zk-dtypes==0.0.14
 # The symmetric layer (permutations, sponges, compressions, byte hashes) and the
 # `fused_region` / `composite` marker seam they lower through. It sits BELOW
 # zorch so `sig-frx` can share it without taking a proving-block dependency, so
@@ -29,6 +31,11 @@ zk-dtypes==0.0.10
 # hash-frx ships host byte-hash rows that the standard library cannot back.
 # Prebuilt wheels on every platform zorch supports, so no Rust toolchain.
 hash-frx==0.2.0.dev20260820080354
+# The lattice substrate (negacyclic ring + NTT, RNS, norms) behind the
+# module-lattice commitments in `zorch/commit/ajtai.py`. Same layering story
+# as hash-frx: it sits BELOW zorch (enc-frx and sig-frx share it), so zorch
+# imports it rather than owning a copy. Dev wheels off the Fractalyze index.
+lattice-frx==0.0.1.dev20260820110543
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.

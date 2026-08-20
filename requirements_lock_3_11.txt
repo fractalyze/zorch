@@ -122,6 +122,7 @@ frx==0.10.2.dev20260820091735 \
     # via
     #   -r requirements.in
     #   hash-frx
+    #   lattice-frx
 frx-cuda12-pjrt==0.10.2.dev20260820091735 \
     --hash=sha256:72e1bd3ba42807c7ed0c01bbfd14f0ad151327211141503db93279576b4ceabd
     # via
@@ -137,6 +138,9 @@ frxlib==0.10.2.dev20260820091735 \
     #   frx
 hash-frx==0.2.0.dev20260820080354 \
     --hash=sha256:1ed07554c0c1452324c0c5e3cb781e5ef8486b3a02eb06258caf7059a2e78382
+    # via -r requirements.in
+lattice-frx==0.0.1.dev20260820110543 \
+    --hash=sha256:0a3588318f77df466b636afee5a426457d1340f42417a2af155a87c5069e1e4d
     # via -r requirements.in
 ml-dtypes==0.5.4 \
     --hash=sha256:0d2ffd05a2575b1519dc928c0b93c06339eb67173ff53acb00724502cda231cf \
@@ -259,6 +263,7 @@ numpy==2.4.6 \
     #   frx
     #   frxlib
     #   hash-frx
+    #   lattice-frx
     #   ml-dtypes
     #   scipy
     #   zk-dtypes
@@ -338,13 +343,17 @@ typing-extensions==4.16.0 \
     # via
     #   -r requirements.in
     #   blake3
-zk-dtypes==0.0.10 \
-    --hash=sha256:06b66ef88dd6394bf7b2a1183fc60c5679a1837fc1b223147807f0f961eac0f7 \
-    --hash=sha256:e462ab54e21ee3dec305854d857519749eef913d817355b75c9e67fbba2fbae3 \
-    --hash=sha256:f2edcaba0e920dddd8e77c86758d54d7e2d5df2bd1acfbadacf392a91e16b026
+zk-dtypes==0.0.14 \
+    --hash=sha256:08543c4428cdeb5a6f4b69b59b27b04bb18d0b790e442c5892f4966cc8912b1a \
+    --hash=sha256:3b462b871e325b4ce5c214fb3706d7ceebe42c0475b0b3e916d4162edb8bddb5 \
+    --hash=sha256:59540d4d4a9239888e01fdf826522cf5f98b38ca79ee3e0033be70477c552596 \
+    --hash=sha256:a9d7c3240c59f6e5d6b853811bf6c6b216dc00e045f3c712ed1eedbd9a6aa15b \
+    --hash=sha256:cddd3b6200ae6bf708b9cbe771eaecedfed3d04e9762a5da5b6394421527aee1 \
+    --hash=sha256:f7fff30e826ec9cdae97834cd3e79e0a26f524c6f0d1a84fae4ea558be4957dc
     # via
     #   -r requirements.in
     #   frx
+    #   lattice-frx
 zkbench==0.4.0 \
     --hash=sha256:60d6d265fbe87dc8c0fd18e16af01d6f1484ba08c4a5c5c1082fd0ac02acb5d3
     # via -r requirements.in
