@@ -24,6 +24,21 @@ py_test(
 )
 
 py_test(
+    name = "grind_and_sample_test",
+    # Four difficulties on two wires, each tracing its own search program.
+    size = "medium",
+    srcs = ["grind_and_sample_test.py"],
+    deps = [
+        "//zorch:blake3_field_transcript",
+        "//zorch:sha256_field_transcript",
+        requirement("frx"),
+        requirement("hash_frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "blake3_field_transcript_test",
     # The streaming absorb traces a fresh program per payload shape, so tracing
     # and compiling the scripted op sequences dominates — well past the
