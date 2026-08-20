@@ -28,6 +28,19 @@ py_library(
 )
 
 py_library(
+    name = "ajtai",
+    srcs = ["ajtai.py"],
+    visibility = ["//visibility:public"],
+    # `lattice_frx` resolves once its wheel publishes (lattice-frx#18) and
+    # the requirements lock picks it up — the gate this target merges behind.
+    deps = [
+        requirement("frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "smcs",
     srcs = ["smcs.py"],
     visibility = ["//visibility:public"],
