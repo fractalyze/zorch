@@ -65,6 +65,45 @@ class GrindAndSampleTest(unittest.TestCase):
             with self.subTest(bits=bits):
                 self._check(make, bits, 1 << 12)
 
+    def _check_observe(self, make, n):
+        vals = fnp.arange(n, dtype=fnp.uint64).reshape(n, 1)
+        vals = fnp.concatenate([vals, vals + 7], axis=1)
+        g = frx.lax.bitcast_convert_type(vals, fnp.binary_field_ghash)
+        t0 = make()
+        t_a = t0.observe_scalar(g)
+        t_a, r_a = t_a.sample_scalar()
+        t_b, r_b = t0.observe_scalar_and_sample(g)
+        self.assertEqual(
+            bytes(fnp.asarray(r_a).tobytes()), bytes(fnp.asarray(r_b).tobytes()),
+            f"challenge differs at n={n}",
+        )
+        for i, (x, y) in enumerate(zip(_leaves(t_a), _leaves(t_b))):
+            self.assertEqual(
+                x.tobytes(), y.tobytes(),
+                f"transcript state leaf {i} differs at n={n}",
+            )
+
+    def test_blake3_observe_and_sample_matches_unmerged(self):
+        def make():
+            t = Blake3FieldTranscript.new(
+                b"grind-and-sample", fnp.binary_field_ghash,
+                pow_preimage_bytes=_POW_BLOCK,
+            )
+            return t.observe(fnp.zeros(4, fnp.binary_field_ghash))
+
+        for n in (1, 3):
+            with self.subTest(n=n):
+                self._check_observe(make, n)
+
+    def test_sha256_observe_and_sample_matches_unmerged(self):
+        def make():
+            t = Sha256FieldTranscript.new(b"grind-and-sample", fnp.binary_field_ghash)
+            return t.observe(fnp.zeros(4, fnp.binary_field_ghash))
+
+        for n in (1, 3):
+            with self.subTest(n=n):
+                self._check_observe(make, n)
+
     def test_window_does_not_change_the_wire(self):
         """`grind_search` tiles ascending, so a narrower window still returns the
         lowest hit -- the merged path must inherit that."""

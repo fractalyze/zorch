@@ -320,6 +320,19 @@ class FoldChoreography(Generic[TranscriptT]):
         overrides the mechanism too."""
         return transcript.grind(bits)
 
+    def observe_message_and_sample(
+        self, transcript: TranscriptT, msg: Array
+    ) -> tuple[TranscriptT, Array]:
+        """Absorb a round message and draw the challenge that immediately
+        follows it. Returns `(transcript, challenge)`.
+
+        The OOD and induce blocks both end this way, and the two calls are
+        adjacent on the stream, so a wire whose squeeze absorbs a payload first
+        can spend one marked region on them instead of two. The default
+        composes, so a wire that cannot merge is unchanged.
+        """
+        return self.observe_message(transcript, msg).sample()
+
     def grind_and_fold_challenge(
         self,
         transcript: TranscriptT,

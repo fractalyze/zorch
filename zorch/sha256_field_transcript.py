@@ -202,11 +202,31 @@ class Sha256FieldTranscript:
         built as ONE absorb payload. Byte-identical to the byte transcript's
         `observe_scalar` per element; distinct from `observe` (the KIND tag
         differs)."""
+        return self._absorb(self._scalar_observe_wire(value))
+
+    def _scalar_observe_wire(self, value: Array) -> Array:
+        """`observe_scalar`'s payload: `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
+        per element, in order. Split out so `observe_scalar_and_sample` can put
+        the same bytes on the stream as part of a draw's framing."""
         vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
         framing = fnp.broadcast_to(
             _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
         )
-        return self._absorb(fnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
+        return fnp.concatenate([framing, vals_u8], axis=1).reshape(-1)
+
+    def observe_scalar_and_sample(
+        self, value: Array
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """`observe_scalar` then `sample_scalar`, as ONE marked region — the
+        BLAKE3 row's method on this wire."""
+        framing = fnp.concatenate(
+            [
+                self._scalar_observe_wire(value),
+                _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR])),
+            ]
+        )
+        state, squeezed = _sha256_squeeze_zone(self.state, framing, self._item_bytes())
+        return replace(self, state=state), self._u8_to_elems(squeezed, 1)[0]
 
     def observe_label(self, label: bytes) -> Sha256FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.

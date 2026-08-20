@@ -342,6 +342,15 @@ def _open_jit(
         sumcheck_messages.append(msg)
         return chor.observe_message(t, msg)
 
+    def emit_and_sample(
+        t: TranscriptT, witness: Array, basis: Array
+    ) -> tuple[TranscriptT, Array]:
+        """`emit` and the separation draw that follows it, as one hop where the
+        wire allows it — the two are adjacent on the stream."""
+        msg = round_._round_poly(fnp.stack([witness, basis]))
+        sumcheck_messages.append(msg)
+        return chor.observe_message_and_sample(t, msg)
+
     def grind(t: TranscriptT, bits: int | None) -> TranscriptT:
         if bits is None:
             return t
@@ -412,8 +421,9 @@ def _open_jit(
                 t = t.observe(y)
                 ood_values.append(y)
                 if eager:
-                    t = emit(t, W, b_ood)
-                t, sep = t.sample()
+                    t, sep = emit_and_sample(t, W, b_ood)
+                else:
+                    t, sep = t.sample()
                 sep = sep.reshape(())
                 B = B + sep * b_ood
         else:
@@ -450,8 +460,9 @@ def _open_jit(
         eqps = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
         if eager:
-            t = emit(t, W, b_new)
-        t, sep = t.sample()
+            t, sep = emit_and_sample(t, W, b_new)
+        else:
+            t, sep = t.sample()
         sep = sep.reshape(())
         B = B + sep * b_new
         current = nxt
