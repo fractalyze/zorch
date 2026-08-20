@@ -53,6 +53,22 @@ def _uniform_matrix(
     )
 
 
+def _assert_equal_limbs(got: Coeff | Eval, want: Coeff | Eval) -> None:
+    """Exact per-limb equality, strict on limb count like the module's own
+    predicate."""
+    for x, y in zip(got.limbs, want.limbs, strict=True):
+        np.testing.assert_array_equal(
+            np.asarray(x).astype(object), np.asarray(y).astype(object)
+        )
+
+
+def _differ(a: Coeff | Eval, b: Coeff | Eval) -> bool:
+    return not all(
+        np.array_equal(np.asarray(x).astype(object), np.asarray(y).astype(object))
+        for x, y in zip(a.limbs, b.limbs, strict=True)
+    )
+
+
 def _ternary_witness(ring: RnsRing, rng: np.random.Generator, cols: int) -> Coeff:
     """A `[cols, d]` coefficient-domain witness with entries in {-1, 0, 1}."""
     return ring.stack(
@@ -85,20 +101,17 @@ class AjtaiTest(absltest.TestCase):
             self.scheme.commit(self.matrix, self.ring.ntt(s2)),
         )
         rhs = self.scheme.commit(self.matrix, self.ring.ntt(self.ring.add(s1, s2)))
-        for got, want in zip(lhs.limbs, rhs.limbs):
-            np.testing.assert_array_equal(
-                np.asarray(got).astype(object), np.asarray(want).astype(object)
-            )
+        _assert_equal_limbs(lhs, rhs)
 
     def test_an_over_bound_opening_is_rejected(self) -> None:
-        witness = _ternary_witness(self.ring, self.rng, _COLS)
-        commitment = self.scheme.commit(self.matrix, self.ring.ntt(witness))
+        # `big` is over the bound by construction — adding it to a ternary
+        # witness instead could land a -1 coefficient back inside the bound
+        # and turn the test seed-lucky.
         big = self.ring.stack(
             [self.ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(_COLS)]
         )
-        spiked = self.ring.add(witness, big)
-        spiked_commitment = self.scheme.commit(self.matrix, self.ring.ntt(spiked))
-        self.assertFalse(self.scheme.verify(self.matrix, spiked_commitment, spiked))
+        commitment = self.scheme.commit(self.matrix, self.ring.ntt(big))
+        self.assertFalse(self.scheme.verify(self.matrix, commitment, big))
 
     def test_a_substituted_witness_is_rejected(self) -> None:
         witness = _ternary_witness(self.ring, self.rng, _COLS)
@@ -112,10 +125,15 @@ class AjtaiTest(absltest.TestCase):
         compiled = frx.jit(lambda a, s: self.scheme.commit(a, s))(
             self.matrix, self.ring.ntt(witness)
         )
-        for got, want in zip(compiled.limbs, eager.limbs):
-            np.testing.assert_array_equal(
-                np.asarray(got).astype(object), np.asarray(want).astype(object)
-            )
+        _assert_equal_limbs(compiled, eager)
+
+    def test_a_truncated_commitment_is_rejected(self) -> None:
+        """A commitment carrying fewer limbs is a different RNS chain — the
+        predicate must not accept it on a matching prefix."""
+        witness = _ternary_witness(self.ring, self.rng, _COLS)
+        commitment = self.scheme.commit(self.matrix, self.ring.ntt(witness))
+        truncated = Eval(commitment.limbs[:1])
+        self.assertFalse(self.scheme.verify(self.matrix, truncated, witness))
 
     def test_a_wrong_shape_is_rejected_at_commit(self) -> None:
         witness = _ternary_witness(self.ring, self.rng, _COLS + 1)
@@ -175,15 +193,21 @@ class BdlopTest(absltest.TestCase):
         r2 = _ternary_witness(self.ring, self.rng, _COLS)
         c1 = self.scheme.commit(self.b0, self.b1, message, r1)
         c2 = self.scheme.commit(self.b0, self.b1, message, r2)
-        same = all(
-            bool(
-                np.array_equal(
-                    np.asarray(x).astype(object), np.asarray(y).astype(object)
-                )
-            )
-            for x, y in zip(c1.t0.limbs, c2.t0.limbs)
+        self.assertTrue(_differ(c1.t0, c2.t0))
+        # t1 = B1·r + m must move with r too — checking t0 alone would let a
+        # regression that drops the B1·r term hide behind verify, which
+        # recomputes through the same implementation.
+        self.assertTrue(_differ(c1.t1, c2.t1))
+
+    def test_commit_traces_under_jit(self) -> None:
+        message = self._message()
+        randomness = _ternary_witness(self.ring, self.rng, _COLS)
+        eager = self.scheme.commit(self.b0, self.b1, message, randomness)
+        compiled = frx.jit(lambda b0, b1, m, r: self.scheme.commit(b0, b1, m, r))(
+            self.b0, self.b1, message, randomness
         )
-        self.assertFalse(same)
+        _assert_equal_limbs(compiled.t0, eager.t0)
+        _assert_equal_limbs(compiled.t1, eager.t1)
 
 
 if __name__ == "__main__":

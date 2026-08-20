@@ -185,8 +185,14 @@ def _within_bound(ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
 
 def _equal(a: Eval, b: Eval) -> bool:
     """Exact per-limb equality, materialised to the host — verification is a
-    boundary predicate, not a traced op."""
+    boundary predicate, not a traced op.
+
+    A different limb count is a different RNS chain, i.e. a different ring:
+    never equal, checked first so a shorter commitment with matching prefix
+    limbs cannot pass by `zip` truncation."""
+    if len(a.limbs) != len(b.limbs):
+        return False
     return all(
         np.array_equal(np.asarray(x).astype(object), np.asarray(y).astype(object))
-        for x, y in zip(a.limbs, b.limbs)
+        for x, y in zip(a.limbs, b.limbs, strict=True)
     )
