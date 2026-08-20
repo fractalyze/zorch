@@ -31,8 +31,7 @@ py_library(
     name = "ajtai",
     srcs = ["ajtai.py"],
     visibility = ["//visibility:public"],
-    # `lattice_frx` resolves once its wheel publishes (lattice-frx#18) and
-    # the requirements lock picks it up — the gate this target merges behind.
+    # lattice-frx wheels come off the Fractalyze index (lattice-frx#18).
     deps = [
         requirement("frx"),
         requirement("lattice_frx"),

@@ -14,13 +14,7 @@ import numpy as np
 from absl.testing import absltest
 from lattice_frx.ring import Coeff, Eval, RnsRing
 
-from zorch.commit.ajtai import (
-    AjtaiCommitment,
-    AjtaiParams,
-    BdlopCommitment,
-    BdlopOpening,
-    BdlopParams,
-)
+from zorch.commit.ajtai import AjtaiCommitment, BdlopCommitment, _equal
 
 # NTT-friendly 36-bit pair from lattice-frx's own suite; d kept small for
 # test wall time (both are 1 mod 2d for every power of two up to 256).
@@ -62,10 +56,12 @@ def _assert_equal_limbs(got: Coeff | Eval, want: Coeff | Eval) -> None:
         )
 
 
-def _differ(a: Coeff | Eval, b: Coeff | Eval) -> bool:
-    return not all(
-        np.array_equal(np.asarray(x).astype(object), np.asarray(y).astype(object))
-        for x, y in zip(a.limbs, b.limbs, strict=True)
+def _over_bound_witness(ring: RnsRing, cols: int) -> Coeff:
+    """Over the bound by construction — adding a spike to a ternary witness
+    instead could land a -1 coefficient back inside the bound and leave the
+    rejection branch seed-lucky."""
+    return ring.stack(
+        [ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(cols)]
     )
 
 
@@ -80,10 +76,7 @@ class AjtaiTest(absltest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self.ring = _ring()
-        self.params = AjtaiParams(
-            ring=self.ring, rows=_ROWS, cols=_COLS, beta_inf=_BETA
-        )
-        self.scheme = AjtaiCommitment(self.params)
+        self.scheme = AjtaiCommitment(self.ring, _ROWS, _COLS, _BETA)
         self.rng = np.random.default_rng(0)
         self.matrix = _uniform_matrix(self.ring, self.rng, _ROWS, _COLS)
 
@@ -104,12 +97,7 @@ class AjtaiTest(absltest.TestCase):
         _assert_equal_limbs(lhs, rhs)
 
     def test_an_over_bound_opening_is_rejected(self) -> None:
-        # `big` is over the bound by construction — adding it to a ternary
-        # witness instead could land a -1 coefficient back inside the bound
-        # and turn the test seed-lucky.
-        big = self.ring.stack(
-            [self.ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(_COLS)]
-        )
+        big = _over_bound_witness(self.ring, _COLS)
         commitment = self.scheme.commit(self.matrix, self.ring.ntt(big))
         self.assertFalse(self.scheme.verify(self.matrix, commitment, big))
 
@@ -122,9 +110,7 @@ class AjtaiTest(absltest.TestCase):
     def test_commit_traces_under_jit(self) -> None:
         witness = _ternary_witness(self.ring, self.rng, _COLS)
         eager = self.scheme.commit(self.matrix, self.ring.ntt(witness))
-        compiled = frx.jit(lambda a, s: self.scheme.commit(a, s))(
-            self.matrix, self.ring.ntt(witness)
-        )
+        compiled = frx.jit(self.scheme.commit)(self.matrix, self.ring.ntt(witness))
         _assert_equal_limbs(compiled, eager)
 
     def test_a_truncated_commitment_is_rejected(self) -> None:
@@ -134,6 +120,12 @@ class AjtaiTest(absltest.TestCase):
         commitment = self.scheme.commit(self.matrix, self.ring.ntt(witness))
         truncated = Eval(commitment.limbs[:1])
         self.assertFalse(self.scheme.verify(self.matrix, truncated, witness))
+
+    def test_a_wrong_domain_opening_raises(self) -> None:
+        witness = _ternary_witness(self.ring, self.rng, _COLS)
+        commitment = self.scheme.commit(self.matrix, self.ring.ntt(witness))
+        with self.assertRaises(TypeError):
+            self.scheme.verify(self.matrix, commitment, self.ring.ntt(witness))
 
     def test_a_wrong_shape_is_rejected_at_commit(self) -> None:
         witness = _ternary_witness(self.ring, self.rng, _COLS + 1)
@@ -145,14 +137,7 @@ class BdlopTest(absltest.TestCase):
     def setUp(self) -> None:
         super().setUp()
         self.ring = _ring()
-        self.params = BdlopParams(
-            ring=self.ring,
-            rows=_ROWS,
-            randomness_cols=_COLS,
-            messages=1,
-            beta_inf=_BETA,
-        )
-        self.scheme = BdlopCommitment(self.params)
+        self.scheme = BdlopCommitment(self.ring, _ROWS, _COLS, 1, _BETA)
         self.rng = np.random.default_rng(1)
         self.b0 = _uniform_matrix(self.ring, self.rng, _ROWS, _COLS)
         self.b1 = _uniform_matrix(self.ring, self.rng, 1, _COLS)
@@ -166,24 +151,36 @@ class BdlopTest(absltest.TestCase):
         message = self._message()
         randomness = _ternary_witness(self.ring, self.rng, _COLS)
         commitment = self.scheme.commit(self.b0, self.b1, message, randomness)
-        opening = BdlopOpening(message=message, randomness=randomness)
-        self.assertTrue(self.scheme.verify(self.b0, self.b1, commitment, opening))
+        self.assertTrue(
+            self.scheme.verify(self.b0, self.b1, commitment, message, randomness)
+        )
 
     def test_a_wrong_message_is_rejected(self) -> None:
         message = self._message()
         randomness = _ternary_witness(self.ring, self.rng, _COLS)
         commitment = self.scheme.commit(self.b0, self.b1, message, randomness)
-        forged = BdlopOpening(message=self._message(), randomness=randomness)
-        self.assertFalse(self.scheme.verify(self.b0, self.b1, commitment, forged))
+        self.assertFalse(
+            self.scheme.verify(
+                self.b0, self.b1, commitment, self._message(), randomness
+            )
+        )
 
     def test_over_bound_randomness_is_rejected(self) -> None:
         message = self._message()
-        big = self.ring.stack(
-            [self.ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(_COLS)]
-        )
+        big = _over_bound_witness(self.ring, _COLS)
         commitment = self.scheme.commit(self.b0, self.b1, message, big)
-        opening = BdlopOpening(message=message, randomness=big)
-        self.assertFalse(self.scheme.verify(self.b0, self.b1, commitment, opening))
+        self.assertFalse(self.scheme.verify(self.b0, self.b1, commitment, message, big))
+
+    def test_a_wrong_domain_randomness_raises(self) -> None:
+        """The domain gate is `_within_bound`'s, shared by both schemes —
+        this pins the BDLOP side, which a verify-level guard once missed."""
+        message = self._message()
+        randomness = _ternary_witness(self.ring, self.rng, _COLS)
+        commitment = self.scheme.commit(self.b0, self.b1, message, randomness)
+        with self.assertRaises(TypeError):
+            self.scheme.verify(
+                self.b0, self.b1, commitment, message, self.ring.ntt(randomness)
+            )
 
     def test_different_randomness_changes_the_commitment(self) -> None:
         """Hiding smoke only — the distributional statement is the scheme's
@@ -193,11 +190,11 @@ class BdlopTest(absltest.TestCase):
         r2 = _ternary_witness(self.ring, self.rng, _COLS)
         c1 = self.scheme.commit(self.b0, self.b1, message, r1)
         c2 = self.scheme.commit(self.b0, self.b1, message, r2)
-        self.assertTrue(_differ(c1.t0, c2.t0))
+        self.assertFalse(_equal(c1.t0, c2.t0))
         # t1 = B1·r + m must move with r too — checking t0 alone would let a
         # regression that drops the B1·r term hide behind verify, which
         # recomputes through the same implementation.
-        self.assertTrue(_differ(c1.t1, c2.t1))
+        self.assertFalse(_equal(c1.t1, c2.t1))
 
     def test_commit_traces_under_jit(self) -> None:
         message = self._message()

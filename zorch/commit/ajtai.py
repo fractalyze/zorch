@@ -29,7 +29,6 @@ lattice-frx's uniform-from-bytes sampler land; the tests use a seeded numpy
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import partial
 
@@ -39,48 +38,36 @@ from lattice_frx import norms, rns
 from lattice_frx.ring import Coeff, Eval, RnsRing
 
 
-@dataclass(frozen=True)
-class AjtaiParams:
-    """`rows × cols` module shape over `ring`, with the ℓ∞ opening bound.
+class AjtaiCommitment:
+    """`commit(A, s) = A·s` and its opening predicate, over a `rows × cols`
+    module with an ℓ∞ opening bound.
 
-    Static configuration, not a pytree: the ring carries the moduli and the
-    bound is a plain host integer read only at the verification boundary.
-    Binding strength (MSIS) is the consumer's parameter choice; this seam
-    only enforces the shapes and the bound it is given.
+    Configuration rides the constructor, like the sibling `MerkleTree`; the
+    ring carries the moduli and `beta_inf` is a plain host integer read only
+    at the verification boundary. Binding strength (MSIS) is the consumer's
+    parameter choice — this seam only enforces the shapes and the bound it
+    is given.
     """
 
-    ring: RnsRing
-    rows: int
-    cols: int
-    beta_inf: int
-
-
-class AjtaiCommitment:
-    """`commit(A, s) = A·s` and its opening predicate."""
-
-    def __init__(self, params: AjtaiParams) -> None:
-        self.params = params
+    def __init__(self, ring: RnsRing, rows: int, cols: int, beta_inf: int) -> None:
+        self.ring = ring
+        self.rows = rows
+        self.cols = cols
+        self.beta_inf = beta_inf
 
     def commit(self, matrix: Eval, witness: Eval) -> Eval:
         """One `matvec`: `[rows, cols, d] × [cols, d] → [rows, d]`, traced."""
-        p = self.params
-        _require_lead("commit: matrix", matrix, (p.rows, p.cols))
-        _require_lead("commit: witness", witness, (p.cols,))
-        return p.ring.matvec(matrix, witness)
+        _require_lead("commit: matrix", matrix, (self.rows, self.cols))
+        _require_lead("commit: witness", witness, (self.cols,))
+        return self.ring.matvec(matrix, witness)
 
     def verify(self, matrix: Eval, commitment: Eval, opening: Coeff) -> bool:
         """The opening predicate: `‖opening‖∞ ≤ β` on the balanced lift, and
         the opening re-commits to `commitment`. Host boundary by design —
         see the module docstring."""
-        p = self.params
-        if not isinstance(opening, Coeff):
-            raise TypeError(
-                f"verify: opening must be Coeff (the norm is a coefficient-"
-                f"domain notion), got {type(opening).__name__}"
-            )
-        if not _within_bound(p.ring, opening, p.beta_inf):
+        if not _within_bound(self.ring, opening, self.beta_inf):
             return False
-        return _equal(self.commit(matrix, p.ring.ntt(opening)), commitment)
+        return _equal(self.commit(matrix, self.ring.ntt(opening)), commitment)
 
 
 @partial(frx.tree_util.register_dataclass, data_fields=["t0", "t1"], meta_fields=[])
@@ -95,104 +82,105 @@ class BdlopPair:
     t1: Eval
 
 
-@partial(
-    frx.tree_util.register_dataclass,
-    data_fields=["message", "randomness"],
-    meta_fields=[],
-)
-@dataclass(frozen=True)
-class BdlopOpening:
-    """What `verify` consumes: the message and the randomness, both in the
-    coefficient domain — the domain norms and "reveal" mean anything in."""
-
-    message: Coeff
-    randomness: Coeff
-
-
-@dataclass(frozen=True)
-class BdlopParams:
-    """Shapes for `t0 = B0·r` (`rows × randomness_cols`) and
-    `t1 = B1·r + m` (`messages × randomness_cols`), plus the ℓ∞ bound on `r`.
-    """
-
-    ring: RnsRing
-    rows: int
-    randomness_cols: int
-    messages: int
-    beta_inf: int
-
-
 class BdlopCommitment:
-    """BDLOP commit/verify. The bound applies to the randomness only — the
-    message is unconstrained, which is what makes the scheme hiding rather
-    than merely binding."""
+    """BDLOP commit/verify: `t0 = B0·r` over `rows × randomness_cols`,
+    `t1 = B1·r + m` over `messages × randomness_cols`.
 
-    def __init__(self, params: BdlopParams) -> None:
-        self.params = params
+    The ℓ∞ bound applies to the randomness only — the message is
+    unconstrained, which is what makes the scheme hiding rather than merely
+    binding. Configuration rides the constructor, as in `AjtaiCommitment`."""
+
+    def __init__(
+        self,
+        ring: RnsRing,
+        rows: int,
+        randomness_cols: int,
+        messages: int,
+        beta_inf: int,
+    ) -> None:
+        self.ring = ring
+        self.rows = rows
+        self.randomness_cols = randomness_cols
+        self.messages = messages
+        self.beta_inf = beta_inf
 
     def commit(
         self, b0: Eval, b1: Eval, message: Coeff, randomness: Coeff
     ) -> BdlopPair:
-        p = self.params
-        _require_lead("commit: b0", b0, (p.rows, p.randomness_cols))
-        _require_lead("commit: b1", b1, (p.messages, p.randomness_cols))
-        _require_lead("commit: message", message, (p.messages,))
-        _require_lead("commit: randomness", randomness, (p.randomness_cols,))
-        r = p.ring.ntt(randomness)
+        _require_lead("commit: b0", b0, (self.rows, self.randomness_cols))
+        _require_lead("commit: b1", b1, (self.messages, self.randomness_cols))
+        _require_lead("commit: message", message, (self.messages,))
+        _require_lead("commit: randomness", randomness, (self.randomness_cols,))
+        r = self.ring.ntt(randomness)
         return BdlopPair(
-            t0=p.ring.matvec(b0, r),
-            t1=p.ring.add(p.ring.matvec(b1, r), p.ring.ntt(message)),
+            t0=self.ring.matvec(b0, r),
+            t1=self.ring.add(self.ring.matvec(b1, r), self.ring.ntt(message)),
         )
 
     def verify(
-        self, b0: Eval, b1: Eval, commitment: BdlopPair, opening: BdlopOpening
+        self,
+        b0: Eval,
+        b1: Eval,
+        commitment: BdlopPair,
+        message: Coeff,
+        randomness: Coeff,
     ) -> bool:
-        p = self.params
-        if not _within_bound(p.ring, opening.randomness, p.beta_inf):
+        """An opening is the revealed `(message, randomness)` pair, taken
+        bare — mirroring `commit`'s own signature and the Ajtai sibling."""
+        if not _within_bound(self.ring, randomness, self.beta_inf):
             return False
-        recomputed = self.commit(b0, b1, opening.message, opening.randomness)
+        recomputed = self.commit(b0, b1, message, randomness)
         return _equal(recomputed.t0, commitment.t0) and _equal(
             recomputed.t1, commitment.t1
         )
 
 
 def _require_lead(name: str, element: Coeff | Eval, lead: tuple[int, ...]) -> None:
-    """The element's leading (batch/module) axes against the params' shape —
-    per-limb `d` and the ring's limb count are the ring ops' own checks."""
+    """The element's leading (batch/module) axes against the scheme's declared
+    module shape — `matvec` checks only internal mat/vec consistency, so a
+    well-formed matvec of the wrong module shape would sail through it."""
     got = tuple(element.limbs[0].shape[:-1])
     if got != lead:
         raise ValueError(f"{name}: leading axes {got}, want {lead}")
 
 
-def _elements_as_host(ring: RnsRing, batched: Coeff) -> Iterator[np.ndarray]:
-    """Each element of a `[k, d]` coefficient batch as a `(limbs, d)` uint64
-    host array — the shape `rns`'s reconstructions consume."""
-    obj_limbs = [np.asarray(limb).astype(object) for limb in batched.limbs]
-    for j in range(obj_limbs[0].shape[0]):
-        yield np.array(
-            [[int(v) for v in limb[j]] for limb in obj_limbs], dtype=np.uint64
-        )
-
-
 def _within_bound(ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
-    """`‖·‖∞ ≤ β` for every element, over the full centered reconstruction —
-    a single-limb lift would accept an opening whose other limbs disagree."""
-    return all(
-        norms.linf(rns.reconstruct_centered(host, ring.q_moduli)) <= beta_inf
-        for host in _elements_as_host(ring, batched)
+    """`‖·‖∞ ≤ β` over the full centered reconstruction of every coefficient.
+
+    `Coeff` only — a norm of NTT values is a bug wearing a plausible shape,
+    and this guard is the one domain gate both schemes' verifies share. The
+    batch flattens into one reconstruction because ℓ∞ of a batch is the ℓ∞
+    of its concatenation, and the reconstruction is per-coefficient; the
+    full-chain lift (not limb 0's) is deliberate — a single-limb lift would
+    accept an opening whose other limbs disagree. `astype(np.uint64)` is the
+    field dtype's own exact canonical conversion, so the host `(limbs, N)`
+    contract is composed from the dtype layer rather than re-derived.
+    """
+    if not isinstance(batched, Coeff):
+        raise TypeError(
+            f"verify: opening values must be Coeff (the norm is a "
+            f"coefficient-domain notion), got {type(batched).__name__}"
+        )
+    host = np.stack(
+        [np.asarray(limb).astype(np.uint64).reshape(-1) for limb in batched.limbs]
     )
+    return norms.linf(rns.reconstruct_centered(host, ring.q_moduli)) <= beta_inf
 
 
 def _equal(a: Eval, b: Eval) -> bool:
-    """Exact per-limb equality, materialised to the host — verification is a
-    boundary predicate, not a traced op.
+    """Exact per-limb equality on the host.
 
     A different limb count is a different RNS chain, i.e. a different ring:
     never equal, checked first so a shorter commitment with matching prefix
-    limbs cannot pass by `zip` truncation."""
+    limbs cannot pass by `zip` truncation. The dtype check has the same
+    never-raise role — comparing across two field dtypes is a different-ring
+    `False`, not an error — and keeps the comparison on the vectorized field
+    arrays instead of boxing every coefficient into a Python int.
+    """
     if len(a.limbs) != len(b.limbs):
         return False
-    return all(
-        np.array_equal(np.asarray(x).astype(object), np.asarray(y).astype(object))
-        for x, y in zip(a.limbs, b.limbs, strict=True)
-    )
+    for x, y in zip(a.limbs, b.limbs):
+        hx, hy = np.asarray(x), np.asarray(y)
+        if hx.dtype != hy.dtype or not np.array_equal(hx, hy):
+            return False
+    return True
