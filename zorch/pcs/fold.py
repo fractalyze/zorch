@@ -320,6 +320,32 @@ class FoldChoreography(Generic[TranscriptT]):
         overrides the mechanism too."""
         return transcript.grind(bits)
 
+    def grind_and_fold_challenge(
+        self,
+        transcript: TranscriptT,
+        msg: Array | None,
+        level: int,
+        fold_idx: int,
+        bits: int,
+    ) -> tuple[TranscriptT, Array, Array]:
+        """Grind this round's proof of work, then draw its fold challenge.
+        Returns `(transcript, witness, challenge)`.
+
+        The default composes `grind` and `fold_challenge`, which puts the
+        witness on the wire as one marked region and the draw as another. A wire
+        whose squeeze absorbs a payload before reading can do both in ONE region
+        by carrying the witness in the draw's framing — byte-identical, because
+        absorb is a stream — and should override this to say so.
+
+        Worth the seam: a marked region costs milliseconds where it sits between
+        a prover's compute kernels, against microseconds of hashing. Ablating
+        29% of the regions in flock's `open` recovered 50% of that phase's
+        Fiat-Shamir cost, so the count of regions is what a prover pays for.
+        """
+        transcript, witness = self.grind(transcript, bits)
+        transcript, challenge = self.fold_challenge(transcript, msg, level, fold_idx)
+        return transcript, witness, challenge
+
     def check_grind(
         self, transcript: TranscriptT, bits: int, witness: Array
     ) -> tuple[TranscriptT, Array]:

@@ -362,8 +362,16 @@ def _open_jit(
             if not eager:
                 msg = round_._round_poly(fnp.stack([W, B]))
                 sumcheck_messages.append(msg)
-            t = grind(t, chor.fold_grind_bits(j, i))
-            t, r = chor.fold_challenge(t, msg, j, i)
+            # The grind and the draw are one hop where the wire allows it:
+            # the witness rides the draw's framing instead of costing a marked
+            # region of its own. `grind_and_fold_challenge`'s default still
+            # composes the two, so a wire that cannot merge is unchanged.
+            bits = chor.fold_grind_bits(j, i)
+            if bits is None:
+                t, r = chor.fold_challenge(t, msg, j, i)
+            else:
+                t, witness, r = chor.grind_and_fold_challenge(t, msg, j, i, bits)
+                pow_witnesses.append(witness)
             if eager:
                 # Fold and the freshly folded state's message in ONE marked
                 # region. Unmarked they are two full passes over the state —
