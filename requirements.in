@@ -15,13 +15,15 @@ absl-py
 numpy
 # PEP 696 TypeVar defaults, which `typing` gains only in 3.13.
 typing-extensions
-frx==0.10.2.dev20260820091735
-frxlib==0.10.2.dev20260820091735
-frx-cuda12-pjrt==0.10.2.dev20260820091735
-frx-cuda12-plugin==0.10.2.dev20260820091735
-# 0.0.14 is lattice-frx's floor (`prime_field` arrives there); the frx floors
-# above (>= 0.0.6, >= 0.0.10) are satisfied a fortiori.
-zk-dtypes==0.0.14
+frx==0.10.2.dev20260820235505
+frxlib==0.10.2.dev20260820235505
+frx-cuda12-pjrt==0.10.2.dev20260820235505
+frx-cuda12-plugin==0.10.2.dev20260820235505
+# 0.0.15 is the frx floor since the wheel that registers the classical-curve
+# field dtypes (frx pins zk_dtypes >= 0.0.15 from 0.10.2.dev20260820235505);
+# lattice-frx's 0.0.14 floor (`prime_field` arrives there) and the older frx
+# floors (>= 0.0.6, >= 0.0.10) are satisfied a fortiori.
+zk-dtypes==0.0.16
 # The symmetric layer (permutations, sponges, compressions, byte hashes) and the
 # `fused_region` / `composite` marker seam they lower through. It sits BELOW
 # zorch so `sig-frx` can share it without taking a proving-block dependency, so

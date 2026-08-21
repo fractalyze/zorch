@@ -117,22 +117,22 @@ blake3==1.0.9 \
     --hash=sha256:f9d8b6c6af52a8ff499debf5fd15d7395e0ed837ec2a80fd828b4c6b970de3ed \
     --hash=sha256:fe3c59f8a7b5460fd374b264559c5da7af0a33657a9eca95fff6d843f02cde9e
     # via hash-frx
-frx==0.10.2.dev20260820091735 \
-    --hash=sha256:272800527adaa699be006516080b396326aabb328aa2581cfefc0f075ebc0fd2
+frx==0.10.2.dev20260820235505 \
+    --hash=sha256:0800dc1e8be6ce22a041c86154e6107e0da8d5f8d0f797d1ae5aef4b50d62b33
     # via
     #   -r requirements.in
     #   hash-frx
     #   lattice-frx
-frx-cuda12-pjrt==0.10.2.dev20260820091735 \
-    --hash=sha256:72e1bd3ba42807c7ed0c01bbfd14f0ad151327211141503db93279576b4ceabd
+frx-cuda12-pjrt==0.10.2.dev20260820235505 \
+    --hash=sha256:2d522c97f3fc71be681c9bb3efaa499ddb65ddd6fefcbc66053f2eea281f3fef
     # via
     #   -r requirements.in
     #   frx-cuda12-plugin
-frx-cuda12-plugin==0.10.2.dev20260820091735 \
-    --hash=sha256:facc5467563a83d455b07eee48b07c9a496e46b54cccab070109d32a128c86b9
+frx-cuda12-plugin==0.10.2.dev20260820235505 \
+    --hash=sha256:e9acf1ffd8a48960ba879d54ccde6be97927e9a509d8be4e5499795d0239f432
     # via -r requirements.in
-frxlib==0.10.2.dev20260820091735 \
-    --hash=sha256:329d42e9b2a330371a0d197b98d21bbdf8645e27a44d9fdf084b100c3582f399
+frxlib==0.10.2.dev20260820235505 \
+    --hash=sha256:e29cfc6e8384fe0974fc89dfe9b725744a8baad2ef990f902c3c5f804f80ba80
     # via
     #   -r requirements.in
     #   frx
@@ -343,13 +343,13 @@ typing-extensions==4.16.0 \
     # via
     #   -r requirements.in
     #   blake3
-zk-dtypes==0.0.14 \
-    --hash=sha256:08543c4428cdeb5a6f4b69b59b27b04bb18d0b790e442c5892f4966cc8912b1a \
-    --hash=sha256:3b462b871e325b4ce5c214fb3706d7ceebe42c0475b0b3e916d4162edb8bddb5 \
-    --hash=sha256:59540d4d4a9239888e01fdf826522cf5f98b38ca79ee3e0033be70477c552596 \
-    --hash=sha256:a9d7c3240c59f6e5d6b853811bf6c6b216dc00e045f3c712ed1eedbd9a6aa15b \
-    --hash=sha256:cddd3b6200ae6bf708b9cbe771eaecedfed3d04e9762a5da5b6394421527aee1 \
-    --hash=sha256:f7fff30e826ec9cdae97834cd3e79e0a26f524c6f0d1a84fae4ea558be4957dc
+zk-dtypes==0.0.16 \
+    --hash=sha256:248b7c04337040b6b8e56e99abbec20ab9fee71db7d56bf4bab6dfb0c70bd0ec \
+    --hash=sha256:69d0e0929176e8b9c014e481dde3160c10c334bf8e59e0f571e81acb1b3408a1 \
+    --hash=sha256:83248d772fd7acfd4821b7e41e6e0b246ddf1d46bdfeaacf09f466468f2ecb68 \
+    --hash=sha256:90907c7c0bdc7d5f6a5bbe91e4e4aea0a246577585d81ab3a3a36675023254ca \
+    --hash=sha256:9ec9caf0e331b9cb6a2c32d27314766b8f0ddd3c0342c9063d7fea8b0222361e \
+    --hash=sha256:ec1852fafe0ff29d7e555c714f651735bad43b93057cffccb061f0c1d364f4cd
     # via
     #   -r requirements.in
     #   frx
