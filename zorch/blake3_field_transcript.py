@@ -113,6 +113,54 @@ def _nonce8(counters: Array) -> Array:
 BLAKE3_SQUEEZE_MARKER = "zorch.blake3_squeeze"
 BLAKE3_SQUEEZE_MARKER_VERSION = 1
 
+# The absorb half of the same story. Once the squeeze is fused, `observe` is
+# what is left: it goes through the plain streaming absorb, and at n=256 rounds
+# it measures 44.2 ms against the SHA-256 transcript's 0.36 ms — 123x, and the
+# whole residual FS deficit on the blake3 arm.
+#
+# `length` is an attr, as `nbytes` is for the squeeze. That is affordable here
+# because a real m=28 prove uses only twelve distinct payload lengths across 90
+# absorbs, and 79 of those are 17 or 18 bytes — so a handful of kernel variants
+# serve everything, and the hot ones are under a block.
+BLAKE3_ABSORB_MARKER = "zorch.blake3_absorb"
+BLAKE3_ABSORB_MARKER_VERSION = 1
+
+
+def _blake3_absorb_region(
+    state: Blake3Stream, payload: Array, **_attrs: object
+) -> Blake3Stream:
+    """The `zorch.blake3_absorb` decomposition, entered at the runtime stream
+    position carried in the state leaves. `_attrs` (`length`) is composite
+    metadata the emitter parses; the decomposition needs only the operands.
+
+    `state` rides as ONE pytree operand: `Blake3Stream` is a registered
+    dataclass, so `lax.composite` flattens it to its seven leaves in field
+    order, which IS the marker's operand ABI. Spelling the leaves out by hand
+    would restate that order at every call site, where a field added or moved
+    upstream lands as silent state corruption rather than an error."""
+    return state.absorb(payload)
+
+
+@partial(jit, inline=True)
+def _blake3_absorb_zone(state: Blake3Stream, payload: Array) -> Blake3Stream:
+    """One marked absorb. The payload length is static at every call site (it
+    comes from a framing constant plus a fixed-width serialization), so it rides
+    as an attr and the emitter gets a compile-time block count.
+
+    `inline=True` keeps a call site already inside an outer jit byte-identical,
+    mirroring `_blake3_squeeze_zone`."""
+    length = payload.shape[0]
+    if length == 0:
+        return state
+    return fused_region(
+        _blake3_absorb_region,
+        state,
+        payload,
+        name=BLAKE3_ABSORB_MARKER,
+        version=BLAKE3_ABSORB_MARKER_VERSION,
+        length=length,
+    )
+
 
 def _blake3_squeeze_hop(
     state: Blake3Stream, framing: Array, nbytes: int
@@ -182,8 +230,11 @@ class Blake3FieldTranscript:
         # whose compressions are entered through the resumable state rather than
         # through hash-frx's marked whole-message region, and hash-frx's own
         # BLAKE3 rows report False regardless. Consumers take their plain
-        # decomposition paths. `_pow_digests` is the one path that does reach the
-        # marked region — it hashes a whole message — and it is not an FS hop.
+        # decomposition paths. `zorch.blake3_absorb` / `zorch.blake3_squeeze`
+        # do not change this: they are zorch's own regions over the resumable
+        # state, not the hash-frx region this flag names. `_pow_digests` is the
+        # one path that does reach the marked region — it hashes a whole
+        # message — and it is not an FS hop.
         return False
 
     @classmethod
@@ -211,7 +262,7 @@ class Blake3FieldTranscript:
         return int(np.dtype(self.dtype).itemsize)
 
     def _absorb(self, payload: Array) -> Blake3FieldTranscript:
-        return replace(self, state=self.state.absorb(payload))
+        return replace(self, state=_blake3_absorb_zone(self.state, payload))
 
     def observe(self, values: Array) -> Blake3FieldTranscript:
         """Absorb `values` under slice framing: `[OP_OBSERVE, KIND_SLICE] ||
