@@ -279,11 +279,40 @@ class Blake3FieldTranscript:
         `value` is one op; an `[n]` array is n ops (one per element, in order),
         built as ONE absorb payload. Distinct from `observe` (the KIND tag
         differs)."""
+        return self._absorb(self._scalar_observe_wire(value))
+
+    def _scalar_observe_wire(self, value: Array) -> Array:
+        """`observe_scalar`'s payload: `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
+        per element, in order. Split out so `observe_scalar_and_sample` can put
+        the same bytes on the stream as part of a draw's framing."""
         vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
         framing = fnp.broadcast_to(
             _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
         )
-        return self._absorb(fnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
+        return fnp.concatenate([framing, vals_u8], axis=1).reshape(-1)
+
+    def _sample_scalar_after(
+        self, payload: Array
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        """Put `payload` on the stream and draw a scalar, as ONE marked region.
+
+        This is the merge every fused pair on this row is made of. Absorb is a
+        stream, so `absorb(P); squeeze(F)` and `squeeze(P || F)` leave the same
+        state, and `_squeeze` already absorbs its framing before reading — so a
+        payload that would have been its own absorb can ride the draw instead.
+        Byte-identical by construction, and one marked region rather than two.
+        """
+        framing = fnp.concatenate(
+            [payload, _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
+        )
+        t, squeezed = self._squeeze(framing, self._item_bytes())
+        return t, t._u8_to_elems(squeezed, 1)[0]
+
+    def observe_scalar_and_sample(
+        self, value: Array
+    ) -> tuple[Blake3FieldTranscript, Array]:
+        """`observe_scalar` then `sample_scalar`, as one marked region."""
+        return self._sample_scalar_after(self._scalar_observe_wire(value))
 
     def observe_label(self, label: bytes) -> Blake3FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -387,10 +416,16 @@ class Blake3FieldTranscript:
             return blake3.unmarked_hash(rows, _MODE, _DIGEST_BYTES)
         return blake3.xof(rows, _DIGEST_BYTES)
 
-    def _absorb_witness(self, witness: Array) -> Blake3FieldTranscript:
+    def _witness_wire(self, witness: Array) -> Array:
+        """The witness's wire bytes, framing included: `[OP_BYTES] || len8(8) ||
+        nonce_le8`. Split out from `_absorb_witness` so `grind_and_sample` can
+        put the same bytes on the stream as part of a draw's framing instead of
+        as an absorb of its own."""
         nonce8 = _nonce8(fnp.asarray(witness, fnp.uint32).reshape(1))[0]
-        framing = _const_u8(bytes([OP_BYTES]) + _len8(8))
-        return self._absorb(fnp.concatenate([framing, nonce8]))
+        return fnp.concatenate([_const_u8(bytes([OP_BYTES]) + _len8(8)), nonce8])
+
+    def _absorb_witness(self, witness: Array) -> Blake3FieldTranscript:
+        return self._absorb(self._witness_wire(witness))
 
     def grind(
         self, pow_bits: int, *, chunk: int = GRIND_WINDOW
@@ -401,13 +436,18 @@ class Blake3FieldTranscript:
         Fully traceable (`zorch.grind.grind_search` windowed device search); does
         not raise on an exhausted search: `check_witness` is the soundness gate,
         so which witness the search returns is soundness-neutral."""
+        witness = self._find_witness(pow_bits, chunk)
+        return self._absorb_witness(witness), witness
+
+    def _find_witness(self, pow_bits: int, chunk: int) -> Array:
+        """The PoW search alone, with nothing absorbed. `grind` puts the witness
+        on the wire itself; `grind_and_sample` folds it into a draw's framing."""
         _validate_pow_bits(pow_bits, _DIGEST_BYTES)
         if chunk < 1:
             raise ValueError(f"chunk must be >= 1, got {chunk}")
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
-            witness = fnp.zeros((), fnp.uint32)
-            return self._absorb_witness(witness), witness
+            return fnp.zeros((), fnp.uint32)
         state_digest = self._state_digest()
 
         def check_batch(counters: Array) -> Array:
@@ -415,8 +455,17 @@ class Blake3FieldTranscript:
                 self._pow_digests(state_digest, counters), pow_bits
             )
 
-        witness = grind_search(check_batch, 2**32, chunk)
-        return self._absorb_witness(witness), witness
+        return grind_search(check_batch, 2**32, chunk)
+
+    def grind_and_sample(
+        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+    ) -> tuple[Blake3FieldTranscript, Array, Array]:
+        """Grind, then draw one scalar challenge, as ONE marked region — the
+        witness rides the draw's framing (see `_sample_scalar_after`). Byte-
+        identical to `grind(...)` followed by `sample_scalar()`."""
+        witness = self._find_witness(pow_bits, chunk)
+        t, challenge = self._sample_scalar_after(self._witness_wire(witness))
+        return t, witness, challenge
 
     def check_witness(
         self, witness: Array, *, pow_bits: int

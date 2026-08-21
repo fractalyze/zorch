@@ -77,7 +77,9 @@ Three of the four transcripts are device and **meet it**:
   loop folds into one device program with **no per-round host sync** — what a
   cuda-graph-unified scheme (e.g. flock) needs. The SHA-256 compression lowers via
   the `hash_frx.sha256` marker. Two honest caveats: there is no single whole-hop
-  fusion marker yet (it leans on the per-compression marker + XLA), and per-hash
+  whole-hop fusion marker for the SLICE-framed hop yet (it leans on the
+  per-compression marker + XLA; the scalar-framed observe+draw pair does ride one
+  `zorch.sha256_squeeze` region), and per-hash
   SHA-256 is a worse GPU fit than Poseidon2's field mults — the win is keeping FS
   *in* the graph, not raw hash throughput.
 - `Blake3FieldTranscript` — device-lowered on the same terms: `observe`/`sample`

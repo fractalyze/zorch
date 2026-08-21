@@ -320,6 +320,61 @@ class FoldChoreography(Generic[TranscriptT]):
         overrides the mechanism too."""
         return transcript.grind(bits)
 
+    def observe_message_and_sample(
+        self, transcript: TranscriptT, msg: Array
+    ) -> tuple[TranscriptT, Array]:
+        """Absorb a round message and draw the challenge that immediately
+        follows it. Returns `(transcript, challenge)`.
+
+        The default is the transcript's own `observe_and_sample` — the same
+        seam `fold_challenge` takes above — and is byte-identical to
+        `observe_message` then `sample`, since the default `observe_message` IS
+        `transcript.observe`.
+
+        It is NOT one region on either byte row: both spell `observe_and_sample`
+        as `observe(values).sample(n)`, which is an absorb region and then a
+        squeeze region. Merging it needs the slice-framed form of the payload
+        merge (`_sample_scalar_after` is scalar-only today), and until that
+        lands this seam exists so a wire that CAN merge — one whose squeeze
+        absorbs a payload before reading — can say so by overriding.
+
+        Note the default does NOT compose through `observe_message`, unlike
+        `grind_and_fold_challenge` below, which calls `self.grind` /
+        `self.fold_challenge`. It cannot: routing through the hook would spend
+        the second region this seam exists to avoid. A consumer that overrides
+        `observe_message` must therefore override this too, or the two wires
+        diverge on the eager separation path.
+        """
+        return transcript.observe_and_sample(msg, 1)
+
+    def grind_and_fold_challenge(
+        self,
+        transcript: TranscriptT,
+        msg: Array | None,
+        level: int,
+        fold_idx: int,
+        bits: int,
+    ) -> tuple[TranscriptT, Array, Array]:
+        """Grind this round's proof of work, then draw its fold challenge.
+        Returns `(transcript, witness, challenge)`.
+
+        The default composes `grind` and `fold_challenge`, which puts the
+        witness on the wire as one marked region and the draw as another. A wire
+        whose squeeze absorbs a payload before reading can do both in ONE region
+        by carrying the witness in the draw's framing — byte-identical, because
+        absorb is a stream. Region count is what a prover pays for; the
+        measurements behind that are on epic #1.
+
+        Overriding is for a wire that fixes its own bytes. Zorch's two rows
+        expose the merge as `Transcript.grind_and_sample`, but that draws under
+        scalar framing while this default draws under `sample(1)`'s slice
+        framing, so it is not a drop-in — a zorch-native consumer would be
+        changing its wire, not just its region count.
+        """
+        transcript, witness = self.grind(transcript, bits)
+        transcript, challenge = self.fold_challenge(transcript, msg, level, fold_idx)
+        return transcript, witness, challenge
+
     def check_grind(
         self, transcript: TranscriptT, bits: int, witness: Array
     ) -> tuple[TranscriptT, Array]:

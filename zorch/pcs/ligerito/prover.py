@@ -352,10 +352,38 @@ def _open_jit(
     # never both.
     eager = chor.eager_messages
 
-    def emit(t: TranscriptT, witness: Array, basis: Array) -> TranscriptT:
+    def fold_hop(
+        t: TranscriptT, msg: Array | None, level: int, fold_idx: int
+    ) -> tuple[TranscriptT, Array]:
+        """This round's proof of work and its fold challenge. The two are
+        adjacent on the stream, so the choreography may spend one hop on them.
+
+        Appends the FOLD half of the witness order `num_pow_witnesses` mirrors;
+        `grind` below appends the query half. The two must stay in schedule
+        order between them."""
+        bits = chor.fold_grind_bits(level, fold_idx)
+        if bits is None:
+            return chor.fold_challenge(t, msg, level, fold_idx)
+        t, witness, r = chor.grind_and_fold_challenge(t, msg, level, fold_idx, bits)
+        pow_witnesses.append(witness)
+        return t, r
+
+    def round_message(witness: Array, basis: Array) -> Array:
         msg = round_._round_poly(fnp.stack([witness, basis]))
         sumcheck_messages.append(msg)
-        return chor.observe_message(t, msg)
+        return msg
+
+    def separation(
+        t: TranscriptT, witness: Array, basis: Array
+    ) -> tuple[TranscriptT, Array]:
+        """The OOD and induce blocks both end by drawing a separation challenge,
+        preceded under the eager policy by this state's message. The two are
+        adjacent on the stream, so the choreography may spend one hop on them."""
+        if eager:
+            t, sep = chor.observe_message_and_sample(t, round_message(witness, basis))
+        else:
+            t, sep = t.sample()
+        return t, sep.reshape(())
 
     def grind(t: TranscriptT, bits: int | None) -> TranscriptT:
         if bits is None:
@@ -365,7 +393,8 @@ def _open_jit(
         return t
 
     if eager:
-        t = emit(t, W, B)
+        # The statement's own message, before the first fold round.
+        t = chor.observe_message(t, round_message(W, B))
 
     current = initial  # M_j
     num_vars = cfg.num_vars
@@ -375,10 +404,8 @@ def _open_jit(
         for i in range(k_j):
             msg: Array | None = None  # eager: this round's is already absorbed
             if not eager:
-                msg = round_._round_poly(fnp.stack([W, B]))
-                sumcheck_messages.append(msg)
-            t = grind(t, chor.fold_grind_bits(j, i))
-            t, r = chor.fold_challenge(t, msg, j, i)
+                msg = round_message(W, B)
+            t, r = fold_hop(t, msg, j, i)
             if eager:
                 # Fold and the freshly folded state's message in ONE marked
                 # region. Unmarked they are two full passes over the state —
@@ -418,10 +445,7 @@ def _open_jit(
                 y = (W * b_ood).sum()
                 t = t.observe(y)
                 ood_values.append(y)
-                if eager:
-                    t = emit(t, W, b_ood)
-                t, sep = t.sample()
-                sep = sep.reshape(())
+                t, sep = separation(t, W, b_ood)
                 B = B + sep * b_ood
         else:
             # Bind the in-clear residual before sampling the final level's queries
@@ -456,10 +480,7 @@ def _open_jit(
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
         eqps = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
         b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
-        if eager:
-            t = emit(t, W, b_new)
-        t, sep = t.sample()
-        sep = sep.reshape(())
+        t, sep = separation(t, W, b_new)
         B = B + sep * b_new
         current = nxt
 

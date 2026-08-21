@@ -202,11 +202,34 @@ class Sha256FieldTranscript:
         built as ONE absorb payload. Byte-identical to the byte transcript's
         `observe_scalar` per element; distinct from `observe` (the KIND tag
         differs)."""
+        return self._absorb(self._scalar_observe_wire(value))
+
+    def _scalar_observe_wire(self, value: Array) -> Array:
+        """`observe_scalar`'s payload: `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
+        per element, in order. Split out so `observe_scalar_and_sample` can put
+        the same bytes on the stream as part of a draw's framing."""
         vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
         framing = fnp.broadcast_to(
             _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
         )
-        return self._absorb(fnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
+        return fnp.concatenate([framing, vals_u8], axis=1).reshape(-1)
+
+    def _sample_scalar_after(
+        self, payload: Array
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """Put `payload` on the stream and draw a scalar, as ONE marked region —
+        the BLAKE3 row's `_sample_scalar_after`, on this wire."""
+        framing = fnp.concatenate(
+            [payload, _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
+        )
+        state, squeezed = _sha256_squeeze_zone(self.state, framing, self._item_bytes())
+        return replace(self, state=state), self._u8_to_elems(squeezed, 1)[0]
+
+    def observe_scalar_and_sample(
+        self, value: Array
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """`observe_scalar` then `sample_scalar`, as one marked region."""
+        return self._sample_scalar_after(self._scalar_observe_wire(value))
 
     def observe_label(self, label: bytes) -> Sha256FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -265,9 +288,16 @@ class Sha256FieldTranscript:
         lo4 = _u32_le_bytes(fnp.asarray(witness, fnp.uint32).reshape(1))[0]
         return fnp.concatenate([lo4, fnp.zeros(4, fnp.uint8)])
 
-    def _absorb_witness(self, witness: Array) -> Sha256FieldTranscript:
+    def _witness_wire(self, witness: Array) -> Array:
+        """The witness's wire bytes, framing included: `[OP_BYTES] || len8(8) ||
+        nonce_le8`. Split out from `_absorb_witness` so `grind_and_sample` can
+        put the same bytes on the stream as part of a draw's framing instead of
+        as an absorb of its own."""
         framing = _const_u8(bytes([OP_BYTES]) + _len8(8))
-        return self._absorb(fnp.concatenate([framing, self._witness_bytes(witness)]))
+        return fnp.concatenate([framing, self._witness_bytes(witness)])
+
+    def _absorb_witness(self, witness: Array) -> Sha256FieldTranscript:
+        return self._absorb(self._witness_wire(witness))
 
     def grind(
         self, pow_bits: int, *, chunk: int = GRIND_WINDOW
@@ -279,13 +309,18 @@ class Sha256FieldTranscript:
         (`zorch.grind.grind_search` windowed device search); does not raise on
         an exhausted search: `check_witness` is the soundness gate, so which
         witness the search returns is soundness-neutral."""
+        witness = self._find_witness(pow_bits, chunk)
+        return self._absorb_witness(witness), witness
+
+    def _find_witness(self, pow_bits: int, chunk: int) -> Array:
+        """The PoW search alone, with nothing absorbed. `grind` puts the witness
+        on the wire itself; `grind_and_sample` folds it into a draw's framing."""
         _validate_pow_bits(pow_bits, _DIGEST_BYTES)
         if chunk < 1:
             raise ValueError(f"chunk must be >= 1, got {chunk}")
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
-            witness = fnp.zeros((), fnp.uint32)
-            return self._absorb_witness(witness), witness
+            return fnp.zeros((), fnp.uint32)
         pow_state = self._pow_state()
 
         def check_batch(counters: Array) -> Array:
@@ -297,8 +332,16 @@ class Sha256FieldTranscript:
                 sha256_stream_finalize(pow_state, nonce8), pow_bits
             )
 
-        witness = grind_search(check_batch, 2**32, chunk)
-        return self._absorb_witness(witness), witness
+        return grind_search(check_batch, 2**32, chunk)
+
+    def grind_and_sample(
+        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+    ) -> tuple[Sha256FieldTranscript, Array, Array]:
+        """Grind, then draw one scalar challenge, as ONE marked region — the
+        BLAKE3 row's `grind_and_sample`, on this wire."""
+        witness = self._find_witness(pow_bits, chunk)
+        t, challenge = self._sample_scalar_after(self._witness_wire(witness))
+        return t, witness, challenge
 
     def check_witness(
         self, witness: Array, *, pow_bits: int
