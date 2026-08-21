@@ -1,0 +1,14 @@
+load("@rules_python//python:defs.bzl", "py_test")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_test(
+    name = "challenge_test",
+    size = "small",
+    srcs = ["challenge_test.py"],
+    deps = [
+        "//zorch/lnp:challenge",
+        requirement("absl_py"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
