@@ -256,23 +256,37 @@ class SumcheckSummand(Protocol):
     def _combine(self, *factors: Array) -> Array: ...
 
 
-# The FS-less compute-only round marker: the jagged LogUp-GKR host
-# loop wraps each round's fold+sum (no Fiat-Shamir) in this composite, while the
-# separate `hash_frx.poseidon2` marker carries FS between rounds. The composite
-# attributes the recognizing emitter parses:
+# The FS-less compute-only round marker: a host loop wraps each round's fold+sum
+# (no Fiat-Shamir) in this composite, while a separate marker carries FS between
+# rounds -- `hash_frx.poseidon2` for the jagged LogUp-GKR loop, the blake3/sha256
+# transcript regions for Ligerito. `variant` is what tells the two apart, so read
+# every attr below as scoped by it. The composite attributes the recognizing
+# emitter parses:
 #   phase   -- "first" (round 0, no fold), "mid" (fold-by-alpha then sum),
 #              "boundary" (the row->interaction handoff: fold-by-alpha then sum
 #              over the still-unfolded eq, which rides through un-bound), or
 #              "final" (fold only, emitting the four pair openings); routes to
 #              the round kernel by position.
-#   variant -- the round-kernel shape: "dense" (the uniform interaction round --
-#              a batched LogUp-GKR round-poly, folds densely) or "jagged" (the row
-#              phase -- segment-based, variable heights, runtime row_counts).
+#   variant -- the round-kernel shape. The recognizer rejects an unknown variant
+#              outright (unlike an unknown attr VALUE, which it does not check),
+#              so every producer's spelling has to appear here. In-repo:
+#              "dense" (the uniform interaction round -- a batched LogUp-GKR
+#              round-poly, folds densely), "jagged" (the row phase --
+#              segment-based, variable heights, runtime row_counts),
+#              "transition" (logup_gkr/circuit.py), and "product" (the plain
+#              two-factor product round -- no eq weighting, no running claim, no
+#              Gruen tail; pcs/ligerito/prover.py).
 #   degree    -- round-poly degree.
-#   poly_form -- the round-poly evaluation domain/form ("coefficient" = the Gruen
-#                {0, 1/2} + s(1)=claim-s(0) scheme this round uses).
-# No `num_scalars`: the LogUp summand is hardcoded in the emitter (AccumLogupPair),
-# which does not read it (it matters only for a generic `zorch.sumcheck.combine`
+#   poly_form -- the round-poly evaluation domain/form. "coefficient" names TWO
+#                wires, separated only by `variant`: under the LogUp variants it
+#                is the Gruen {0, 1/2} + s(1)=claim-s(0) scheme, a full ascending
+#                vector of width `degree+1`; under "product" it is the COMPRESSED
+#                pair [c_0, c_2] of width 2, with c_1 off the wire and rebuilt by
+#                the verifier (`CompressedCoeffsSumcheckRound`). An emitter that
+#                reads `poly_form` without `variant` will emit the wrong width.
+# No `num_scalars`: each variant's summand is hardcoded in its emitter (the LogUp
+# variants take AccumLogupPair; "product" is a plain two-factor product), so none
+# of them reads it (it matters only for a generic `zorch.sumcheck.combine`
 # region). No `challenge_limbs`: the separate FS step recomposes the fold
 # challenge, which arrives as one operand whose dtype already carries base vs
 # extension.

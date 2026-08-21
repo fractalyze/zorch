@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING, Any, Generic
 import frx
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.fusion import fused_region
 
 from zorch.challenge import ChallengePolicy
 from zorch.coding.tensor_code import TensorCode
@@ -64,6 +65,8 @@ from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.stage import ProveResult, ProverStage, TrivialClaim
 from zorch.sumcheck.domain import fold
 from zorch.sumcheck.prover import (
+    SUMCHECK_ROUND_MARKER,
+    SUMCHECK_ROUND_MARKER_VERSION,
     CompressedProductRound,
     ProductSummand,
     StandardRound,
@@ -249,6 +252,63 @@ def _open(
     return _open_jit(prover, pd.f, pd.initial, z, B, value, transcript)
 
 
+def _fold_and_message_decomp(
+    W: Array,
+    B: Array,
+    r: Array,
+    round_: StandardRound | CompressedProductRound,
+    **_attrs: Any,
+) -> tuple[Array, Array, Array]:
+    """Byte-exact decomposition of the fused round: fold the two factors at `r`,
+    then the folded state's round poly. `_attrs` (variant / degree) are
+    composite metadata the emitter parses; the decomposition needs only the
+    operands. Returns the marker ABI's result order, [poly, folded_W,
+    folded_B]."""
+    folded = fold(fnp.stack([W, B]), r)
+    return round_._round_poly(folded), folded[0], folded[1]
+
+
+def _fold_and_message(
+    W: Array, B: Array, r: Array, round_: StandardRound | CompressedProductRound
+) -> tuple[Array, Array, Array]:
+    """One round's fold + next message under the `zorch.sumcheck.round` marker
+    (`variant="product"`): a plain product summand, so no eq weighting, no
+    running claim and no Gruen tail — the round poly alone is the message.
+
+    Only `CompressedProductRound` is marked. `poly_form` is what the emitter
+    builds its message from, and the two rounds disagree on it: the compressed
+    round's wire is the coefficient pair `[c_0, c_2]`, `StandardRound`'s is the
+    three natural-domain evaluations. A marker declaring `"coefficient"` over a
+    `StandardRound` would be RECOGNIZED and emit a wire the decomposition never
+    produces — silently, since only an unknown *variant* is rejected outright.
+    No emitter claims the evaluation form, so marking it would buy nothing;
+    the plain decomposition runs instead.
+
+    `round_` rides as a closure rather than an operand: it is a static
+    description of the summand, not data, and the emitter reconstructs what it
+    needs from `degree`."""
+    if not isinstance(round_, CompressedProductRound):
+        return _fold_and_message_decomp(W, B, r, round_)
+    return fused_region(
+        partial(_fold_and_message_decomp, round_=round_),
+        W,
+        B,
+        r,
+        name=SUMCHECK_ROUND_MARKER,
+        version=SUMCHECK_ROUND_MARKER_VERSION,
+        variant="product",
+        # Every Ligerito round is an interior round -- there is no boundary
+        # handoff to distinguish -- but the recognizer requires `phase` on
+        # every marker, so name the one phase these rounds have.
+        phase="mid",
+        # This is the degree-2 two-factor round; its wire is the compressed
+        # pair [c_0, c_2], which `poly_form` names for the emitter (c_1 stays
+        # off the wire, rebuilt by the verifier).
+        degree=2,
+        poly_form="coefficient",
+    )
+
+
 @partial(frx.jit, static_argnums=(0,))
 def _open_jit(
     prover: LigeritoProver[TranscriptT],
@@ -319,11 +379,25 @@ def _open_jit(
                 sumcheck_messages.append(msg)
             t = grind(t, chor.fold_grind_bits(j, i))
             t, r = chor.fold_challenge(t, msg, j, i)
-            W, B = fold(fnp.stack([W, B]), r)
             if eager:
-                # The freshly folded state's — the terminal residual state's
-                # included (the verifier recomputes that one in the clear).
-                t = emit(t, W, B)
+                # Fold and the freshly folded state's message in ONE marked
+                # region. Unmarked they are two full passes over the state —
+                # the fold pairs x with x + N/2 and the reduce re-splits that
+                # output on another stride, so XLA materializes the folded
+                # state and reads it back. `zorch.sumcheck.round` routes the
+                # pair to an emitter that writes the folded buffers and
+                # accumulates the message in one pass; unclaimed (CPU, or an
+                # older pin) the decomposition below runs inline and is
+                # byte-identical to the eager body it replaces.
+                #
+                # Fiat-Shamir stays outside, per the FS-less marker contract:
+                # the region takes `r` and returns the message, the transcript
+                # absorbs it here.
+                msg_next, W, B = _fold_and_message(W, B, r, round_)
+                sumcheck_messages.append(msg_next)
+                t = chor.observe_message(t, msg_next)
+            else:
+                W, B = fold(fnp.stack([W, B]), r)
         num_vars -= k_j
 
         # --- re-commit the folded witness as M_{j+1} (non-final levels) ---
