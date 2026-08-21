@@ -16,7 +16,10 @@ from absl.testing import absltest
 from frx import Array
 
 from zorch.coding.reed_solomon import eval_domain
-from zorch.pcs.deep import deep_composition, open_columns
+from zorch.pcs.deep import (
+    deep_composition,
+    open_columns,
+)
 from zorch.poly.univariate import compute_lagrange_basis, eval_coeffs, powers
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.utils.field import split_coeffs
@@ -100,6 +103,85 @@ class DeepCompositionTest(absltest.TestCase):
         got = deep_composition(base_cols, ext_cols, evals, xis, pos, vf, domain)
         want = self._expect(coeffs, domain, vf, xis_of)
         self.assertTrue(bool(fnp.all(got == want)), "wrapped-opening mismatch")
+
+
+class DeepCompositionPowerAssignmentTest(absltest.TestCase):
+    def test_custom_vf_pows_reverses_assignment(self) -> None:
+        # A caller may fix descending powers (Horner-style accumulation:
+        # column 0 highest). Σ_j vf^(m-1-j)·q_j equals the ascending reference
+        # over the REVERSED column list — exact, so byte equality.
+        coeffs, domain, base_cols, ext_cols, vf = DeepCompositionTest._setup(self, 11)
+        m = _B + _C
+        z = rand_ext_field(888, (), KB, EF)
+        evals = fnp.stack([eval_coeffs(coeffs[i], z) for i in range(m)])
+        got = deep_composition(
+            base_cols,
+            ext_cols,
+            evals,
+            fnp.stack([z]),
+            [0] * m,
+            vf,
+            domain,
+            vf_pows=powers(vf, m)[::-1],
+        )
+        want = DeepCompositionTest._expect(
+            self, list(reversed(coeffs)), domain, vf, [z] * m
+        )
+        self.assertTrue(bool(fnp.all(got == want)), "descending vf_pows mismatch")
+
+    def test_columns_leading_boundary_shapes(self) -> None:
+        # A block may be empty (all columns of one kind) or hold a single
+        # column: both make the transposed shape degenerate, where a wrong
+        # axis still indexes without erroring.
+        n = 1 << _N_BITS
+        domain = eval_domain(KB, n)
+        z = rand_ext_field(779, (), KB, EF)
+        for n_base, n_ext in ((1, 0), (0, 1), (1, 1)):
+            base_coeffs = [rand_field(31 + i, (n,), KB) for i in range(n_base)]
+            ext_coeffs = [rand_ext_field(41 + j, (n,), KB, EF) for j in range(n_ext)]
+            base_cols = (
+                fnp.stack([_evals_on(c, domain) for c in base_coeffs], axis=1)
+                if n_base
+                else fnp.zeros(
+                    (n, 0), dtype=base_coeffs[0].dtype if base_coeffs else KB
+                )
+            )
+            ext_cols = (
+                fnp.stack([_evals_on(c, domain) for c in ext_coeffs], axis=1)
+                if n_ext
+                else fnp.zeros((n, 0), dtype=EF)
+            )
+            m = n_base + n_ext
+            vf = rand_ext_field(51, (), KB, EF)
+            evals = fnp.stack([eval_coeffs(c, z) for c in base_coeffs + ext_coeffs])
+            args = (evals, fnp.stack([z]), [0] * m, vf, domain)
+            want = deep_composition(base_cols, ext_cols, *args)
+            got = deep_composition(base_cols.T, ext_cols.T, *args, columns_leading=True)
+            self.assertTrue(
+                bool(fnp.all(got == want)), f"B={n_base} C={n_ext} mismatch"
+            )
+
+    def test_columns_leading_matches_row_major_bytes(self) -> None:
+        # Layout must not perturb the arithmetic: same columns, transposed,
+        # must land on the same bytes — not merely the same polynomial.
+        coeffs, domain, base_cols, ext_cols, vf = DeepCompositionTest._setup(self, 3)
+        m = _B + _C
+        z = rand_ext_field(778, (), KB, EF)
+        evals = fnp.stack([eval_coeffs(coeffs[i], z) for i in range(m)])
+        want = deep_composition(
+            base_cols, ext_cols, evals, fnp.stack([z]), [0] * m, vf, domain
+        )
+        got = deep_composition(
+            base_cols.T,
+            ext_cols.T,
+            evals,
+            fnp.stack([z]),
+            [0] * m,
+            vf,
+            domain,
+            columns_leading=True,
+        )
+        self.assertTrue(bool(fnp.all(got == want)), "columns_leading mismatch")
 
 
 class OpenColumnsTest(absltest.TestCase):
