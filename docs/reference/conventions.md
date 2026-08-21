@@ -6,6 +6,32 @@ New to JAX? Read [`jax.md`](jax.md) first — the mental models these rules foll
 from, plus the canonical external references. This page is the rules; that one is
 the why.
 
+## Device-first, and what "host" is allowed to mean
+
+Every numeric path is designed to trace — device-resident, capturable as one
+CUDA graph — by default. Host execution is the exception, and it comes in
+exactly two shapes:
+
+- **Inexpressible math** stays host as plain Python/bigints: arithmetic whose
+  values exceed every fixed-width lane (balanced-lift reconstructions and norm
+  bounds over the full RNS range, the LNP challenge gate's ~300-bit unreduced
+  products). No array layer helps here — a field dtype would reduce away the
+  very magnitude being measured — so the performance lever is algorithmic, not
+  codegen, and numpy object arrays are acceptable as containers for exact
+  ints. This is the same boundary lattice-frx pins for its norms and lifts.
+- **Array-expressible work that merely *runs* on host** is still written in
+  `frx`, never numpy. A numpy path is invisible to XLA codegen — no fusion, no
+  emitter, no backend retarget — so its performance can never be fixed, only
+  rewritten; the same function in `frx` runs on the CPU backend today and
+  moves on-device by changing nothing but the platform. Bare numpy is reserved
+  for the bigint containers above and for test oracles, where independence
+  from the traced stack is the point.
+
+When a protocol needs a host decision inside a traced pipeline (a rejection
+branch, a repeat loop), shape it as a host loop around a traced core with a
+fixed budget, and keep the traced core's inputs device-resident — the host
+touches verdicts, not arrays.
+
 ## `@jit`
 
 `@jit` the leaf numeric kernels; compose them in plain Python.

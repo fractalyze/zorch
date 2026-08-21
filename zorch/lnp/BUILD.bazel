@@ -1,0 +1,16 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "challenge",
+    srcs = [
+        "__init__.py",
+        "challenge.py",
+    ],
+    visibility = ["//visibility:public"],
+    # lattice-frx wheels come off the Fractalyze index (lattice-frx#18).
+    deps = [
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
