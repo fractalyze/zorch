@@ -11,9 +11,22 @@ commitment scheme. What lives here is the algebra and the opening predicate:
   part of the tested contract, not an accident.
 - **BDLOP** (eprint 2016/997): the hiding extension — `t0 = B0·r`,
   `t1 = B1·r + m` — opened by revealing `(m, r)` and re-running the algebra.
+- **ABDLOP** (eprint 2022/284, eq. 5): the two halves combined in one scheme —
+  `t_A = A1·s1 + A2·s2` binds a small-norm witness `s1` Ajtai-style while
+  `t_B = B·s2 + m` carries unrestricted-coefficient messages BDLOP-style,
+  both under the same randomness `s2`. This is the commitment LNP proofs
+  (`zorch/lnp`) open and prove statements about, and it lives on lattice-frx's
+  *partial-split* host ring (`q ≡ 5 (mod 8)`) rather than the NTT ring the
+  other two use: LNP soundness extraction divides by challenge differences,
+  which Lemma 2.6 grounds in the partial-split factorization — and no modulus
+  satisfies both ring modes.
 
-Commitment is one `matvec` in the NTT domain per equation, so it traces and
-batches exactly like the ring ops it is made of (lattice-frx's `RnsRing`).
+For Ajtai and BDLOP, commitment is one `matvec` in the NTT domain per
+equation, so it traces and batches exactly like the ring ops it is made of
+(lattice-frx's `RnsRing`). ABDLOP is host-boundary throughout instead: the
+partial-split ring pins products to the host, so its commitment is a host
+matvec composed from the ring's own `mul`/`add` over the `(limbs, d)` uint64
+contract, with module vectors stacked as `(k, limbs, d)`.
 Verification is a host-boundary predicate on purpose: the opening bound is an
 ℓ∞ norm over the *balanced lift* of the witness, and lattice-frx pins lifts
 and norms to the host (`rns.reconstruct_centered` + `norms.linf`) because no
@@ -30,12 +43,13 @@ lattice-frx's uniform-from-bytes sampler land; the tests use a seeded numpy
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
+from functools import partial, reduce
 
 import frx
 import numpy as np
 from lattice_frx import norms, rns
 from lattice_frx.ring import Coeff, Eval, RnsRing
+from lattice_frx.split_ring import HostSplitRing
 
 
 class AjtaiCommitment:
@@ -135,6 +149,149 @@ class BdlopCommitment:
         )
 
 
+@dataclass(frozen=True)
+class AbdlopPair:
+    """An ABDLOP commitment: the Ajtai half `t_a` and the message half `t_b`.
+
+    Host `(k, limbs, d)` uint64 stacks, not a pytree — the partial-split
+    ring is host-boundary, so there is nothing to trace or batch here."""
+
+    t_a: np.ndarray
+    t_b: np.ndarray
+
+
+class AbdlopCommitment:
+    """ABDLOP commit/verify: `t_a = A1·s1 + A2·s2` over `rows × (s1_cols +
+    randomness_cols)`, `t_b = B·s2 + m` over `messages × randomness_cols`.
+
+    Two ℓ∞ bounds because the two witness halves are different objects in
+    the scheme: `beta1_inf` bounds the committed witness `s1` (the Ajtai
+    half's message), `beta2_inf` the randomness `s2`; the message `m` is
+    unconstrained, as in BDLOP. Configuration rides the constructor, as in
+    the siblings — binding (MSIS) and hiding (MLWE) strength are the
+    consumer's parameter choice."""
+
+    def __init__(
+        self,
+        ring: HostSplitRing,
+        rows: int,
+        s1_cols: int,
+        randomness_cols: int,
+        messages: int,
+        beta1_inf: int,
+        beta2_inf: int,
+    ) -> None:
+        self.ring = ring
+        self.rows = rows
+        self.s1_cols = s1_cols
+        self.randomness_cols = randomness_cols
+        self.messages = messages
+        self.beta1_inf = beta1_inf
+        self.beta2_inf = beta2_inf
+
+    def commit(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        b: np.ndarray,
+        s1: np.ndarray,
+        s2: np.ndarray,
+        message: np.ndarray,
+    ) -> AbdlopPair:
+        self._require_stack("commit: a1", a1, (self.rows, self.s1_cols))
+        self._require_stack("commit: a2", a2, (self.rows, self.randomness_cols))
+        self._require_stack("commit: b", b, (self.messages, self.randomness_cols))
+        self._require_stack("commit: s1", s1, (self.s1_cols,))
+        self._require_stack("commit: s2", s2, (self.randomness_cols,))
+        self._require_stack("commit: message", message, (self.messages,))
+        ring = self.ring
+        return AbdlopPair(
+            t_a=_add_stacks(
+                ring, _split_matvec(ring, a1, s1), _split_matvec(ring, a2, s2)
+            ),
+            t_b=_add_stacks(ring, _split_matvec(ring, b, s2), message),
+        )
+
+    def verify(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        b: np.ndarray,
+        commitment: AbdlopPair,
+        s1: np.ndarray,
+        s2: np.ndarray,
+        message: np.ndarray,
+    ) -> bool:
+        """The exact opening predicate: `‖s1‖∞ ≤ β1`, `‖s2‖∞ ≤ β2` on the
+        balanced lifts, and the triple re-commits to `commitment`. The
+        *relaxed* opening (with a challenge factor) is the LNP protocol
+        layer's notion, not this seam's — same discipline as the siblings
+        keeping challenges out of the commitment algebra."""
+        if not _within_bound_host(self.ring, s1, self.beta1_inf):
+            return False
+        if not _within_bound_host(self.ring, s2, self.beta2_inf):
+            return False
+        recomputed = self.commit(a1, a2, b, s1, s2, message)
+        return _equal_host(recomputed.t_a, commitment.t_a) and _equal_host(
+            recomputed.t_b, commitment.t_b
+        )
+
+    def _require_stack(self, name: str, arr: np.ndarray, lead: tuple[int, ...]) -> None:
+        """The `_require_lead` of the host-array convention: leading
+        (module) axes against the scheme's declared shape, with the
+        trailing `(limbs, d)` fixed by the ring."""
+        want = lead + (len(self.ring.q_moduli), self.ring.d)
+        got = arr.shape
+        if got != want:
+            raise ValueError(f"{name}: shape {got}, want {want}")
+
+
+def _split_matvec(
+    ring: HostSplitRing, matrix: np.ndarray, vector: np.ndarray
+) -> np.ndarray:
+    """`A·s` composed from the split ring's own `mul`/`add` — one row at a
+    time on the host, the partial-split counterpart of `RnsRing.matvec`."""
+    return np.stack(
+        [
+            reduce(
+                ring.add, (ring.mul(entry, coeff) for entry, coeff in zip(row, vector))
+            )
+            for row in matrix
+        ]
+    )
+
+
+def _add_stacks(ring: HostSplitRing, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Entrywise ring addition of two `(k, limbs, d)` stacks."""
+    return np.stack([ring.add(x, y) for x, y in zip(a, b, strict=True)])
+
+
+def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:
+    """The one norm policy every opening predicate here shares: ℓ∞ over the
+    *centered* reconstruction. Named once because the two ported
+    reconstructions differ at exactly `Q/2` (see lattice-frx's `rns.py`),
+    so which one the bound reads is a pinned choice, not a detail."""
+    return norms.linf(rns.reconstruct_centered(host, q_moduli)) <= beta_inf
+
+
+def _within_bound_host(ring: HostSplitRing, stacked: np.ndarray, beta_inf: int) -> bool:
+    """`‖·‖∞ ≤ β` over the full centered reconstruction, the host-array
+    twin of `_within_bound`: the `(k, limbs, d)` batch flattens into one
+    `(limbs, k·d)` reconstruction because ℓ∞ of a batch is the ℓ∞ of its
+    concatenation. The domain gate has no work to do here — the
+    partial-split ring is coefficient-domain by construction."""
+    host = np.transpose(stacked, (1, 0, 2)).reshape(len(ring.q_moduli), -1)
+    return _linf_within(host, ring.q_moduli, beta_inf)
+
+
+def _equal_host(a: np.ndarray, b: np.ndarray) -> bool:
+    """Exact equality on host stacks. `np.array_equal` already refuses a
+    shape mismatch (a truncated RNS chain included); the dtype check keeps
+    the same never-raise role as `_equal`'s — a different dtype is a
+    different-ring `False`, not an error."""
+    return a.dtype == b.dtype and bool(np.array_equal(a, b))
+
+
 def _require_lead(name: str, element: Coeff | Eval, lead: tuple[int, ...]) -> None:
     """The element's leading (batch/module) axes against the scheme's declared
     module shape — `matvec` checks only internal mat/vec consistency, so a
@@ -164,7 +321,7 @@ def _within_bound(ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
     host = np.stack(
         [np.asarray(limb).astype(np.uint64).reshape(-1) for limb in batched.limbs]
     )
-    return norms.linf(rns.reconstruct_centered(host, ring.q_moduli)) <= beta_inf
+    return _linf_within(host, ring.q_moduli, beta_inf)
 
 
 def _equal(a: Eval, b: Eval) -> bool:

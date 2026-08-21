@@ -13,8 +13,16 @@ import frx
 import numpy as np
 from absl.testing import absltest
 from lattice_frx.ring import Coeff, Eval, RnsRing
+from lattice_frx.split_ring import HostSplitRing
 
-from zorch.commit.ajtai import AjtaiCommitment, BdlopCommitment, _equal
+from zorch.commit.ajtai import (
+    AbdlopCommitment,
+    AbdlopPair,
+    AjtaiCommitment,
+    BdlopCommitment,
+    _add_stacks,
+    _equal,
+)
 
 # NTT-friendly 36-bit pair from lattice-frx's own suite; d kept small for
 # test wall time (both are 1 mod 2d for every power of two up to 256).
@@ -22,6 +30,11 @@ _Q = (34359753217, 34359754753)
 _D = 64
 _ROWS, _COLS = 2, 3
 _BETA = 1  # ternary witnesses
+
+# Partial-split 36-bit pair (≡ 5 mod 8), from lattice-frx's
+# `find_nearest_split_primes(36, 2)` — the mutually exclusive modulus shape
+# the ABDLOP scheme lives on.
+_SPLIT_Q = (68719476493, 68719476853)
 
 
 def _ring() -> RnsRing:
@@ -205,6 +218,170 @@ class BdlopTest(absltest.TestCase):
         )
         _assert_equal_limbs(compiled.t0, eager.t0)
         _assert_equal_limbs(compiled.t1, eager.t1)
+
+
+def _uniform_split(ring: HostSplitRing, rng: np.random.Generator) -> np.ndarray:
+    """One uniform split-ring element on the `(limbs, d)` host contract."""
+    return np.array(
+        [rng.integers(0, q, size=_D, dtype=np.uint64) for q in ring.q_moduli],
+        dtype=np.uint64,
+    )
+
+
+def _split_matrix(
+    ring: HostSplitRing, rng: np.random.Generator, rows: int, cols: int
+) -> np.ndarray:
+    return np.stack(
+        [
+            np.stack([_uniform_split(ring, rng) for _ in range(cols)])
+            for _ in range(rows)
+        ]
+    )
+
+
+def _ternary_split_vector(
+    ring: HostSplitRing, rng: np.random.Generator, cols: int
+) -> np.ndarray:
+    """A `(cols, limbs, d)` stack with coefficients in {-1, 0, 1}."""
+    return np.stack(
+        [ring.from_signed(rng.integers(-1, 2, size=_D).tolist()) for _ in range(cols)]
+    )
+
+
+def _over_bound_split_vector(ring: HostSplitRing, cols: int) -> np.ndarray:
+    """Over the bound by construction, as `_over_bound_witness` above."""
+    return np.stack(
+        [ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(cols)]
+    )
+
+
+class AbdlopTest(absltest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.ring = HostSplitRing(_SPLIT_Q, _D)
+        self.scheme = AbdlopCommitment(
+            self.ring,
+            rows=_ROWS,
+            s1_cols=_COLS,
+            randomness_cols=_COLS,
+            messages=1,
+            beta1_inf=_BETA,
+            beta2_inf=_BETA,
+        )
+        self.rng = np.random.default_rng(2)
+        self.a1 = _split_matrix(self.ring, self.rng, _ROWS, _COLS)
+        self.a2 = _split_matrix(self.ring, self.rng, _ROWS, _COLS)
+        self.b = _split_matrix(self.ring, self.rng, 1, _COLS)
+
+    def _witnesses(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """A fresh `(s1, s2, message)` triple — s1/s2 ternary, the message
+        unconstrained uniform."""
+        s1 = _ternary_split_vector(self.ring, self.rng, _COLS)
+        s2 = _ternary_split_vector(self.ring, self.rng, _COLS)
+        message = np.stack([_uniform_split(self.ring, self.rng)])
+        return s1, s2, message
+
+    def test_a_valid_opening_verifies(self) -> None:
+        s1, s2, message = self._witnesses()
+        commitment = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
+        self.assertTrue(
+            self.scheme.verify(self.a1, self.a2, self.b, commitment, s1, s2, message)
+        )
+
+    def test_the_commitment_is_additively_homomorphic(self) -> None:
+        """com(s1,s2,m) + com(s1',s2',m') == com(s1+s1', s2+s2', m+m') —
+        linear in the whole witness triple, the folding prerequisite."""
+        s1, s2, message = self._witnesses()
+        t1, u2, other = self._witnesses()
+        first = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
+        second = self.scheme.commit(self.a1, self.a2, self.b, t1, u2, other)
+        lhs_t_a = _add_stacks(self.ring, first.t_a, second.t_a)
+        lhs_t_b = _add_stacks(self.ring, first.t_b, second.t_b)
+        rhs = self.scheme.commit(
+            self.a1,
+            self.a2,
+            self.b,
+            _add_stacks(self.ring, s1, t1),
+            _add_stacks(self.ring, s2, u2),
+            _add_stacks(self.ring, message, other),
+        )
+        np.testing.assert_array_equal(lhs_t_a, rhs.t_a)
+        np.testing.assert_array_equal(lhs_t_b, rhs.t_b)
+
+    def test_an_over_bound_s1_is_rejected(self) -> None:
+        _, s2, message = self._witnesses()
+        big = _over_bound_split_vector(self.ring, _COLS)
+        commitment = self.scheme.commit(self.a1, self.a2, self.b, big, s2, message)
+        self.assertFalse(
+            self.scheme.verify(self.a1, self.a2, self.b, commitment, big, s2, message)
+        )
+
+    def test_an_over_bound_randomness_is_rejected(self) -> None:
+        s1, _, message = self._witnesses()
+        big = _over_bound_split_vector(self.ring, _COLS)
+        commitment = self.scheme.commit(self.a1, self.a2, self.b, s1, big, message)
+        self.assertFalse(
+            self.scheme.verify(self.a1, self.a2, self.b, commitment, s1, big, message)
+        )
+
+    def test_a_substituted_witness_is_rejected(self) -> None:
+        s1, s2, message = self._witnesses()
+        other1, _, _ = self._witnesses()
+        commitment = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
+        self.assertFalse(
+            self.scheme.verify(
+                self.a1, self.a2, self.b, commitment, other1, s2, message
+            )
+        )
+
+    def test_a_wrong_message_is_rejected(self) -> None:
+        s1, s2, message = self._witnesses()
+        commitment = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
+        other = np.stack([_uniform_split(self.ring, self.rng)])
+        self.assertFalse(
+            self.scheme.verify(self.a1, self.a2, self.b, commitment, s1, s2, other)
+        )
+
+    def test_a_truncated_commitment_is_rejected(self) -> None:
+        """A commitment carrying fewer limbs is a different RNS chain — the
+        predicate must not accept it on a matching prefix."""
+        s1, s2, message = self._witnesses()
+        commitment = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
+        truncated = AbdlopPair(
+            t_a=commitment.t_a[:, :1, :], t_b=commitment.t_b[:, :1, :]
+        )
+        self.assertFalse(
+            self.scheme.verify(self.a1, self.a2, self.b, truncated, s1, s2, message)
+        )
+
+    def test_different_randomness_changes_the_commitment(self) -> None:
+        """Hiding smoke only, as in `BdlopTest`: every part must move with
+        s2 — t_a through A2·s2, t_b through B·s2."""
+        s1, s2, message = self._witnesses()
+        _, other, _ = self._witnesses()
+        c1 = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
+        c2 = self.scheme.commit(self.a1, self.a2, self.b, s1, other, message)
+        self.assertFalse(np.array_equal(c1.t_a, c2.t_a))
+        self.assertFalse(np.array_equal(c1.t_b, c2.t_b))
+
+    def test_a_wrong_shape_is_rejected_at_commit(self) -> None:
+        s1, s2, message = self._witnesses()
+        wide = _ternary_split_vector(self.ring, self.rng, _COLS + 1)
+        with self.assertRaises(ValueError):
+            self.scheme.commit(self.a1, self.a2, self.b, wide, s2, message)
+        with self.assertRaises(ValueError):
+            self.scheme.commit(self.a1, self.a2, self.b, s1, wide, message)
+        with self.assertRaises(ValueError):
+            self.scheme.commit(self.a1, self.a2, self.b, s1, s2, s1)
+
+    def test_an_ntt_ring_is_rejected_at_construction(self) -> None:
+        """A deliberate tripwire on the dependency at this suite's exact
+        primes: the two ring modes are mutually exclusive, and if
+        lattice-frx ever relaxed its constructor guard, an NTT-friendly
+        ring strayed into the ABDLOP scheme would be a soundness gap this
+        suite must catch, not a parameter choice."""
+        with self.assertRaises(ValueError):
+            HostSplitRing(_Q, _D)
 
 
 if __name__ == "__main__":
