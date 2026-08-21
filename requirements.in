@@ -15,10 +15,10 @@ absl-py
 numpy
 # PEP 696 TypeVar defaults, which `typing` gains only in 3.13.
 typing-extensions
-frx==0.10.2.dev20260820235505
-frxlib==0.10.2.dev20260820235505
-frx-cuda12-pjrt==0.10.2.dev20260820235505
-frx-cuda12-plugin==0.10.2.dev20260820235505
+frx==0.10.2.dev20260821142028
+frxlib==0.10.2.dev20260821142028
+frx-cuda12-pjrt==0.10.2.dev20260821142028
+frx-cuda12-plugin==0.10.2.dev20260821142028
 # 0.0.15 is the frx floor since the wheel that registers the classical-curve
 # field dtypes (frx pins zk_dtypes >= 0.0.15 from 0.10.2.dev20260820235505);
 # lattice-frx's 0.0.14 floor (`prime_field` arrives there) and the older frx
