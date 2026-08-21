@@ -7,7 +7,7 @@ design and open decisions: epic issue
 A Modern SNARK is IOP + PCS, and the PCS is the axis schemes vary on. `pcs` is the
 one seam every scheme's commitment plugs into. Three instances anchor the ends of
 the design space: [`kzg`](#kzg-pairing-based) (pairing, trusted setup),
-[`fri`](#fri-transparent) (transparent, hash-based), and
+[`deep_fri`](#deep_fri-transparent) (transparent, hash-based), and
 [`basefold`](#basefold-transparent-multilinear) (transparent, the multilinear
 *matrix* commitment the [jagged PCS](#jagged-a-consumer-on-the-seam) builds on).
 That schemes at opposite ends of the space satisfy the same two protocols is the
@@ -56,12 +56,16 @@ batching challenge when openings are bundled. `setup` splits the SRS into the
 O(degree) `KzgProvingKey` and O(1) `KzgVerifierKey` from one `τ`, and that shared
 `τ` is the soundness invariant binding them.
 
-### fri (transparent)
+### deep_fri (transparent)
 
 The DEEP quotient trick turns a point opening into a low-degree test: to open `f`
 at `z` with claim `v`, show `g(x) = (f(x) − v)/(x − z)` is low degree, which holds
-exactly when `v = f(z)`. `g` is never committed — the verifier rebuilds its
-codeword from the committed `f` at queried points — so `open` Merkle-commits only
+exactly when `v = f(z)`. Opening a batch does not multiply the work: the `M`
+quotients batch by powers of one Fiat-Shamir challenge into a single codeword —
+the DEEP-ALI composition, `zorch/pcs/deep.py`'s eval-form arithmetic — covered by
+ONE commit-fold chain and one query phase. Neither the quotients nor the
+composition are ever committed — the verifier rebuilds the composition's layer-0
+pair from the committed `f_m` at queried points — so `open` Merkle-commits only
 the folded layers. Structurally the opposite of KZG on one seam: interactive,
 Merkle-backed ([commit](commit.md) + [coding](coding.md)), no trusted setup, all
 field and NTT arithmetic.
@@ -74,9 +78,9 @@ RLC-batching the columns into a single codeword, running an interleaved sumcheck
 that folds MLE and codeword by the same challenge, then a natural-order FRI query
 phase whose layer 0 is the RLC of the opened rows; `verify` is the dual. The
 query phase carries no proof-of-work grind yet — a soundness gap shared with
-[`fri`](#fri-transparent).
+[`deep_fri`](#deep_fri-transparent).
 
-Structurally it differs from `kzg`/`fri` by being a **matrix commitment**: the
+Structurally it differs from `kzg`/`deep_fri` by being a **matrix commitment**: the
 columns of an MLE `[2^v, w]` share one RS domain and the Merkle leaves are
 codeword *rows*, so the whole batch binds under a **single** root where the
 others return one per polynomial. The seam permits this because `commitment` is
@@ -103,12 +107,12 @@ instance parameterizes its pin with the scheme's wire types:
 if TYPE_CHECKING:
     _: type[
         ProverStage[
-            OpeningClaim[FriCommitment],
-            OpeningWitness[FriProverData],
+            OpeningClaim[DeepFriCommitment],
+            OpeningWitness[DeepFriProverData],
             TrivialClaim,
-            OpeningProof[list[FriProof]],
+            OpeningProof[DeepFriProof],
         ]
-    ] = FriProver
+    ] = DeepFriProver
 ```
 
 Because those wire types are zorch-owned nominal types, the PCS pins have full
@@ -117,7 +121,7 @@ with `open`'s fails the pin. That is why prover data is always a named
 dataclass, never a bare list or tuple.
 
 **Commitments are aliases until they grow structure.** Every scheme's commitment
-is literally an `Array` (KZG: `[K]` G1 points; FRI: `[K]` roots; BaseFold: one
+is literally an `Array` (KZG: `[K]` G1 points; DEEP-FRI: `[K]` roots; BaseFold: one
 root) and feeds `Transcript.observe` / the jagged structure bind directly, so
 each scheme names it with a `TypeAlias` (`KzgCommitment`, …) rather than a
 wrapper dataclass — a wrapper would cost an unwrap at every observe site and a
