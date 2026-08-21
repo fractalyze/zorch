@@ -131,9 +131,12 @@ def _layout(d: int, kappa: int, fail_prob: float) -> tuple[int, int]:
     return _attempts(fail_prob), uniform_bytes_needed(2 * kappa + 1, d // 2)
 
 
-def _negacyclic_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Negacyclic product over exact Python ints (object arrays): full
-    convolution, then `X^d ≡ -1` folds the top half in with a sign."""
+def negacyclic_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """The exact negacyclic product over unreduced ℤ — full convolution,
+    then `X^d ≡ -1` folds the top half in with a sign. Dtype-preserving on
+    purpose: object arrays carry Python bigints through the η gate, int64
+    carries the protocol responses' `c·s` — no mod-q product may replace
+    either (the split ring's `mul` reduces)."""
     d = a.shape[0]
     full = np.convolve(a, b)
     out = full[:d].copy()
@@ -148,8 +151,8 @@ def _negacyclic_pow(base: np.ndarray, k: int) -> np.ndarray:
     if k == 1:
         return base
     half = _negacyclic_pow(base, k >> 1)
-    squared = _negacyclic_mul(half, half)
-    return _negacyclic_mul(squared, base) if k & 1 else squared
+    squared = negacyclic_mul(half, half)
+    return negacyclic_mul(squared, base) if k & 1 else squared
 
 
 def _sigma_product_l1(c: np.ndarray, k: int) -> int:
@@ -164,7 +167,7 @@ def _sigma_product_l1(c: np.ndarray, k: int) -> int:
     sigma = np.empty(d, dtype=object)
     for i, (j, neg) in enumerate(zip(dest, negate)):
         sigma[j] = -power[i] if neg else power[i]
-    return int(np.abs(_negacyclic_mul(sigma, power)).sum())
+    return int(np.abs(negacyclic_mul(sigma, power)).sum())
 
 
 def _embed(draws: np.ndarray, d: int, kappa: int) -> np.ndarray:

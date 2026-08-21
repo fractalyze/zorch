@@ -14,3 +14,16 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+py_library(
+    name = "opening",
+    srcs = ["opening.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":challenge",
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)

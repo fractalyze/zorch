@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_test")
 load("@zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
     name = "challenge_test",
@@ -11,4 +12,19 @@ py_test(
         requirement("lattice_frx"),
         requirement("numpy"),
     ],
+)
+
+py_test(
+    name = "opening_test",
+    size = "small",
+    srcs = ["opening_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        "//zorch/lnp:opening",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
 )
