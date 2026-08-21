@@ -17,7 +17,7 @@ reached through a context object.
 | I/O                    | field elements (`Array`); `observe` bitcast-flattens to the base field                        | opaque `bytes`; the consumer serializes its own field↔bytes                                | field elements (`Array`); the byte surface, made scan-threadable                   | field elements (`Array`); the same byte surface, made scan-threadable                |
 | Substrate              | **device**: `observe`/`sample` are device ops, threadable through `@jit` / a `lax.scan` carry | **host**: a `bytes` buffer; the injected `ByteHash.digest` runs on `hashlib` or the marker | **device**: a streaming `Sha256State` pytree — threads `@jit` / a `lax.scan` carry | **device**: a streaming `Blake3Stream` pytree — threads `@jit` / a `lax.scan` carry  |
 | Squeeze                | sponge rate read                                                                              | `HASH(buffer ‖ ctr)` counter stream (a hash is not an XOF) + re-absorb                     | same `SHA256(buffer ‖ ctr)` counter stream over the streaming midstate             | one XOF read of the finalized state (BLAKE3 *is* an XOF) + re-absorb                 |
-| `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `hash_frx.sha256` marker)                | **`False`** (the resumable state's compressions carry no marker any emitter reads)   |
+| `has_dedicated_fusion` | `True` (the permutation lowers to a fusion marker)                                            | **delegates to the `ByteHash`** — `False` for `HostSha256`, `True` for `Sha256`            | **`True`** (the SHA-256 chain lowers via the `hash_frx.sha256` marker)                | **`False`** — but see below: the hop DOES carry `zorch.blake3_{absorb,squeeze}`; this flag names hash-frx's whole-message region |
 | Seam                   | `Transcript` (field-element, canonical-bit PoW)                                               | `ByteTranscript` (byte, leading-zero-bit nonce PoW)                                        | `Transcript` (field-element)                                                       | `Transcript` (field-element)                                                         |
 
 The byte transcript is **one class parameterized by a `ByteHash`**: the same
@@ -77,17 +77,19 @@ Three of the four transcripts are device and **meet it**:
   loop folds into one device program with **no per-round host sync** — what a
   cuda-graph-unified scheme (e.g. flock) needs. The SHA-256 compression lowers via
   the `hash_frx.sha256` marker. Two honest caveats: there is no single whole-hop
-  fusion marker yet (it leans on the per-compression marker + XLA), and per-hash
+  whole-hop fusion marker for the SLICE-framed hop yet (it leans on the
+  per-compression marker + XLA; the scalar-framed observe+draw pair does ride one
+  `zorch.sha256_squeeze` region), and per-hash
   SHA-256 is a worse GPU fit than Poseidon2's field mults — the win is keeping FS
   *in* the graph, not raw hash throughput.
 - `Blake3FieldTranscript` — device-lowered on the same terms: `observe`/`sample`
   are device ops on a fixed-shape state, so the round loop folds into one device
   program with no per-round host sync, which is the win the SHA-256 row is here
   for. Two things it does not match, and a consumer swapping the rows should read
-  both from here rather than from a profile. Its Fiat-Shamir hop has no marker at
-  either layer — hash-frx marks BLAKE3's whole-message hash, not the resumable
-  state's compressions — so `has_dedicated_fusion` reads `False` and consumers
-  take their plain
+  both from here rather than from a profile. Its Fiat-Shamir hop carries zorch's
+  own markers over the resumable state, but `has_dedicated_fusion` still reads
+  `False`: that flag is about hash-frx's marked whole-message region, which the
+  compressions are not entered through, so consumers keep taking their plain
   decomposition paths. And its substrate is not branchless the way
   `Sha256State` is: `Blake3Stream` carries data-dependent `while_loop`s for the
   subtree merges (the merge count follows the chunk count) plus a per-block
