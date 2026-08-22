@@ -41,3 +41,18 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "eval_test",
+    size = "small",
+    srcs = ["eval_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        "//zorch/lnp:eval",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
