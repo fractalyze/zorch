@@ -48,6 +48,7 @@ is what the layer below is for.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -101,9 +102,7 @@ class AbdlopEval:
                 f"message vector — build it over the extended scheme"
             )
         ring = scheme.ring
-        modulus = 1
-        for q in ring.q_moduli:
-            modulus *= q
+        modulus = math.prod(ring.q_moduli)
         if modulus >= _MAX_MODULUS:
             raise ValueError(
                 f"eval: γ is a Z_q scalar drawn from u64 chunks, so q must be "
@@ -148,14 +147,33 @@ class AbdlopEval:
         # (2) γ, once t_g is bound.
         t, gamma = self._gamma(transcript, t_g, fs1.shape[0])
 
-        # (3) the masked aggregates.
-        values = self._values(fs1, fm, target, s1_ring, message)
-        h = np.stack([self._aggregate(g[j], values, gamma[j]) for j in range(self.lam)])
+        # (3) the masked aggregates. Aggregating the M functions *before*
+        #     applying them, rather than evaluating all M and summing, is
+        #     the same value by linearity —
+        #       h_j = g_j + Σ_u γ_{j,u}·(Fs1_u·s1 + Fm_u·m − target_u)
+        #           = g_j + (Σ_u γ_{j,u}Fs1_u)·s1 + (Σ_u γ_{j,u}Fm_u)·m − …
+        #     — and costs λ matvecs instead of M, over a ring whose mul is
+        #     a deliberate O(d²) host oracle. The blocks are the eq.-28
+        #     relation's own, so they are computed once and used twice.
+        aggregated = self._blocks(fs1, fm, target, gamma)
+        weighted_s1, weighted_m, weighted_target = aggregated
+        h = ring.sub(
+            ring.add(
+                g,
+                ring.add(
+                    ring.matvec(weighted_s1, s1_ring),
+                    ring.matvec(weighted_m, message),
+                ),
+            ),
+            weighted_target,
+        )
 
         # (4) the same aggregation as a linear relation over (s1, m‖g),
         #     proved by the layer below.
         t = absorb_stacks(t.observe_label(_LABEL_MASK), h)
-        r1, rm, u = self._relation(fs1, fm, target, gamma, h)
+        # `u` is the verifier's side of eq. 28; the prover only supplies
+        # the matrices its opening call takes.
+        r1, rm, _ = self._relation(aggregated, h)
         opening, t = self.opening.prove(
             a1, a2, np.concatenate([b, bg]), r1, rm, s1, s2, rng, t
         )
@@ -188,7 +206,7 @@ class AbdlopEval:
         # each q_i is zero mod q, by CRT.
         if proof.h[..., 0].any():
             return False, t
-        r1, rm, u = self._relation(fs1, fm, target, gamma, proof.h)
+        r1, rm, u = self._relation(self._blocks(fs1, fm, target, gamma), proof.h)
         return self.opening.verify(
             a1,
             a2,
@@ -229,37 +247,41 @@ class AbdlopEval:
         draws = uniform_from_bytes(raw, self.modulus, count)
         return t, draws.reshape(self.lam, relations)
 
-    def _values(
-        self,
-        fs1: np.ndarray,
-        fm: np.ndarray,
-        target: np.ndarray,
-        s1_ring: np.ndarray,
-        message: np.ndarray,
-    ) -> np.ndarray:
-        """`F_u(s1, m) = Fs1_u·s1 + Fm_u·m − target_u`, all M at once."""
-        ring = self.opening.scheme.ring
-        return ring.sub(
-            ring.add(ring.matvec(fs1, s1_ring), ring.matvec(fm, message)), target
-        )
+    def _combine(self, values: np.ndarray, weights: np.ndarray) -> np.ndarray:
+        """`Σ_u weights_u · values_u` — the γ-aggregation, one row of it.
 
-    def _aggregate(
-        self, base: np.ndarray, values: np.ndarray, weights: np.ndarray
-    ) -> np.ndarray:
-        """`base + Σ_u weights_u · values_u`, the row shape of both `h` and
-        the relation matrices."""
+        `values` may be a stack of ring elements or of whole matrix rows;
+        `mul_scalar` and `add` both take leading batch axes, so the same
+        fold serves the aggregate and the relation blocks. A weighted sum
+        by Z_q scalars is a module op the ring should own (lattice-frx's
+        `matvec` is its ring-element sibling); until it does, this is the
+        one spelling of it in the package."""
         ring = self.opening.scheme.ring
-        for value, weight in zip(values, weights):
-            base = ring.add(base, ring.mul_scalar(value, int(weight)))
-        return base
+        total = ring.mul_scalar(values[0], int(weights[0]))
+        for value, weight in zip(values[1:], weights[1:]):
+            total = ring.add(total, ring.mul_scalar(value, int(weight)))
+        return total
 
-    def _relation(
+    def _blocks(
         self,
         fs1: np.ndarray,
         fm: np.ndarray,
         target: np.ndarray,
         gamma: np.ndarray,
-        h: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The γ-aggregated blocks `(Σ_u γ_{j,u}Fs1_u, Σ_u γ_{j,u}Fm_u,
+        Σ_u γ_{j,u}target_u)`, one row per j.
+
+        Both the prover's `h` and the eq.-28 relation are built from these,
+        so aggregating is done once per proof rather than once per use —
+        and the prover never materializes the M individual `F_u(s1, m)`."""
+        return tuple(  # type: ignore[return-value]
+            np.stack([self._combine(block, row) for row in gamma])
+            for block in (fs1, fm, target)
+        )
+
+    def _relation(
+        self, aggregated: tuple[np.ndarray, np.ndarray, np.ndarray], h: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """Eq. 28 in Π_many's `(R1, Rm, u)` shape over the message `m‖g`.
 
@@ -271,29 +293,20 @@ class AbdlopEval:
             u_j   = h_j + Σ_u γ_{j,u}·target_u
 
         — the `e_j` block being why the inner opening has to be built over
-        the extended scheme."""
+        the extended scheme. Stacked over all j, those blocks are just the
+        λ×λ identity over the ring."""
         ring = self.opening.scheme.ring
-        zero = self._zeros(self.lam)
-        one = ring.from_signed([1] + [0] * (ring.d - 1))
-        r1, rm, u = [], [], []
-        for j in range(self.lam):
-            selector = zero.copy()
-            selector[j] = one
-            r1.append(self._aggregate(self._zeros(fs1.shape[1]), fs1, gamma[j]))
-            rm.append(
-                np.concatenate(
-                    [
-                        self._aggregate(self._zeros(fm.shape[1]), fm, gamma[j]),
-                        selector,
-                    ]
-                )
-            )
-            u.append(self._aggregate(h[j], target, gamma[j]))
-        return np.stack(r1), np.stack(rm), np.stack(u)
-
-    def _zeros(self, rows: int) -> np.ndarray:
-        ring = self.opening.scheme.ring
-        return np.zeros((rows, len(ring.q_moduli), ring.d), dtype=np.uint64)
+        weighted_s1, weighted_m, weighted_target = aggregated
+        eye = np.zeros(
+            (self.lam, self.lam, len(ring.q_moduli), ring.d), dtype=np.uint64
+        )
+        diagonal = np.arange(self.lam)
+        eye[diagonal, diagonal] = ring.from_signed([1] + [0] * (ring.d - 1))
+        return (
+            weighted_s1,
+            np.concatenate([weighted_m, eye], axis=1),
+            ring.add(h, weighted_target),
+        )
 
     def _require_functions(
         self, fs1: np.ndarray, fm: np.ndarray, target: np.ndarray

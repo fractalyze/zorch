@@ -14,67 +14,58 @@ from __future__ import annotations
 
 import numpy as np
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256
 from lattice_frx.split_ring import HostSplitRing
 
-from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
+from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
-from zorch.lnp.challenge import ChallengeParams
 from zorch.lnp.eval import AbdlopEval, EvalProof
 from zorch.lnp.opening import AbdlopOpening
+from zorch.lnp.testing import lnp_fixture
+from zorch.lnp.testing.lnp_fixture import SPLIT_Q as _SPLIT_Q
+from zorch.lnp.testing.lnp_fixture import D as _D
+from zorch.lnp.testing.lnp_fixture import bump as _bump
 
-_SPLIT_Q = (4294967197,)
-_D = 64
-_KAPPA, _ETA, _K = 2, 59, 32
-_CHALLENGE = ChallengeParams(d=_D, kappa=_KAPPA, eta=_ETA, k=_K, fail_prob=2.0**-40)
-
-# n rows, m1 committed / m2 randomness columns, ℓ messages, λ garbage
-# terms, M linear functions.
-_ROWS, _M1, _M2, _ELL, _LAM, _M = 2, 2, 2, 1, 2, 2
-
-_GAMMA = 14.0
-_T = _ETA * float(np.sqrt(_M1 * _D))
-_STD = _GAMMA * _T
-_REP = float(np.exp(14.0 / _GAMMA + 1.0 / (2.0 * _GAMMA**2)))
+# This suite's module shape: n rows, m1 committed / m2 randomness columns,
+# ℓ messages, λ garbage terms, M linear functions. `_M1` must match the
+# fixture's, which is what its masking standard deviation was derived for.
+_ROWS, _M1, _M2 = 2, lnp_fixture.M1, 2
+_ELL, _LAM, _M = 1, 2, 2
 
 
 def _ring() -> HostSplitRing:
-    return HostSplitRing(_SPLIT_Q, _D)
+    return lnp_fixture.ring()
 
 
 def _uniform_stack(
     ring: HostSplitRing, rng: np.random.Generator, *lead: int
 ) -> np.ndarray:
-    return np.stack(
-        [
-            rng.integers(0, q, size=(*lead, ring.d), dtype=np.uint64)
-            for q in ring.q_moduli
-        ],
-        axis=-2,
-    )
+    return lnp_fixture.uniform_stack(ring, rng, *lead)
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
-    return ByteHashTranscript.new(b"lnp-eval-test", HostSha256()).observe_bytes(tag)
+    return lnp_fixture.transcript(b"lnp-eval-test", tag)
 
 
-def _eval(ring: HostSplitRing, **overrides: object) -> AbdlopEval:
+def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitment:
     """The extended scheme is the whole trick: the inner opening's BDLOP
     half carries ℓ + λ messages, because `m‖g` is what it opens."""
-    scheme = AbdlopCommitment(
+    return AbdlopCommitment(
         ring,
         rows=_ROWS,
         s1_cols=_M1,
         randomness_cols=_M2,
-        messages=_ELL + _LAM,
+        messages=messages,
         beta1_inf=1,
         beta2_inf=1,
     )
-    params: dict[str, object] = dict(
-        s1_std=_STD, s2_std=_STD, rep1=_REP, rep2=_REP, challenge=_CHALLENGE
-    )
-    params.update(overrides)
-    return AbdlopEval(AbdlopOpening(scheme, **params), lam=_LAM)  # type: ignore[arg-type]
+
+
+def _opening(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopOpening:
+    return AbdlopOpening(_scheme(ring, messages), **lnp_fixture.OPENING_PARAMS)  # type: ignore[arg-type]
+
+
+def _eval(ring: HostSplitRing) -> AbdlopEval:
+    return AbdlopEval(_opening(ring), lam=_LAM)
 
 
 class _Instance:
@@ -97,14 +88,12 @@ class _Instance:
 
         # The commitment covers m‖g, but g is drawn per proof — the message
         # half is committed here and `prove` appends t_g.
-        scheme = self.protocol.opening.scheme
         s1_ring = self.ring.from_signed_stack(self.s1)
         s2_ring = self.ring.from_signed_stack(self.s2)
         self.t_a = self.ring.add(
             self.ring.matvec(self.a1, s1_ring), self.ring.matvec(self.a2, s2_ring)
         )
         self.t_b = self.ring.add(self.ring.matvec(self.b, s2_ring), self.message)
-        assert scheme.messages == _ELL + _LAM
 
         # F_u(s1, m) = Fs1_u·s1 + Fm_u·m − target_u. Pick the matrices, then
         # solve for the target that makes each F_u a *nonzero* ring element
@@ -190,12 +179,18 @@ class EvalCompletenessTest(absltest.TestCase):
 
     def test_the_aggregates_are_masked_away_from_the_constant(self) -> None:
         """The other side of the same coin: everything *but* the constant
-        coefficient is garbage-masked, so two proofs of the same statement
+        coefficient is garbage-masked, so two proofs of **one** statement
         publish unrelated h. A leak here would be a zero-knowledge break,
-        not a correctness one."""
-        first, _ = _Instance(3).prove()
-        second, _ = _Instance(4).prove()
+        not a correctness one — and it has to be the same statement twice,
+        since two different ones would differ whether g masked anything or
+        not. `_Instance.rng` is stateful, so the second run draws fresh
+        garbage against identical publics and witness."""
+        instance = _Instance(3)
+        first, _ = instance.prove()
+        second, _ = instance.prove()
         self.assertFalse(np.array_equal(first.h, second.h))
+        self.assertTrue(instance.verify(first))
+        self.assertTrue(instance.verify(second))
 
     def test_the_chain_is_byte_deterministic(self) -> None:
         first, _ = _Instance(5).prove()
@@ -205,12 +200,19 @@ class EvalCompletenessTest(absltest.TestCase):
         np.testing.assert_array_equal(first.opening.c, second.opening.c)
 
     def test_distinct_transcripts_yield_distinct_proofs(self) -> None:
-        instance = _Instance(6)
-        p1, _ = instance.prove(tag=b"one")
-        p2, _ = instance.prove(tag=b"two")
+        """Two instances at one seed, so the publics, the witness and the
+        garbage draw all match and the **tag** is the only difference —
+        otherwise `h` would differ from the fresh `g` alone and say nothing
+        about γ. A proof is then bound to the transcript it was made
+        against, and to no other."""
+        one, two = _Instance(6), _Instance(6)
+        p1, _ = one.prove(tag=b"one")
+        p2, _ = two.prove(tag=b"two")
+        # The control: identical garbage, so h can only diverge through γ.
+        np.testing.assert_array_equal(p1.t_g, p2.t_g)
         self.assertFalse(np.array_equal(p1.h, p2.h))
-        self.assertTrue(instance.verify(p1, tag=b"one"))
-        self.assertFalse(instance.verify(p1, tag=b"two"))
+        self.assertTrue(one.verify(p1, tag=b"one"))
+        self.assertFalse(one.verify(p1, tag=b"two"))
 
 
 class EvalSoundnessTest(absltest.TestCase):
@@ -225,8 +227,7 @@ class EvalSoundnessTest(absltest.TestCase):
         coefficient so that F̃_u ≠ 0. The honest prover then cannot produce
         an h with a zero constant coefficient, so the proof must fail."""
         instance = _Instance(8)
-        bad_target = instance.target.copy()
-        bad_target[0, 0, 0] = (int(bad_target[0, 0, 0]) + 1) % _SPLIT_Q[0]
+        bad_target = _bump(instance.target, 0, 0, 0)
         proof, _ = instance.prove(target=bad_target)
         self.assertTrue(proof.h[..., 0].any())
         self.assertFalse(instance.verify(proof, target=bad_target))
@@ -235,22 +236,19 @@ class EvalSoundnessTest(absltest.TestCase):
         """h is bound twice over — into the Π_many challenge and into the
         relation target — so moving a non-constant coefficient breaks the
         inner proof even though h̃ stays zero."""
-        h = self.proof.h.copy()
-        h[0, 0, 1] = (int(h[0, 0, 1]) + 1) % _SPLIT_Q[0]
+        h = _bump(self.proof.h, 0, 0, 1)
         self.assertFalse(h[..., 0].any())
         bad = EvalProof(t_g=self.proof.t_g, h=h, opening=self.proof.opening)
         self.assertFalse(self.instance.verify(bad))
 
     def test_a_tampered_garbage_commitment_is_rejected(self) -> None:
         """t_g feeds γ, so tampering re-derives a different aggregation."""
-        t_g = self.proof.t_g.copy()
-        t_g[0, 0, 0] = (int(t_g[0, 0, 0]) + 1) % _SPLIT_Q[0]
+        t_g = _bump(self.proof.t_g, 0, 0, 0)
         bad = EvalProof(t_g=t_g, h=self.proof.h, opening=self.proof.opening)
         self.assertFalse(self.instance.verify(bad))
 
     def test_a_wrong_linear_function_is_rejected(self) -> None:
-        wrong = self.instance.fm.copy()
-        wrong[0, 0, 0, 0] = (int(wrong[0, 0, 0, 0]) + 1) % _SPLIT_Q[0]
+        wrong = _bump(self.instance.fm, 0, 0, 0, 0)
         self.assertFalse(self.instance.verify(self.proof, fm=wrong))
 
     def test_a_wrong_commitment_is_rejected(self) -> None:
@@ -262,33 +260,14 @@ class EvalSurfaceTest(absltest.TestCase):
     def test_a_non_extended_opening_is_refused(self) -> None:
         """The commonest way to misuse this seam: hand it an opening built
         over the plain scheme, whose BDLOP half has no room for g."""
-        ring = _ring()
-        plain = AbdlopCommitment(
-            ring,
-            rows=_ROWS,
-            s1_cols=_M1,
-            randomness_cols=_M2,
-            messages=_ELL,
-            beta1_inf=1,
-            beta2_inf=1,
-        )
-        opening = AbdlopOpening(
-            plain,
-            s1_std=_STD,
-            s2_std=_STD,
-            rep1=_REP,
-            rep2=_REP,
-            challenge=_CHALLENGE,
-        )
         with self.assertRaisesRegex(ValueError, "extended scheme"):
-            AbdlopEval(opening, lam=_ELL + 1)
+            AbdlopEval(_opening(_ring(), messages=_ELL), lam=_ELL + 1)
 
     def test_a_nonpositive_lam_is_refused(self) -> None:
         """λ = 0 would make the soundness error q1^0 = 1 — a proof of
         nothing — and leave γ with no rows to aggregate into."""
-        opening = _eval(_ring()).opening
         with self.assertRaisesRegex(ValueError, "lam must be positive"):
-            AbdlopEval(opening, lam=0)
+            AbdlopEval(_opening(_ring()), lam=0)
 
     def test_mismatched_function_matrices_are_refused(self) -> None:
         instance = _Instance(9)

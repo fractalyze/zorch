@@ -1,6 +1,22 @@
-load("@rules_python//python:defs.bzl", "py_test")
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_library(
+    name = "lnp_fixture",
+    srcs = [
+        "__init__.py",
+        "lnp_fixture.py",
+    ],
+    visibility = ["//zorch:__subpackages__"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/lnp:challenge",
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
 
 py_test(
     name = "challenge_test",
@@ -35,6 +51,7 @@ py_test(
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         "//zorch/lnp:opening",
+        "//zorch/lnp/testing:lnp_fixture",
         requirement("absl_py"),
         requirement("hash_frx"),
         requirement("lattice_frx"),
@@ -50,6 +67,7 @@ py_test(
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         "//zorch/lnp:eval",
+        "//zorch/lnp/testing:lnp_fixture",
         requirement("absl_py"),
         requirement("hash_frx"),
         requirement("lattice_frx"),

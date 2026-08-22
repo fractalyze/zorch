@@ -17,41 +17,24 @@ from unittest import mock
 
 import numpy as np
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256
 from lattice_frx.split_ring import HostSplitRing
 
-from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
+from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import opening as opening_module
-from zorch.lnp.challenge import ChallengeParams
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
+from zorch.lnp.testing import lnp_fixture
+from zorch.lnp.testing.lnp_fixture import STD as _STD
+from zorch.lnp.testing.lnp_fixture import D as _D
 
-# One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`) and
-# a small degree keep the schoolbook ring affordable; the challenge keeps the
-# paper's (κ, η, k) since the gate is degree-agnostic.
-_SPLIT_Q = (4294967197,)
-_D = 64
-_KAPPA, _ETA, _K = 2, 59, 32
-_ROWS, _M1, _M2, _ELL, _N = 2, 2, 2, 1, 1
-
-# The whole candidate budget is squeezed on every `_challenge` call, decided
-# or not, so it is the dominant cost of a test proof. 2^-40 keeps a margin
-# far past anything a seeded suite can reach (the measured gate rejection is
-# ~1%, so the first block almost always decides) at a third of the hashing;
-# production keeps the library's 2^-128 default.
-_CHALLENGE = ChallengeParams(d=_D, kappa=_KAPPA, eta=_ETA, k=_K, fail_prob=2.0**-40)
-
-# Lemma 2.14-1 at γ = 14: M = exp(14/γ + 1/(2γ²)) ≈ e ≈ 2.72 per response,
-# s_i = γ·T_i with T_1 = η·α (α = ‖s1‖ ≤ √(m1·d) for ternary s1) and
-# T_2 = η·ν·√(m2·d) at ν = 1.
-_GAMMA = 14.0
-_T = _ETA * float(np.sqrt(_M1 * _D))
-_STD = _GAMMA * _T
-_REP = float(np.exp(14.0 / _GAMMA + 1.0 / (2.0 * _GAMMA**2)))
+# This suite's module shape: n rows, m1 committed / m2 randomness columns,
+# ℓ messages, N linear relations. `_M1` must match the fixture's, which is
+# what its masking standard deviation was derived for.
+_ROWS, _M1, _M2, _ELL, _N = 2, lnp_fixture.M1, 2, 1, 1
 
 
 def _ring() -> HostSplitRing:
-    return HostSplitRing(_SPLIT_Q, _D)
+    return lnp_fixture.ring()
 
 
 def _scheme(ring: HostSplitRing) -> AbdlopCommitment:
@@ -70,26 +53,18 @@ def _opening(ring: HostSplitRing, **overrides: object) -> AbdlopOpening:
     """The test parameter point, with one kwarg moved per call — the
     `_Instance.prove/verify` convention applied to construction, so a test
     that varies `fail_prob` states only that."""
-    params: dict[str, object] = dict(
-        s1_std=_STD, s2_std=_STD, rep1=_REP, rep2=_REP, challenge=_CHALLENGE
-    )
-    return AbdlopOpening(_scheme(ring), **(params | overrides))  # type: ignore[arg-type]
+    params = lnp_fixture.OPENING_PARAMS | overrides
+    return AbdlopOpening(_scheme(ring), **params)  # type: ignore[arg-type]
 
 
 def _uniform_stack(
     ring: HostSplitRing, rng: np.random.Generator, *lead: int
 ) -> np.ndarray:
-    return np.stack(
-        [
-            rng.integers(0, q, size=(*lead, ring.d), dtype=np.uint64)
-            for q in ring.q_moduli
-        ],
-        axis=-2,
-    )
+    return lnp_fixture.uniform_stack(ring, rng, *lead)
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
-    return ByteHashTranscript.new(b"lnp-opening-test", HostSha256()).observe_bytes(tag)
+    return lnp_fixture.transcript(b"lnp-opening-test", tag)
 
 
 class _Instance:
