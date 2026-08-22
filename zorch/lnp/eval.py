@@ -197,8 +197,9 @@ class AbdlopEval:
         and the Π_many proof of the aggregation relation verifies."""
         ring = self.opening.scheme.ring
         self._require_functions(fs1, fm, target)
-        self._require_stack("verify: t_g", proof.t_g, self.lam)
-        self._require_stack("verify: h", proof.h, self.lam)
+        scheme = self.opening.scheme
+        scheme.require_stack("eval verify: t_g", proof.t_g, self.lam)
+        scheme.require_stack("eval verify: h", proof.h, self.lam)
 
         t, gamma = self._gamma(transcript, proof.t_g, fs1.shape[0])
         t = absorb_stacks(t.observe_label(_LABEL_MASK), proof.h)
@@ -311,13 +312,4 @@ class AbdlopEval:
                 raise ValueError(
                     f"eval: {name} must lead with {want}, got {arr.shape[:2]}"
                 )
-        self._require_stack("target", target, relations)
-
-    def _require_stack(self, name: str, arr: np.ndarray, rows: int) -> None:
-        ring = self.opening.scheme.ring
-        want = (rows, len(ring.q_moduli), ring.d)
-        if not isinstance(arr, np.ndarray) or arr.shape != want:
-            raise ValueError(
-                f"eval: {name} must be a ring stack of shape {want}, got "
-                f"{getattr(arr, 'shape', type(arr).__name__)}"
-            )
+        self.opening.scheme.require_stack("eval: target", target, relations)

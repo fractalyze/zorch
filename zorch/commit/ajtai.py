@@ -198,12 +198,12 @@ class AbdlopCommitment:
         s2: np.ndarray,
         message: np.ndarray,
     ) -> AbdlopPair:
-        self._require_stack("commit: a1", a1, (self.rows, self.s1_cols))
-        self._require_stack("commit: a2", a2, (self.rows, self.randomness_cols))
-        self._require_stack("commit: b", b, (self.messages, self.randomness_cols))
-        self._require_stack("commit: s1", s1, (self.s1_cols,))
-        self._require_stack("commit: s2", s2, (self.randomness_cols,))
-        self._require_stack("commit: message", message, (self.messages,))
+        self.require_stack("commit: a1", a1, self.rows, self.s1_cols)
+        self.require_stack("commit: a2", a2, self.rows, self.randomness_cols)
+        self.require_stack("commit: b", b, self.messages, self.randomness_cols)
+        self.require_stack("commit: s1", s1, self.s1_cols)
+        self.require_stack("commit: s2", s2, self.randomness_cols)
+        self.require_stack("commit: message", message, self.messages)
         ring = self.ring
         return AbdlopPair(
             t_a=ring.add(ring.matvec(a1, s1), ring.matvec(a2, s2)),
@@ -234,14 +234,23 @@ class AbdlopCommitment:
             recomputed.t_b, commitment.t_b
         )
 
-    def _require_stack(self, name: str, arr: np.ndarray, lead: tuple[int, ...]) -> None:
+    def require_stack(self, name: str, arr: np.ndarray, *lead: int) -> None:
         """The `_require_lead` of the host-array convention: leading
         (module) axes against the scheme's declared shape, with the
-        trailing `(limbs, d)` fixed by the ring."""
-        want = lead + (len(self.ring.q_moduli), self.ring.d)
-        got = arr.shape
-        if got != want:
-            raise ValueError(f"{name}: shape {got}, want {want}")
+        trailing `(limbs, d)` fixed by the ring.
+
+        Public because the protocol layers above hold a scheme and gate the
+        same host-array shape against it — every stack they take is
+        `lead + (limbs, d)` for a `lead` this scheme's parameters decide.
+        A per-layer copy is how the two drifted into different messages for
+        one failure, and each new layer would add another."""
+        want = (*lead, len(self.ring.q_moduli), self.ring.d)
+        got = getattr(arr, "shape", None)
+        if not isinstance(arr, np.ndarray) or got != want:
+            raise ValueError(
+                f"{name} must be a ring stack of shape {want}, got "
+                f"{got if got is not None else type(arr).__name__}"
+            )
 
 
 def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:
