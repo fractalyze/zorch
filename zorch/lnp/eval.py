@@ -55,6 +55,7 @@ import numpy as np
 from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 
 from zorch.byte_transcript import ByteTranscript
+from zorch.lnp import wire
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
 from zorch.lnp.transcript import absorb_stacks
 
@@ -195,14 +196,11 @@ class AbdlopEval:
     ) -> tuple[bool, ByteTranscript]:
         """Fig. 5's two checks: every `h_j` has a zero constant coefficient,
         and the Π_many proof of the aggregation relation verifies."""
-        scheme = self.opening.scheme
-        ring = scheme.ring
+        ring = self.opening.scheme.ring
         # The statement is the caller's and raises; the proof is the
-        # prover's and is a verdict. See `is_wire_stack`.
+        # prover's and is a verdict. See `zorch/lnp/wire.py`.
         self._require_functions(fs1, fm, target)
-        if not scheme.is_wire_stack(proof.t_g, self.lam) or not scheme.is_wire_stack(
-            proof.h, self.lam
-        ):
+        if not self._is_well_formed(proof):
             return False, transcript
 
         t, gamma = self._gamma(transcript, proof.t_g, fs1.shape[0])
@@ -224,6 +222,22 @@ class AbdlopEval:
             u,
             proof.opening,
             t,
+        )
+
+    def _is_well_formed(self, proof: EvalProof) -> bool:
+        """Whether `proof` is structurally usable — every field of it.
+
+        `opening` is a field like the other two, and the one a per-field
+        habit forgets: it is composite, so nothing about it looks like a
+        gate, and an `EvalProof` carrying `None` there reached an
+        `AttributeError` instead of a verdict. The layer below owns what
+        its own wire means, so this defers rather than re-deriving it."""
+        scheme = self.opening.scheme
+        return (
+            isinstance(proof, EvalProof)
+            and wire.is_stack(scheme, proof.t_g, self.lam)
+            and wire.is_stack(scheme, proof.h, self.lam)
+            and self.opening._is_well_formed(proof.opening)
         )
 
     def _sample_garbage(self, rng: np.random.Generator) -> np.ndarray:
@@ -308,12 +322,13 @@ class AbdlopEval:
         relations = fs1.shape[0]
         if relations < 1:
             raise ValueError("eval: need at least one linear function")
-        for name, arr, want in (
+        # The same gate as `target`'s, not a leading-axes-only variant of
+        # it: checking `shape[:2]` left the trailing `(limbs, d)` to be
+        # rejected later by whichever ring op reached it, in the ring's
+        # vocabulary rather than this layer's.
+        for name, arr, lead in (
             ("fs1", fs1, (relations, scheme.s1_cols)),
             ("fm", fm, (relations, self.ell)),
+            ("target", target, (relations,)),
         ):
-            if arr.shape[:2] != want:
-                raise ValueError(
-                    f"eval: {name} must lead with {want}, got {arr.shape[:2]}"
-                )
-        self.opening.scheme.require_stack("eval: target", target, relations)
+            scheme.require_stack(f"eval: {name}", arr, *lead)

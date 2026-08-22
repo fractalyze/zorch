@@ -12,6 +12,8 @@ honest instance is therefore constructed to have a genuinely nonzero
 
 from __future__ import annotations
 
+from dataclasses import fields, replace
+
 import numpy as np
 from absl.testing import absltest
 from lattice_frx.split_ring import HostSplitRing
@@ -84,10 +86,10 @@ class _Instance:
         # half is committed here and `prove` appends t_g.
         s1_ring = self.ring.from_signed_stack(self.s1)
         s2_ring = self.ring.from_signed_stack(self.s2)
-        self.t_a = self.ring.add(
-            self.ring.matvec(self.a1, s1_ring), self.ring.matvec(self.a2, s2_ring)
+        commitment = _scheme(self.ring, _ELL).commit(
+            self.a1, self.a2, self.b, s1_ring, s2_ring, self.message
         )
-        self.t_b = self.ring.add(self.ring.matvec(self.b, s2_ring), self.message)
+        self.t_a, self.t_b = commitment.t_a, commitment.t_b
 
         # F_u(s1, m) = Fs1_u·s1 + Fm_u·m − target_u. Pick the matrices, then
         # solve for the target that makes each F_u a *nonzero* ring element
@@ -151,7 +153,7 @@ class EvalStatementTest(absltest.TestCase):
         element (so Π_many alone could not prove it)."""
         instance = _Instance(0)
         values = instance.ring.sub(instance.raw, instance.target)
-        self.assertFalse(values[..., 0].any())
+        self.assertFalse(instance.ring.constant_coeff(values).any())
         for u in range(_M):
             self.assertTrue(values[u].any())
 
@@ -169,7 +171,7 @@ class EvalCompletenessTest(absltest.TestCase):
         instance = _Instance(2)
         proof, _ = instance.prove()
         self.assertEqual(proof.h.shape, (_LAM, len(_SPLIT_Q), _D))
-        self.assertFalse(proof.h[..., 0].any())
+        self.assertFalse(instance.ring.constant_coeff(proof.h).any())
 
     def test_the_aggregates_are_masked_away_from_the_constant(self) -> None:
         """The other side of the same coin: everything *but* the constant
@@ -223,7 +225,7 @@ class EvalSoundnessTest(absltest.TestCase):
         instance = _Instance(8)
         bad_target = _bump(instance.target, 0, 0, 0)
         proof, _ = instance.prove(target=bad_target)
-        self.assertTrue(proof.h[..., 0].any())
+        self.assertTrue(instance.ring.constant_coeff(proof.h).any())
         self.assertFalse(instance.verify(proof, target=bad_target))
 
     def test_a_tampered_masked_aggregate_is_rejected(self) -> None:
@@ -231,14 +233,14 @@ class EvalSoundnessTest(absltest.TestCase):
         relation target — so moving a non-constant coefficient breaks the
         inner proof even though h̃ stays zero."""
         h = _bump(self.proof.h, 0, 0, 1)
-        self.assertFalse(h[..., 0].any())
-        bad = EvalProof(t_g=self.proof.t_g, h=h, opening=self.proof.opening)
+        self.assertFalse(self.instance.ring.constant_coeff(h).any())
+        bad = replace(self.proof, h=h)
         self.assertFalse(self.instance.verify(bad))
 
     def test_a_tampered_garbage_commitment_is_rejected(self) -> None:
         """t_g feeds γ, so tampering re-derives a different aggregation."""
         t_g = _bump(self.proof.t_g, 0, 0, 0)
-        bad = EvalProof(t_g=t_g, h=self.proof.h, opening=self.proof.opening)
+        bad = replace(self.proof, t_g=t_g)
         self.assertFalse(self.instance.verify(bad))
 
     def test_a_wrong_linear_function_is_rejected(self) -> None:
@@ -265,8 +267,16 @@ class EvalSurfaceTest(absltest.TestCase):
 
     def test_mismatched_function_matrices_are_refused(self) -> None:
         instance = _Instance(9)
-        with self.assertRaisesRegex(ValueError, "fm must lead with"):
+        with self.assertRaisesRegex(ValueError, "fm must be a ring stack"):
             instance.prove(fm=instance.fm[:, :-1])
+
+    def test_a_function_matrix_with_the_wrong_ring_shape_is_refused(self) -> None:
+        """The trailing `(limbs, d)` is gated too, not just the leading
+        axes — a truncated RNS chain is a different-ring statement and has
+        to fail here rather than inside a ring op."""
+        instance = _Instance(12)
+        with self.assertRaisesRegex(ValueError, "fs1 must be a ring stack"):
+            instance.prove(fs1=instance.fs1[..., :-1, :])
 
 
 class EvalWireContractTest(absltest.TestCase):
@@ -285,12 +295,19 @@ class EvalWireContractTest(absltest.TestCase):
         cls.instance = _Instance(11)
         cls.proof, _ = cls.instance.prove()
 
-    def _replace(self, **field: np.ndarray) -> EvalProof:
-        parts: dict[str, object] = dict(
-            t_g=self.proof.t_g, h=self.proof.h, opening=self.proof.opening
-        )
-        parts.update(field)
-        return EvalProof(**parts)  # type: ignore[arg-type]
+    def test_every_proof_field_is_gated(self) -> None:
+        """Driven off the dataclass, not a hand-kept list: a field added to
+        `EvalProof` without a gate fails here rather than at whatever a
+        verifier does with an unchecked value.
+
+        `None` stands in for every malformed value because it is what no
+        field can legitimately be — including `opening`, the composite one
+        a per-field habit forgets. That omission is what this catches: it
+        reached an `AttributeError` out of `verify` instead of a verdict."""
+        for field in fields(EvalProof):
+            with self.subTest(field.name):
+                bad = replace(self.proof, **{field.name: None})
+                self.assertFalse(self.instance.verify(bad))
 
     def test_an_out_of_range_residue_on_the_wire_is_a_verdict(self) -> None:
         """The case the array contract exists for: `q ≤ v < 2^64` is a
@@ -299,13 +316,17 @@ class EvalWireContractTest(absltest.TestCase):
             with self.subTest(name):
                 bad = getattr(self.proof, name).copy()
                 bad[0, 0, 0] = _SPLIT_Q[0]
-                self.assertFalse(self.instance.verify(self._replace(**{name: bad})))
+                self.assertFalse(
+                    self.instance.verify(replace(self.proof, **{name: bad}))
+                )
 
     def test_a_misshaped_wire_stack_is_a_verdict(self) -> None:
         for name in ("t_g", "h"):
             with self.subTest(name):
                 bad = getattr(self.proof, name)[:-1]
-                self.assertFalse(self.instance.verify(self._replace(**{name: bad})))
+                self.assertFalse(
+                    self.instance.verify(replace(self.proof, **{name: bad}))
+                )
 
     def test_a_wrongly_typed_wire_stack_is_a_verdict(self) -> None:
         """`float64` cannot hold a residue, and `int64` is not the contract
@@ -313,7 +334,7 @@ class EvalWireContractTest(absltest.TestCase):
         for dtype in (np.float64, np.int64):
             with self.subTest(dtype.__name__):
                 bad = self.proof.h.astype(dtype)
-                self.assertFalse(self.instance.verify(self._replace(h=bad)))
+                self.assertFalse(self.instance.verify(replace(self.proof, h=bad)))
 
     def test_an_out_of_range_statement_still_raises(self) -> None:
         """The other half of the rule. `target` is the caller's, so a

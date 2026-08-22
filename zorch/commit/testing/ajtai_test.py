@@ -223,16 +223,12 @@ def _ternary_split_vector(
     ring: HostSplitRing, rng: np.random.Generator, cols: int
 ) -> np.ndarray:
     """A `(cols, limbs, d)` stack with coefficients in {-1, 0, 1}."""
-    return np.stack(
-        [ring.from_signed(rng.integers(-1, 2, size=_D).tolist()) for _ in range(cols)]
-    )
+    return ring.from_signed_stack(rng.integers(-1, 2, size=(cols, _D)))
 
 
 def _over_bound_split_vector(ring: HostSplitRing, cols: int) -> np.ndarray:
     """Over the bound by construction, as `_over_bound_witness` above."""
-    return np.stack(
-        [ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(cols)]
-    )
+    return ring.from_signed_stack([[_BETA + 1] + [0] * (_D - 1)] * cols)
 
 
 class AbdlopTest(absltest.TestCase):

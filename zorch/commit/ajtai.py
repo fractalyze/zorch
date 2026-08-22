@@ -24,9 +24,9 @@ commitment scheme. What lives here is the algebra and the opening predicate:
 For Ajtai and BDLOP, commitment is one `matvec` in the NTT domain per
 equation, so it traces and batches exactly like the ring ops it is made of
 (lattice-frx's `RnsRing`). ABDLOP is host-boundary throughout instead: the
-partial-split ring pins products to the host, so its commitment is a host
-matvec composed from the ring's own `mul`/`add` over the `(limbs, d)` uint64
-contract, with module vectors stacked as `(k, limbs, d)`.
+partial-split ring pins products to the host, so its commitment is the ring's
+own host `matvec`/`add` over the `(limbs, d)` uint64 contract, with module
+vectors stacked as `(k, limbs, d)`.
 Verification is a host-boundary predicate on purpose: the opening bound is an
 ℓ∞ norm over the *balanced lift* of the witness, and lattice-frx pins lifts
 and norms to the host (`rns.reconstruct_centered` + `norms.linf`) because no
@@ -48,7 +48,6 @@ from functools import partial
 import frx
 import numpy as np
 from lattice_frx import norms, rns
-from lattice_frx.canonical import is_canonical
 from lattice_frx.ring import Coeff, Eval, RnsRing
 from lattice_frx.split_ring import HostSplitRing
 
@@ -244,36 +243,16 @@ class AbdlopCommitment:
         same host-array shape against it — every stack they take is
         `lead + (limbs, d)` for a `lead` this scheme's parameters decide.
         A per-layer copy is how the two drifted into different messages for
-        one failure, and each new layer would add another."""
+        one failure, and each new layer would add another.
+
+        Shape only. What a *proof* may be assumed to satisfy is a protocol
+        notion, and this file keeps none — see `zorch/lnp/wire.py`."""
         want = (*lead, len(self.ring.q_moduli), self.ring.d)
-        got = getattr(arr, "shape", None)
-        if not isinstance(arr, np.ndarray) or got != want:
+        if not isinstance(arr, np.ndarray) or arr.shape != want:
             raise ValueError(
                 f"{name} must be a ring stack of shape {want}, got "
-                f"{got if got is not None else type(arr).__name__}"
+                f"{getattr(arr, 'shape', type(arr).__name__)}"
             )
-
-    def is_wire_stack(self, arr: np.ndarray, *lead: int) -> bool:
-        """`require_stack` asked rather than enforced, and extended to the
-        array contract — whether an *untrusted* stack is usable at all.
-
-        The split is by who supplied the value, and it is one rule across
-        the proof surface: a statement or public parameter comes from the
-        verifier's own caller, so a malformed one is that caller's bug and
-        raises; a proof field comes off the wire, where malformed is what
-        an adversary sends, so it is a verdict. A verifier that raises on
-        wire data is only a total predicate over well-formed messages,
-        which is not the property the caller needs.
-
-        The residue range is included here and not in `require_stack`
-        because it is exactly the check nothing else performs in time: the
-        ring ops downstream do raise on a non-canonical operand, which is
-        the raise this answers first."""
-        try:
-            self.require_stack("wire", arr, *lead)
-        except ValueError:
-            return False
-        return is_canonical(arr, self.ring.q_moduli)
 
 
 def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:

@@ -54,6 +54,7 @@ from lattice_frx import norms, sampler
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
+from zorch.lnp import wire
 from zorch.lnp.challenge import ChallengeParams, attempt_budget, negacyclic_mul
 from zorch.lnp.transcript import absorb_stacks
 
@@ -226,16 +227,10 @@ class AbdlopOpening:
         bounds, then the recomputed `(w, v)` must replay to the proof's
         challenge — which is checks 2 and 3 folded into the hash."""
         ring = self.scheme.ring
-        # Every field of `proof` is the prover's, so a malformed one is a
-        # verdict rather than an exception — the wire half of the rule
-        # `AbdlopCommitment.is_wire_stack` states. The publics `t_a`, `t_b`
-        # and `u` are the caller's and keep raising, from the ring ops they
-        # reach.
-        if not (
-            self._is_wire_signed(proof.c)
-            and self._is_wire_signed(proof.z1, self.scheme.s1_cols)
-            and self._is_wire_signed(proof.z2, self.scheme.randomness_cols)
-        ):
+        # `proof` is the prover's, so malformed is a verdict; the publics
+        # `t_a`, `t_b` and `u` are the caller's and keep raising, from the
+        # ring ops they reach. See `zorch/lnp/wire.py`.
+        if not self._is_well_formed(proof):
             return False, transcript
         if norms.l2_squared(proof.z1) > self._bound1_sq:
             return False, transcript
@@ -273,35 +268,27 @@ class AbdlopOpening:
         return t, self.challenge.from_bytes(raw)
 
     def _require_signed(self, name: str, arr: np.ndarray, *lead: int) -> None:
-        """The signed-integer twin of the ring-side shape gates: witnesses
-        and responses are `(lead, d)` integer arrays, the challenge the
-        rank-one case `(d,)`. Every field of the wire `OpeningProof` passes
-        through here, so a malformed proof fails in this module's
-        vocabulary instead of deep inside a ring op — and a `c` that is a
-        list, or float coefficients silently truncated by `from_signed`,
-        is refused rather than quietly scored against the real challenge."""
-        want = (*lead, self.scheme.ring.d)
-        if not isinstance(arr, np.ndarray) or not np.issubdtype(arr.dtype, np.integer):
-            raise TypeError(
-                f"opening: {name} must be a signed integer ndarray, got "
-                f"{type(arr).__name__} dtype {getattr(arr, 'dtype', None)!r}"
-            )
-        if arr.shape != want:
-            raise ValueError(f"opening: {name} must have shape {want}, got {arr.shape}")
+        """`wire.require_signed` against this scheme's ring — `prove` reads
+        its witness from the caller, so a malformed one is that caller's
+        bug."""
+        wire.require_signed(self.scheme.ring, f"opening: {name}", arr, *lead)
 
-    def _is_wire_signed(self, arr: np.ndarray, *lead: int) -> bool:
-        """`_require_signed` asked rather than enforced — the signed-integer
-        twin of `AbdlopCommitment.is_wire_stack`, and the same rule.
+    def _is_well_formed(self, proof: OpeningProof) -> bool:
+        """Whether `proof` is structurally usable — every field of it, in
+        one place.
 
-        Routed through the raising gate rather than restating its predicate
-        so the two cannot answer differently about one array: `prove` reads
-        these shapes from its caller and wants the exception, `verify` reads
-        them off the wire and wants the verdict."""
-        try:
-            self._require_signed("wire", arr, *lead)
-        except (TypeError, ValueError):
-            return False
-        return True
+        One gate over the whole dataclass rather than a check at each point
+        of use: per-field gating leaves whichever field nobody remembered
+        ungated, and `verify` then crashes on exactly the message this is
+        meant to reject. `Π_eval` calls this for the opening it nests, so
+        the nested proof meets the same gate as a top-level one."""
+        ring = self.scheme.ring
+        return (
+            isinstance(proof, OpeningProof)
+            and wire.is_signed(ring, proof.c)
+            and wire.is_signed(ring, proof.z1, self.scheme.s1_cols)
+            and wire.is_signed(ring, proof.z2, self.scheme.randomness_cols)
+        )
 
 
 def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
