@@ -24,9 +24,9 @@ commitment scheme. What lives here is the algebra and the opening predicate:
 For Ajtai and BDLOP, commitment is one `matvec` in the NTT domain per
 equation, so it traces and batches exactly like the ring ops it is made of
 (lattice-frx's `RnsRing`). ABDLOP is host-boundary throughout instead: the
-partial-split ring pins products to the host, so its commitment is a host
-matvec composed from the ring's own `mul`/`add` over the `(limbs, d)` uint64
-contract, with module vectors stacked as `(k, limbs, d)`.
+partial-split ring pins products to the host, so its commitment is the ring's
+own host `matvec`/`add` over the `(limbs, d)` uint64 contract, with module
+vectors stacked as `(k, limbs, d)`.
 Verification is a host-boundary predicate on purpose: the opening bound is an
 ℓ∞ norm over the *balanced lift* of the witness, and lattice-frx pins lifts
 and norms to the host (`rns.reconstruct_centered` + `norms.linf`) because no
@@ -43,7 +43,7 @@ lattice-frx's uniform-from-bytes sampler land; the tests use a seeded numpy
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial, reduce
+from functools import partial
 
 import frx
 import numpy as np
@@ -198,18 +198,16 @@ class AbdlopCommitment:
         s2: np.ndarray,
         message: np.ndarray,
     ) -> AbdlopPair:
-        self._require_stack("commit: a1", a1, (self.rows, self.s1_cols))
-        self._require_stack("commit: a2", a2, (self.rows, self.randomness_cols))
-        self._require_stack("commit: b", b, (self.messages, self.randomness_cols))
-        self._require_stack("commit: s1", s1, (self.s1_cols,))
-        self._require_stack("commit: s2", s2, (self.randomness_cols,))
-        self._require_stack("commit: message", message, (self.messages,))
+        self.require_stack("commit: a1", a1, self.rows, self.s1_cols)
+        self.require_stack("commit: a2", a2, self.rows, self.randomness_cols)
+        self.require_stack("commit: b", b, self.messages, self.randomness_cols)
+        self.require_stack("commit: s1", s1, self.s1_cols)
+        self.require_stack("commit: s2", s2, self.randomness_cols)
+        self.require_stack("commit: message", message, self.messages)
         ring = self.ring
         return AbdlopPair(
-            t_a=_add_stacks(
-                ring, _split_matvec(ring, a1, s1), _split_matvec(ring, a2, s2)
-            ),
-            t_b=_add_stacks(ring, _split_matvec(ring, b, s2), message),
+            t_a=ring.add(ring.matvec(a1, s1), ring.matvec(a2, s2)),
+            t_b=ring.add(ring.matvec(b, s2), message),
         )
 
     def verify(
@@ -236,34 +234,25 @@ class AbdlopCommitment:
             recomputed.t_b, commitment.t_b
         )
 
-    def _require_stack(self, name: str, arr: np.ndarray, lead: tuple[int, ...]) -> None:
+    def require_stack(self, name: str, arr: np.ndarray, *lead: int) -> None:
         """The `_require_lead` of the host-array convention: leading
         (module) axes against the scheme's declared shape, with the
-        trailing `(limbs, d)` fixed by the ring."""
-        want = lead + (len(self.ring.q_moduli), self.ring.d)
-        got = arr.shape
-        if got != want:
-            raise ValueError(f"{name}: shape {got}, want {want}")
+        trailing `(limbs, d)` fixed by the ring.
 
+        Public because the protocol layers above hold a scheme and gate the
+        same host-array shape against it — every stack they take is
+        `lead + (limbs, d)` for a `lead` this scheme's parameters decide.
+        A per-layer copy is how the two drifted into different messages for
+        one failure, and each new layer would add another.
 
-def _split_matvec(
-    ring: HostSplitRing, matrix: np.ndarray, vector: np.ndarray
-) -> np.ndarray:
-    """`A·s` composed from the split ring's own `mul`/`add` — one row at a
-    time on the host, the partial-split counterpart of `RnsRing.matvec`."""
-    return np.stack(
-        [
-            reduce(
-                ring.add, (ring.mul(entry, coeff) for entry, coeff in zip(row, vector))
+        Shape only. What a *proof* may be assumed to satisfy is a protocol
+        notion, and this file keeps none — see `zorch/lnp/wire.py`."""
+        want = (*lead, len(self.ring.q_moduli), self.ring.d)
+        if not isinstance(arr, np.ndarray) or arr.shape != want:
+            raise ValueError(
+                f"{name} must be a ring stack of shape {want}, got "
+                f"{getattr(arr, 'shape', type(arr).__name__)}"
             )
-            for row in matrix
-        ]
-    )
-
-
-def _add_stacks(ring: HostSplitRing, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Entrywise ring addition of two `(k, limbs, d)` stacks."""
-    return np.stack([ring.add(x, y) for x, y in zip(a, b, strict=True)])
 
 
 def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:

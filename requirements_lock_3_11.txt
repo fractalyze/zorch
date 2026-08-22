@@ -139,8 +139,8 @@ frxlib==0.10.2.dev20260822060712 \
 hash-frx==0.2.0.dev20260820080354 \
     --hash=sha256:1ed07554c0c1452324c0c5e3cb781e5ef8486b3a02eb06258caf7059a2e78382
     # via -r requirements.in
-lattice-frx==0.0.1.dev20260822021847 \
-    --hash=sha256:17f5a08848d289d17df26d8ebf32b29f02abf688cf2bc46a43f519688fb8e45b
+lattice-frx==0.0.1.dev20260822082430 \
+    --hash=sha256:c1e7968f2b9cbc69094f0785989b5e3d252ad01d19f976597fef6fbd556f5d3f
     # via -r requirements.in
 ml-dtypes==0.5.4 \
     --hash=sha256:0d2ffd05a2575b1519dc928c0b93c06339eb67173ff53acb00724502cda231cf \

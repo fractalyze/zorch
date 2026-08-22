@@ -13,6 +13,7 @@ work, not this seam.
 
 from __future__ import annotations
 
+from dataclasses import fields, replace
 from unittest import mock
 
 import numpy as np
@@ -57,12 +58,6 @@ def _opening(ring: HostSplitRing, **overrides: object) -> AbdlopOpening:
     return AbdlopOpening(_scheme(ring), **params)  # type: ignore[arg-type]
 
 
-def _uniform_stack(
-    ring: HostSplitRing, rng: np.random.Generator, *lead: int
-) -> np.ndarray:
-    return lnp_fixture.uniform_stack(ring, rng, *lead)
-
-
 def _transcript(tag: bytes = b"") -> ByteTranscript:
     return lnp_fixture.transcript(b"lnp-opening-test", tag)
 
@@ -76,14 +71,14 @@ class _Instance:
         self.ring = _ring()
         self.opening = _opening(self.ring)
         rng = np.random.default_rng(seed)
-        self.a1 = _uniform_stack(self.ring, rng, _ROWS, _M1)
-        self.a2 = _uniform_stack(self.ring, rng, _ROWS, _M2)
-        self.b = _uniform_stack(self.ring, rng, _ELL, _M2)
-        self.r1 = _uniform_stack(self.ring, rng, _N, _M1)
-        self.rm = _uniform_stack(self.ring, rng, _N, _ELL)
+        self.a1 = self.ring.uniform_stack(rng, _ROWS, _M1)
+        self.a2 = self.ring.uniform_stack(rng, _ROWS, _M2)
+        self.b = self.ring.uniform_stack(rng, _ELL, _M2)
+        self.r1 = self.ring.uniform_stack(rng, _N, _M1)
+        self.rm = self.ring.uniform_stack(rng, _N, _ELL)
         self.s1 = rng.integers(-1, 2, size=(_M1, _D)).astype(np.int64)
         self.s2 = rng.integers(-1, 2, size=(_M2, _D)).astype(np.int64)
-        message = _uniform_stack(self.ring, rng, _ELL)
+        message = self.ring.uniform_stack(rng, _ELL)
         commitment = self.opening.scheme.commit(
             self.a1,
             self.a2,
@@ -239,12 +234,12 @@ class OpeningSoundnessTest(absltest.TestCase):
         recomputed challenge cannot match."""
         wrong_u = self.instance.ring.add(
             self.instance.u,
-            _uniform_stack(self.instance.ring, np.random.default_rng(99), _N),
+            self.instance.ring.uniform_stack(np.random.default_rng(99), _N),
         )
         self.assertFalse(self.instance.verify(self.proof, u=wrong_u))
 
     def test_a_wrong_commitment_is_rejected(self) -> None:
-        other_t_a = _uniform_stack(self.instance.ring, np.random.default_rng(6), _ROWS)
+        other_t_a = self.instance.ring.uniform_stack(np.random.default_rng(6), _ROWS)
         self.assertFalse(self.instance.verify(self.proof, t_a=other_t_a))
 
 
@@ -265,6 +260,12 @@ class OpeningZeroKnowledgeSmokeTest(absltest.TestCase):
 
 
 class OpeningSurfaceTest(absltest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(10)
+        cls.proof, _ = cls.instance.prove()
+
     def test_a_wrong_witness_shape_raises(self) -> None:
         instance = _Instance(8)
         with self.assertRaises(ValueError):
@@ -280,13 +281,22 @@ class OpeningSurfaceTest(absltest.TestCase):
                 _transcript(),
             )
 
+    def test_every_proof_field_is_gated(self) -> None:
+        """Driven off the dataclass rather than a hand-kept list, so a field
+        added to `OpeningProof` without a gate fails here. `None` stands in
+        for every malformed value because no field can legitimately be it."""
+        for field in fields(OpeningProof):
+            with self.subTest(field.name):
+                bad = replace(self.proof, **{field.name: None})
+                self.assertFalse(self.instance.verify(bad))
+
     def test_a_malformed_wire_challenge_is_refused(self) -> None:
-        """`c` is wire data like the responses, so it meets the same gate.
-        Without it a list `c` verified true (`np.array_equal` is happy to
-        compare one against an array) and a wrong length surfaced as a
+        """`c` is wire data like the responses, so it meets the same gate,
+        and refusal is a `False` — the prover chose these bytes. Without the
+        gate a list `c` verified *true* (`np.array_equal` is happy to compare
+        one against an array) and a wrong length surfaced as a
         `SplitRing.mul` shape error from inside the ring."""
-        instance = _Instance(10)
-        proof, _ = instance.prove()
+        instance, proof = self.instance, self.proof
         # Typed `object`: these inputs deliberately violate `OpeningProof`'s
         # annotation, which is exactly the promise a wire decoder cannot make
         # and the runtime gate therefore has to.
@@ -297,18 +307,32 @@ class OpeningSurfaceTest(absltest.TestCase):
         )
         for name, c in cases:
             with self.subTest(name):
-                bad = OpeningProof(c=c, z1=proof.z1, z2=proof.z2)  # type: ignore[arg-type]
-                with self.assertRaisesRegex((TypeError, ValueError), "verify: c"):
-                    instance.verify(bad)
+                self.assertFalse(instance.verify(replace(proof, c=c)))
+
+    def test_a_malformed_wire_response_is_refused(self) -> None:
+        """`z1` and `z2` meet the same gate as `c`, and the same verdict.
+        A float response would otherwise reach `_challenge_times`' int64
+        cast and be scored after silent truncation."""
+        instance, proof = self.instance, self.proof
+        for name in ("z1", "z2"):
+            good = getattr(proof, name)
+            cases: tuple[tuple[str, object], ...] = (
+                ("float coefficients", good.astype(np.float64)),
+                ("a dropped row", good[:-1]),
+                ("a nested list", good.tolist()),
+            )
+            for case, z in cases:
+                with self.subTest(f"{name}: {case}"):
+                    self.assertFalse(instance.verify(replace(proof, **{name: z})))
 
     def test_zero_relations_degenerate_to_the_pure_opening(self) -> None:
         """No linear relations is a real statement — a bare ABDLOP opening.
         The same instance proves it: N lives in `r1`'s row count, so passing
         empty relation matrices is the whole deviation."""
         instance = _Instance(9)
-        empty = opening_module._empty_stack(instance.ring)
-        r1 = np.empty((0, _M1) + instance.t_a.shape[1:], dtype=np.uint64)
-        rm = np.empty((0, _ELL) + instance.t_a.shape[1:], dtype=np.uint64)
+        empty = instance.ring.zeros(0)
+        r1 = instance.ring.zeros(0, _M1)
+        rm = instance.ring.zeros(0, _ELL)
         proof, _ = instance.prove(r1=r1, rm=rm)
         self.assertTrue(instance.verify(proof, r1=r1, rm=rm, u=empty))
 

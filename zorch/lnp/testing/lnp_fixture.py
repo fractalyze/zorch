@@ -52,20 +52,6 @@ def ring() -> HostSplitRing:
     return HostSplitRing(SPLIT_Q, D)
 
 
-def uniform_stack(
-    host_ring: HostSplitRing, rng: np.random.Generator, *lead: int
-) -> np.ndarray:
-    """A `(lead, limbs, d)` stack of uniform canonical residues — the public
-    matrices and commitments every suite needs."""
-    return np.stack(
-        [
-            rng.integers(0, q, size=(*lead, host_ring.d), dtype=np.uint64)
-            for q in host_ring.q_moduli
-        ],
-        axis=-2,
-    )
-
-
 def transcript(domain: bytes, tag: bytes = b"") -> ByteTranscript:
     """A fresh transcript in `domain`, with `tag` absorbed — the per-test
     separator that makes two proofs of one statement distinguishable."""

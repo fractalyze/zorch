@@ -20,7 +20,6 @@ from zorch.commit.ajtai import (
     AbdlopPair,
     AjtaiCommitment,
     BdlopCommitment,
-    _add_stacks,
     _equal,
 )
 
@@ -220,39 +219,16 @@ class BdlopTest(absltest.TestCase):
         _assert_equal_limbs(compiled.t1, eager.t1)
 
 
-def _uniform_split(ring: HostSplitRing, rng: np.random.Generator) -> np.ndarray:
-    """One uniform split-ring element on the `(limbs, d)` host contract."""
-    return np.array(
-        [rng.integers(0, q, size=_D, dtype=np.uint64) for q in ring.q_moduli],
-        dtype=np.uint64,
-    )
-
-
-def _split_matrix(
-    ring: HostSplitRing, rng: np.random.Generator, rows: int, cols: int
-) -> np.ndarray:
-    return np.stack(
-        [
-            np.stack([_uniform_split(ring, rng) for _ in range(cols)])
-            for _ in range(rows)
-        ]
-    )
-
-
 def _ternary_split_vector(
     ring: HostSplitRing, rng: np.random.Generator, cols: int
 ) -> np.ndarray:
     """A `(cols, limbs, d)` stack with coefficients in {-1, 0, 1}."""
-    return np.stack(
-        [ring.from_signed(rng.integers(-1, 2, size=_D).tolist()) for _ in range(cols)]
-    )
+    return ring.from_signed_stack(rng.integers(-1, 2, size=(cols, _D)))
 
 
 def _over_bound_split_vector(ring: HostSplitRing, cols: int) -> np.ndarray:
     """Over the bound by construction, as `_over_bound_witness` above."""
-    return np.stack(
-        [ring.from_signed([_BETA + 1] + [0] * (_D - 1)) for _ in range(cols)]
-    )
+    return ring.from_signed_stack([[_BETA + 1] + [0] * (_D - 1)] * cols)
 
 
 class AbdlopTest(absltest.TestCase):
@@ -269,16 +245,16 @@ class AbdlopTest(absltest.TestCase):
             beta2_inf=_BETA,
         )
         self.rng = np.random.default_rng(2)
-        self.a1 = _split_matrix(self.ring, self.rng, _ROWS, _COLS)
-        self.a2 = _split_matrix(self.ring, self.rng, _ROWS, _COLS)
-        self.b = _split_matrix(self.ring, self.rng, 1, _COLS)
+        self.a1 = self.ring.uniform_stack(self.rng, _ROWS, _COLS)
+        self.a2 = self.ring.uniform_stack(self.rng, _ROWS, _COLS)
+        self.b = self.ring.uniform_stack(self.rng, 1, _COLS)
 
     def _witnesses(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """A fresh `(s1, s2, message)` triple — s1/s2 ternary, the message
         unconstrained uniform."""
         s1 = _ternary_split_vector(self.ring, self.rng, _COLS)
         s2 = _ternary_split_vector(self.ring, self.rng, _COLS)
-        message = np.stack([_uniform_split(self.ring, self.rng)])
+        message = self.ring.uniform_stack(self.rng, 1)
         return s1, s2, message
 
     def test_a_valid_opening_verifies(self) -> None:
@@ -295,15 +271,15 @@ class AbdlopTest(absltest.TestCase):
         t1, u2, other = self._witnesses()
         first = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
         second = self.scheme.commit(self.a1, self.a2, self.b, t1, u2, other)
-        lhs_t_a = _add_stacks(self.ring, first.t_a, second.t_a)
-        lhs_t_b = _add_stacks(self.ring, first.t_b, second.t_b)
+        lhs_t_a = self.ring.add(first.t_a, second.t_a)
+        lhs_t_b = self.ring.add(first.t_b, second.t_b)
         rhs = self.scheme.commit(
             self.a1,
             self.a2,
             self.b,
-            _add_stacks(self.ring, s1, t1),
-            _add_stacks(self.ring, s2, u2),
-            _add_stacks(self.ring, message, other),
+            self.ring.add(s1, t1),
+            self.ring.add(s2, u2),
+            self.ring.add(message, other),
         )
         np.testing.assert_array_equal(lhs_t_a, rhs.t_a)
         np.testing.assert_array_equal(lhs_t_b, rhs.t_b)
@@ -337,7 +313,7 @@ class AbdlopTest(absltest.TestCase):
     def test_a_wrong_message_is_rejected(self) -> None:
         s1, s2, message = self._witnesses()
         commitment = self.scheme.commit(self.a1, self.a2, self.b, s1, s2, message)
-        other = np.stack([_uniform_split(self.ring, self.rng)])
+        other = self.ring.uniform_stack(self.rng, 1)
         self.assertFalse(
             self.scheme.verify(self.a1, self.a2, self.b, commitment, s1, s2, other)
         )

@@ -55,6 +55,7 @@ import numpy as np
 from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 
 from zorch.byte_transcript import ByteTranscript
+from zorch.lnp import wire
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
 from zorch.lnp.transcript import absorb_stacks
 
@@ -196,15 +197,18 @@ class AbdlopEval:
         """Fig. 5's two checks: every `h_j` has a zero constant coefficient,
         and the Π_many proof of the aggregation relation verifies."""
         ring = self.opening.scheme.ring
+        # The statement is the caller's and raises; the proof is the
+        # prover's and is a verdict. See `zorch/lnp/wire.py`.
         self._require_functions(fs1, fm, target)
-        self._require_stack("verify: t_g", proof.t_g, self.lam)
-        self._require_stack("verify: h", proof.h, self.lam)
+        if not self._is_well_formed(proof):
+            return False, transcript
 
         t, gamma = self._gamma(transcript, proof.t_g, fs1.shape[0])
         t = absorb_stacks(t.observe_label(_LABEL_MASK), proof.h)
-        # The constant coefficient is coefficient 0 of every limb: zero mod
-        # each q_i is zero mod q, by CRT.
-        if proof.h[..., 0].any():
+        # Zero mod each q_i is zero mod q, by CRT — so the ring's own
+        # constant-coefficient reading answers Fig. 5's `h̃_j = 0` check
+        # directly, over every limb at once.
+        if ring.constant_coeff(proof.h).any():
             return False, t
         r1, rm, u = self._relation(self._blocks(fs1, fm, target, gamma), proof.h)
         return self.opening.verify(
@@ -220,19 +224,32 @@ class AbdlopEval:
             t,
         )
 
-    def _sample_garbage(self, rng: np.random.Generator) -> np.ndarray:
-        """`g ← {x ∈ R_q : x̃ = 0}^λ` — uniform per limb (uniform over R_q by
-        CRT), with the constant coefficient forced to zero. Private coins:
-        this is masking, like the Gaussian `y` of the layer below, so it
-        comes off the caller's generator and never off the transcript."""
-        ring = self.opening.scheme.ring
-        g = np.stack(
-            [
-                rng.integers(0, q, size=(self.lam, ring.d), dtype=np.uint64)
-                for q in ring.q_moduli
-            ],
-            axis=-2,
+    def _is_well_formed(self, proof: EvalProof) -> bool:
+        """Whether `proof` is structurally usable — every field of it.
+
+        `opening` is a field like the other two, and the one a per-field
+        habit forgets: it is composite, so nothing about it looks like a
+        gate, and an `EvalProof` carrying `None` there reached an
+        `AttributeError` instead of a verdict. The layer below owns what
+        its own wire means, so this defers rather than re-deriving it."""
+        scheme = self.opening.scheme
+        return (
+            isinstance(proof, EvalProof)
+            and wire.is_stack(scheme, proof.t_g, self.lam)
+            and wire.is_stack(scheme, proof.h, self.lam)
+            and self.opening._is_well_formed(proof.opening)
         )
+
+    def _sample_garbage(self, rng: np.random.Generator) -> np.ndarray:
+        """`g ← {x ∈ R_q : x̃ = 0}^λ` — the ring's uniform stack with the
+        constant coefficient forced to zero. Private coins: this is masking,
+        like the Gaussian `y` of the layer below, so it comes off the
+        caller's generator and never off the transcript.
+
+        The zeroing is this protocol's own — `uniform_stack` is the module
+        convention's uniform constructor, and `x̃ = 0` is Fig. 5's condition
+        on the garbage, not a ring-level shape."""
+        g = self.opening.scheme.ring.uniform_stack(rng, self.lam)
         g[..., 0] = 0
         return g
 
@@ -247,21 +264,6 @@ class AbdlopEval:
         draws = uniform_from_bytes(raw, self.modulus, count)
         return t, draws.reshape(self.lam, relations)
 
-    def _combine(self, values: np.ndarray, weights: np.ndarray) -> np.ndarray:
-        """`Σ_u weights_u · values_u` — the γ-aggregation, one row of it.
-
-        `values` may be a stack of ring elements or of whole matrix rows;
-        `mul_scalar` and `add` both take leading batch axes, so the same
-        fold serves the aggregate and the relation blocks. A weighted sum
-        by Z_q scalars is a module op the ring should own (lattice-frx's
-        `matvec` is its ring-element sibling); until it does, this is the
-        one spelling of it in the package."""
-        ring = self.opening.scheme.ring
-        total = ring.mul_scalar(values[0], int(weights[0]))
-        for value, weight in zip(values[1:], weights[1:]):
-            total = ring.add(total, ring.mul_scalar(value, int(weight)))
-        return total
-
     def _blocks(
         self,
         fs1: np.ndarray,
@@ -274,9 +276,14 @@ class AbdlopEval:
 
         Both the prover's `h` and the eq.-28 relation are built from these,
         so aggregating is done once per proof rather than once per use —
-        and the prover never materializes the M individual `F_u(s1, m)`."""
+        and the prover never materializes the M individual `F_u(s1, m)`.
+
+        `combine` contracts the leading (per-relation) axis and carries
+        whatever the block holds past it, so one call serves `target`'s
+        stack of elements and `fs1`/`fm`'s stacks of whole matrix rows."""
+        ring = self.opening.scheme.ring
         return tuple(  # type: ignore[return-value]
-            np.stack([self._combine(block, row) for row in gamma])
+            np.stack([ring.combine(row, block) for row in gamma])
             for block in (fs1, fm, target)
         )
 
@@ -297,11 +304,9 @@ class AbdlopEval:
         λ×λ identity over the ring."""
         ring = self.opening.scheme.ring
         weighted_s1, weighted_m, weighted_target = aggregated
-        eye = np.zeros(
-            (self.lam, self.lam, len(ring.q_moduli), ring.d), dtype=np.uint64
-        )
+        eye = ring.zeros(self.lam, self.lam)
         diagonal = np.arange(self.lam)
-        eye[diagonal, diagonal] = ring.from_signed([1] + [0] * (ring.d - 1))
+        eye[diagonal, diagonal] = ring.one()
         return (
             weighted_s1,
             np.concatenate([weighted_m, eye], axis=1),
@@ -317,21 +322,13 @@ class AbdlopEval:
         relations = fs1.shape[0]
         if relations < 1:
             raise ValueError("eval: need at least one linear function")
-        for name, arr, want in (
+        # The same gate as `target`'s, not a leading-axes-only variant of
+        # it: checking `shape[:2]` left the trailing `(limbs, d)` to be
+        # rejected later by whichever ring op reached it, in the ring's
+        # vocabulary rather than this layer's.
+        for name, arr, lead in (
             ("fs1", fs1, (relations, scheme.s1_cols)),
             ("fm", fm, (relations, self.ell)),
+            ("target", target, (relations,)),
         ):
-            if arr.shape[:2] != want:
-                raise ValueError(
-                    f"eval: {name} must lead with {want}, got {arr.shape[:2]}"
-                )
-        self._require_stack("target", target, relations)
-
-    def _require_stack(self, name: str, arr: np.ndarray, rows: int) -> None:
-        ring = self.opening.scheme.ring
-        want = (rows, len(ring.q_moduli), ring.d)
-        if not isinstance(arr, np.ndarray) or arr.shape != want:
-            raise ValueError(
-                f"eval: {name} must be a ring stack of shape {want}, got "
-                f"{getattr(arr, 'shape', type(arr).__name__)}"
-            )
+            scheme.require_stack(f"eval: {name}", arr, *lead)

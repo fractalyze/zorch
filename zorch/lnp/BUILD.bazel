@@ -26,12 +26,24 @@ py_library(
 )
 
 py_library(
+    name = "wire",
+    srcs = ["wire.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/commit:ajtai",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "opening",
     srcs = ["opening.py"],
     visibility = ["//visibility:public"],
     deps = [
         ":challenge",
         ":transcript",
+        ":wire",
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         requirement("lattice_frx"),
@@ -46,6 +58,7 @@ py_library(
     deps = [
         ":opening",
         ":transcript",
+        ":wire",
         "//zorch:byte_transcript",
         requirement("lattice_frx"),
         requirement("numpy"),
