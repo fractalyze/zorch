@@ -51,7 +51,6 @@ from dataclasses import dataclass
 
 import numpy as np
 from lattice_frx import norms, sampler
-from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
@@ -189,8 +188,8 @@ class AbdlopOpening:
             y2_ring = ring.from_signed_stack(y2)
             w = ring.add(ring.matvec(a1, y1_ring), ring.matvec(a2, y2_ring))
             v = ring.sub(
-                _matvec(ring, r1, y1_ring),
-                _matvec(ring, rm, ring.matvec(b, y2_ring)),
+                ring.matvec(r1, y1_ring),
+                ring.matvec(rm, ring.matvec(b, y2_ring)),
             )
             advanced, c = self._challenge(transcript, w, v)
             cs1 = _challenge_times(c, s1)
@@ -247,10 +246,10 @@ class AbdlopOpening:
         masked_message = ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring))
         v = ring.sub(
             ring.add(
-                _matvec(ring, r1, z1_ring),
-                _matvec(ring, rm, masked_message),
+                ring.matvec(r1, z1_ring),
+                ring.matvec(rm, masked_message),
             ),
-            _scale(ring, c_elem, u),
+            ring.scale(c_elem, u),
         )
         advanced, c = self._challenge(transcript, w, v)
         return bool(np.array_equal(c, proof.c)), advanced
@@ -283,25 +282,6 @@ class AbdlopOpening:
             raise ValueError(f"opening: {name} must have shape {want}, got {arr.shape}")
 
 
-def _empty_stack(ring: HostSplitRing) -> np.ndarray:
-    return np.empty((0, len(ring.q_moduli), ring.d), dtype=np.uint64)
-
-
-def _matvec(ring: HostSplitRing, matrix: np.ndarray, vector: np.ndarray) -> np.ndarray:
-    """`ring.matvec`, admitting the no-rows case. N = 0 is a real statement
-    here — a pure opening, no linear relations — and the empty result is the
-    ring's shape convention, not this protocol's. The guard exists only
-    because `matvec` ends in an `np.stack` that rejects an empty list; it
-    retires when the substrate returns `(0, limbs, d)` itself."""
-    return ring.matvec(matrix, vector) if matrix.shape[0] else _empty_stack(ring)
-
-
-def _scale(ring: HostSplitRing, element: np.ndarray, stack: np.ndarray) -> np.ndarray:
-    """`ring.scale`, admitting the empty stack — `_matvec`'s twin, same
-    reason and same expiry."""
-    return ring.scale(element, stack) if stack.shape[0] else _empty_stack(ring)
-
-
 def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
     """`c·s` over the *integers*, one negacyclic product per row: the
     responses' norm statement lives in unreduced ℤ, so no ring (mod-q)
@@ -329,11 +309,14 @@ def _rej1(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> 
     the inner product and norm over exact Python ints (a fixed-width dot
     would wrap at real parameter scales).
 
-    `‖v‖²` is `vo @ vo` rather than `norms.l2_squared` only to reuse the
-    object-dtype view the inner product already needs — identical exact
-    arithmetic, half the conversions. The substrate's own norm is the
-    slower spelling of the same self-dot; fixing it there is what makes
-    this comment (and this line) go away."""
+    `‖v‖²` is `vo @ vo` rather than `norms.l2_squared` to reuse the
+    object-dtype view the inner product already needs: the substrate's
+    norm is now the *same* self-dot, so the two are identical arithmetic,
+    but calling it here would convert `v` a second time — measured ~1.14x
+    slower at `(4, 128)` and `(16, 256)`. `verify` has no such view to
+    reuse and calls the substrate. This stays hand-spelled only while the
+    inner product is: a substrate op that returns `⟨z,v⟩` and `‖v‖²` off
+    one conversion would take both lines."""
     zo = z.reshape(-1).astype(object)
     vo = v.reshape(-1).astype(object)
     threshold = (-2 * int(zo @ vo) + int(vo @ vo)) / (2.0 * std**2) - math.log(rep)

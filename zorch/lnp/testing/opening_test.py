@@ -306,7 +306,7 @@ class OpeningSurfaceTest(absltest.TestCase):
         The same instance proves it: N lives in `r1`'s row count, so passing
         empty relation matrices is the whole deviation."""
         instance = _Instance(9)
-        empty = opening_module._empty_stack(instance.ring)
+        empty = instance.ring.zeros(0)
         r1 = np.empty((0, _M1) + instance.t_a.shape[1:], dtype=np.uint64)
         rm = np.empty((0, _ELL) + instance.t_a.shape[1:], dtype=np.uint64)
         proof, _ = instance.prove(r1=r1, rm=rm)
