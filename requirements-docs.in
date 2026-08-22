@@ -11,7 +11,7 @@ frx==0.10.2.dev20260820091735
 frxlib==0.10.2.dev20260820091735
 zk-dtypes==0.0.14
 # mkdocstrings imports zorch.commit.ajtai, which imports lattice_frx.
-lattice-frx==0.0.1.dev20260821000958
+lattice-frx==0.0.1.dev20260822021847
 absl-py
 numpy
 typing-extensions

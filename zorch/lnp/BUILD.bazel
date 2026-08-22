@@ -14,3 +14,40 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+py_library(
+    name = "transcript",
+    srcs = ["transcript.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "opening",
+    srcs = ["opening.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":challenge",
+        ":transcript",
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "eval",
+    srcs = ["eval.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":opening",
+        ":transcript",
+        "//zorch:byte_transcript",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)

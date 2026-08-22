@@ -12,6 +12,7 @@ fall-through and exhaustion branches deterministically.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -19,7 +20,12 @@ from absl.testing import absltest
 from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 from lattice_frx.split_ring import HostSplitRing
 
-from zorch.lnp.challenge import challenge_bytes_needed, challenge_from_bytes
+from zorch.lnp.challenge import (
+    ChallengeParams,
+    attempt_budget,
+    challenge_bytes_needed,
+    challenge_from_bytes,
+)
 
 # The paper's Figure-3 instantiation (eprint 2022/284): d=128, κ=2, η=59,
 # k=32 — the parameter point the LNP layer pins.
@@ -247,6 +253,92 @@ class ChallengeBytesNeededTest(absltest.TestCase):
         for fail_prob in [0.0, 1.0]:
             with self.assertRaises(ValueError):
                 challenge_bytes_needed(*good, fail_prob=fail_prob)
+
+
+class AttemptBudgetTest(absltest.TestCase):
+    def test_the_half_acceptance_case_is_the_log2_count(self) -> None:
+        """The candidate loop's own budget is the general formula at the
+        stated 1/2 per-candidate rejection bound."""
+        for fail_prob in (2.0**-128, 2.0**-40, 2.0**-4, 0.5, 0.9):
+            self.assertEqual(
+                attempt_budget(fail_prob), math.ceil(-math.log2(fail_prob))
+            )
+
+    def test_degenerate_probabilities_are_refused(self) -> None:
+        """The domain edges where the raw formula fails without naming
+        itself: `accept_prob = 0` divides by zero, `accept_prob = 1` is a
+        math-domain error. They are not treated alike — zero is refused,
+        certain acceptance is answered, since the latter is the formula's
+        limit and not a caller mistake. `AbdlopOpening` covers the
+        reachable underflow route in its own vocabulary."""
+        # Certain acceptance is answered, not refused: one attempt suffices.
+        self.assertEqual(attempt_budget(2.0**-128, 1.0), 1)
+        for bad in (0.0, -0.5, 1.5):
+            with self.assertRaisesRegex(ValueError, "accept_prob"):
+                attempt_budget(2.0**-128, bad)
+        for bad in (0.0, 1.0, -1.0):
+            with self.assertRaisesRegex(ValueError, "fail_prob"):
+                attempt_budget(bad)
+
+    def test_a_rarer_acceptance_buys_a_longer_budget(self) -> None:
+        """Monotone in both arguments, and low enough acceptance blows up —
+        which is what a protocol's construction-time guard is watching for."""
+        self.assertGreater(
+            attempt_budget(2.0**-128, 0.05), attempt_budget(2.0**-128, 0.5)
+        )
+        self.assertGreater(
+            attempt_budget(2.0**-128, 0.5), attempt_budget(2.0**-40, 0.5)
+        )
+        # Surviving 2^-128 at one-in-a-million acceptance needs ~10^8 tries.
+        self.assertGreater(attempt_budget(2.0**-128, 1e-6), 10**7)
+
+
+class ChallengeParamsTest(absltest.TestCase):
+    """The pairing object: same answers as the free functions, one value."""
+
+    def test_it_agrees_with_the_free_functions(self) -> None:
+        params = ChallengeParams(d=_D, kappa=_KAPPA, eta=_ETA, k=_K)
+        self.assertEqual(
+            params.bytes_needed, challenge_bytes_needed(_D, _KAPPA, _ETA, _K)
+        )
+        data = _full_stream(12)
+        np.testing.assert_array_equal(
+            params.from_bytes(data),
+            challenge_from_bytes(data, _D, _KAPPA, _ETA, _K),
+        )
+
+    def test_the_budget_travels_with_the_point(self) -> None:
+        """The knob a consumer could previously not reach: a params object
+        carries its own `fail_prob` into *both* halves of the pair, so the
+        count and the parse cannot disagree about the budget."""
+        cheap = ChallengeParams(d=_D, kappa=_KAPPA, eta=_ETA, k=_K, fail_prob=2.0**-4)
+        self.assertEqual(cheap.bytes_needed, 4 * _BLOCK)
+        rng = np.random.default_rng(13)
+        data = rng.integers(0, 256, size=cheap.bytes_needed, dtype=np.uint8)
+        self.assertEqual(cheap.from_bytes(data).shape, (_D,))
+
+    def test_parameters_normalize_and_validate(self) -> None:
+        """Same gate as the free functions — a numpy `eta` becomes a real
+        Python int (its 2k-th power would wrap in a 64-bit lane), a
+        fractional one is a TypeError, an out-of-range one a ValueError.
+
+        The fields are annotated `int` because that is what they hold once
+        `__post_init__` has run; the ignores below are the point of the
+        gate — these are the values a caller can pass that the annotation
+        cannot stop."""
+        self.assertIsInstance(
+            ChallengeParams(
+                d=np.int64(_D),  # type: ignore[arg-type]
+                kappa=np.int64(_KAPPA),  # type: ignore[arg-type]
+                eta=np.int64(_ETA),  # type: ignore[arg-type]
+                k=np.int64(_K),  # type: ignore[arg-type]
+            ).eta,
+            int,
+        )
+        with self.assertRaises(TypeError):
+            ChallengeParams(d=_D, kappa=_KAPPA, eta=59.5, k=_K)  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            ChallengeParams(d=96, kappa=_KAPPA, eta=_ETA, k=_K)
 
 
 if __name__ == "__main__":
