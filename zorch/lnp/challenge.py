@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import math
 import operator
+from dataclasses import dataclass
 from typing import SupportsIndex
 
 import numpy as np
@@ -116,11 +117,45 @@ def _require_params(
     return d, kappa, eta, k
 
 
-def _attempts(fail_prob: float) -> int:
-    """The fixed candidate budget: with the stated per-candidate rejection
-    bound of 1/2, `ceil(-log2(fail_prob))` attempts fail together with
-    probability at most `fail_prob`."""
-    return math.ceil(-math.log2(fail_prob))
+def attempt_budget(fail_prob: float, accept_prob: float = 0.5) -> int:
+    """The fixed attempt count for a rejection loop: at acceptance
+    `accept_prob` per attempt, `ceil(log(fail_prob) / log1p(-accept_prob))`
+    attempts fail together with probability at most `fail_prob`.
+
+    The package's "budget rather than an open-ended loop" discipline in one
+    formula, so a protocol's own rejection loop and this module's candidate
+    loop cannot spell it two ways. The candidate loop is the `accept_prob =
+    1/2` case (the stated conservative per-candidate rejection bound), where
+    it reduces to `ceil(-log2(fail_prob))`. Its eventual home is
+    lattice-frx's sampler family, whose docstring already states the same
+    contract; it lives here until the batched substrate move.
+
+    Both probabilities are gated here rather than left to callers, because
+    this is a public entry point and the raw formula fails on its domain
+    edges without naming what went wrong: `accept_prob = 0` divides by
+    zero, `accept_prob = 1` is a math-domain error. They are not treated
+    alike — zero is refused, while certain acceptance is *answered* (one
+    attempt suffices at any `fail_prob`), since that is the formula's limit
+    rather than a caller mistake.
+
+    A caller deriving acceptance as `1/(rep1·rep2)` can underflow to
+    exactly `0.0`, which is why the zero case raises here rather than
+    dividing. Such a caller should still catch the mis-derived rates in its
+    own vocabulary first — this gate names `accept_prob`, which that caller
+    never passed."""
+    if not 0.0 < fail_prob < 1.0:
+        raise ValueError(
+            f"attempt_budget: fail_prob must be in (0, 1), got {fail_prob!r}"
+        )
+    if not 0.0 < accept_prob <= 1.0:
+        raise ValueError(
+            f"attempt_budget: accept_prob must be in (0, 1], got {accept_prob!r}"
+        )
+    # Certain acceptance: one attempt suffices at any fail_prob, and the
+    # formula's log1p(-1) would be a domain error rather than that answer.
+    if accept_prob == 1.0:
+        return 1
+    return math.ceil(math.log(fail_prob) / math.log1p(-accept_prob))
 
 
 def _layout(d: int, kappa: int, fail_prob: float) -> tuple[int, int]:
@@ -128,7 +163,7 @@ def _layout(d: int, kappa: int, fail_prob: float) -> tuple[int, int]:
     byte count, defined once so `challenge_from_bytes`'s parser cannot
     drift from the count its companion quotes (the `_ternary_layout`
     discipline of lattice-frx's sampler family)."""
-    return _attempts(fail_prob), uniform_bytes_needed(2 * kappa + 1, d // 2)
+    return attempt_budget(fail_prob), uniform_bytes_needed(2 * kappa + 1, d // 2)
 
 
 def negacyclic_mul(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -253,3 +288,56 @@ def challenge_from_bytes(
         f"{fail_prob!r}, so suspect the stream (or a caller's slicing), not "
         f"bad luck."
     )
+
+
+@dataclass(frozen=True)
+class ChallengeParams:
+    """The challenge-space point and its budget, carried as one value.
+
+    `challenge_bytes_needed` and `challenge_from_bytes` are a pair — the
+    parser must consume exactly the count its companion quotes — and
+    `_layout` exists so those two cannot drift. A protocol that passes the
+    five parameters to each call separately re-splits the pairing it was
+    given: the count and the parse become two independent argument lists,
+    and `fail_prob` is easy to reach in neither (the first consumer set the
+    other four in its constructor and left this one on the default, with no
+    way for its caller to move it). Protocol modules take this object whole
+    instead.
+
+    `fail_prob` here prices *this* budget — the candidate blocks the η gate
+    may reject — and is deliberately not the same knob as a protocol's own
+    rejection-loop `fail_prob`, in the same way the module docstring keeps
+    it separate from the inner `uniform_from_bytes` budget. It is the
+    dominant cost of a proof (the whole block budget is squeezed whether or
+    not the first candidate decides), so it is worth stating rather than
+    inheriting."""
+
+    d: int
+    kappa: int
+    eta: int
+    k: int
+    fail_prob: float = 2.0**-128
+
+    def __post_init__(self) -> None:
+        # Normalizing, not just validating: `_require_params` turns a numpy
+        # integer into a genuine Python int (a float is refused outright),
+        # which the η gate's exact arithmetic depends on — `eta ** (2k)`
+        # would wrap in a fixed 64-bit lane. Frozen, so it goes in the long
+        # way.
+        for name, value in zip(
+            ("d", "kappa", "eta", "k"),
+            _require_params(self.d, self.kappa, self.eta, self.k, self.fail_prob),
+        ):
+            object.__setattr__(self, name, value)
+
+    @property
+    def bytes_needed(self) -> int:
+        """The exact stream length `from_bytes` consumes."""
+        attempts, block = _layout(self.d, self.kappa, self.fail_prob)
+        return attempts * block
+
+    def from_bytes(self, data: bytes | bytearray | np.ndarray) -> np.ndarray:
+        """One challenge from `C`, as `challenge_from_bytes` at this point."""
+        return challenge_from_bytes(
+            data, self.d, self.kappa, self.eta, self.k, self.fail_prob
+        )
