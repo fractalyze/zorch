@@ -15,6 +15,19 @@ py_test(
 )
 
 py_test(
+    name = "transcript_test",
+    size = "small",
+    srcs = ["transcript_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/lnp:transcript",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "opening_test",
     size = "small",
     srcs = ["opening_test.py"],

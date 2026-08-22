@@ -16,6 +16,16 @@ py_library(
 )
 
 py_library(
+    name = "transcript",
+    srcs = ["transcript.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "opening",
     srcs = ["opening.py"],
     visibility = ["//visibility:public"],
