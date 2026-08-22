@@ -48,6 +48,7 @@ _SELECT_BLOCK = 128
 # backend takes the portable oracle throughout.
 _CUDA = "gpu"
 _METAL = "metal"
+_CPU = "cpu"
 
 BitSelectReduction = Literal["bits", "elements"]
 
@@ -558,7 +559,11 @@ def bit_select_xor_reduce(
         # name exactly who has a handler. Metal appears in no arm below, which
         # is why its batched stacks and non-128 widths take the portable
         # expression until one is measured to matter.
-        if backend in (_CUDA, _METAL) and not batched and width == 128:
+        # `_CPU` is here because on Apple Silicon the host is the faster
+        # device for this prover's arithmetic -- it has PMULL, where a GPU has
+        # to synthesize the carry-less multiply -- so the portable oracle was
+        # costing the CPU path more than its arithmetic advantage was worth.
+        if backend in (_CUDA, _METAL, _CPU) and not batched and width == 128:
             out_l = _bit_select_reduce_elements_ffi(selectors_l, values_l)
         elif backend == _CUDA:
             elements_pallas = (
@@ -585,14 +590,14 @@ def bit_select_xor_reduce(
                 f"{values.shape}"
             )
         backend = frx.default_backend()
-        if backend in (_CUDA, _METAL):
+        if backend in (_CUDA, _METAL, _CPU):
             selector_bytes = lax.bitcast_convert_type(selectors_l, fnp.uint8).reshape(
                 selectors.shape[0], width // 8
             )
             packed_bytes = (
                 _bit_select_packed_bytes_pallas
                 if backend == _CUDA
-                else _bit_select_packed_bytes_ffi
+                else _bit_select_packed_bytes_ffi  # Metal and CPU share the FFI
             )
             out_l = packed_bytes(selector_bytes, values_l, limbs)
         else:
