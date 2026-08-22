@@ -33,7 +33,10 @@ from hash_frx.blake3 import blake3
 from hash_frx.blake3.blake3 import BLAKE3_MARKER
 from hash_frx.blake3.byte_hashes import HostBlake3
 
-from zorch.blake3_field_transcript import Blake3FieldTranscript
+from zorch.blake3_field_transcript import (
+    BLAKE3_FINALIZE_MARKER,
+    Blake3FieldTranscript,
+)
 from zorch.byte_transcript import (
     ByteHashTranscript,
     _leading_zero_bits_ok,
@@ -393,6 +396,27 @@ class Blake3ProofOfWorkTest(absltest.TestCase):
                 # The lowering renders it `stablehlo.composite "hash_frx.blake3"`,
                 # so the closing quote is what separates the two names.
                 self.assertEqual(f'"{BLAKE3_MARKER}"' in hlo, marked)
+
+    def test_the_digest_that_opens_the_grind_is_a_marked_region(self) -> None:
+        # `_pow_digests` was already marked; the digest that OPENS it was not,
+        # and on Metal that bare finalize was the largest unmarked scope in
+        # `open` — 683 dispatches, 17% of the phase (flock-zorch#308). Invisible
+        # to every other test here: the bytes are unchanged, so only the
+        # lowering tells the marked arm from the unmarked one.
+        #
+        # The `bits == 0` arm is the counter-assertion. It short-circuits to the
+        # canonical zero witness before reading the state at all, so the marker
+        # must be ABSENT there — otherwise this would pass on a region that
+        # rides along with the transcript rather than with the call.
+        for bits, marked in ((8, True), (0, False)):
+            with self.subTest(bits=bits, marked=marked):
+                _, t = self._pair(_NO_PADDING)
+                hlo = (
+                    frx.jit(lambda x, b=bits: x.grind(b, chunk=_TEST_WINDOW))
+                    .lower(t)
+                    .as_text()
+                )
+                self.assertEqual(f'"{BLAKE3_FINALIZE_MARKER}"' in hlo, marked)
 
     def test_grind_bits_out_of_range_rejected(self) -> None:
         # Mirrors the byte transcript: > 256 (or negative) leading-zero bits on a

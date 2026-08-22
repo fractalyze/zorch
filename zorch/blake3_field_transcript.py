@@ -125,6 +125,18 @@ BLAKE3_SQUEEZE_MARKER_VERSION = 1
 BLAKE3_ABSORB_MARKER = "zorch.blake3_absorb"
 BLAKE3_ABSORB_MARKER_VERSION = 1
 
+# The third of the streaming trio, and the one the first two left behind. A
+# squeeze's finalize rides inside `zorch.blake3_squeeze`, but the proof-of-work
+# grind opens with a bare `finalize` — a root compression with no re-absorb to
+# sit beside — so it fell outside every marker. On Metal that made it the
+# largest unmarked scope in `open`: 683 dispatches, 17.0% of the phase, every
+# one a single threadgroup. See flock-zorch#308.
+#
+# Same ABI as the other two: the state rides as operands and the output width is
+# the attr, so one kernel serves every stream position.
+BLAKE3_FINALIZE_MARKER = "zorch.blake3_finalize"
+BLAKE3_FINALIZE_MARKER_VERSION = 1
+
 
 def _blake3_absorb_region(
     state: Blake3Stream, payload: Array, **_attrs: object
@@ -159,6 +171,34 @@ def _blake3_absorb_zone(state: Blake3Stream, payload: Array) -> Blake3Stream:
         name=BLAKE3_ABSORB_MARKER,
         version=BLAKE3_ABSORB_MARKER_VERSION,
         length=length,
+    )
+
+
+def _blake3_finalize_region(state: Blake3Stream, nbytes: int) -> Array:
+    """The `zorch.blake3_finalize` decomposition: read `nbytes` of extendable
+    output at the runtime stream position carried in the state leaves, without
+    advancing it. `composite` passes attrs as keywords, so `nbytes` binds from
+    the marker.
+
+    `state` rides as ONE pytree operand, for the reason `_blake3_absorb_region`
+    gives."""
+    return state.finalize(nbytes)
+
+
+@partial(jit, static_argnames=("nbytes",), inline=True)
+def _blake3_finalize_zone(state: Blake3Stream, nbytes: int) -> Array:
+    """One marked finalize, for the readers that take a digest without putting
+    it back on the stream — which is a squeeze minus its two absorbs, so the
+    emitter has strictly less to do than `zorch.blake3_squeeze`'s.
+
+    `inline=True` keeps a call site already inside an outer jit byte-identical,
+    mirroring `_blake3_absorb_zone`."""
+    return fused_region(
+        _blake3_finalize_region,
+        state,
+        name=BLAKE3_FINALIZE_MARKER,
+        version=BLAKE3_FINALIZE_MARKER_VERSION,
+        nbytes=nbytes,
     )
 
 
@@ -230,9 +270,9 @@ class Blake3FieldTranscript:
         # whose compressions are entered through the resumable state rather than
         # through hash-frx's marked whole-message region, and hash-frx's own
         # BLAKE3 rows report False regardless. Consumers take their plain
-        # decomposition paths. `zorch.blake3_absorb` / `zorch.blake3_squeeze`
-        # do not change this: they are zorch's own regions over the resumable
-        # state, not the hash-frx region this flag names. `_pow_digests` is the
+        # decomposition paths. `zorch.blake3_{absorb,squeeze,finalize}` do not
+        # change this: they are zorch's own regions over the resumable state,
+        # not the hash-frx region this flag names. `_pow_digests` is the
         # one path that does reach the marked region — it hashes a whole
         # message — and it is not an FS hop.
         return False
@@ -372,8 +412,10 @@ class Blake3FieldTranscript:
         """`BLAKE3(buffer)` at the digest width — the first 32 bytes of every PoW
         pre-image, matching the byte transcript's `HASH(state_digest ||
         nonce_le8)`. The same finalize a squeeze reads, so the grind opens with
-        no digest construction of its own."""
-        return self.state.finalize(_DIGEST_BYTES)
+        no digest construction of its own — but a squeeze's finalize is inside
+        `zorch.blake3_squeeze` and this one has no re-absorb to sit beside, so it
+        takes `zorch.blake3_finalize` of its own (flock-zorch#308)."""
+        return _blake3_finalize_zone(self.state, _DIGEST_BYTES)
 
     def _pow_digests(self, state_digest: Array, counters: Array) -> Array:
         """PoW candidate digests for a uint32 `[B]` counter batch: uint8
