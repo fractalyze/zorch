@@ -43,7 +43,7 @@ lattice-frx's uniform-from-bytes sampler land; the tests use a seeded numpy
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial, reduce
+from functools import partial
 
 import frx
 import numpy as np
@@ -206,10 +206,8 @@ class AbdlopCommitment:
         self._require_stack("commit: message", message, (self.messages,))
         ring = self.ring
         return AbdlopPair(
-            t_a=_add_stacks(
-                ring, _split_matvec(ring, a1, s1), _split_matvec(ring, a2, s2)
-            ),
-            t_b=_add_stacks(ring, _split_matvec(ring, b, s2), message),
+            t_a=ring.add(ring.matvec(a1, s1), ring.matvec(a2, s2)),
+            t_b=ring.add(ring.matvec(b, s2), message),
         )
 
     def verify(
@@ -244,26 +242,6 @@ class AbdlopCommitment:
         got = arr.shape
         if got != want:
             raise ValueError(f"{name}: shape {got}, want {want}")
-
-
-def _split_matvec(
-    ring: HostSplitRing, matrix: np.ndarray, vector: np.ndarray
-) -> np.ndarray:
-    """`A·s` composed from the split ring's own `mul`/`add` — one row at a
-    time on the host, the partial-split counterpart of `RnsRing.matvec`."""
-    return np.stack(
-        [
-            reduce(
-                ring.add, (ring.mul(entry, coeff) for entry, coeff in zip(row, vector))
-            )
-            for row in matrix
-        ]
-    )
-
-
-def _add_stacks(ring: HostSplitRing, a: np.ndarray, b: np.ndarray) -> np.ndarray:
-    """Entrywise ring addition of two `(k, limbs, d)` stacks."""
-    return np.stack([ring.add(x, y) for x, y in zip(a, b, strict=True)])
 
 
 def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:

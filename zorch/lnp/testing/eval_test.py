@@ -36,12 +36,6 @@ def _ring() -> HostSplitRing:
     return lnp_fixture.ring()
 
 
-def _uniform_stack(
-    ring: HostSplitRing, rng: np.random.Generator, *lead: int
-) -> np.ndarray:
-    return lnp_fixture.uniform_stack(ring, rng, *lead)
-
-
 def _transcript(tag: bytes = b"") -> ByteTranscript:
     return lnp_fixture.transcript(b"lnp-eval-test", tag)
 
@@ -77,13 +71,13 @@ class _Instance:
         self.ring = _ring()
         self.protocol = _eval(self.ring)
         rng = np.random.default_rng(seed)
-        self.a1 = _uniform_stack(self.ring, rng, _ROWS, _M1)
-        self.a2 = _uniform_stack(self.ring, rng, _ROWS, _M2)
-        self.b = _uniform_stack(self.ring, rng, _ELL, _M2)
-        self.bg = _uniform_stack(self.ring, rng, _LAM, _M2)
+        self.a1 = self.ring.uniform_stack(rng, _ROWS, _M1)
+        self.a2 = self.ring.uniform_stack(rng, _ROWS, _M2)
+        self.b = self.ring.uniform_stack(rng, _ELL, _M2)
+        self.bg = self.ring.uniform_stack(rng, _LAM, _M2)
         self.s1 = rng.integers(-1, 2, size=(_M1, _D)).astype(np.int64)
         self.s2 = rng.integers(-1, 2, size=(_M2, _D)).astype(np.int64)
-        self.message = _uniform_stack(self.ring, rng, _ELL)
+        self.message = self.ring.uniform_stack(rng, _ELL)
         self.rng = rng
 
         # The commitment covers m‖g, but g is drawn per proof — the message
@@ -99,8 +93,8 @@ class _Instance:
         # solve for the target that makes each F_u a *nonzero* ring element
         # with a zero constant coefficient: subtract off only the constant
         # coefficient of the raw value.
-        self.fs1 = _uniform_stack(self.ring, rng, _M, _M1)
-        self.fm = _uniform_stack(self.ring, rng, _M, _ELL)
+        self.fs1 = self.ring.uniform_stack(rng, _M, _M1)
+        self.fm = self.ring.uniform_stack(rng, _M, _ELL)
         raw = self.ring.add(
             self.ring.matvec(self.fs1, s1_ring), self.ring.matvec(self.fm, self.message)
         )
@@ -252,7 +246,7 @@ class EvalSoundnessTest(absltest.TestCase):
         self.assertFalse(self.instance.verify(self.proof, fm=wrong))
 
     def test_a_wrong_commitment_is_rejected(self) -> None:
-        other = _uniform_stack(self.instance.ring, np.random.default_rng(99), _ROWS)
+        other = self.instance.ring.uniform_stack(np.random.default_rng(99), _ROWS)
         self.assertFalse(self.instance.verify(self.proof, t_a=other))
 
 
