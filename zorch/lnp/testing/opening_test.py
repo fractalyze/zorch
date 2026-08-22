@@ -275,9 +275,10 @@ class OpeningSurfaceTest(absltest.TestCase):
             )
 
     def test_a_malformed_wire_challenge_is_refused(self) -> None:
-        """`c` is wire data like the responses, so it meets the same gate.
-        Without it a list `c` verified true (`np.array_equal` is happy to
-        compare one against an array) and a wrong length surfaced as a
+        """`c` is wire data like the responses, so it meets the same gate,
+        and refusal is a `False` — the prover chose these bytes. Without the
+        gate a list `c` verified *true* (`np.array_equal` is happy to compare
+        one against an array) and a wrong length surfaced as a
         `SplitRing.mul` shape error from inside the ring."""
         instance = _Instance(10)
         proof, _ = instance.prove()
@@ -292,8 +293,28 @@ class OpeningSurfaceTest(absltest.TestCase):
         for name, c in cases:
             with self.subTest(name):
                 bad = OpeningProof(c=c, z1=proof.z1, z2=proof.z2)  # type: ignore[arg-type]
-                with self.assertRaisesRegex((TypeError, ValueError), "verify: c"):
-                    instance.verify(bad)
+                self.assertFalse(instance.verify(bad))
+
+    def test_a_malformed_wire_response_is_refused(self) -> None:
+        """`z1` and `z2` meet the same gate as `c`, and the same verdict.
+        A float response would otherwise reach `_challenge_times`' int64
+        cast and be scored after silent truncation."""
+        instance = _Instance(11)
+        proof, _ = instance.prove()
+        for name in ("z1", "z2"):
+            good = getattr(proof, name)
+            cases: tuple[tuple[str, object], ...] = (
+                ("float coefficients", good.astype(np.float64)),
+                ("a dropped row", good[:-1]),
+                ("a nested list", good.tolist()),
+            )
+            for case, z in cases:
+                with self.subTest(f"{name}: {case}"):
+                    fields: dict[str, object] = dict(
+                        c=proof.c, z1=proof.z1, z2=proof.z2
+                    )
+                    fields[name] = z
+                    self.assertFalse(instance.verify(OpeningProof(**fields)))  # type: ignore[arg-type]
 
     def test_zero_relations_degenerate_to_the_pure_opening(self) -> None:
         """No linear relations is a real statement — a bare ABDLOP opening.

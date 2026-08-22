@@ -269,5 +269,65 @@ class EvalSurfaceTest(absltest.TestCase):
             instance.prove(fm=instance.fm[:, :-1])
 
 
+class EvalWireContractTest(absltest.TestCase):
+    """Malformed *proof* fields are a verdict, malformed *statement* fields
+    are an exception — the one rule the proof surface answers by.
+
+    A verifier reads the proof off the wire, so every value an adversary
+    controls has to produce `False`; before this, a residue past its
+    modulus escaped as a `ValueError` from whichever ring op reached it
+    first, which makes a deployed verifier crash on a malformed message
+    rather than reject it."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(11)
+        cls.proof, _ = cls.instance.prove()
+
+    def _replace(self, **field: np.ndarray) -> EvalProof:
+        parts: dict[str, object] = dict(
+            t_g=self.proof.t_g, h=self.proof.h, opening=self.proof.opening
+        )
+        parts.update(field)
+        return EvalProof(**parts)  # type: ignore[arg-type]
+
+    def test_an_out_of_range_residue_on_the_wire_is_a_verdict(self) -> None:
+        """The case the array contract exists for: `q ≤ v < 2^64` is a
+        well-typed uint64 and a malformed residue."""
+        for name in ("t_g", "h"):
+            with self.subTest(name):
+                bad = getattr(self.proof, name).copy()
+                bad[0, 0, 0] = _SPLIT_Q[0]
+                self.assertFalse(self.instance.verify(self._replace(**{name: bad})))
+
+    def test_a_misshaped_wire_stack_is_a_verdict(self) -> None:
+        for name in ("t_g", "h"):
+            with self.subTest(name):
+                bad = getattr(self.proof, name)[:-1]
+                self.assertFalse(self.instance.verify(self._replace(**{name: bad})))
+
+    def test_a_wrongly_typed_wire_stack_is_a_verdict(self) -> None:
+        """`float64` cannot hold a residue, and `int64` is not the contract
+        dtype however well its values fit."""
+        for dtype in (np.float64, np.int64):
+            with self.subTest(dtype.__name__):
+                bad = self.proof.h.astype(dtype)
+                self.assertFalse(self.instance.verify(self._replace(h=bad)))
+
+    def test_an_out_of_range_statement_still_raises(self) -> None:
+        """The other half of the rule. `target` is the caller's, so a
+        malformed one is that caller's bug — returning `False` would report
+        a parameter mistake as a failed proof."""
+        bad_target = self.instance.target.copy()
+        bad_target[0, 0, 0] = _SPLIT_Q[0]
+        with self.assertRaises(ValueError):
+            self.instance.verify(self.proof, target=bad_target)
+
+    def test_a_misshaped_statement_still_raises(self) -> None:
+        with self.assertRaisesRegex(ValueError, "target must be a ring stack"):
+            self.instance.verify(self.proof, target=self.instance.target[:-1])
+
+
 if __name__ == "__main__":
     absltest.main()

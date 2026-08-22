@@ -48,6 +48,7 @@ from functools import partial
 import frx
 import numpy as np
 from lattice_frx import norms, rns
+from lattice_frx.canonical import is_canonical
 from lattice_frx.ring import Coeff, Eval, RnsRing
 from lattice_frx.split_ring import HostSplitRing
 
@@ -251,6 +252,28 @@ class AbdlopCommitment:
                 f"{name} must be a ring stack of shape {want}, got "
                 f"{got if got is not None else type(arr).__name__}"
             )
+
+    def is_wire_stack(self, arr: np.ndarray, *lead: int) -> bool:
+        """`require_stack` asked rather than enforced, and extended to the
+        array contract — whether an *untrusted* stack is usable at all.
+
+        The split is by who supplied the value, and it is one rule across
+        the proof surface: a statement or public parameter comes from the
+        verifier's own caller, so a malformed one is that caller's bug and
+        raises; a proof field comes off the wire, where malformed is what
+        an adversary sends, so it is a verdict. A verifier that raises on
+        wire data is only a total predicate over well-formed messages,
+        which is not the property the caller needs.
+
+        The residue range is included here and not in `require_stack`
+        because it is exactly the check nothing else performs in time: the
+        ring ops downstream do raise on a non-canonical operand, which is
+        the raise this answers first."""
+        try:
+            self.require_stack("wire", arr, *lead)
+        except ValueError:
+            return False
+        return is_canonical(arr, self.ring.q_moduli)
 
 
 def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:

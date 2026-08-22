@@ -195,11 +195,15 @@ class AbdlopEval:
     ) -> tuple[bool, ByteTranscript]:
         """Fig. 5's two checks: every `h_j` has a zero constant coefficient,
         and the Π_many proof of the aggregation relation verifies."""
-        ring = self.opening.scheme.ring
-        self._require_functions(fs1, fm, target)
         scheme = self.opening.scheme
-        scheme.require_stack("eval verify: t_g", proof.t_g, self.lam)
-        scheme.require_stack("eval verify: h", proof.h, self.lam)
+        ring = scheme.ring
+        # The statement is the caller's and raises; the proof is the
+        # prover's and is a verdict. See `is_wire_stack`.
+        self._require_functions(fs1, fm, target)
+        if not scheme.is_wire_stack(proof.t_g, self.lam) or not scheme.is_wire_stack(
+            proof.h, self.lam
+        ):
+            return False, transcript
 
         t, gamma = self._gamma(transcript, proof.t_g, fs1.shape[0])
         t = absorb_stacks(t.observe_label(_LABEL_MASK), proof.h)

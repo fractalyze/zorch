@@ -226,12 +226,20 @@ class AbdlopOpening:
         bounds, then the recomputed `(w, v)` must replay to the proof's
         challenge — which is checks 2 and 3 folded into the hash."""
         ring = self.scheme.ring
-        self._require_signed("verify: c", proof.c)
-        self._require_signed("verify: z1", proof.z1, self.scheme.s1_cols)
-        self._require_signed("verify: z2", proof.z2, self.scheme.randomness_cols)
-        if norms.l2_squared(proof.z1.reshape(-1)) > self._bound1_sq:
+        # Every field of `proof` is the prover's, so a malformed one is a
+        # verdict rather than an exception — the wire half of the rule
+        # `AbdlopCommitment.is_wire_stack` states. The publics `t_a`, `t_b`
+        # and `u` are the caller's and keep raising, from the ring ops they
+        # reach.
+        if not (
+            self._is_wire_signed(proof.c)
+            and self._is_wire_signed(proof.z1, self.scheme.s1_cols)
+            and self._is_wire_signed(proof.z2, self.scheme.randomness_cols)
+        ):
             return False, transcript
-        if norms.l2_squared(proof.z2.reshape(-1)) > self._bound2_sq:
+        if norms.l2_squared(proof.z1) > self._bound1_sq:
+            return False, transcript
+        if norms.l2_squared(proof.z2) > self._bound2_sq:
             return False, transcript
         c_elem = ring.from_signed(proof.c)
         z1_ring = ring.from_signed_stack(proof.z1)
@@ -280,6 +288,20 @@ class AbdlopOpening:
             )
         if arr.shape != want:
             raise ValueError(f"opening: {name} must have shape {want}, got {arr.shape}")
+
+    def _is_wire_signed(self, arr: np.ndarray, *lead: int) -> bool:
+        """`_require_signed` asked rather than enforced — the signed-integer
+        twin of `AbdlopCommitment.is_wire_stack`, and the same rule.
+
+        Routed through the raising gate rather than restating its predicate
+        so the two cannot answer differently about one array: `prove` reads
+        these shapes from its caller and wants the exception, `verify` reads
+        them off the wire and wants the verdict."""
+        try:
+            self._require_signed("wire", arr, *lead)
+        except (TypeError, ValueError):
+            return False
+        return True
 
 
 def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
