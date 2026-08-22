@@ -55,11 +55,8 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
-from zorch.lnp.challenge import (
-    challenge_bytes_needed,
-    challenge_from_bytes,
-    negacyclic_mul,
-)
+from zorch.lnp.challenge import ChallengeParams, attempt_budget, negacyclic_mul
+from zorch.lnp.transcript import absorb_stacks
 
 _LABEL = b"lnp/open"
 
@@ -68,9 +65,8 @@ _LABEL = b"lnp/open"
 class OpeningProof:
     """The non-interactive Π_many wire: the challenge and the two masked
     responses, as signed integer coefficient vectors (`int64`; `z_i` is
-    `(m_i, d)`, `c` is `(d,)`). `w` and `v` are deliberately absent — the
-    verifier recomputes them, which is what keeps the proof independent
-    of the relation count."""
+    `(m_i, d)`, `c` is `(d,)`). `w` and `v` are absent by design — see the
+    module docstring on why the verifier recomputes them."""
 
     c: np.ndarray
     z1: np.ndarray
@@ -83,57 +79,70 @@ class AbdlopOpening:
     The scheme object carries the ring and the module shape; this class
     adds the proof parameters: the masking standard deviations `s?_std`,
     the Lemma 2.14-1 repetition rates `rep?` they were derived with, the
-    challenge-space point `(kappa, eta, k)`, and the budget's `fail_prob`.
-    Parameter *derivation* (the γ-factors of §2.6/§6.1) stays with the
-    consumer — this seam takes the derived numbers."""
+    challenge point (`ChallengeParams`, carrying its own budget), and the
+    `fail_prob` pricing *this* protocol's rejection loop. Parameter
+    *derivation* (the γ-factors of §2.6/§6.1) stays with the consumer —
+    this seam takes the derived numbers.
+
+    The relation count is not among them: it is `r1.shape[0]`, which both
+    `prove` and `verify` already receive, so storing it would be a second
+    representation of one number with nothing gating the two against each
+    other."""
 
     def __init__(
         self,
         scheme: AbdlopCommitment,
-        relations: int,
         s1_std: float,
         s2_std: float,
         rep1: float,
         rep2: float,
-        kappa: int,
-        eta: int,
-        k: int,
+        challenge: ChallengeParams,
         fail_prob: float = 2.0**-128,
     ) -> None:
-        if relations < 0:
-            raise ValueError(f"opening: relations must be >= 0, got {relations!r}")
         for name, value in (("s1_std", s1_std), ("s2_std", s2_std)):
             if value <= 0.0:
                 raise ValueError(f"opening: {name} must be positive, got {value!r}")
         for name, value in (("rep1", rep1), ("rep2", rep2)):
             if value <= 1.0:
                 raise ValueError(f"opening: {name} must exceed 1, got {value!r}")
+        # Rates past ~1e154 overflow their product to inf, which collapses
+        # the acceptance to exactly 0.0 — and then `attempt_budget` refuses
+        # `accept_prob`, a parameter this caller never passed, instead of
+        # the budget guard below naming the rates that are actually wrong.
+        if not math.isfinite(rep1 * rep2):
+            raise ValueError(
+                f"opening: rep1·rep2 overflows to infinity at rep1={rep1!r}, "
+                f"rep2={rep2!r} — repetition rates this far from their Lemma "
+                f"2.14-1 values are a parameter bug"
+            )
         if not 0.0 < fail_prob < 1.0:
             raise ValueError(f"opening: fail_prob must be in (0, 1), got {fail_prob!r}")
+        ring = scheme.ring
+        if challenge.d != ring.d:
+            raise ValueError(
+                f"opening: challenge degree {challenge.d} does not match the "
+                f"ring's {ring.d}"
+            )
         self.scheme = scheme
-        self.relations = relations
         self.s1_std = s1_std
         self.s2_std = s2_std
         self.rep1 = rep1
         self.rep2 = rep2
-        self.kappa = kappa
-        self.eta = eta
-        self.k = k
+        self.challenge = challenge
         self.fail_prob = fail_prob
-        ring = scheme.ring
+        # Squeezed once per attempt, so it is resolved once here.
+        self._challenge_bytes = challenge.bytes_needed
         # ‖z_i‖₂ ≤ s_i·√(2·m_i·d) [Ban93], compared squared over exact ints;
         # the floor only tightens the bound.
         self._bound1_sq = math.floor(s1_std**2 * 2 * scheme.s1_cols * ring.d)
         self._bound2_sq = math.floor(s2_std**2 * 2 * scheme.randomness_cols * ring.d)
-        self._challenge_bytes = challenge_bytes_needed(ring.d, kappa, eta, k)
         # One resolved sampler per std: `sampler_for`'s tier decision is a
         # function of σ (its admissibility gate), so a callable resolved at
         # one std must not be invoked at the other.
         count1 = scheme.s1_cols * ring.d
         count2 = scheme.randomness_cols * ring.d
         # One attempt accepts both Rej1 gates with probability ≈ 1/(rep1·rep2).
-        accept = 1.0 / (rep1 * rep2)
-        self._attempts = math.ceil(math.log(fail_prob) / math.log1p(-accept))
+        self._attempts = attempt_budget(fail_prob, 1.0 / (rep1 * rep2))
         # The budget grows as rep1·rep2·log(1/fail_prob): well-derived
         # repetition rates (M ≈ 3–6 each) land in the hundreds, and a huge
         # budget means a mis-derived rate — surface it here rather than as
@@ -179,24 +188,19 @@ class AbdlopOpening:
             y1_ring = ring.from_signed_stack(y1)
             y2_ring = ring.from_signed_stack(y2)
             w = ring.add(ring.matvec(a1, y1_ring), ring.matvec(a2, y2_ring))
-            if self.relations:
-                v = ring.sub(
-                    ring.matvec(r1, y1_ring),
-                    ring.matvec(rm, ring.matvec(b, y2_ring)),
-                )
-            else:
-                v = _empty_stack(ring)
+            v = ring.sub(
+                _matvec(ring, r1, y1_ring),
+                _matvec(ring, rm, ring.matvec(b, y2_ring)),
+            )
             advanced, c = self._challenge(transcript, w, v)
             cs1 = _challenge_times(c, s1)
             cs2 = _challenge_times(c, s2)
             z1 = cs1 + y1
             z2 = cs2 + y2
-            # Both gates draw their coin every attempt, accepted or not, so
-            # the rng stream a given seed produces is a function of the
-            # attempt count alone.
-            ok1 = _rej1(rng, z1, cs1, self.s1_std, self.rep1)
-            ok2 = _rej1(rng, z2, cs2, self.s2_std, self.rep2)
-            if ok1 and ok2:
+            coin1, coin2 = _coin(rng), _coin(rng)
+            if _rej1(coin1, z1, cs1, self.s1_std, self.rep1) and _rej1(
+                coin2, z2, cs2, self.s2_std, self.rep2
+            ):
                 return OpeningProof(c=c, z1=z1, z2=z2), advanced
         raise RuntimeError(
             f"opening.prove: every attempt was rejected — {self._attempts} "
@@ -237,19 +241,17 @@ class AbdlopOpening:
             ring.add(ring.matvec(a1, z1_ring), ring.matvec(a2, z2_ring)),
             ring.scale(c_elem, t_a),
         )
-        if self.relations:
-            v = ring.sub(
-                ring.add(
-                    ring.matvec(r1, z1_ring),
-                    ring.matvec(
-                        rm,
-                        ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring)),
-                    ),
-                ),
-                ring.scale(c_elem, u),
-            )
-        else:
-            v = _empty_stack(ring)
+        # `c·m` for the implicit message `m = t_B − B·s2`: the same masking
+        # the responses carry, applied to the quantity the BDLOP half commits
+        # to but never sends.
+        masked_message = ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring))
+        v = ring.sub(
+            ring.add(
+                _matvec(ring, r1, z1_ring),
+                _matvec(ring, rm, masked_message),
+            ),
+            _scale(ring, c_elem, u),
+        )
         advanced, c = self._challenge(transcript, w, v)
         return bool(np.array_equal(c, proof.c)), advanced
 
@@ -257,14 +259,11 @@ class AbdlopOpening:
         self, transcript: ByteTranscript, w: np.ndarray, v: np.ndarray
     ) -> tuple[ByteTranscript, np.ndarray]:
         """Absorb this protocol's messages and squeeze the challenge — the
-        one definition both sides replay. Serialization is the canonical
-        residues as C-order little-endian u64."""
-        t = transcript.observe_label(_LABEL)
-        t = t.observe_slice(_stack_bytes(w), w.shape[0])
-        t = t.observe_slice(_stack_bytes(v), v.shape[0])
+        one definition both sides replay; the wire itself is
+        `zorch.lnp.transcript`'s, shared with the sibling protocols."""
+        t = absorb_stacks(transcript.observe_label(_LABEL), w, v)
         t, raw = t.sample_scalar(self._challenge_bytes)
-        ring = self.scheme.ring
-        return t, challenge_from_bytes(raw, ring.d, self.kappa, self.eta, self.k)
+        return t, self.challenge.from_bytes(raw)
 
     def _require_signed(self, name: str, arr: np.ndarray, *lead: int) -> None:
         """The signed-integer twin of the ring-side shape gates: witnesses
@@ -288,13 +287,19 @@ def _empty_stack(ring: HostSplitRing) -> np.ndarray:
     return np.empty((0, len(ring.q_moduli), ring.d), dtype=np.uint64)
 
 
-def _stack_bytes(stack: np.ndarray) -> bytes:
-    """Canonical residues as C-order little-endian u64 — the deterministic
-    wire form both sides absorb. This body, together with `_challenge`'s
-    `observe_slice` count convention (ring *elements*, not words), is the
-    lnp transcript wire for ring stacks: a sibling protocol module must
-    share this definition, never respell it."""
-    return np.ascontiguousarray(stack).astype("<u8", copy=False).tobytes()
+def _matvec(ring: HostSplitRing, matrix: np.ndarray, vector: np.ndarray) -> np.ndarray:
+    """`ring.matvec`, admitting the no-rows case. N = 0 is a real statement
+    here — a pure opening, no linear relations — and the empty result is the
+    ring's shape convention, not this protocol's. The guard exists only
+    because `matvec` ends in an `np.stack` that rejects an empty list; it
+    retires when the substrate returns `(0, limbs, d)` itself."""
+    return ring.matvec(matrix, vector) if matrix.shape[0] else _empty_stack(ring)
+
+
+def _scale(ring: HostSplitRing, element: np.ndarray, stack: np.ndarray) -> np.ndarray:
+    """`ring.scale`, admitting the empty stack — `_matvec`'s twin, same
+    reason and same expiry."""
+    return ring.scale(element, stack) if stack.shape[0] else _empty_stack(ring)
 
 
 def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
@@ -307,19 +312,29 @@ def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
     )
 
 
-def _rej1(
-    rng: np.random.Generator,
-    z: np.ndarray,
-    v: np.ndarray,
-    std: float,
-    rep: float,
-) -> bool:
-    """Rej1 (Fig. 1): accept iff `u < (1/M)·exp((−2⟨z,v⟩ + ‖v‖²)/(2s²))`,
+def _coin(rng: np.random.Generator) -> float:
+    """One Rej1 coin, floored off zero so its `log` stays finite.
+
+    Both gates draw before either is evaluated, so the rng stream a given
+    seed produces stays a function of the attempt count alone — and the
+    gates are then free to short-circuit, which matters because the second
+    gate's exact-integer arithmetic is the expensive half of an attempt and
+    a `1 − 1/M` share of attempts are already lost at the first."""
+    return max(float(rng.random()), np.finfo(np.float64).tiny)
+
+
+def _rej1(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> bool:
+    """Rej1 (Fig. 1): accept iff `coin < (1/M)·exp((−2⟨z,v⟩ + ‖v‖²)/(2s²))`,
     taken in log space so a large positive exponent cannot overflow, with
     the inner product and norm over exact Python ints (a fixed-width dot
-    would wrap at real parameter scales)."""
-    dot = int(z.reshape(-1).astype(object) @ v.reshape(-1).astype(object))
-    v_sq = norms.l2_squared(v.reshape(-1))
-    threshold = (-2 * dot + v_sq) / (2.0 * std**2) - math.log(rep)
-    coin = max(float(rng.random()), np.finfo(np.float64).tiny)
+    would wrap at real parameter scales).
+
+    `‖v‖²` is `vo @ vo` rather than `norms.l2_squared` only to reuse the
+    object-dtype view the inner product already needs — identical exact
+    arithmetic, half the conversions. The substrate's own norm is the
+    slower spelling of the same self-dot; fixing it there is what makes
+    this comment (and this line) go away."""
+    zo = z.reshape(-1).astype(object)
+    vo = v.reshape(-1).astype(object)
+    threshold = (-2 * int(zo @ vo) + int(vo @ vo)) / (2.0 * std**2) - math.log(rep)
     return math.log(coin) < threshold

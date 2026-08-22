@@ -13,7 +13,6 @@ work, not this seam.
 
 from __future__ import annotations
 
-import math
 from unittest import mock
 
 import numpy as np
@@ -24,6 +23,7 @@ from lattice_frx.split_ring import HostSplitRing
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import opening as opening_module
+from zorch.lnp.challenge import ChallengeParams
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
 
 # One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`) and
@@ -33,6 +33,13 @@ _SPLIT_Q = (4294967197,)
 _D = 64
 _KAPPA, _ETA, _K = 2, 59, 32
 _ROWS, _M1, _M2, _ELL, _N = 2, 2, 2, 1, 1
+
+# The whole candidate budget is squeezed on every `_challenge` call, decided
+# or not, so it is the dominant cost of a test proof. 2^-40 keeps a margin
+# far past anything a seeded suite can reach (the measured gate rejection is
+# ~1%, so the first block almost always decides) at a third of the hashing;
+# production keeps the library's 2^-128 default.
+_CHALLENGE = ChallengeParams(d=_D, kappa=_KAPPA, eta=_ETA, k=_K, fail_prob=2.0**-40)
 
 # Lemma 2.14-1 at γ = 14: M = exp(14/γ + 1/(2γ²)) ≈ e ≈ 2.72 per response,
 # s_i = γ·T_i with T_1 = η·α (α = ‖s1‖ ≤ √(m1·d) for ternary s1) and
@@ -59,28 +66,26 @@ def _scheme(ring: HostSplitRing) -> AbdlopCommitment:
     )
 
 
-def _opening(ring: HostSplitRing) -> AbdlopOpening:
-    return AbdlopOpening(
-        _scheme(ring),
-        relations=_N,
-        s1_std=_STD,
-        s2_std=_STD,
-        rep1=_REP,
-        rep2=_REP,
-        kappa=_KAPPA,
-        eta=_ETA,
-        k=_K,
+def _opening(ring: HostSplitRing, **overrides: object) -> AbdlopOpening:
+    """The test parameter point, with one kwarg moved per call — the
+    `_Instance.prove/verify` convention applied to construction, so a test
+    that varies `fail_prob` states only that."""
+    params: dict[str, object] = dict(
+        s1_std=_STD, s2_std=_STD, rep1=_REP, rep2=_REP, challenge=_CHALLENGE
     )
+    return AbdlopOpening(_scheme(ring), **(params | overrides))  # type: ignore[arg-type]
 
 
 def _uniform_stack(
     ring: HostSplitRing, rng: np.random.Generator, *lead: int
 ) -> np.ndarray:
-    flat = [
-        np.array([rng.integers(0, q, size=_D, dtype=np.uint64) for q in ring.q_moduli])
-        for _ in range(math.prod(lead))
-    ]
-    return np.stack(flat).reshape(*lead, len(ring.q_moduli), _D)
+    return np.stack(
+        [
+            rng.integers(0, q, size=(*lead, ring.d), dtype=np.uint64)
+            for q in ring.q_moduli
+        ],
+        axis=-2,
+    )
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
@@ -136,11 +141,7 @@ class _Instance:
         )
 
     def verify(
-        self,
-        proof: OpeningProof,
-        tag: bytes = b"",
-        opening: AbdlopOpening | None = None,
-        **overrides: np.ndarray,
+        self, proof: OpeningProof, tag: bytes = b"", **overrides: np.ndarray
     ) -> bool:
         args = dict(
             a1=self.a1,
@@ -153,9 +154,7 @@ class _Instance:
             u=self.u,
         )
         args.update(overrides)
-        ok, _ = (opening or self.opening).verify(
-            proof=proof, transcript=_transcript(tag), **args
-        )
+        ok, _ = self.opening.verify(proof=proof, transcript=_transcript(tag), **args)
         return ok
 
 
@@ -185,12 +184,13 @@ class OpeningCompletenessTest(absltest.TestCase):
     def test_the_repeat_loop_is_exercised_and_budgeted(self) -> None:
         """At M ≈ 2.7 per response the acceptance rate is ≈ 1/M² ≈ 0.14, so
         across a handful of proofs at least one takes more than one attempt
-        — observed directly as the per-proof Rej1 call count (two gates per
-        attempt) while every proof still verifies."""
+        — observed directly as the per-proof coin count (two coins per
+        attempt, drawn whether or not the gates short-circuit) while every
+        proof still verifies."""
         instance = _Instance(3)
         attempts = []
         with mock.patch.object(
-            opening_module, "_rej1", side_effect=opening_module._rej1
+            opening_module, "_coin", side_effect=opening_module._coin
         ) as spy:
             for i in range(4):
                 seen = spy.call_count
@@ -209,47 +209,37 @@ class OpeningCompletenessTest(absltest.TestCase):
         """fail_prob = 0.5 shrinks the budget to a handful of attempts;
         forcing every rejection then exhausts it — the loop must raise,
         not spin."""
-        ring = _ring()
-        starved = AbdlopOpening(
-            _scheme(ring),
-            relations=_N,
-            s1_std=_STD,
-            s2_std=_STD,
-            rep1=_REP,
-            rep2=_REP,
-            kappa=_KAPPA,
-            eta=_ETA,
-            k=_K,
-            fail_prob=0.5,
-        )
+        starved = _opening(_ring(), fail_prob=0.5)
         instance = _Instance(4)
         with mock.patch.object(opening_module, "_rej1", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "prove"):
                 instance.prove(opening=starved)
+
+    def test_overflowing_repetition_rates_are_rejected_at_construction(self) -> None:
+        """Past ~1e154 the product of the two rates overflows to infinity,
+        so the derived acceptance underflows to exactly 0.0. Without a gate
+        here the budget helper refuses `accept_prob` — a parameter this
+        caller never passed — instead of this module naming the rates."""
+        with self.assertRaisesRegex(ValueError, r"rep1.rep2 overflows"):
+            _opening(_ring(), rep1=1e200, rep2=1e200)
 
     def test_an_absurd_attempt_budget_is_rejected_at_construction(self) -> None:
         """A mis-derived repetition rate must fail loudly at construction —
         the budget formula would otherwise size the loop in the 10^17s and
         prove would hang rather than err."""
         with self.assertRaisesRegex(ValueError, "attempt budget"):
-            AbdlopOpening(
-                _scheme(_ring()),
-                relations=_N,
-                s1_std=_STD,
-                s2_std=_STD,
-                rep1=1e9,
-                rep2=1e9,
-                kappa=_KAPPA,
-                eta=_ETA,
-                k=_K,
-            )
+            _opening(_ring(), rep1=1e9, rep2=1e9)
 
 
 class OpeningSoundnessTest(absltest.TestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.instance = _Instance(5)
-        self.proof, _ = self.instance.prove()
+    # One honest instance and one proof for the whole class: every method
+    # here only reads them (each copies before tampering, and `verify` is
+    # pure), so re-proving per method is four proofs of dead work.
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(5)
+        cls.proof, _ = cls.instance.prove()
 
     def test_a_tampered_response_is_rejected(self) -> None:
         z1 = self.proof.z1.copy()
@@ -279,8 +269,8 @@ class OpeningSoundnessTest(absltest.TestCase):
         self.assertFalse(self.instance.verify(self.proof, u=wrong_u))
 
     def test_a_wrong_commitment_is_rejected(self) -> None:
-        other = _Instance(6)
-        self.assertFalse(self.instance.verify(self.proof, t_a=other.t_a))
+        other_t_a = _uniform_stack(self.instance.ring, np.random.default_rng(6), _ROWS)
+        self.assertFalse(self.instance.verify(self.proof, t_a=other_t_a))
 
 
 class OpeningZeroKnowledgeSmokeTest(absltest.TestCase):
@@ -337,24 +327,15 @@ class OpeningSurfaceTest(absltest.TestCase):
                     instance.verify(bad)
 
     def test_zero_relations_degenerate_to_the_pure_opening(self) -> None:
-        ring = _ring()
-        pure = AbdlopOpening(
-            _scheme(ring),
-            relations=0,
-            s1_std=_STD,
-            s2_std=_STD,
-            rep1=_REP,
-            rep2=_REP,
-            kappa=_KAPPA,
-            eta=_ETA,
-            k=_K,
-        )
+        """No linear relations is a real statement — a bare ABDLOP opening.
+        The same instance proves it: N lives in `r1`'s row count, so passing
+        empty relation matrices is the whole deviation."""
         instance = _Instance(9)
         empty = opening_module._empty_stack(instance.ring)
         r1 = np.empty((0, _M1) + instance.t_a.shape[1:], dtype=np.uint64)
         rm = np.empty((0, _ELL) + instance.t_a.shape[1:], dtype=np.uint64)
-        proof, _ = instance.prove(opening=pure, r1=r1, rm=rm)
-        self.assertTrue(instance.verify(proof, opening=pure, r1=r1, rm=rm, u=empty))
+        proof, _ = instance.prove(r1=r1, rm=rm)
+        self.assertTrue(instance.verify(proof, r1=r1, rm=rm, u=empty))
 
 
 if __name__ == "__main__":

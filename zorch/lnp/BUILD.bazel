@@ -31,6 +31,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":challenge",
+        ":transcript",
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         requirement("lattice_frx"),
