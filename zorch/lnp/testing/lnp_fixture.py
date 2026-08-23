@@ -16,7 +16,9 @@ from hash_frx.sha256 import HostSha256
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
+from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.challenge import ChallengeParams
+from zorch.lnp.masking import Masking
 
 # One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`)
 # and a small degree keep the schoolbook ring affordable; the challenge
@@ -42,10 +44,18 @@ T = ETA * float(np.sqrt(M1 * D))
 STD = GAMMA * T
 REP = float(np.exp(14.0 / GAMMA + 1.0 / (2.0 * GAMMA**2)))
 
-# The masking/rejection parameters an `AbdlopOpening` takes at this point.
-OPENING_PARAMS: dict[str, object] = dict(
+# The masking/rejection parameters every protocol at this point masks
+# against. One `Masking` per scheme, shared by the protocols built over it —
+# which is the object's own reason for existing (see `masking.py`).
+MASKING_PARAMS: dict[str, object] = dict(
     s1_std=STD, s2_std=STD, rep1=REP, rep2=REP, challenge=CHALLENGE
 )
+
+
+def masking(scheme: AbdlopCommitment, **overrides: object) -> Masking:
+    """The test masking point over `scheme`, with one kwarg moved per call
+    so a test that varies `fail_prob` states only that."""
+    return Masking(scheme, **(MASKING_PARAMS | overrides))  # type: ignore[arg-type]
 
 
 def ring() -> HostSplitRing:
