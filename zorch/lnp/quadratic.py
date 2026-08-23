@@ -1,12 +1,17 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Π^(2) — one quadratic relation in the committed message, over R_q.
+"""Π^(2) — quadratic relations in the committed message, over R_q.
 
-The third protocol layer of the LNP framework (eprint 2022/284, Fig. 6),
-and the one the norm statements are actually built on. `opening.py` proves
-relations that are *linear* in `(s1, m)`; this proves one that is
+The third protocol layer of the LNP framework (eprint 2022/284, §4), and
+the one the norm statements are actually built on. `opening.py` proves
+relations that are *linear* in `(s1, m)`; this proves ones that are
 quadratic:
 
     f(s) = sᵀ·R2·s + r1ᵀ·s + r0 = 0.
+
+Two classes, the paper's Fig. 6 and Fig. 7: `AbdlopQuadratic` proves one
+such relation, and `AbdlopQuadraticMany` proves N of them by aggregating
+with a Fiat-Shamir challenge before delegating to the first — so N
+relations still commit exactly one garbage term.
 
 **Why a quadratic layer buys norms.** The automorphism `σ₋₁ : X ↦ X⁻¹`
 puts `⟨a, b⟩` — the integer inner product of two coefficient vectors — in
@@ -63,9 +68,11 @@ posture.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
+from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
@@ -73,6 +80,11 @@ from zorch.lnp import wire
 from zorch.lnp.masking import Masking
 
 _LABEL = b"lnp/quad"
+_LABEL_MANY = b"lnp/quad/aggregate"
+
+# `µ` is drawn coefficient-wise off the transcript, and the byte sampler
+# builds its draws from little-endian u64 chunks — so q must fit one.
+_MAX_MODULUS = 1 << 64
 
 # §4's `k`: the order of σ₋₁, which is an involution. See the module
 # docstring on why this is pinned rather than taken, and on the collision
@@ -265,6 +277,166 @@ class AbdlopQuadratic:
             ("r0", r0, (1,)),
         ):
             scheme.require_stack(f"quadratic: {name}", arr, *lead)
+
+
+class AbdlopQuadraticMany:
+    """Π_many^(2) prove/verify — N quadratic relations at once (Fig. 7).
+
+    Proving the N relations separately would commit N garbage polynomials.
+    Instead the verifier sends `µ ∈ R_q^N` and the prover proves the single
+    relation `f = Σ_j µ_j·f_j` through Fig. 6, so exactly one garbage term
+    is committed however many relations there are. The cost is an additive
+    `q1^{-d/2}` in the soundness error (Lemma 4.3), `q1` being the smallest
+    prime factor of `q`: if some `f_j(s) ≠ 0`, a random `µ_j` kills it only
+    with that probability, because `X^d + 1` splits into two irreducible
+    factors modulo each `q_i`.
+
+    `µ` is drawn from **R_q**, not `Z_q` — a whole ring element per
+    relation. `Π_eval`'s γ are `Z_q` scalars because they aggregate
+    constant-coefficient statements; these aggregate ring-valued ones, and
+    a scalar µ would leave the soundness argument without the degree-`d/2`
+    factor it rests on.
+
+    Nothing is added to the wire: `µ` is Fiat-Shamir output, so the proof
+    is the inner Fig. 6 proof and the verifier re-derives `µ` itself."""
+
+    def __init__(self, quadratic: AbdlopQuadratic) -> None:
+        self.quadratic = quadratic
+        self.scheme = quadratic.scheme
+        ring = self.scheme.ring
+        modulus = math.prod(ring.q_moduli)
+        if modulus >= _MAX_MODULUS:
+            raise ValueError(
+                f"quadratic: µ is drawn coefficient-wise from u64 chunks, so "
+                f"q must be below 2^64; this ring's q has "
+                f"{modulus.bit_length()} bits. An RNS chain this wide needs a "
+                f"wider sampler first."
+            )
+        self.modulus = modulus
+
+    def prove(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        b: np.ndarray,
+        b_quad: np.ndarray,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+        s1: np.ndarray,
+        s2: np.ndarray,
+        message: np.ndarray,
+        rng: np.random.Generator,
+        transcript: ByteTranscript,
+    ) -> tuple[QuadraticProof, ByteTranscript]:
+        """One proof that every `f_j(s) = 0`.
+
+        `r2`/`r1`/`r0` carry a leading relation axis over Fig. 6's shapes."""
+        self._require_functions(r2, r1, r0)
+        advanced, mu = self._mu(transcript, r2.shape[0])
+        one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
+        return self.quadratic.prove(
+            a1,
+            a2,
+            b,
+            b_quad,
+            one_r2,
+            one_r1,
+            one_r0,
+            s1,
+            s2,
+            message,
+            rng,
+            advanced,
+        )
+
+    def verify(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        b: np.ndarray,
+        b_quad: np.ndarray,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+        t_a: np.ndarray,
+        t_b: np.ndarray,
+        proof: QuadraticProof,
+        transcript: ByteTranscript,
+    ) -> tuple[bool, ByteTranscript]:
+        """Re-derive `µ`, aggregate the same way, and defer to Fig. 6."""
+        self._require_functions(r2, r1, r0)
+        advanced, mu = self._mu(transcript, r2.shape[0])
+        one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
+        return self.quadratic.verify(
+            a1,
+            a2,
+            b,
+            b_quad,
+            one_r2,
+            one_r1,
+            one_r0,
+            t_a,
+            t_b,
+            proof,
+            advanced,
+        )
+
+    def _mu(
+        self, transcript: ByteTranscript, relations: int
+    ) -> tuple[ByteTranscript, np.ndarray]:
+        """Squeeze `µ ∈ R_q^N` — `d` coefficients per relation, the one
+        derivation both sides replay.
+
+        No absorb precedes it: Fig. 7 opens with the verifier's message, and
+        the transcript arrived already bound to the statement."""
+        ring = self.scheme.ring
+        count = relations * ring.d
+        t = transcript.observe_label(_LABEL_MANY)
+        t, raw = t.sample_scalar(uniform_bytes_needed(self.modulus, count))
+        draws = uniform_from_bytes(raw, self.modulus, count)
+        return t, ring.from_signed_stack(draws.reshape(relations, ring.d))
+
+    def _aggregate(
+        self,
+        mu: np.ndarray,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """`(Σ_j µ_j·R2_j, Σ_j µ_j·r1_j, Σ_j µ_j·r0_j)` — one aggregated
+        quadratic function.
+
+        Each piece is a contraction of the relation axis against `µ`, which
+        is `matvec` with the relation axis moved last: the module
+        convention's contraction *is* the ring-weighted sum, so this needs
+        no ring op of its own. `R2`'s two matrix axes are flattened for the
+        contraction and restored after, since `matvec` contracts one axis."""
+        ring = self.scheme.ring
+        n = self.quadratic.width
+        tail = r2.shape[-2:]
+        flat = r2.reshape(r2.shape[0], n * n, *tail)
+        return (
+            ring.matvec(np.moveaxis(flat, 0, 1), mu).reshape(n, n, *tail),
+            ring.matvec(np.moveaxis(r1, 0, 1), mu),
+            ring.matvec(np.moveaxis(r0, 0, 1), mu),
+        )
+
+    def _require_functions(
+        self, r2: np.ndarray, r1: np.ndarray, r0: np.ndarray
+    ) -> None:
+        """The N functions are three aligned pieces; a mismatch would
+        otherwise surface as a `µ` of the wrong width."""
+        relations = getattr(r2, "shape", (0,))[0]
+        if relations < 1:
+            raise ValueError("quadratic: need at least one quadratic function")
+        n = self.quadratic.width
+        for name, arr, lead in (
+            ("r2", r2, (relations, n, n)),
+            ("r1", r1, (relations, n)),
+            ("r0", r0, (relations, 1)),
+        ):
+            self.scheme.require_stack(f"quadratic: {name}", arr, *lead)
 
 
 def _orbit(ring: HostSplitRing, stack: np.ndarray) -> np.ndarray:

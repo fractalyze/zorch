@@ -1,11 +1,19 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Π^(2) (Fig. 6) — completeness, soundness, and the wire contract.
+"""Π^(2) (Fig. 6) and Π_many^(2) (Fig. 7) — completeness, soundness, and
+the wire contract.
 
 The honest statement is built the only way a quadratic one can be without
 solving for a witness: pick `R2` and `r1` freely, then *define*
 `r0 := −(sᵀR2s + r1ᵀs)` so that `f(s) = 0` holds by construction. A test
 that instead picked `r0` freely would be proving a false statement and
 could only ever assert rejection.
+
+Two tests here exist because a prove/verify round-trip is a weak gate on a
+protocol whose two sides share an implementation: it passes just as
+happily when both sides drop the quadratic term, or lift through the wrong
+automorphism. So the quadratic form is tampered with directly, and the
+§2.3 identity is pinned against exact integer arithmetic rather than
+against the protocol.
 """
 
 from __future__ import annotations
@@ -17,7 +25,12 @@ from lattice_frx.split_ring import HostSplitRing
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import masking as masking_module
-from zorch.lnp.quadratic import SIGMA_ORDER, AbdlopQuadratic, QuadraticProof
+from zorch.lnp.quadratic import (
+    SIGMA_ORDER,
+    AbdlopQuadratic,
+    AbdlopQuadraticMany,
+    QuadraticProof,
+)
 from zorch.lnp.testing import lnp_fixture
 
 _ROWS = 2
@@ -307,6 +320,124 @@ class QuadraticWireTest(absltest.TestCase):
                 self.assertRaisesRegex(ValueError, f"quadratic: {name}"),
             ):
                 call()
+
+
+class _ManyInstance:
+    """N honest quadratic relations over one commitment.
+
+    Each is built the same way the single-relation fixture is — constant
+    term solved so the relation holds — because a statement that is only
+    true in aggregate would pass Fig. 7 while failing what it claims."""
+
+    def __init__(self, seed: int, relations: int = 3) -> None:
+        self.base = _Instance(seed)
+        self.relations = relations
+        ring = self.base.ring
+        self.protocol = AbdlopQuadraticMany(self.base.protocol)
+        rng = self.base.rng
+        n = self.base.protocol.width
+        s = self.base.protocol._lift(
+            ring.from_signed_stack(self.base.s1), self.base.message
+        )
+        squares, linears, constants = [], [], []
+        for _ in range(relations):
+            square = ring.uniform_stack(rng, n, n)
+            linear = ring.uniform_stack(rng, n)
+            squares.append(square)
+            linears.append(linear)
+            constants.append(
+                ring.neg(
+                    ring.add(
+                        ring.matvec(s[None, :], ring.matvec(square, s)),
+                        ring.matvec(linear[None, :], s),
+                    )
+                )
+            )
+        self.r2 = np.stack(squares)
+        self.r1 = np.stack(linears)
+        self.r0 = np.stack(constants)
+
+    def _statement(self) -> dict[str, np.ndarray]:
+        return dict(
+            a1=self.base.a1,
+            a2=self.base.a2,
+            b=self.base.b,
+            b_quad=self.base.b_quad,
+            r2=self.r2,
+            r1=self.r1,
+            r0=self.r0,
+        )
+
+    def prove(
+        self, tag: bytes = b"", **overrides: np.ndarray
+    ) -> tuple[QuadraticProof, ByteTranscript]:
+        args = self._statement()
+        args.update(overrides)
+        return self.protocol.prove(
+            s1=self.base.s1,
+            s2=self.base.s2,
+            message=self.base.message,
+            rng=self.base.rng,
+            transcript=_transcript(tag),
+            **args,
+        )
+
+    def verify(
+        self, proof: QuadraticProof, tag: bytes = b"", **overrides: np.ndarray
+    ) -> bool:
+        args = self._statement()
+        args.update(t_a=self.base.t_a, t_b=self.base.t_b)
+        args.update(overrides)
+        ok, _ = self.protocol.verify(proof=proof, transcript=_transcript(tag), **args)
+        return ok
+
+
+class QuadraticManyTest(absltest.TestCase):
+    """Fig. 7: N relations aggregated into one, so the proof commits a
+    single garbage term however many relations the statement carries."""
+
+    def test_an_honest_proof_over_many_relations_verifies(self) -> None:
+        instance = _ManyInstance(30)
+        proof, _ = instance.prove()
+        self.assertTrue(instance.verify(proof))
+
+    def test_many_relations_cost_one_garbage_commitment(self) -> None:
+        """The layer exists to make proof size independent of N, and it can
+        because the aggregation challenge is Fiat-Shamir output rather than
+        a message. Six relations must therefore produce the same
+        single-element commitment that one does."""
+        instance = _ManyInstance(31, relations=6)
+        proof, _ = instance.prove()
+        self.assertIsInstance(proof, QuadraticProof)
+        self.assertEqual(proof.t.shape[0], 1)
+        self.assertTrue(instance.verify(proof))
+
+    def test_one_false_relation_among_many_is_rejected(self) -> None:
+        """Aggregation must not let one bad relation hide behind the rest,
+        and it must hold at every position — an implementation that dropped
+        a row would still pass a check made only at the first."""
+        instance = _ManyInstance(32)
+        proof, _ = instance.prove()
+        for j in range(instance.relations):
+            bumped = lnp_fixture.bump(instance.r0, j, 0, 0, 0)
+            self.assertFalse(instance.verify(proof, r0=bumped), j)
+
+    def test_the_aggregation_challenge_spans_the_whole_ring(self) -> None:
+        """§4.2 draws from R_q, not Z_q, and the `q1^{-d/2}` soundness bound
+        rests on that: a scalar drawn into the constant coefficient would
+        leave the other `d − 1` at zero and cost the degree factor."""
+        instance = _ManyInstance(33)
+        ring = instance.base.ring
+        _, mu = instance.protocol._mu(_transcript(), instance.relations)
+        self.assertEqual(mu.shape, (instance.relations, 1, ring.d))
+        for j in range(instance.relations):
+            self.assertGreater(int(np.count_nonzero(mu[j])), 1)
+
+    def test_a_statement_with_no_relations_raises(self) -> None:
+        instance = _ManyInstance(34)
+        proof, _ = instance.prove()
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            instance.verify(proof, r2=instance.r2[:0])
 
 
 if __name__ == "__main__":
