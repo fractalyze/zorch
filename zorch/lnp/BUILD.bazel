@@ -63,6 +63,18 @@ py_library(
 )
 
 py_library(
+    name = "quadratic",
+    srcs = ["quadratic.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":masking",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "eval",
     srcs = ["eval.py"],
     visibility = ["//visibility:public"],
