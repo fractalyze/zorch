@@ -227,7 +227,19 @@ def expand_monomial_to_hypercube(x: Array, scalar: Array) -> Array:
     MSB-first indexing (w[0] binds x[0]). `<coeffs, expand_monomial(x)>` is the
     monomial-basis evaluation at x, as `<evals, expand_eq(x)>` is the eval-basis
     one."""
+    n = x.shape[0]
+    if n >= _OUTER_SPLIT_MIN:
+        # Same split as the eq twin, and for the same reason (see
+        # `_OUTER_SPLIT_MIN`): a monomial entry factors over any coordinate
+        # split, since Π_{i: w_i=1} x_i separates into the first k coordinates
+        # and the rest. Indexing is MSB-first, so x[:k] owns the high index
+        # bits and is the slow axis. GF multiplication is associative and
+        # exact, so the product is byte-equal to the chain.
+        k = n // 2
+        first = expand_monomial_to_hypercube(x[:k], scalar)
+        rest = expand_monomial_to_hypercube(x[k:], fnp.ones((), x.dtype))
+        return _flat_outer(first, rest)
     state = fnp.atleast_1d(scalar)
-    for j in range(x.shape[0]):
+    for j in range(n):
         state = expand_monomial_step(state, x[j])
     return state

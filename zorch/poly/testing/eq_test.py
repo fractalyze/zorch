@@ -15,6 +15,8 @@ from zorch.poly.eq import (
     expand_eq_family,
     expand_eq_to_hypercube,
     expand_hypercube_step,
+    expand_monomial_step,
+    expand_monomial_to_hypercube,
 )
 
 KB = zk_dtypes.koalabear_mont
@@ -68,6 +70,53 @@ class ExpandEqTest(absltest.TestCase):
                 ref = expand_hypercube_step(ref, x[j], msb=msb)
             self.assertEqual(out.shape, ref.shape)
             self.assertTrue(bool(fnp.all(out == ref)), f"dtype={dtype} msb={msb}")
+
+
+class ExpandMonomialTest(absltest.TestCase):
+    def test_msb_first_indexing(self) -> None:
+        # result[nat(w)] with w[0] as MSB binding x[0]: x=[2,3] ->
+        # result[2] = x[0] (bit 1 set, bit 0 clear).
+        x = fnp.array([2, 3], dtype=KB)
+        out = expand_monomial_to_hypercube(x, fnp.ones([], dtype=KB))
+        self.assertEqual(out.shape, (4,))
+        self.assertEqual([int(v) for v in out], [1, 3, 2, 6])
+
+    def test_scalar_seeds_every_entry(self) -> None:
+        x = fnp.array([2, 3], dtype=KB)
+        out = expand_monomial_to_hypercube(x, fnp.array(5, dtype=KB))
+        self.assertEqual([int(v) for v in out], [5, 15, 10, 30])
+
+    def test_outer_split_matches_doubling_chain(self) -> None:
+        # The monomial expand splits at _OUTER_SPLIT_MIN exactly as its eq twin
+        # does, and must stay byte-equal to the pure doubling chain: a monomial
+        # entry factors over any coordinate split (the first k coordinates own
+        # the high index bits) and GF multiplication is associative and exact.
+        # Case list kept minimal for the same reason as the eq twin's — the
+        # eager chain reference over a software GF(2^128) multiply is what makes
+        # a wider sweep time out on the small-size CI budget.
+        for dtype in (KB, zk_dtypes.binary_field_ghash):
+            n = _OUTER_SPLIT_MIN
+            x = fnp.array(list(range(1, n + 1)), dtype=dtype)
+            scalar = fnp.array(3, dtype=dtype)
+            out = expand_monomial_to_hypercube(x, scalar)
+            ref = fnp.atleast_1d(scalar)
+            for j in range(n):
+                ref = expand_monomial_step(ref, x[j])
+            self.assertEqual(out.shape, ref.shape)
+            self.assertTrue(bool(fnp.all(out == ref)), f"dtype={dtype}")
+
+    def test_odd_variable_count_splits_unevenly(self) -> None:
+        # n//2 leaves the halves unequal at odd n; the high/low bit assignment
+        # must still line up with the chain.
+        n = _OUTER_SPLIT_MIN + 1
+        x = fnp.array(list(range(1, n + 1)), dtype=KB)
+        scalar = fnp.array(7, dtype=KB)
+        out = expand_monomial_to_hypercube(x, scalar)
+        ref = fnp.atleast_1d(scalar)
+        for j in range(n):
+            ref = expand_monomial_step(ref, x[j])
+        self.assertEqual(out.shape, (1 << n,))
+        self.assertTrue(bool(fnp.all(out == ref)))
 
 
 def _chain_family(cs: Array, *, msb: bool, suffix: bool) -> list[Array]:
