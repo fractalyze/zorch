@@ -1,7 +1,19 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Π_eval — linear relations over Z_q, as constant coefficients over R_q.
+"""Π_eval — statements over Z_q, as constant coefficients over R_q.
 
-The second protocol layer of the LNP framework (eprint 2022/284, Fig. 5).
+The LNP framework's two evaluation protocols (eprint 2022/284): `Fig. 5`,
+which aggregates *linear* functions of the committed `(s1, m)`, and
+`Fig. 8`, which aggregates *quadratic* ones over the σ-lift and carries a
+batch of ring-valued relations alongside. They share this file because
+they share the step that defines them — `GarbageMasking` below — and
+differ only in what is aggregated and which protocol proves the aggregate
+well-formed: `opening.py`'s Π_many for the first, `quadratic.py`'s
+Π_many^(2) for the second.
+
+The bulk of what follows describes Fig. 5; `AbdlopQuadraticEval` at the
+bottom describes where Fig. 8 departs from it.
+
+The second protocol layer of the LNP framework (Fig. 5).
 Π_many (`opening.py`) proves that a linear function of the committed
 `(s1, m)` is zero *as a ring element*; this layer proves the strictly
 weaker — and, for inner products, the interesting — statement that its
@@ -58,6 +70,13 @@ from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import wire
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
+from zorch.lnp.quadratic import (
+    SIGMA_ORDER,
+    AbdlopQuadraticMany,
+    QuadraticProof,
+    evaluate,
+    lift,
+)
 from zorch.lnp.transcript import absorb_stacks
 
 # `γ` is drawn as a Z_q scalar off the transcript, and the byte sampler
@@ -93,7 +112,7 @@ class GarbageMasking:
         ell = scheme.messages - lam
         if ell < 0:
             raise ValueError(
-                f"eval: the opening's BDLOP half carries {scheme.messages} "
+                f"eval: the scheme's BDLOP half carries {scheme.messages} "
                 f"messages, too few for lam={lam} garbage terms on top of a "
                 f"message vector — build it over the extended scheme"
             )
@@ -367,3 +386,320 @@ class AbdlopEval:
             ("target", target, (relations,)),
         ):
             scheme.require_stack(f"eval: {name}", arr, *lead)
+
+
+@dataclass(frozen=True)
+class QuadraticEvalProof:
+    """The Π_eval^(2) wire: the garbage commitment, the revealed
+    aggregates, and the Π_many^(2) proof underneath. `Γ` is absent for the
+    reason `γ` is absent above — it is Fiat-Shamir output, and the verifier
+    re-derives it from `t_g`."""
+
+    t_g: np.ndarray
+    h: np.ndarray
+    quadratic: QuadraticProof
+
+
+class AbdlopQuadraticEval:
+    """Π_eval^(2) prove/verify over an `AbdlopQuadraticMany` (Fig. 8).
+
+    `AbdlopEval` above proves that *linear* functions of `(s1, m)` have a
+    vanishing constant coefficient. This proves the same of *quadratic*
+    functions of the σ-lift — which is the form every norm statement takes,
+    since `⟨s, s⟩ = ‖s‖²` lives in the constant coefficient of
+    `σ₋₁(s)ᵀ·s` (§2.3) and is quadratic in the lift, not linear in `m`.
+
+    Two families arrive, both written against `self.width`, the lift of
+    `(s1, m)`:
+
+    - `(r2, r1, r0)` — `N` relations claimed zero *as ring elements*.
+      They are carried through untouched (eq. 39); `AbdlopQuadraticMany`
+      is what proves them, and `N = 0` is legal.
+    - `(e2, e1, e0)` — `M` evaluations claimed to have a zero *constant
+      coefficient*, the paper's `F_j`. These are the reason to be here, so
+      `M ≥ 1`.
+
+    The two are proved in one shot, against one commitment, because a
+    consumer that ran Fig. 7 and Fig. 5 side by side would hold two
+    parameter points for one witness and could not see them drift.
+
+    **Why this is not `AbdlopEval` with a quadratic backend.** The λ garbage
+    terms are appended to the *message*, so the inner protocol opens
+    `m‖g` — and `lift` orbits the message stack as a whole, which puts the
+    garbage in each automorphism copy rather than after the message's
+    copies. eq. 38 is written against exactly that layout and reads only
+    the first copy's `g`, so `_embed` is the map from the caller's width to
+    the inner one and is where the layout is owned.
+
+    Soundness is `2/|C| + q1^{-d/2} + q1^{-λ}` (Thm 4.5), `q1` the smallest
+    prime factor of `q`: the challenge term is Fig. 6's, the `q1^{-d/2}` is
+    Fig. 7's `µ`-aggregation, and `q1^{-λ}` is this layer's Γ. The middle
+    term is what a reader of Fig. 5 alone would not expect.
+
+    **Commit-and-prove, not zero-knowledge over a reusable commitment** —
+    §3.2, for the same reason as `AbdlopEval`: appending `g` means
+    `(t_A, t_B)` leaks more about `s2` on every run. The caller passes the
+    commitment in per proof and must not run two proofs against one.
+    """
+
+    def __init__(self, many: AbdlopQuadraticMany, lam: int) -> None:
+        scheme = many.scheme
+        self.garbage = GarbageMasking(scheme, lam, b"lnp/eval/quad")
+        self.many = many
+        self.lam = lam
+        self.ell = self.garbage.ell
+        # The width the caller's two families are written against: the lift
+        # of `(s1, m)` alone. The inner protocol's own width is wider — it
+        # lifts `m‖g` — and `_embed` is the map between them.
+        self.width = SIGMA_ORDER * (scheme.s1_cols + self.ell)
+        s1_span = SIGMA_ORDER * scheme.s1_cols
+        copy_width = self.ell + lam
+        self._positions = np.concatenate(
+            [np.arange(s1_span)]
+            + [
+                s1_span + copy * copy_width + np.arange(self.ell)
+                for copy in range(SIGMA_ORDER)
+            ]
+        )
+        # `x^{(g)}_{2,1,i}` of eq. 38 — the garbage of the *first*
+        # automorphism copy, which is the only copy the equation reads.
+        self._garbage_slots = s1_span + self.ell + np.arange(lam)
+
+    def prove(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        b: np.ndarray,
+        bg: np.ndarray,
+        b_quad: np.ndarray,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+        e2: np.ndarray,
+        e1: np.ndarray,
+        e0: np.ndarray,
+        s1: np.ndarray,
+        s2: np.ndarray,
+        message: np.ndarray,
+        rng: np.random.Generator,
+        transcript: ByteTranscript,
+    ) -> tuple[QuadraticEvalProof, ByteTranscript]:
+        """One non-interactive proof that every `f_j(s)` is zero and every
+        `F̃_j(s)` is zero.
+
+        `s1`/`s2` are signed integer `(m_i, d)` arrays as in `opening.py`;
+        `message` is the ring stack `m` that `commit` was called with —
+        without the garbage, which this layer appends itself. `b_quad` is
+        Fig. 6's `b`, distinct from both the BDLOP matrix `b` and `bg`."""
+        ring = self.many.scheme.ring
+        self._require_functions(r2, r1, r0, e2, e1, e0)
+        s2_ring = ring.from_signed_stack(s2)
+
+        # (1) λ garbage terms with zero constant coefficient, committed
+        #     under B_g beside the message.
+        g = self.garbage.sample(rng)
+        t_g = ring.add(ring.matvec(bg, s2_ring), g)
+
+        # (2) Γ, once t_g is bound.
+        t, gamma = self.garbage.gamma(transcript, t_g, _count(e2))
+
+        # (3) h_i = g_i + Σ_j γ_{i,j}·F_j(s)  (eq. 37). Aggregating the M
+        #     functions *before* evaluating them is the same value by
+        #     linearity and costs λ evaluations rather than λ·M, over a ring
+        #     whose mul is a deliberate O(d²) host oracle. The aggregates
+        #     are the eq.-38 relations' own, so they are built once.
+        s = lift(ring, ring.from_signed_stack(s1), message)
+        aggregates = self._aggregates(gamma, e2, e1, e0)
+        h = ring.add(g, np.concatenate([evaluate(ring, *a, s) for a in aggregates]))
+
+        # (4) the N carried relations and the λ new ones, in one Fig. 7 run
+        #     over the message `m‖g`.
+        t = self.garbage.observe(t, h)
+        f2, f1, f0 = self._relations(aggregates, r2, r1, r0, h)
+        proof, t = self.many.prove(
+            a1,
+            a2,
+            np.concatenate([b, bg]),
+            b_quad,
+            f2,
+            f1,
+            f0,
+            s1,
+            s2,
+            np.concatenate([message, g]),
+            rng,
+            t,
+        )
+        return QuadraticEvalProof(t_g=t_g, h=h, quadratic=proof), t
+
+    def verify(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        b: np.ndarray,
+        bg: np.ndarray,
+        b_quad: np.ndarray,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+        e2: np.ndarray,
+        e1: np.ndarray,
+        e0: np.ndarray,
+        t_a: np.ndarray,
+        t_b: np.ndarray,
+        proof: QuadraticEvalProof,
+        transcript: ByteTranscript,
+    ) -> tuple[bool, ByteTranscript]:
+        """Fig. 8's two checks: every `h_i` has a zero constant coefficient,
+        and the Π_many^(2) proof of the `N + λ` relations verifies."""
+        # The statement is the caller's and raises; the proof is the
+        # prover's and is a verdict. See `zorch/lnp/wire.py`.
+        self._require_functions(r2, r1, r0, e2, e1, e0)
+        if not self._is_well_formed(proof):
+            return False, transcript
+
+        t, gamma = self.garbage.gamma(transcript, proof.t_g, _count(e2))
+        t = self.garbage.observe(t, proof.h)
+        if not self.garbage.vanishes(proof.h):
+            return False, t
+        f2, f1, f0 = self._relations(
+            self._aggregates(gamma, e2, e1, e0), r2, r1, r0, proof.h
+        )
+        return self.many.verify(
+            a1,
+            a2,
+            np.concatenate([b, bg]),
+            b_quad,
+            f2,
+            f1,
+            f0,
+            t_a,
+            np.concatenate([t_b, proof.t_g]),
+            proof.quadratic,
+            t,
+        )
+
+    def _is_well_formed(self, proof: QuadraticEvalProof) -> bool:
+        """Whether `proof` is structurally usable — every field of it, in
+        one place, per `zorch/lnp/wire.py`. The composite field defers to
+        the layer that owns its wire."""
+        scheme = self.many.scheme
+        return (
+            isinstance(proof, QuadraticEvalProof)
+            and wire.is_stack(scheme, proof.t_g, self.lam)
+            and wire.is_stack(scheme, proof.h, self.lam)
+            and self.many._is_well_formed(proof.quadratic)
+        )
+
+    def _aggregates(
+        self, gamma: np.ndarray, e2: np.ndarray, e1: np.ndarray, e0: np.ndarray
+    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+        """`Σ_j γ_{i,j}·F_j` for each `i ∈ [λ]`, still over the caller's
+        width — one quadratic triple per row of `Γ`.
+
+        `combine` contracts the leading (per-evaluation) axis and carries
+        whatever the block holds past it, so one call serves `e0`'s stack
+        of ring elements and `e2`'s stack of whole matrices alike."""
+        ring = self.many.scheme.ring
+        return [
+            (ring.combine(row, e2), ring.combine(row, e1), ring.combine(row, e0))
+            for row in gamma
+        ]
+
+    def _relations(
+        self,
+        aggregates: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+        h: np.ndarray,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The `N + λ` quadratic functions the inner protocol is run on.
+
+        The caller's `N` relations pass through unchanged in meaning but
+        re-indexed (eq. 39). Each of the λ new ones is eq. 38,
+
+            f_{N+i}(x) = x^{(g)}_{2,1,i} + Σ_j γ_{i,j}·F_j(x) − h_i,
+
+        which is the aggregate this layer already needed for `h`, plus a
+        selector for one garbage term and the revealed `h_i` as a constant.
+        Building them here rather than in `prove` is what lets the verifier
+        rebuild the identical statement from `Γ` and `h` alone."""
+        ring = self.many.scheme.ring
+        new2, new1, new0 = self._embed(
+            np.stack([aggregate[0] for aggregate in aggregates]),
+            np.stack([aggregate[1] for aggregate in aggregates]),
+            np.stack([aggregate[2] for aggregate in aggregates]),
+        )
+        # `_embed` writes only the caller's positions, so the garbage slots
+        # it leaves zero take eq. 38's coefficient by assignment.
+        new1[np.arange(self.lam), self._garbage_slots] = ring.one()
+        new0 = ring.sub(new0, h[:, None])
+        old2, old1, old0 = self._embed(r2, r1, r0)
+        return (
+            np.concatenate([old2, new2]),
+            np.concatenate([old1, new1]),
+            np.concatenate([old0, new0]),
+        )
+
+    def _embed(
+        self, r2: np.ndarray, r1: np.ndarray, r0: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """A stack of quadratic functions over the caller's lift, re-indexed
+        into the inner protocol's wider one.
+
+        The two lifts differ only in what the message half carries: the
+        caller writes against `[s1, σ(s1), m, σ(m)]`, the inner protocol
+        against `[s1, σ(s1), m, g, σ(m), σ(g)]` — the garbage interleaved
+        per automorphism copy, because `lift` orbits the message stack as a
+        whole. So `s1`'s images keep their positions, each copy of `m`
+        shifts right by the garbage the copies before it now carry, and
+        `r0` is not indexed at all."""
+        ring = self.many.scheme.ring
+        n = self.many.quadratic.width
+        positions = self._positions
+        wide2 = ring.zeros(len(r2), n, n)
+        wide2[:, positions[:, None], positions[None, :]] = r2
+        wide1 = ring.zeros(len(r1), n)
+        wide1[:, positions] = r1
+        return wide2, wide1, r0
+
+    def _require_functions(
+        self,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+        e2: np.ndarray,
+        e1: np.ndarray,
+        e0: np.ndarray,
+    ) -> None:
+        """Both families are three aligned pieces over `self.width`.
+
+        `N` may be zero — Fig. 8 carrying no relations is the direct
+        generalization of Fig. 5, and the module convention's own answer for
+        an empty stack makes it fall out. `M` may not: with nothing to
+        aggregate, the λ garbage terms buy nothing and Fig. 7 is the
+        protocol for that statement."""
+        scheme = self.many.scheme
+        n = self.width
+        evaluations = _count(e2)
+        if evaluations < 1:
+            raise ValueError("eval: need at least one evaluation function")
+        relations = _count(r2)
+        for name, arr, lead in (
+            ("r2", r2, (relations, n, n)),
+            ("r1", r1, (relations, n)),
+            ("r0", r0, (relations, 1)),
+            ("e2", e2, (evaluations, n, n)),
+            ("e1", e1, (evaluations, n)),
+            ("e0", e0, (evaluations, 1)),
+        ):
+            scheme.require_stack(f"eval: {name}", arr, *lead)
+
+
+def _count(arr: np.ndarray) -> int:
+    """The leading-axis length of a function-family block, and zero for
+    anything with no axes at all — so a malformed family reaches the shape
+    gate below rather than an `IndexError` above it."""
+    shape = getattr(arr, "shape", ())
+    return int(shape[0]) if shape else 0

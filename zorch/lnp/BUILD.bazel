@@ -80,6 +80,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         ":opening",
+        ":quadratic",
         ":transcript",
         ":wire",
         "//zorch:byte_transcript",
