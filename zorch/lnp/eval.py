@@ -55,16 +55,97 @@ import numpy as np
 from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 
 from zorch.byte_transcript import ByteTranscript
+from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import wire
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
 from zorch.lnp.transcript import absorb_stacks
 
-_LABEL_COMMIT = b"lnp/eval/garbage"
-_LABEL_MASK = b"lnp/eval/masked"
-
 # `γ` is drawn as a Z_q scalar off the transcript, and the byte sampler
 # builds its draws from little-endian u64 chunks — so q must fit one.
 _MAX_MODULUS = 1 << 64
+
+
+class GarbageMasking:
+    """The ENS20 garbage-and-aggregate step, and the transcript labels it
+    hashes under — what Fig. 5 and Fig. 8 share.
+
+    Both protocols prove that functions of the committed witness have a
+    *vanishing constant coefficient*, and both do it the same way: commit
+    λ garbage polynomials that are themselves constant-coefficient-free,
+    take `Γ ∈ Z_q^{λ×M}` from the verifier, and reveal the λ aggregates in
+    the clear for the `h̃_j = 0` check. What differs is only *what* is
+    aggregated — linear functions of `(s1, m)` in Fig. 5, quadratic ones
+    over the σ-lift in Fig. 8 — and that half stays with the caller.
+
+    Extracted for the reason `masking.py` was: the two protocols do not
+    merely resemble each other here, they must agree, and a second spelling
+    of one derivation is a fork no single-protocol suite can see.
+
+    `domain` separates the two transcripts, so it is a constructor argument
+    rather than a module constant: deriving `Γ` from the same absorbed
+    bytes under the same label in two protocols is what would let a proof
+    of one be replayed against the other.
+    """
+
+    def __init__(self, scheme: AbdlopCommitment, lam: int, domain: bytes) -> None:
+        if lam < 1:
+            raise ValueError(f"eval: lam must be positive, got {lam!r}")
+        ell = scheme.messages - lam
+        if ell < 0:
+            raise ValueError(
+                f"eval: the opening's BDLOP half carries {scheme.messages} "
+                f"messages, too few for lam={lam} garbage terms on top of a "
+                f"message vector — build it over the extended scheme"
+            )
+        modulus = math.prod(scheme.ring.q_moduli)
+        if modulus >= _MAX_MODULUS:
+            raise ValueError(
+                f"eval: γ is a Z_q scalar drawn from u64 chunks, so q must be "
+                f"below 2^64; this ring's q has {modulus.bit_length()} bits. "
+                f"An RNS chain this wide needs a wider γ sampler first."
+            )
+        self.scheme = scheme
+        self.lam = lam
+        self.ell = ell
+        self.modulus = modulus
+        self._commit_label = domain + b"/garbage"
+        self._mask_label = domain + b"/masked"
+
+    def sample(self, rng: np.random.Generator) -> np.ndarray:
+        """`g ← {x ∈ R_q : x̃ = 0}^λ` — the ring's uniform stack with the
+        constant coefficient forced to zero. Private coins: this is masking,
+        like the Gaussian `y` of the layer below, so it comes off the
+        caller's generator and never off the transcript.
+
+        The zeroing is the protocol's own — `uniform_stack` is the module
+        convention's uniform constructor, and `x̃ = 0` is the condition on
+        the garbage, not a ring-level shape."""
+        g = self.scheme.ring.uniform_stack(rng, self.lam)
+        g[..., 0] = 0
+        return g
+
+    def gamma(
+        self, transcript: ByteTranscript, t_g: np.ndarray, relations: int
+    ) -> tuple[ByteTranscript, np.ndarray]:
+        """Absorb the garbage commitment and squeeze `Γ ∈ Z_q^{λ×M}` — the
+        one derivation both sides replay."""
+        count = self.lam * relations
+        t = absorb_stacks(transcript.observe_label(self._commit_label), t_g)
+        t, raw = t.sample_scalar(uniform_bytes_needed(self.modulus, count))
+        draws = uniform_from_bytes(raw, self.modulus, count)
+        return t, draws.reshape(self.lam, relations)
+
+    def observe(self, transcript: ByteTranscript, h: np.ndarray) -> ByteTranscript:
+        """Bind the revealed aggregates, which every later challenge in the
+        proof is drawn after."""
+        return absorb_stacks(transcript.observe_label(self._mask_label), h)
+
+    def vanishes(self, h: np.ndarray) -> bool:
+        """The `h̃_j = 0` check, over every limb at once.
+
+        Zero mod each `q_i` is zero mod `q` by CRT, so the ring's own
+        constant-coefficient reading answers it directly."""
+        return not self.scheme.ring.constant_coeff(h).any()
 
 
 @dataclass(frozen=True)
@@ -92,28 +173,10 @@ class AbdlopEval:
     parameter work, like every other number this package's seams take."""
 
     def __init__(self, opening: AbdlopOpening, lam: int) -> None:
-        if lam < 1:
-            raise ValueError(f"eval: lam must be positive, got {lam!r}")
-        scheme = opening.scheme
-        ell = scheme.messages - lam
-        if ell < 0:
-            raise ValueError(
-                f"eval: the opening's BDLOP half carries {scheme.messages} "
-                f"messages, too few for lam={lam} garbage terms on top of a "
-                f"message vector — build it over the extended scheme"
-            )
-        ring = scheme.ring
-        modulus = math.prod(ring.q_moduli)
-        if modulus >= _MAX_MODULUS:
-            raise ValueError(
-                f"eval: γ is a Z_q scalar drawn from u64 chunks, so q must be "
-                f"below 2^64; this ring's q has {modulus.bit_length()} bits. "
-                f"An RNS chain this wide needs a wider γ sampler first."
-            )
+        self.garbage = GarbageMasking(opening.scheme, lam, b"lnp/eval")
         self.opening = opening
         self.lam = lam
-        self.ell = ell
-        self.modulus = modulus
+        self.ell = self.garbage.ell
 
     def prove(
         self,
@@ -142,11 +205,11 @@ class AbdlopEval:
         s2_ring = ring.from_signed_stack(s2)
 
         # (1) garbage with a zero constant coefficient, committed under B_g.
-        g = self._sample_garbage(rng)
+        g = self.garbage.sample(rng)
         t_g = ring.add(ring.matvec(bg, s2_ring), g)
 
         # (2) γ, once t_g is bound.
-        t, gamma = self._gamma(transcript, t_g, fs1.shape[0])
+        t, gamma = self.garbage.gamma(transcript, t_g, fs1.shape[0])
 
         # (3) the masked aggregates. Aggregating the M functions *before*
         #     applying them, rather than evaluating all M and summing, is
@@ -171,7 +234,7 @@ class AbdlopEval:
 
         # (4) the same aggregation as a linear relation over (s1, m‖g),
         #     proved by the layer below.
-        t = absorb_stacks(t.observe_label(_LABEL_MASK), h)
+        t = self.garbage.observe(t, h)
         # `u` is the verifier's side of eq. 28; the prover only supplies
         # the matrices its opening call takes.
         r1, rm, _ = self._relation(aggregated, h)
@@ -196,19 +259,15 @@ class AbdlopEval:
     ) -> tuple[bool, ByteTranscript]:
         """Fig. 5's two checks: every `h_j` has a zero constant coefficient,
         and the Π_many proof of the aggregation relation verifies."""
-        ring = self.opening.scheme.ring
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
         self._require_functions(fs1, fm, target)
         if not self._is_well_formed(proof):
             return False, transcript
 
-        t, gamma = self._gamma(transcript, proof.t_g, fs1.shape[0])
-        t = absorb_stacks(t.observe_label(_LABEL_MASK), proof.h)
-        # Zero mod each q_i is zero mod q, by CRT — so the ring's own
-        # constant-coefficient reading answers Fig. 5's `h̃_j = 0` check
-        # directly, over every limb at once.
-        if ring.constant_coeff(proof.h).any():
+        t, gamma = self.garbage.gamma(transcript, proof.t_g, fs1.shape[0])
+        t = self.garbage.observe(t, proof.h)
+        if not self.garbage.vanishes(proof.h):
             return False, t
         r1, rm, u = self._relation(self._blocks(fs1, fm, target, gamma), proof.h)
         return self.opening.verify(
@@ -239,30 +298,6 @@ class AbdlopEval:
             and wire.is_stack(scheme, proof.h, self.lam)
             and self.opening._is_well_formed(proof.opening)
         )
-
-    def _sample_garbage(self, rng: np.random.Generator) -> np.ndarray:
-        """`g ← {x ∈ R_q : x̃ = 0}^λ` — the ring's uniform stack with the
-        constant coefficient forced to zero. Private coins: this is masking,
-        like the Gaussian `y` of the layer below, so it comes off the
-        caller's generator and never off the transcript.
-
-        The zeroing is this protocol's own — `uniform_stack` is the module
-        convention's uniform constructor, and `x̃ = 0` is Fig. 5's condition
-        on the garbage, not a ring-level shape."""
-        g = self.opening.scheme.ring.uniform_stack(rng, self.lam)
-        g[..., 0] = 0
-        return g
-
-    def _gamma(
-        self, transcript: ByteTranscript, t_g: np.ndarray, relations: int
-    ) -> tuple[ByteTranscript, np.ndarray]:
-        """Absorb the garbage commitment and squeeze `γ ∈ Z_q^{λ×M}` — the
-        one derivation both sides replay."""
-        count = self.lam * relations
-        t = absorb_stacks(transcript.observe_label(_LABEL_COMMIT), t_g)
-        t, raw = t.sample_scalar(uniform_bytes_needed(self.modulus, count))
-        draws = uniform_from_bytes(raw, self.modulus, count)
-        return t, draws.reshape(self.lam, relations)
 
     def _blocks(
         self,
