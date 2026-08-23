@@ -30,6 +30,7 @@ from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
     QuadraticProof,
+    lift,
 )
 from zorch.lnp.testing import lnp_fixture
 
@@ -98,7 +99,7 @@ class _Instance:
         # f(s) = sᵀR2s + r1ᵀs + r0 with r0 solved so the statement is true.
         self.r2 = ring.uniform_stack(rng, n, n)
         self.r1 = ring.uniform_stack(rng, n)
-        s = self.protocol._lift(s1_ring, self.message)
+        s = lift(ring, s1_ring, self.message)
         quad = ring.matvec(s[None, :], ring.matvec(self.r2, s))
         linear = ring.matvec(self.r1[None, :], s)
         self.r0 = ring.neg(ring.add(quad, linear))
@@ -142,7 +143,6 @@ class _Instance:
 
 
 class QuadraticCompletenessTest(absltest.TestCase):
-
     def test_an_honest_proof_verifies(self) -> None:
         instance = _Instance(1)
         proof, _ = instance.prove()
@@ -161,9 +161,7 @@ class QuadraticCompletenessTest(absltest.TestCase):
         the linear layer's statement."""
         instance = _Instance(3)
         ring = instance.ring
-        s = instance.protocol._lift(
-            ring.from_signed_stack(instance.s1), instance.message
-        )
+        s = lift(ring, ring.from_signed_stack(instance.s1), instance.message)
         quad = ring.matvec(s[None, :], ring.matvec(instance.r2, s))
         self.assertTrue(quad.any())
 
@@ -207,7 +205,6 @@ class QuadraticCompletenessTest(absltest.TestCase):
 
 
 class QuadraticSoundnessTest(absltest.TestCase):
-
     def setUp(self) -> None:
         super().setUp()
         self.instance = _Instance(10)
@@ -336,9 +333,7 @@ class _ManyInstance:
         self.protocol = AbdlopQuadraticMany(self.base.protocol)
         rng = self.base.rng
         n = self.base.protocol.width
-        s = self.base.protocol._lift(
-            ring.from_signed_stack(self.base.s1), self.base.message
-        )
+        s = lift(ring, ring.from_signed_stack(self.base.s1), self.base.message)
         squares, linears, constants = [], [], []
         for _ in range(relations):
             square = ring.uniform_stack(rng, n, n)

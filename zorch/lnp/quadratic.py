@@ -153,7 +153,7 @@ class AbdlopQuadratic:
         s2_ring = ring.from_signed_stack(s2)
         # Witness-only, so a rejected attempt would recompute them
         # unchanged; the lift and its matvec are the costly ones.
-        s = self._lift(s1_ring, message)
+        s = lift(ring, s1_ring, message)
         r2s = ring.matvec(r2, s)
         b_s2 = _dot(ring, b_quad, s2_ring)
 
@@ -164,7 +164,7 @@ class AbdlopQuadratic:
             w = ring.add(ring.matvec(a1, y1_ring), ring.matvec(a2, y2_ring))
             # eq. 29: the message half masks `m` through `−B·y2`, because
             # that is the only way the verifier reaches `m`.
-            y = self._lift(y1_ring, ring.neg(ring.matvec(b, y2_ring)))
+            y = lift(ring, y1_ring, ring.neg(ring.matvec(b, y2_ring)))
             # g1 = sᵀR2y + yᵀR2s + r1ᵀy, g0 = yᵀR2y (eq. 31). `R2·s` is
             # loop-invariant; `R2·y` is not.
             r2y = ring.matvec(r2, y)
@@ -222,7 +222,7 @@ class AbdlopQuadratic:
         # can form — `z_m = c·t_B − B·z2` (`opening.py` computes the same
         # quantity for the linear check).
         z_m = ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring))
-        z = self._lift(z1_ring, z_m)
+        z = lift(ring, z1_ring, z_m)
         # f := c·t − bᵀ·z2, then v := zᵀR2z + c·r1ᵀz + c²·r0 − f.
         f = ring.sub(ring.scale(c_elem, proof.t), _dot(ring, b_quad, z2_ring))
         c_sq = ring.scale(c_elem, c_stack)[0]
@@ -238,15 +238,6 @@ class AbdlopQuadratic:
         )
         advanced, c = self.masking.challenge_from(transcript, _LABEL, w, proof.t, v)
         return bool(np.array_equal(c, proof.c)), advanced
-
-    def _lift(self, s1_part: np.ndarray, message_part: np.ndarray) -> np.ndarray:
-        """`[(σⁱ(s1_part))ᵢ ; (σⁱ(message_part))ᵢ]` for `i ∈ [k]` (eq. 29).
-
-        The two halves are lifted separately and then concatenated, which is
-        the paper's order — `s1`'s `k` images first, then the message's —
-        and the order the statement's `R2`/`r1` are indexed against."""
-        ring = self.scheme.ring
-        return np.concatenate([_orbit(ring, s1_part), _orbit(ring, message_part)])
 
     def _is_well_formed(self, proof: QuadraticProof) -> bool:
         """Whether `proof` is structurally usable — every field of it, in
@@ -382,6 +373,12 @@ class AbdlopQuadraticMany:
             advanced,
         )
 
+    def _is_well_formed(self, proof: QuadraticProof) -> bool:
+        """The wire is Fig. 6's — `µ` adds no field — so this defers rather
+        than restating it. Named here because the layer above proves
+        through Fig. 7 and should not reach past it."""
+        return self.quadratic._is_well_formed(proof)
+
     def _mu(
         self, transcript: ByteTranscript, relations: int
     ) -> tuple[ByteTranscript, np.ndarray]:
@@ -437,6 +434,40 @@ class AbdlopQuadraticMany:
             ("r0", r0, (relations, 1)),
         ):
             self.scheme.require_stack(f"quadratic: {name}", arr, *lead)
+
+
+def lift(
+    ring: HostSplitRing, s1_part: np.ndarray, message_part: np.ndarray
+) -> np.ndarray:
+    """`[(σⁱ(s1_part))ᵢ ; (σⁱ(message_part))ᵢ]` for `i ∈ [k]` (eq. 29).
+
+    The two halves are lifted separately and then concatenated, which is
+    the paper's order — `s1`'s `k` images first, then the message's — and
+    the order a statement's `R2`/`r1` are indexed against.
+
+    Note what the message half does when it carries more than `m`: the
+    *whole* stack is orbited, so `lift(ring, s1, m‖g)` groups the images by
+    automorphism copy, `[m‖g, σ(m‖g)]`, and not by vector. That is exactly
+    eq. 38's `x_{2,j} = (x^{(m)}_{2,j}, x^{(g)}_{2,j})` layout, which the
+    layer appending `g` depends on.
+    """
+    return np.concatenate([_orbit(ring, s1_part), _orbit(ring, message_part)])
+
+
+def evaluate(
+    ring: HostSplitRing,
+    r2: np.ndarray,
+    r1: np.ndarray,
+    r0: np.ndarray,
+    s: np.ndarray,
+) -> np.ndarray:
+    """`f(s) = sᵀ·R2·s + r1ᵀ·s + r0` as a one-element stack.
+
+    The value the protocols never compute — Fig. 6 proves `f(s) = 0`
+    without evaluating it — and the one a layer proving something *about*
+    `f(s)` needs. Fig. 8's aggregate `h` is the caller.
+    """
+    return ring.add(ring.add(_dot(ring, s, ring.matvec(r2, s)), _dot(ring, r1, s)), r0)
 
 
 def _orbit(ring: HostSplitRing, stack: np.ndarray) -> np.ndarray:
