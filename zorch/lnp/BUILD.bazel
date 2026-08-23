@@ -88,3 +88,19 @@ py_library(
         requirement("numpy"),
     ],
 )
+
+py_library(
+    name = "range",
+    srcs = ["range.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":eval",
+        ":masking",
+        ":quadratic",
+        ":transcript",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)

@@ -41,12 +41,19 @@ import math
 
 import numpy as np
 from lattice_frx import norms, sampler
+from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import wire
 from zorch.lnp.challenge import ChallengeParams, attempt_budget, negacyclic_mul
 from zorch.lnp.transcript import absorb_stacks
+
+# The paper's projection dimension: Lemma 2.8/2.9 are stated at 256 rows and
+# their 2^-128 tail bounds are what fix it, so the constants 26, 337 and 41 in
+# the proven bound are all 256's. A default rather than a hard-coding so a test
+# can shrink it, never so a consumer can tune it.
+PROJECTION = 256
 
 # A budget past this means a mis-derived repetition rate, not a demanding
 # `fail_prob`: well-derived rates (M ≈ 3–6 each) land in the hundreds.
@@ -242,15 +249,167 @@ def _rej1(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> 
     the inner product and norm over exact Python ints (a fixed-width dot
     would wrap at real parameter scales).
 
-    `‖v‖²` is `vo @ vo` rather than `norms.l2_squared` to reuse the
-    object-dtype view the inner product already needs: the substrate's
-    norm is now the *same* self-dot, so the two are identical arithmetic,
-    but calling it here would convert `v` a second time — measured ~1.14x
-    slower at `(4, 128)` and `(16, 256)`. `within_bounds` has no such view
-    to reuse and calls the substrate. This stays hand-spelled only while
-    the inner product is: a substrate op that returns `⟨z,v⟩` and `‖v‖²`
-    off one conversion would take both lines."""
+    Both quantities come off `_exact_dots`, which is the one-conversion
+    seam this docstring used to ask for."""
+    zv, vv = _exact_dots(z, v)
+    threshold = (-2 * zv + vv) / (2.0 * std**2) - math.log(rep)
+    return math.log(coin) < threshold
+
+
+def _exact_dots(z: np.ndarray, v: np.ndarray) -> tuple[int, int]:
+    """`(⟨z, v⟩, ‖v‖²)` over exact Python ints, off one object-dtype view.
+
+    Both rejection gates need exactly this pair, and both need it in
+    unreduced ℤ — a fixed-width dot wraps at real parameter scales, which
+    is a silently wrong verdict rather than an error.
+
+    `‖v‖²` is `vo @ vo` rather than `norms.l2_squared` to reuse the view
+    the inner product already built: the substrate's norm is now the same
+    self-dot, so the arithmetic is identical, but calling it would convert
+    `v` a second time — measured ~1.14x slower at `(4, 128)` and
+    `(16, 256)`. `within_bounds` has no view to reuse and calls the
+    substrate."""
     zo = z.reshape(-1).astype(object)
     vo = v.reshape(-1).astype(object)
-    threshold = (-2 * int(zo @ vo) + int(vo @ vo)) / (2.0 * std**2) - math.log(rep)
+    return int(zo @ vo), int(vo @ vo)
+
+
+class BimodalMasking:
+    """The parameter point Fig. 9's projection masks and rejects against.
+
+    `Masking` above is the masking of a *witness*: two Gaussians, one per
+    ABDLOP half, gated by Rej1. This is the masking of a *projection* — a
+    single Gaussian `y ~ D_{s3}^{256/d}` over the 256 integers `R⃗s` shrinks
+    the witness to, gated by the bimodal Rej0 of Fig. 2. The two are not
+    the same object and must not be one: they mask different vectors, at
+    different standard deviations, under different rejection algorithms.
+
+    **Why bimodal here and not there.** The projection is masked as
+    `z = b·R⃗s + y` for a secret sign `b ∈ {−1, 1}`, which makes `z`'s
+    distribution the average of two Gaussians centred at `±R⃗s`. Rej0
+    (Lemma 2.14-3) accepts that average against `M = exp(1/(2γ²))` rather
+    than Rej1's `exp(14/γ + 1/(2γ²))`, so the same repetition rate is
+    reached at a much smaller `s3` — and `s3` is what the revealed `z`'s bit
+    length, and therefore the proof size, is set by. The price is proving
+    `b` really is a sign, which is why Fig. 9 hands the layer above a
+    quadratic relation and `d − 1` evaluations it would not otherwise need.
+
+    Rej1 cannot be swapped in as a "safer default": it is stated for a
+    unimodal `z = v + y` and says nothing about this distribution.
+
+    The witness masking is *not* absorbed here even though both are
+    rejection loops, because a rejected attempt at this layer redraws
+    `(b, y)` and re-derives `R`, while a rejected attempt inside the proof
+    below redraws that proof's own `(y1, y2)`. One loop around both would
+    throw away work the inner loop had already accepted.
+
+    Parameters arrive derived, as everywhere in this package: `mask_std` is
+    the paper's `s3 = γ·√337·β` (the `√337` is Lemma 2.8's projection
+    growth, the `γ` the usual `s = γ·T`), `rep0` its Lemma 2.14-3 rate, and
+    `accept_t` the `t ≥ 1.64` of Prop. 5.1 sizing the verifier's norm gate.
+    Deriving them from a witness bound is the consumer's, since `β` is a
+    property of the statement rather than of this seam.
+    """
+
+    def __init__(
+        self,
+        ring: HostSplitRing,
+        mask_std: float,
+        rep0: float,
+        projection: int = PROJECTION,
+        accept_t: float = 1.64,
+        fail_prob: float = 2.0**-128,
+    ) -> None:
+        if projection < 1:
+            raise ValueError(
+                f"masking: projection must be positive, got {projection!r}"
+            )
+        if projection % ring.d:
+            raise ValueError(
+                f"masking: the mask is a stack of ring elements, so the "
+                f"projection dimension must be a multiple of the ring degree "
+                f"{ring.d}; got {projection}"
+            )
+        for name, value in (("mask_std", mask_std), ("accept_t", accept_t)):
+            if value <= 0.0:
+                raise ValueError(f"masking: {name} must be positive, got {value!r}")
+        if rep0 <= 1.0:
+            raise ValueError(f"masking: rep0 must exceed 1, got {rep0!r}")
+        if not 0.0 < fail_prob < 1.0:
+            raise ValueError(f"masking: fail_prob must be in (0, 1), got {fail_prob!r}")
+        self.ring = ring
+        self.projection = projection
+        self.mask_cols = projection // ring.d
+        self.mask_std = mask_std
+        self.rep0 = rep0
+        self.accept_t = accept_t
+        self.fail_prob = fail_prob
+        self.attempts = attempt_budget(fail_prob, 1.0 / rep0)
+        if self.attempts > _MAX_ATTEMPTS:
+            raise ValueError(
+                f"masking: rep0 = {rep0!r} implies an attempt budget of "
+                f"{self.attempts} — a repetition rate this far from its "
+                f"Lemma 2.14-3 value is a parameter bug"
+            )
+        # `‖z‖₂ ≤ t·√256·s3` (Prop. 5.1), compared squared over exact ints
+        # so the reveal never round-trips through a float; the floor only
+        # tightens the bound, as in `Masking`.
+        self._bound_sq = math.floor((accept_t**2) * projection * mask_std**2)
+        self._draw = sampler.sampler_for(mask_std, self.attempts * projection)
+        self._centers = np.zeros((self.mask_cols, ring.d), dtype=np.float64)
+
+    def draw(self, rng: np.random.Generator) -> tuple[int, np.ndarray]:
+        """One attempt's `(b, y)`: a sign and a `(256/d, d)` Gaussian mask.
+
+        Both are private coins off the caller's generator, never off the
+        transcript — the sign especially, since a transcript-derived `b`
+        would be public and the bimodal trick buys nothing.
+
+        Drawn together because they are one attempt: a loop that redrew the
+        mask while holding the sign would be sampling neither Rej0's
+        distribution nor Rej1's."""
+        sign = 1 if rng.integers(0, 2) else -1
+        return sign, self._draw(rng, self._centers, self.mask_std)
+
+    def accepts(self, rng: np.random.Generator, z: np.ndarray, v: np.ndarray) -> bool:
+        """Rej0 (Fig. 2) on one attempt's revealed projection.
+
+        `v` is the *signed* centre `b·R⃗s`, not `R⃗s` — Lemma 2.14-3 is
+        stated for `z = y + (−1)^β v` and the gate reads `⟨z, v⟩` at that
+        same `v`. `cosh` is even, so the two spellings agree here by luck
+        rather than by contract; passing the centre the response was built
+        from is what stays true when a later leg is not symmetric."""
+        return _rej0(_coin(rng), z, v, self.mask_std, self.rep0)
+
+    def within_bounds(self, z: np.ndarray) -> bool:
+        """`‖z‖₂ ≤ t·√256·s3` (Prop. 5.1) — the verifier's gate on the
+        revealed projection, and the only place the range statement's slack
+        is actually enforced."""
+        return norms.l2_squared(z) <= self._bound_sq
+
+    def exhausted(self, protocol: str) -> RuntimeError:
+        """The Rej0 twin of `Masking.exhausted`."""
+        return RuntimeError(
+            f"{protocol}: every attempt was rejected — {self.attempts} "
+            f"attempts at acceptance ≈ 1/rep0 fail together with probability "
+            f"<= {self.fail_prob!r}, so suspect the parameters (a repetition "
+            f"rate far from its Lemma 2.14-3 value), not bad luck."
+        )
+
+
+def _rej0(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> bool:
+    """Rej0 (Fig. 2): accept iff
+    `coin < 1/(M·exp(−‖v‖²/(2s²))·cosh(⟨z,v⟩/s²))`, in log space.
+
+    Taken in logs for the reason `_rej1` is, and then some: `cosh` of a
+    real-parameter argument overflows to `inf` long before the acceptance
+    itself underflows, which would reject every attempt rather than the
+    intended `1 − 1/M` share of them. `log cosh x = |x| + log1p(e^{−2|x|})
+    − log 2` is the overflow-free form.
+
+    """
+    zv, vv = _exact_dots(z, v)
+    scaled = abs(zv) / std**2
+    log_cosh = scaled + math.log1p(math.exp(-2.0 * scaled)) - math.log(2.0)
+    threshold = vv / (2.0 * std**2) - math.log(rep) - log_cosh
     return math.log(coin) < threshold

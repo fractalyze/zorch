@@ -23,9 +23,18 @@ imported.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from zorch.byte_transcript import ByteTranscript
+
+if TYPE_CHECKING:
+    # Annotation only: `absorb_signed` calls a method on the ring it is
+    # handed and never constructs one, so this module stays free of a
+    # runtime lattice-frx dependency — it is the wire every other module
+    # here imports, and widening its graph would widen theirs.
+    from lattice_frx.split_ring import HostSplitRing
 
 
 def stack_bytes(stack: np.ndarray) -> bytes:
@@ -62,3 +71,29 @@ def absorb_stacks(transcript: ByteTranscript, *stacks: np.ndarray) -> ByteTransc
     for stack in stacks:
         transcript = transcript.observe_slice(stack_bytes(stack), stack.shape[0])
     return transcript
+
+
+def absorb_signed(
+    transcript: ByteTranscript, ring: "HostSplitRing", *arrays: np.ndarray
+) -> ByteTranscript:
+    """Absorb signed integer arrays, through the ring's canonical form.
+
+    `stack_bytes` refuses a signed array at the door, and rightly: `-1` and
+    the residue `2**64 - 1` are byte-identical, so serializing signed input
+    directly is how two values bind to one transcript. But a protocol does
+    sometimes have to absorb one — Fig. 9's revealed projection `⃗z` lives in
+    unreduced ℤ, because its *norm* is the statement and a residue has none.
+
+    So the reduction is named here rather than left to each caller. The
+    choice being pinned is that a signed array is absorbed as the ring
+    element it reduces to, and that lives beside `absorb_stacks` for the
+    reason the module docstring gives: the second protocol to need this
+    would otherwise pick its own convention (raw two's-complement? balanced?
+    mod q?), and no single-module suite could see the fork — both sides of
+    *that* protocol would agree with each other.
+
+    Each array is `(k, d)` signed integers, absorbed as `k` ring elements.
+    """
+    return absorb_stacks(
+        transcript, *(ring.from_signed_stack(array) for array in arrays)
+    )

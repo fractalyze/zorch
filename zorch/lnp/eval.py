@@ -446,6 +446,11 @@ class AbdlopQuadraticEval:
         scheme = many.scheme
         self.garbage = GarbageMasking(scheme, lam, b"lnp/eval/quad")
         self.many = many
+        # Named here for the reason `_is_well_formed` is: the layer above
+        # proves through this one and should not reach past it. Without it a
+        # consumer spells `eval.many.scheme`, and the chain becomes
+        # load-bearing from outside.
+        self.scheme = scheme
         self.lam = lam
         self.ell = self.garbage.ell
         # The width the caller's two families are written against: the lift
@@ -578,6 +583,15 @@ class AbdlopQuadraticEval:
             proof.quadratic,
             t,
         )
+
+    def require_witness(self, name: str, s1: np.ndarray, s2: np.ndarray) -> None:
+        """The witness gate of the masking this protocol ultimately proves
+        against, deferred down the chain the way `_is_well_formed` is.
+
+        Same reason: a layer above should not have to know that the masking
+        sits three constructors down, and the tunnel `eval.many.quadratic
+        .masking` would break on any re-parenting."""
+        self.many.quadratic.masking.require_witness(name, s1, s2)
 
     def _is_well_formed(self, proof: QuadraticEvalProof) -> bool:
         """Whether `proof` is structurally usable — every field of it, in

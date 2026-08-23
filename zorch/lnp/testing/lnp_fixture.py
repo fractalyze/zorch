@@ -18,7 +18,7 @@ from lattice_frx.split_ring import HostSplitRing
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.challenge import ChallengeParams
-from zorch.lnp.masking import Masking
+from zorch.lnp.masking import BimodalMasking, Masking
 
 # One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`)
 # and a small degree keep the schoolbook ring affordable; the challenge
@@ -74,3 +74,31 @@ def bump(stack: np.ndarray, *index: int) -> np.ndarray:
     out = stack.copy()
     out[index] = (int(out[index]) + 1) % SPLIT_Q[0]
     return out
+
+
+# The Fig.-9 masking point, derived at the same γ. Lemma 2.14-3's bimodal
+# rate is M = exp(1/(2γ²)) ≈ 1.003 — far under Rej1's ≈ 2.72, which is the
+# whole reason Fig. 9 pays for a sign and its `d − 1` coefficient proofs.
+# The projection dimension is `BimodalMasking`'s own default, which is the
+# object that validates it against the ring degree.
+REP0 = float(np.exp(1.0 / (2.0 * GAMMA**2)))
+
+
+def bimodal(
+    ring: HostSplitRing, witness_cols: int, **overrides: object
+) -> BimodalMasking:
+    """The bimodal point over `ring` for a *ternary* `(s1, m)` of
+    `witness_cols` ring elements.
+
+    `s3 = γ·√337·β`: the `√337` is Lemma 2.8-2's projection growth at κ = 1,
+    and `β = ‖(s1, m)‖₂ ≤ √(witness_cols·d)` is the ternary witness bound
+    this package's suites all build. Derived here rather than in each suite
+    for the reason `MASKING_PARAMS` is — Fig. 10 needs two of these, one per
+    leg, and two spellings of one derivation is the divergence."""
+    beta = float(np.sqrt(witness_cols * ring.d))
+    params: dict[str, object] = dict(
+        mask_std=GAMMA * float(np.sqrt(337.0)) * beta,
+        rep0=REP0,
+        fail_prob=2.0**-40,
+    )
+    return BimodalMasking(ring, **(params | overrides))  # type: ignore[arg-type]
