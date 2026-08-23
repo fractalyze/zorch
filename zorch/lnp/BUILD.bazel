@@ -21,6 +21,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:byte_transcript",
+        requirement("lattice_frx"),
         requirement("numpy"),
     ],
 )
@@ -37,8 +38,8 @@ py_library(
 )
 
 py_library(
-    name = "opening",
-    srcs = ["opening.py"],
+    name = "masking",
+    srcs = ["masking.py"],
     visibility = ["//visibility:public"],
     deps = [
         ":challenge",
@@ -52,11 +53,51 @@ py_library(
 )
 
 py_library(
+    name = "opening",
+    srcs = ["opening.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":masking",
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "quadratic",
+    srcs = ["quadratic.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":masking",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "eval",
     srcs = ["eval.py"],
     visibility = ["//visibility:public"],
     deps = [
         ":opening",
+        ":quadratic",
+        ":transcript",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "range",
+    srcs = ["range.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":eval",
+        ":masking",
+        ":quadratic",
         ":transcript",
         ":wire",
         "//zorch:byte_transcript",

@@ -11,7 +11,9 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [
         "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
         "//zorch/lnp:challenge",
+        "//zorch/lnp:masking",
         requirement("hash_frx"),
         requirement("lattice_frx"),
         requirement("numpy"),
@@ -39,6 +41,7 @@ py_test(
         "//zorch/lnp:transcript",
         requirement("absl_py"),
         requirement("hash_frx"),
+        requirement("lattice_frx"),
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
@@ -50,6 +53,7 @@ py_test(
     deps = [
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
+        "//zorch/lnp:masking",
         "//zorch/lnp:opening",
         "//zorch/lnp/testing:lnp_fixture",
         requirement("absl_py"),
@@ -67,6 +71,59 @@ py_test(
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         "//zorch/lnp:eval",
+        "//zorch/lnp/testing:lnp_fixture",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "quadratic_test",
+    size = "small",
+    srcs = ["quadratic_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        "//zorch/lnp:masking",
+        "//zorch/lnp:quadratic",
+        "//zorch/lnp/testing:lnp_fixture",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "quadratic_eval_test",
+    size = "small",
+    srcs = ["quadratic_eval_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        "//zorch/lnp:eval",
+        "//zorch/lnp:quadratic",
+        "//zorch/lnp/testing:lnp_fixture",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "range_test",
+    size = "medium",
+    srcs = ["range_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        "//zorch/lnp:eval",
+        "//zorch/lnp:masking",
+        "//zorch/lnp:quadratic",
+        "//zorch/lnp:range",
         "//zorch/lnp/testing:lnp_fixture",
         requirement("absl_py"),
         requirement("hash_frx"),

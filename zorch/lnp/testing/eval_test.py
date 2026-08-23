@@ -57,7 +57,7 @@ def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitmen
 
 
 def _opening(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopOpening:
-    return AbdlopOpening(_scheme(ring, messages), **lnp_fixture.OPENING_PARAMS)  # type: ignore[arg-type]
+    return AbdlopOpening(lnp_fixture.masking(_scheme(ring, messages)))
 
 
 def _eval(ring: HostSplitRing) -> AbdlopEval:

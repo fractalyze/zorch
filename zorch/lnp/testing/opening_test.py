@@ -22,7 +22,7 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
-from zorch.lnp import opening as opening_module
+from zorch.lnp import masking as masking_module
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
 from zorch.lnp.testing import lnp_fixture
 from zorch.lnp.testing.lnp_fixture import STD as _STD
@@ -54,8 +54,7 @@ def _opening(ring: HostSplitRing, **overrides: object) -> AbdlopOpening:
     """The test parameter point, with one kwarg moved per call — the
     `_Instance.prove/verify` convention applied to construction, so a test
     that varies `fail_prob` states only that."""
-    params = lnp_fixture.OPENING_PARAMS | overrides
-    return AbdlopOpening(_scheme(ring), **params)  # type: ignore[arg-type]
+    return AbdlopOpening(lnp_fixture.masking(_scheme(ring), **overrides))
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
@@ -160,7 +159,7 @@ class OpeningCompletenessTest(absltest.TestCase):
         instance = _Instance(3)
         attempts = []
         with mock.patch.object(
-            opening_module, "_coin", side_effect=opening_module._coin
+            masking_module, "_coin", side_effect=masking_module._coin
         ) as spy:
             for i in range(4):
                 seen = spy.call_count
@@ -181,7 +180,7 @@ class OpeningCompletenessTest(absltest.TestCase):
         not spin."""
         starved = _opening(_ring(), fail_prob=0.5)
         instance = _Instance(4)
-        with mock.patch.object(opening_module, "_rej1", return_value=False):
+        with mock.patch.object(masking_module, "_rej1", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "prove"):
                 instance.prove(opening=starved)
 
