@@ -23,9 +23,11 @@ imported.
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import numpy as np
+from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 
 from zorch.byte_transcript import ByteTranscript
 
@@ -97,3 +99,53 @@ def absorb_signed(
     return absorb_stacks(
         transcript, *(ring.from_signed_stack(array) for array in arrays)
     )
+
+
+# The byte sampler builds its draws from little-endian u64 chunks, so a
+# ring whose `q` does not fit one cannot be drawn against. A property of
+# `lattice_frx.sampler`, not of any one protocol — which is why the ceiling
+# and its message live here rather than once per layer that squeezes.
+_MAX_MODULUS = 1 << 64
+
+
+def sampling_modulus(ring: "HostSplitRing") -> int:
+    """`q` as one integer, gated for the uniform sampler's u64 chunking.
+
+    Every layer that squeezes `Z_q` draws off the transcript needs this
+    number and this gate; two layers that each derived them raised two
+    near-identical errors, and the ceiling would have had to be found twice
+    the day the sampler widens."""
+    modulus = math.prod(ring.q_moduli)
+    if modulus >= _MAX_MODULUS:
+        raise ValueError(
+            f"transcript: uniform draws come off u64 chunks, so q must be "
+            f"below 2^64; this ring's q has {modulus.bit_length()} bits. An "
+            f"RNS chain this wide needs a wider sampler first."
+        )
+    return modulus
+
+
+def squeeze_uniform(
+    transcript: ByteTranscript, label: bytes, modulus: int, count: int
+) -> tuple[ByteTranscript, np.ndarray]:
+    """Absorb `label`, then squeeze `count` uniform `Z_q` draws.
+
+    The squeeze half of this module's charter. `uniform_bytes_needed` and
+    `uniform_from_bytes` must be called at the *same* modulus and count or
+    the byte stream desynchronises, and a protocol that respelled the
+    pairing would fork the wire exactly as one respelling `absorb_stacks`
+    would — with the same invisibility, since both sides of that protocol
+    would still agree with each other.
+
+    Reshaping the draws, and what to build from them, stays with the caller:
+    that part genuinely differs (a ring element per relation for Fig. 7, a
+    `λ×M` scalar matrix for the ENS20 aggregation).
+
+    `range.py` deliberately does *not* come through here — its `Bin_1`
+    matrix has a power-of-two support, where `uniform_from_bytes`' general
+    path would spend a full u64 per two-bit draw. That is an exception to
+    this rule, and it reads as one only because the rule is named.
+    """
+    t = transcript.observe_label(label)
+    t, raw = t.sample_scalar(uniform_bytes_needed(modulus, count))
+    return t, uniform_from_bytes(raw, modulus, count)

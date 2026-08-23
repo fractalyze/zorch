@@ -49,22 +49,27 @@ _RELATIONS = 2
 _EVALUATIONS = 3
 
 
-def _scheme(ring: HostSplitRing) -> AbdlopCommitment:
-    """The **extended** scheme: its BDLOP half carries `ℓ + λ` messages,
-    because `m‖g` is what the inner protocol opens."""
+def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitment:
+    """The **extended** scheme by default: its BDLOP half carries `ℓ + λ`
+    messages, because `m‖g` is what the inner protocol opens.
+
+    `messages` is a parameter so the fixture can also build the *narrow*
+    scheme the caller commits against — the same shape `eval_test` takes,
+    and what lets the commitment come from `commit` rather than be
+    re-spelled here."""
     return AbdlopCommitment(
         ring,
         rows=_ROWS,
         s1_cols=_M1,
         randomness_cols=_M2,
-        messages=_ELL + _LAM,
+        messages=messages,
         beta1_inf=1,
         beta2_inf=1,
     )
 
 
-def _protocol(ring: HostSplitRing, **overrides: object) -> AbdlopQuadraticEval:
-    masking = lnp_fixture.masking(_scheme(ring), **overrides)
+def _protocol(ring: HostSplitRing) -> AbdlopQuadraticEval:
+    masking = lnp_fixture.masking(_scheme(ring))
     return AbdlopQuadraticEval(AbdlopQuadraticMany(AbdlopQuadratic(masking)), _LAM)
 
 
@@ -92,7 +97,6 @@ class _Instance:
     def __init__(self, seed: int, relations: int = _RELATIONS) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
-        self.scheme = _scheme(ring)
         self.protocol = _protocol(ring)
         rng = np.random.default_rng(seed)
         self.rng = rng
@@ -112,10 +116,12 @@ class _Instance:
         s2_ring = ring.from_signed_stack(self.s2)
         self.message = ring.uniform_stack(rng, _ELL)
 
-        self.t_a = ring.add(
-            ring.matvec(self.a1, s1_ring), ring.matvec(self.a2, s2_ring)
+        # The scheme's own commit over the *narrow* BDLOP half — the layer
+        # appends its own garbage, so the caller commits to `m` alone.
+        commitment = _scheme(ring, _ELL).commit(
+            self.a1, self.a2, self.b, s1_ring, s2_ring, self.message
         )
-        self.t_b = ring.add(ring.matvec(self.b, s2_ring), self.message)
+        self.t_a, self.t_b = commitment.t_a, commitment.t_b
 
         # The lift the caller's two families are written against — `m`, not
         # `m‖g`; the protocol appends the garbage itself.
@@ -226,7 +232,7 @@ class QuadraticEvalCompletenessTest(absltest.TestCase):
         instance = _Instance(5)
         self.assertEqual(instance.protocol.width, SIGMA_ORDER * (_M1 + _ELL))
         self.assertEqual(
-            instance.protocol.many.quadratic.width,
+            instance.protocol.many.width,
             SIGMA_ORDER * (_M1 + _ELL + _LAM),
         )
         self.assertEqual(instance.protocol.ell, _ELL)
@@ -248,7 +254,7 @@ class QuadraticEvalLayoutTest(absltest.TestCase):
         g = ring.uniform_stack(rng, _LAM)
 
         wide = lift(ring, s1_ring, np.concatenate([instance.message, g]))
-        self.assertEqual(len(wide), protocol.many.quadratic.width)
+        self.assertEqual(len(wide), protocol.many.width)
         np.testing.assert_array_equal(wide[protocol._positions], instance.s)
         np.testing.assert_array_equal(wide[protocol._garbage_slots], g)
 
@@ -287,10 +293,11 @@ class QuadraticEvalLayoutTest(absltest.TestCase):
 
 
 class QuadraticEvalSoundnessTest(absltest.TestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.instance = _Instance(9)
-        self.proof, _ = self.instance.prove()
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(9)
+        cls.proof, _ = cls.instance.prove()
 
     def test_the_honest_proof_is_the_baseline(self) -> None:
         self.assertTrue(self.instance.verify(self.proof))
@@ -348,13 +355,14 @@ class QuadraticEvalSoundnessTest(absltest.TestCase):
 
 
 class QuadraticEvalWireTest(absltest.TestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.instance = _Instance(10)
-        self.proof, _ = self.instance.prove()
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(10)
+        cls.proof, _ = cls.instance.prove()
 
     def test_a_non_proof_is_a_verdict(self) -> None:
-        self.assertFalse(self.instance.verify(object()))  # type: ignore[arg-type]
+        self.assertFalse(self.instance.verify(object()))
 
     def test_every_proof_field_is_gated(self) -> None:
         """Drives off `dataclasses.fields`, so a field added to
@@ -362,7 +370,7 @@ class QuadraticEvalWireTest(absltest.TestCase):
         rather than reaching an `AttributeError` inside `verify` — which is
         what the composite field did one layer down."""
         for field in dataclasses.fields(QuadraticEvalProof):
-            tampered = dataclasses.replace(self.proof, **{field.name: None})  # type: ignore[arg-type]
+            tampered = dataclasses.replace(self.proof, **{field.name: None})
             self.assertFalse(self.instance.verify(tampered), field.name)
 
     def test_an_out_of_range_residue_is_a_verdict(self) -> None:

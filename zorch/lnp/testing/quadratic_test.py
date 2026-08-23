@@ -30,7 +30,9 @@ from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
     QuadraticProof,
+    evaluate,
     lift,
+    sigma_exponent,
 )
 from zorch.lnp.testing import lnp_fixture
 
@@ -76,7 +78,6 @@ class _Instance:
         self.rng = rng
         ring = self.ring
         n = self.protocol.width
-        self.assert_width = n
 
         self.a1 = ring.uniform_stack(rng, _ROWS, _M1)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
@@ -91,18 +92,19 @@ class _Instance:
         s2_ring = ring.from_signed_stack(self.s2)
         self.message = ring.uniform_stack(rng, _ELL)
 
-        self.t_a = ring.add(
-            ring.matvec(self.a1, s1_ring), ring.matvec(self.a2, s2_ring)
+        # The scheme's own commit, so the fixture cannot drift from the
+        # equation the protocol proves against.
+        commitment = self.scheme.commit(
+            self.a1, self.a2, self.b, s1_ring, s2_ring, self.message
         )
-        self.t_b = ring.add(ring.matvec(self.b, s2_ring), self.message)
+        self.t_a, self.t_b = commitment.t_a, commitment.t_b
 
-        # f(s) = sᵀR2s + r1ᵀs + r0 with r0 solved so the statement is true.
+        # f(s) = sᵀR2s + r1ᵀs + r0 with r0 solved so the statement is true —
+        # through the protocol's own `evaluate`, for the same reason.
         self.r2 = ring.uniform_stack(rng, n, n)
         self.r1 = ring.uniform_stack(rng, n)
         s = lift(ring, s1_ring, self.message)
-        quad = ring.matvec(s[None, :], ring.matvec(self.r2, s))
-        linear = ring.matvec(self.r1[None, :], s)
-        self.r0 = ring.neg(ring.add(quad, linear))
+        self.r0 = ring.neg(evaluate(ring, self.r2, self.r1, ring.zeros(1), s))
 
     def _statement(self) -> dict[str, np.ndarray]:
         return dict(
@@ -152,7 +154,7 @@ class QuadraticCompletenessTest(absltest.TestCase):
         """§4's `n = k(m1 + ℓ)` — the statement is written against the
         witness *and* its automorphism images, not the witness alone."""
         instance = _Instance(2)
-        self.assertEqual(instance.assert_width, SIGMA_ORDER * (_M1 + _ELL))
+        self.assertEqual(instance.protocol.width, SIGMA_ORDER * (_M1 + _ELL))
         self.assertEqual(instance.r2.shape[:2], (SIGMA_ORDER * (_M1 + _ELL),) * 2)
 
     def test_the_statement_really_is_quadratic(self) -> None:
@@ -173,12 +175,16 @@ class QuadraticCompletenessTest(absltest.TestCase):
         *quadratic* statement a *norm* statement — and because it is the one
         property a wrong choice of automorphism would break silently. The
         protocol's round-trip cannot see that: prover and verifier lift the
-        same way, so they would agree on the wrong `σ` too."""
+        same way, so they would agree on the wrong `σ` too.
+
+        Applied through `sigma_exponent`, the same function `_orbit` lifts
+        with — spelling `2·d − 1` here instead would pin the *number* while
+        leaving the protocol free to apply a different automorphism."""
         ring = _ring()
         rng = np.random.default_rng(99)
         coeffs = rng.integers(-3, 4, (ring.d,)).astype(np.int64)
         a = ring.from_signed(coeffs)
-        sigma_a = ring.galois(a, 2 * ring.d - 1)
+        sigma_a = ring.galois(a, sigma_exponent(ring.d))
         product = ring.mul(sigma_a, a)
         want = int((coeffs.astype(object) ** 2).sum()) % lnp_fixture.SPLIT_Q[0]
         self.assertEqual(int(ring.constant_coeff(product[None])[0, 0]), want)
@@ -205,10 +211,11 @@ class QuadraticCompletenessTest(absltest.TestCase):
 
 
 class QuadraticSoundnessTest(absltest.TestCase):
-    def setUp(self) -> None:
-        super().setUp()
-        self.instance = _Instance(10)
-        self.proof, _ = self.instance.prove()
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(10)
+        cls.proof, _ = cls.instance.prove()
 
     def test_the_honest_proof_is_the_baseline(self) -> None:
         self.assertTrue(self.instance.verify(self.proof))
@@ -275,10 +282,11 @@ class QuadraticWireTest(absltest.TestCase):
     """The untrusted-proof rule: a malformed proof is a verdict, a malformed
     statement is the caller's bug. See `zorch/lnp/wire.py`."""
 
-    def setUp(self) -> None:
-        super().setUp()
-        self.instance = _Instance(20)
-        self.proof, _ = self.instance.prove()
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.instance = _Instance(20)
+        cls.proof, _ = cls.instance.prove()
 
     def test_every_proof_field_is_gated(self) -> None:
         """Drives off `dataclasses.fields`, so a field added to
@@ -287,11 +295,11 @@ class QuadraticWireTest(absltest.TestCase):
         import dataclasses
 
         for field in dataclasses.fields(QuadraticProof):
-            tampered = dataclasses.replace(self.proof, **{field.name: None})  # type: ignore[arg-type]
+            tampered = dataclasses.replace(self.proof, **{field.name: None})
             self.assertFalse(self.instance.verify(tampered), field.name)
 
     def test_a_non_proof_is_a_verdict(self) -> None:
-        self.assertFalse(self.instance.verify(object()))  # type: ignore[arg-type]
+        self.assertFalse(self.instance.verify(object()))
 
     def test_an_out_of_range_residue_in_t_is_a_verdict(self) -> None:
         """`wire.is_stack`'s range half: a residue at or above the modulus
@@ -319,72 +327,37 @@ class QuadraticWireTest(absltest.TestCase):
                 call()
 
 
-class _ManyInstance:
+class _ManyInstance(_Instance):
     """N honest quadratic relations over one commitment.
 
     Each is built the same way the single-relation fixture is — constant
     term solved so the relation holds — because a statement that is only
-    true in aggregate would pass Fig. 7 while failing what it claims."""
+    true in aggregate would pass Fig. 7 while failing what it claims.
+
+    A subclass rather than a wrapper: everything but the protocol and the
+    stacked statement is `_Instance`'s, and the two harnesses had drifted
+    once already (only one of them grew a `protocol=` override)."""
+
+    # Fig. 7 in place of Fig. 6 — a genuine narrowing, and the only thing
+    # this fixture changes about the harness it inherits.
+    protocol: AbdlopQuadraticMany  # type: ignore[assignment]
 
     def __init__(self, seed: int, relations: int = 3) -> None:
-        self.base = _Instance(seed)
+        super().__init__(seed)
         self.relations = relations
-        ring = self.base.ring
-        self.protocol = AbdlopQuadraticMany(self.base.protocol)
-        rng = self.base.rng
-        n = self.base.protocol.width
-        s = lift(ring, ring.from_signed_stack(self.base.s1), self.base.message)
-        squares, linears, constants = [], [], []
-        for _ in range(relations):
-            square = ring.uniform_stack(rng, n, n)
-            linear = ring.uniform_stack(rng, n)
-            squares.append(square)
-            linears.append(linear)
-            constants.append(
-                ring.neg(
-                    ring.add(
-                        ring.matvec(s[None, :], ring.matvec(square, s)),
-                        ring.matvec(linear[None, :], s),
-                    )
-                )
-            )
-        self.r2 = np.stack(squares)
-        self.r1 = np.stack(linears)
-        self.r0 = np.stack(constants)
-
-    def _statement(self) -> dict[str, np.ndarray]:
-        return dict(
-            a1=self.base.a1,
-            a2=self.base.a2,
-            b=self.base.b,
-            b_quad=self.base.b_quad,
-            r2=self.r2,
-            r1=self.r1,
-            r0=self.r0,
+        ring = self.ring
+        n = self.protocol.width
+        self.protocol = AbdlopQuadraticMany(_quadratic(ring))
+        rng = self.rng
+        s = lift(ring, ring.from_signed_stack(self.s1), self.message)
+        self.r2 = ring.uniform_stack(rng, relations, n, n)
+        self.r1 = ring.uniform_stack(rng, relations, n)
+        self.r0 = np.stack(
+            [
+                ring.neg(evaluate(ring, self.r2[j], self.r1[j], ring.zeros(1), s))
+                for j in range(relations)
+            ]
         )
-
-    def prove(
-        self, tag: bytes = b"", **overrides: np.ndarray
-    ) -> tuple[QuadraticProof, ByteTranscript]:
-        args = self._statement()
-        args.update(overrides)
-        return self.protocol.prove(
-            s1=self.base.s1,
-            s2=self.base.s2,
-            message=self.base.message,
-            rng=self.base.rng,
-            transcript=_transcript(tag),
-            **args,
-        )
-
-    def verify(
-        self, proof: QuadraticProof, tag: bytes = b"", **overrides: np.ndarray
-    ) -> bool:
-        args = self._statement()
-        args.update(t_a=self.base.t_a, t_b=self.base.t_b)
-        args.update(overrides)
-        ok, _ = self.protocol.verify(proof=proof, transcript=_transcript(tag), **args)
-        return ok
 
 
 class QuadraticManyTest(absltest.TestCase):
@@ -422,7 +395,7 @@ class QuadraticManyTest(absltest.TestCase):
         rests on that: a scalar drawn into the constant coefficient would
         leave the other `d − 1` at zero and cost the degree factor."""
         instance = _ManyInstance(33)
-        ring = instance.base.ring
+        ring = instance.ring
         _, mu = instance.protocol._mu(_transcript(), instance.relations)
         self.assertEqual(mu.shape, (instance.relations, 1, ring.d))
         for j in range(instance.relations):

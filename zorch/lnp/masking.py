@@ -163,6 +163,33 @@ class Masking:
         t, raw = t.sample_scalar(self.challenge_bytes)
         return t, self.challenge.from_bytes(raw)
 
+    def ajtai_image(
+        self, a1: np.ndarray, a2: np.ndarray, x1: np.ndarray, x2: np.ndarray
+    ) -> np.ndarray:
+        """`A1·x1 + A2·x2`, the Ajtai half of the commitment equation.
+
+        Both siblings send it as their first message at `x = y` and both
+        rebuild it at `x = z` to check it, so it is one expression at four
+        sites, not two protocols that happen to agree. Here rather than on
+        `AbdlopCommitment` because what the layers pass is a *masking* or a
+        *response*, not a witness — the scheme's own `commit` is the
+        witness-shaped caller and keeps its bound checks."""
+        ring = self.scheme.ring
+        return ring.add(ring.matvec(a1, x1), ring.matvec(a2, x2))
+
+    def masked_message(
+        self, c: np.ndarray, b: np.ndarray, t_b: np.ndarray, z2: np.ndarray
+    ) -> np.ndarray:
+        """`c·t_B − B·z2` — `c·m` for the message the BDLOP half commits to
+        but never sends.
+
+        The only route either verifier has to `m`: Fig. 4 feeds it to the
+        linear check, Fig. 6 lifts it as eq. 30's message half. Named once
+        because the two must agree on it and a suite of either alone cannot
+        see them drift."""
+        ring = self.scheme.ring
+        return ring.sub(ring.scale(c, t_b), ring.matvec(b, z2))
+
     def respond(
         self, c: np.ndarray, s1: np.ndarray, s2: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:

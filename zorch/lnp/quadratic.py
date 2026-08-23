@@ -68,28 +68,33 @@ posture.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
-from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
 from zorch.lnp.masking import Masking
+from zorch.lnp.transcript import sampling_modulus, squeeze_uniform
 
 _LABEL = b"lnp/quad"
 _LABEL_MANY = b"lnp/quad/aggregate"
-
-# `µ` is drawn coefficient-wise off the transcript, and the byte sampler
-# builds its draws from little-endian u64 chunks — so q must fit one.
-_MAX_MODULUS = 1 << 64
 
 # §4's `k`: the order of σ₋₁, which is an involution. See the module
 # docstring on why this is pinned rather than taken, and on the collision
 # with `ChallengeParams.k`.
 SIGMA_ORDER = 2
+
+
+def sigma_exponent(d: int) -> int:
+    """σ₋₁'s exponent in `roots.galois_map`'s vocabulary: `X ↦ X^{-1}`, and
+    `X^{-1} = X^{2d-1}` in `Z[X]/(X^d + 1)`.
+
+    This module pins the automorphism, so it names the number too — a wrong
+    one is a silently different statement rather than an error, and it had
+    been open-coded at every site that applies σ."""
+    return 2 * d - 1
 
 
 @dataclass(frozen=True)
@@ -161,7 +166,7 @@ class AbdlopQuadratic:
             y1, y2 = masking.draw(rng)
             y1_ring = ring.from_signed_stack(y1)
             y2_ring = ring.from_signed_stack(y2)
-            w = ring.add(ring.matvec(a1, y1_ring), ring.matvec(a2, y2_ring))
+            w = masking.ajtai_image(a1, a2, y1_ring, y2_ring)
             # eq. 29: the message half masks `m` through `−B·y2`, because
             # that is the only way the verifier reaches `m`.
             y = lift(ring, y1_ring, ring.neg(ring.matvec(b, y2_ring)))
@@ -211,21 +216,19 @@ class AbdlopQuadratic:
             return False, transcript
 
         c_elem = ring.from_signed(proof.c)
-        c_stack = c_elem[None]
         z1_ring = ring.from_signed_stack(proof.z1)
         z2_ring = ring.from_signed_stack(proof.z2)
         w = ring.sub(
-            ring.add(ring.matvec(a1, z1_ring), ring.matvec(a2, z2_ring)),
+            self.masking.ajtai_image(a1, a2, z1_ring, z2_ring),
             ring.scale(c_elem, t_a),
         )
         # eq. 30's `z`: the response half, and the message half the verifier
-        # can form — `z_m = c·t_B − B·z2` (`opening.py` computes the same
-        # quantity for the linear check).
-        z_m = ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring))
+        # can form — the same `c·t_B − B·z2` Fig. 4's linear check reads.
+        z_m = self.masking.masked_message(c_elem, b, t_b, z2_ring)
         z = lift(ring, z1_ring, z_m)
         # f := c·t − bᵀ·z2, then v := zᵀR2z + c·r1ᵀz + c²·r0 − f.
         f = ring.sub(ring.scale(c_elem, proof.t), _dot(ring, b_quad, z2_ring))
-        c_sq = ring.scale(c_elem, c_stack)[0]
+        c_sq = ring.mul(c_elem, c_elem)
         v = ring.sub(
             ring.add(
                 ring.add(
@@ -294,16 +297,11 @@ class AbdlopQuadraticMany:
     def __init__(self, quadratic: AbdlopQuadratic) -> None:
         self.quadratic = quadratic
         self.scheme = quadratic.scheme
-        ring = self.scheme.ring
-        modulus = math.prod(ring.q_moduli)
-        if modulus >= _MAX_MODULUS:
-            raise ValueError(
-                f"quadratic: µ is drawn coefficient-wise from u64 chunks, so "
-                f"q must be below 2^64; this ring's q has "
-                f"{modulus.bit_length()} bits. An RNS chain this wide needs a "
-                f"wider sampler first."
-            )
-        self.modulus = modulus
+        # Forwarded rather than left to the caller to reach through: the
+        # layer above proves through Fig. 7 and should not reach past it,
+        # the same rule `_is_well_formed` below is named for.
+        self.width = quadratic.width
+        self.modulus = sampling_modulus(self.scheme.ring)
 
     def prove(
         self,
@@ -379,6 +377,11 @@ class AbdlopQuadraticMany:
         through Fig. 7 and should not reach past it."""
         return self.quadratic._is_well_formed(proof)
 
+    def require_witness(self, name: str, s1: np.ndarray, s2: np.ndarray) -> None:
+        """The masking's witness gate, forwarded one hop for the same reason
+        `_is_well_formed` and `scheme` are."""
+        self.quadratic.masking.require_witness(name, s1, s2)
+
     def _mu(
         self, transcript: ByteTranscript, relations: int
     ) -> tuple[ByteTranscript, np.ndarray]:
@@ -388,10 +391,9 @@ class AbdlopQuadraticMany:
         No absorb precedes it: Fig. 7 opens with the verifier's message, and
         the transcript arrived already bound to the statement."""
         ring = self.scheme.ring
-        count = relations * ring.d
-        t = transcript.observe_label(_LABEL_MANY)
-        t, raw = t.sample_scalar(uniform_bytes_needed(self.modulus, count))
-        draws = uniform_from_bytes(raw, self.modulus, count)
+        t, draws = squeeze_uniform(
+            transcript, _LABEL_MANY, self.modulus, relations * ring.d
+        )
         return t, ring.from_signed_stack(draws.reshape(relations, ring.d))
 
     def _aggregate(
@@ -424,10 +426,10 @@ class AbdlopQuadraticMany:
     ) -> None:
         """The N functions are three aligned pieces; a mismatch would
         otherwise surface as a `µ` of the wrong width."""
-        relations = getattr(r2, "shape", (0,))[0]
+        relations = wire.leading(r2)
         if relations < 1:
             raise ValueError("quadratic: need at least one quadratic function")
-        n = self.quadratic.width
+        n = self.width
         for name, arr, lead in (
             ("r2", r2, (relations, n, n)),
             ("r1", r1, (relations, n)),
@@ -478,7 +480,7 @@ def _orbit(ring: HostSplitRing, stack: np.ndarray) -> np.ndarray:
     that the shape stays right if a later challenge space admits an
     automorphism of higher order. `galois` carries the batch axis, so each
     image is one call over the whole stack rather than one per element."""
-    exponent = 2 * ring.d - 1  # σ₋₁ : X ↦ X^{-1} = X^{2d-1}
+    exponent = sigma_exponent(ring.d)
     images = [stack]
     for _ in range(SIGMA_ORDER - 1):
         images.append(ring.galois(images[-1], exponent))

@@ -69,6 +69,24 @@ def is_signed(ring: HostSplitRing, arr: np.ndarray, *lead: int) -> bool:
     return True
 
 
+def leading(arr: np.ndarray) -> int:
+    """How many entries a stack's leading (per-statement) axis carries, for
+    an array that may not be one at all.
+
+    Every protocol layer here sizes a family of functions by this number
+    before gating its shape, so the answer for a malformed argument has to
+    be a number rather than an exception: `0` sends a non-array, or one
+    with no axes, on to the raising shape gate that names the actual
+    problem, instead of an `IndexError` from indexing `shape` above it.
+
+    Named once for the reason the rest of this module is: two layers that
+    spelled it themselves answered the same malformed statement two
+    different ways.
+    """
+    shape = getattr(arr, "shape", ())
+    return shape[0] if shape else 0
+
+
 def is_stack(scheme: AbdlopCommitment, arr: np.ndarray, *lead: int) -> bool:
     """Whether an untrusted `lead + (limbs, d)` ring stack is usable at all.
 

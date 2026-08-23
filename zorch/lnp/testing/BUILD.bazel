@@ -41,6 +41,7 @@ py_test(
         "//zorch/lnp:transcript",
         requirement("absl_py"),
         requirement("hash_frx"),
+        requirement("lattice_frx"),
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )

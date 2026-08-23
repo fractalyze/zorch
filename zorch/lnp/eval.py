@@ -130,6 +130,50 @@ class GarbageMasking:
         self._commit_label = domain + b"/garbage"
         self._mask_label = domain + b"/masked"
 
+    def commit(
+        self, bg: np.ndarray, s2_ring: np.ndarray, rng: np.random.Generator
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Draw the λ garbage terms and commit them: `(g, t_g = B_g·s2 + g)`.
+
+        The line that actually *defines* the extension, and therefore the
+        one that had least business being spelled once per protocol. `bg`
+        is gated here for the same reason — it was the only public matrix
+        in this package with no shape gate, so a wrong row count surfaced
+        from a ring `matvec` instead of naming itself."""
+        ring = self.scheme.ring
+        self.scheme.require_stack("eval: bg", bg, self.lam, self.scheme.randomness_cols)
+        g = self.sample(rng)
+        return g, ring.add(ring.matvec(bg, s2_ring), g)
+
+    def blocks(self, b: np.ndarray, bg: np.ndarray) -> np.ndarray:
+        """The BDLOP matrix the inner protocol opens `m‖g` against."""
+        return np.concatenate([b, bg])
+
+    def commitment(self, t_b: np.ndarray, t_g: np.ndarray) -> np.ndarray:
+        """The commitment to `m‖g`, in the order `blocks` is stacked in.
+
+        Named beside `blocks` because the two are one ordering contract, and
+        a round-trip cannot see them disagree — both sides build them the
+        same way."""
+        return np.concatenate([t_b, t_g])
+
+    def aggregate(self, gamma: np.ndarray, *blocks: np.ndarray) -> tuple:
+        """`Σ_u γ_{j,u}·block_u` for each row `j` of Γ, per block.
+
+        Γ's own contraction, so it belongs on the seam that owns Γ. Both
+        protocols aggregate — Fig. 5 over `(Fs1, Fm, target)`, Fig. 8 over
+        `(e2, e1, e0)` — and each block keeps whatever it holds past the
+        contracted axis, so one call serves a stack of elements and a stack
+        of whole matrices alike.
+
+        Returns block-major stacks, the shape both callers ultimately index
+        against; the per-row form one of them used to return had to be
+        transposed back before it could be used."""
+        ring = self.scheme.ring
+        return tuple(
+            np.stack([ring.combine(row, block) for row in gamma]) for block in blocks
+        )
+
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         """`g ← {x ∈ R_q : x̃ = 0}^λ` — the ring's uniform stack with the
         constant coefficient forced to zero. Private coins: this is masking,
@@ -194,8 +238,17 @@ class AbdlopEval:
     def __init__(self, opening: AbdlopOpening, lam: int) -> None:
         self.garbage = GarbageMasking(opening.scheme, lam, b"lnp/eval")
         self.opening = opening
+        # Named here for the reason its Fig. 8 sibling names it: a consumer
+        # should not have to know which layer down the scheme lives.
+        self.scheme = opening.scheme
         self.lam = lam
         self.ell = self.garbage.ell
+        # eq. 28's `e_j` selector, stacked over all j: the λ×λ identity over
+        # the ring. Depends only on `lam`, so it is built once rather than on
+        # every prove and every verify.
+        self._selector = self.scheme.ring.zeros(lam, lam)
+        diagonal = np.arange(lam)
+        self._selector[diagonal, diagonal] = self.scheme.ring.one()
 
     def prove(
         self,
@@ -218,14 +271,13 @@ class AbdlopEval:
         `message` is the ring stack `m` that `commit` was called with. The
         commitment is absent for the same reason it is absent there — the
         transcript arrived bound to it."""
-        ring = self.opening.scheme.ring
+        ring = self.scheme.ring
         self._require_functions(fs1, fm, target)
         s1_ring = ring.from_signed_stack(s1)
         s2_ring = ring.from_signed_stack(s2)
 
         # (1) garbage with a zero constant coefficient, committed under B_g.
-        g = self.garbage.sample(rng)
-        t_g = ring.add(ring.matvec(bg, s2_ring), g)
+        g, t_g = self.garbage.commit(bg, s2_ring, rng)
 
         # (2) γ, once t_g is bound.
         t, gamma = self.garbage.gamma(transcript, t_g, fs1.shape[0])
@@ -238,7 +290,7 @@ class AbdlopEval:
         #     — and costs λ matvecs instead of M, over a ring whose mul is
         #     a deliberate O(d²) host oracle. The blocks are the eq.-28
         #     relation's own, so they are computed once and used twice.
-        aggregated = self._blocks(fs1, fm, target, gamma)
+        aggregated = self.garbage.aggregate(gamma, fs1, fm, target)
         weighted_s1, weighted_m, weighted_target = aggregated
         h = ring.sub(
             ring.add(
@@ -258,7 +310,7 @@ class AbdlopEval:
         # the matrices its opening call takes.
         r1, rm, _ = self._relation(aggregated, h)
         opening, t = self.opening.prove(
-            a1, a2, np.concatenate([b, bg]), r1, rm, s1, s2, rng, t
+            a1, a2, self.garbage.blocks(b, bg), r1, rm, s1, s2, rng, t
         )
         return EvalProof(t_g=t_g, h=h, opening=opening), t
 
@@ -288,15 +340,17 @@ class AbdlopEval:
         t = self.garbage.observe(t, proof.h)
         if not self.garbage.vanishes(proof.h):
             return False, t
-        r1, rm, u = self._relation(self._blocks(fs1, fm, target, gamma), proof.h)
+        r1, rm, u = self._relation(
+            self.garbage.aggregate(gamma, fs1, fm, target), proof.h
+        )
         return self.opening.verify(
             a1,
             a2,
-            np.concatenate([b, bg]),
+            self.garbage.blocks(b, bg),
             r1,
             rm,
             t_a,
-            np.concatenate([t_b, proof.t_g]),
+            self.garbage.commitment(t_b, proof.t_g),
             u,
             proof.opening,
             t,
@@ -310,35 +364,12 @@ class AbdlopEval:
         gate, and an `EvalProof` carrying `None` there reached an
         `AttributeError` instead of a verdict. The layer below owns what
         its own wire means, so this defers rather than re-deriving it."""
-        scheme = self.opening.scheme
+        scheme = self.scheme
         return (
             isinstance(proof, EvalProof)
             and wire.is_stack(scheme, proof.t_g, self.lam)
             and wire.is_stack(scheme, proof.h, self.lam)
             and self.opening._is_well_formed(proof.opening)
-        )
-
-    def _blocks(
-        self,
-        fs1: np.ndarray,
-        fm: np.ndarray,
-        target: np.ndarray,
-        gamma: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """The γ-aggregated blocks `(Σ_u γ_{j,u}Fs1_u, Σ_u γ_{j,u}Fm_u,
-        Σ_u γ_{j,u}target_u)`, one row per j.
-
-        Both the prover's `h` and the eq.-28 relation are built from these,
-        so aggregating is done once per proof rather than once per use —
-        and the prover never materializes the M individual `F_u(s1, m)`.
-
-        `combine` contracts the leading (per-relation) axis and carries
-        whatever the block holds past it, so one call serves `target`'s
-        stack of elements and `fs1`/`fm`'s stacks of whole matrix rows."""
-        ring = self.opening.scheme.ring
-        return tuple(  # type: ignore[return-value]
-            np.stack([ring.combine(row, block) for row in gamma])
-            for block in (fs1, fm, target)
         )
 
     def _relation(
@@ -356,14 +387,11 @@ class AbdlopEval:
         — the `e_j` block being why the inner opening has to be built over
         the extended scheme. Stacked over all j, those blocks are just the
         λ×λ identity over the ring."""
-        ring = self.opening.scheme.ring
+        ring = self.scheme.ring
         weighted_s1, weighted_m, weighted_target = aggregated
-        eye = ring.zeros(self.lam, self.lam)
-        diagonal = np.arange(self.lam)
-        eye[diagonal, diagonal] = ring.one()
         return (
             weighted_s1,
-            np.concatenate([weighted_m, eye], axis=1),
+            np.concatenate([weighted_m, self._selector], axis=1),
             ring.add(h, weighted_target),
         )
 
@@ -372,8 +400,8 @@ class AbdlopEval:
     ) -> None:
         """The M linear functions are three aligned pieces; a mismatch here
         would otherwise surface as a γ of the wrong width."""
-        scheme = self.opening.scheme
-        relations = fs1.shape[0]
+        scheme = self.scheme
+        relations = wire.leading(fs1)
         if relations < 1:
             raise ValueError("eval: need at least one linear function")
         # The same gate as `target`'s, not a leading-axes-only variant of
@@ -502,8 +530,7 @@ class AbdlopQuadraticEval:
 
         # (1) λ garbage terms with zero constant coefficient, committed
         #     under B_g beside the message.
-        g = self.garbage.sample(rng)
-        t_g = ring.add(ring.matvec(bg, s2_ring), g)
+        g, t_g = self.garbage.commit(bg, s2_ring, rng)
 
         # (2) Γ, once t_g is bound.
         t, gamma = self.garbage.gamma(transcript, t_g, _count(e2))
@@ -515,7 +542,16 @@ class AbdlopQuadraticEval:
         #     are the eq.-38 relations' own, so they are built once.
         s = lift(ring, ring.from_signed_stack(s1), message)
         aggregates = self._aggregates(gamma, e2, e1, e0)
-        h = ring.add(g, np.concatenate([evaluate(ring, *a, s) for a in aggregates]))
+        # Named apart from this method's `a1`/`a2` — those are the Ajtai
+        # matrices, and shadowing them here sends the aggregates down to
+        # Fig. 7 in their place.
+        agg2, agg1, agg0 = aggregates
+        h = ring.add(
+            g,
+            np.concatenate(
+                [evaluate(ring, agg2[i], agg1[i], agg0[i], s) for i in range(self.lam)]
+            ),
+        )
 
         # (4) the N carried relations and the λ new ones, in one Fig. 7 run
         #     over the message `m‖g`.
@@ -524,7 +560,7 @@ class AbdlopQuadraticEval:
         proof, t = self.many.prove(
             a1,
             a2,
-            np.concatenate([b, bg]),
+            self.garbage.blocks(b, bg),
             b_quad,
             f2,
             f1,
@@ -573,13 +609,13 @@ class AbdlopQuadraticEval:
         return self.many.verify(
             a1,
             a2,
-            np.concatenate([b, bg]),
+            self.garbage.blocks(b, bg),
             b_quad,
             f2,
             f1,
             f0,
             t_a,
-            np.concatenate([t_b, proof.t_g]),
+            self.garbage.commitment(t_b, proof.t_g),
             proof.quadratic,
             t,
         )
@@ -591,7 +627,7 @@ class AbdlopQuadraticEval:
         Same reason: a layer above should not have to know that the masking
         sits three constructors down, and the tunnel `eval.many.quadratic
         .masking` would break on any re-parenting."""
-        self.many.quadratic.masking.require_witness(name, s1, s2)
+        self.many.require_witness(name, s1, s2)
 
     def _is_well_formed(self, proof: QuadraticEvalProof) -> bool:
         """Whether `proof` is structurally usable — every field of it, in
@@ -607,22 +643,14 @@ class AbdlopQuadraticEval:
 
     def _aggregates(
         self, gamma: np.ndarray, e2: np.ndarray, e1: np.ndarray, e0: np.ndarray
-    ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """`Σ_j γ_{i,j}·F_j` for each `i ∈ [λ]`, still over the caller's
-        width — one quadratic triple per row of `Γ`.
-
-        `combine` contracts the leading (per-evaluation) axis and carries
-        whatever the block holds past it, so one call serves `e0`'s stack
-        of ring elements and `e2`'s stack of whole matrices alike."""
-        ring = self.many.scheme.ring
-        return [
-            (ring.combine(row, e2), ring.combine(row, e1), ring.combine(row, e0))
-            for row in gamma
-        ]
+        width — three block-major stacks, the shape `_embed` wants."""
+        return self.garbage.aggregate(gamma, e2, e1, e0)
 
     def _relations(
         self,
-        aggregates: list[tuple[np.ndarray, np.ndarray, np.ndarray]],
+        aggregates: tuple[np.ndarray, np.ndarray, np.ndarray],
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -639,12 +667,8 @@ class AbdlopQuadraticEval:
         selector for one garbage term and the revealed `h_i` as a constant.
         Building them here rather than in `prove` is what lets the verifier
         rebuild the identical statement from `Γ` and `h` alone."""
-        ring = self.many.scheme.ring
-        new2, new1, new0 = self._embed(
-            np.stack([aggregate[0] for aggregate in aggregates]),
-            np.stack([aggregate[1] for aggregate in aggregates]),
-            np.stack([aggregate[2] for aggregate in aggregates]),
-        )
+        ring = self.scheme.ring
+        new2, new1, new0 = self._embed(*aggregates)
         # `_embed` writes only the caller's positions, so the garbage slots
         # it leaves zero take eq. 38's coefficient by assignment.
         new1[np.arange(self.lam), self._garbage_slots] = ring.one()
@@ -670,7 +694,7 @@ class AbdlopQuadraticEval:
         shifts right by the garbage the copies before it now carry, and
         `r0` is not indexed at all."""
         ring = self.many.scheme.ring
-        n = self.many.quadratic.width
+        n = self.many.width
         positions = self._positions
         wide2 = ring.zeros(len(r2), n, n)
         wide2[:, positions[:, None], positions[None, :]] = r2
