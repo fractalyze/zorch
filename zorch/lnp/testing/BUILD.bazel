@@ -11,7 +11,9 @@ py_library(
     visibility = ["//zorch:__subpackages__"],
     deps = [
         "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
         "//zorch/lnp:challenge",
+        "//zorch/lnp:masking",
         requirement("hash_frx"),
         requirement("lattice_frx"),
         requirement("numpy"),
@@ -50,6 +52,7 @@ py_test(
     deps = [
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
+        "//zorch/lnp:masking",
         "//zorch/lnp:opening",
         "//zorch/lnp/testing:lnp_fixture",
         requirement("absl_py"),

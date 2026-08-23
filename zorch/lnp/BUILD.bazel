@@ -37,8 +37,8 @@ py_library(
 )
 
 py_library(
-    name = "opening",
-    srcs = ["opening.py"],
+    name = "masking",
+    srcs = ["masking.py"],
     visibility = ["//visibility:public"],
     deps = [
         ":challenge",
@@ -47,6 +47,17 @@ py_library(
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "opening",
+    srcs = ["opening.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":masking",
+        "//zorch:byte_transcript",
         requirement("numpy"),
     ],
 )
