@@ -317,8 +317,7 @@ def _verify(
             t, cfg.queries[j], dtype, lsb_first=cfg.alpha_lsb_first
         )
         alpha = alpha[: cfg.queries[j]]
-        eqps = basis.proximity_basis(points_s, one)
-        b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
+        b_new = basis.proximity_basis(points_s, alpha).sum(axis=0)  # (2^num_vars,)
         h_new = (alpha * v).sum()
         if cur is not None:
             t, m = take(t)

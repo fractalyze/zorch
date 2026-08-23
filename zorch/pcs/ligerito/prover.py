@@ -478,8 +478,10 @@ def _open_jit(
         )
         alpha = alpha[: cfg.queries[j]]  # (Q,) partial-Lagrange weights
         points_s = code_j.eval_point(positions)  # (Q, num_vars) message-var points
-        eqps = basis.proximity_basis(points_s, one)  # (Q, 2^nv)
-        b_new = (alpha[:, None] * eqps).sum(axis=0)  # (2^num_vars,)
+        # α is passed to the expansion rather than applied to it — see
+        # `proximity_basis`. Worth the indirection: on the scaled-afterwards
+        # spelling this reduce was the largest single term in the m32 open.
+        b_new = basis.proximity_basis(points_s, alpha).sum(axis=0)  # (2^num_vars,)
         t, sep = separation(t, W, b_new)
         B = B + sep * b_new
         current = nxt
