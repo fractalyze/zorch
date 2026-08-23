@@ -15,7 +15,14 @@ agreement is two decisions, and they belong together in one place:
   bytes; picking the element count keeps the transcript describing the
   algebra rather than the storage layout.
 
-A protocol module that respelled either half would fork the wire, and no
+The squeeze direction is the same decision seen from the other side: a
+layer that aggregates N statements draws its weights off the transcript,
+and prover and verifier must derive them from the same bytes in the same
+order. `Π_eval`'s `γ ∈ Z_q` and `Π_many^(2)`'s `µ ∈ R_q` differ only in
+which domain they land in, so the byte derivation is stated once here and
+each layer states only its domain.
+
+A protocol module that respelled any of it would fork the wire, and no
 single-module test can see it — both sides of *that* protocol would agree
 with each other while disagreeing with its sibling. Hence one definition,
 imported.
@@ -23,9 +30,17 @@ imported.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
+from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
+from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
+
+# The byte sampler builds its draws from little-endian u64 chunks, so a
+# modulus at or above this has no uniform draw on this wire.
+_MAX_MODULUS = 1 << 64
 
 
 def stack_bytes(stack: np.ndarray) -> bytes:
@@ -62,3 +77,37 @@ def absorb_stacks(transcript: ByteTranscript, *stacks: np.ndarray) -> ByteTransc
     for stack in stacks:
         transcript = transcript.observe_slice(stack_bytes(stack), stack.shape[0])
     return transcript
+
+
+def require_u64_modulus(ring: HostSplitRing, who: str) -> int:
+    """`q = Π q_i` as one Python int, gated to what `squeeze_uniform` can
+    draw from.
+
+    Every layer that squeezes a transcript-derived weight needs this bound,
+    and it is the sampler's, not any one protocol's — so it is checked at
+    construction, where the caller can still choose a different ring, and
+    named after the layer that asked."""
+    modulus = math.prod(ring.q_moduli)
+    if modulus >= _MAX_MODULUS:
+        raise ValueError(
+            f"{who}: transcript draws are built from little-endian u64 "
+            f"chunks, so q must be below 2^64; this ring's q has "
+            f"{modulus.bit_length()} bits. An RNS chain this wide needs a "
+            f"wider sampler first."
+        )
+    return modulus
+
+
+def squeeze_uniform(
+    transcript: ByteTranscript, modulus: int, count: int
+) -> tuple[ByteTranscript, np.ndarray]:
+    """Squeeze `count` uniform residues mod `modulus`, and the advanced
+    transcript.
+
+    The byte count is derived from the modulus rather than passed, which is
+    what keeps two layers squeezing the same number of bytes for the same
+    draw — the squeeze-side twin of `absorb_stacks`. What the residues then
+    *mean* is the caller's: `Π_eval` reads them as `Z_q` scalars, Fig. 7 as
+    the coefficients of `R_q` elements."""
+    transcript, raw = transcript.sample_scalar(uniform_bytes_needed(modulus, count))
+    return transcript, uniform_from_bytes(raw, modulus, count)

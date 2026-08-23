@@ -23,9 +23,10 @@ Fiat-Shamir shape.
 The masking, the rejection budget and the `[Ban93]` norm bounds are not
 this protocol's own — Fig. 6 masks against exactly the same ones, and
 Fig. 8 runs both protocols against a single commitment. They live on the
-`Masking` this is built over (`masking.py`), together with the host/device
-boundary they imply. What is this module's own is the pair of first-round
-messages `(w, v)` and the verification equations that recompute them.
+`Masking` this is built over (`masking.py`), together with the Ajtai
+commitment algebra both protocols mask against and the host/device
+boundary they imply. What is this module's own is `v` — the relation
+message — and the equation that recomputes it.
 
 The transcript arrives already bound to the statement (the caller absorbed
 the commitment); this protocol absorbs only its own messages.
@@ -100,7 +101,7 @@ class AbdlopOpening:
             y1, y2 = masking.draw(rng)
             y1_ring = ring.from_signed_stack(y1)
             y2_ring = ring.from_signed_stack(y2)
-            w = ring.add(ring.matvec(a1, y1_ring), ring.matvec(a2, y2_ring))
+            w = masking.ajtai_mask(a1, a2, y1_ring, y2_ring)
             v = ring.sub(
                 ring.matvec(r1, y1_ring),
                 ring.matvec(rm, ring.matvec(b, y2_ring)),
@@ -140,19 +141,13 @@ class AbdlopOpening:
         c_elem = ring.from_signed(proof.c)
         z1_ring = ring.from_signed_stack(proof.z1)
         z2_ring = ring.from_signed_stack(proof.z2)
-        w = ring.sub(
-            ring.add(ring.matvec(a1, z1_ring), ring.matvec(a2, z2_ring)),
-            ring.scale(c_elem, t_a),
-        )
+        w = self.masking.recomputed_ajtai_mask(a1, a2, z1_ring, z2_ring, c_elem, t_a)
         # `c·m` for the implicit message `m = t_B − B·s2`: the same masking
         # the responses carry, applied to the quantity the BDLOP half commits
         # to but never sends.
-        masked_message = ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring))
+        z_m = self.masking.masked_message(c_elem, t_b, b, z2_ring)
         v = ring.sub(
-            ring.add(
-                ring.matvec(r1, z1_ring),
-                ring.matvec(rm, masked_message),
-            ),
+            ring.add(ring.matvec(r1, z1_ring), ring.matvec(rm, z_m)),
             ring.scale(c_elem, u),
         )
         advanced, c = self.masking.challenge_from(transcript, _LABEL, w, v)

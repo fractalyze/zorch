@@ -18,8 +18,12 @@ against the protocol.
 
 from __future__ import annotations
 
+from dataclasses import fields, replace
+from unittest import mock
+
 import numpy as np
 from absl.testing import absltest
+from lattice_frx import norms
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
@@ -30,6 +34,7 @@ from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
     QuadraticProof,
+    _dot,
 )
 from zorch.lnp.testing import lnp_fixture
 
@@ -69,13 +74,18 @@ class _Instance:
 
     def __init__(self, seed: int) -> None:
         self.ring = _ring()
-        self.scheme = _scheme(self.ring)
-        self.protocol = _quadratic(self.ring)
+        self.quadratic = _quadratic(self.ring)
+        # What `prove`/`verify` dispatch on — Fig. 6 here, Fig. 7 in
+        # `_ManyInstance`. `self.quadratic` stays the inner protocol, which
+        # is what carries the lifted width and the lift itself.
+        self.protocol: AbdlopQuadratic | AbdlopQuadraticMany = self.quadratic
+        # The scheme the protocol actually masks against, not a second one
+        # built to the same parameters.
+        self.scheme = self.quadratic.scheme
         rng = np.random.default_rng(seed)
         self.rng = rng
         ring = self.ring
-        n = self.protocol.width
-        self.assert_width = n
+        n = self.quadratic.width
 
         self.a1 = ring.uniform_stack(rng, _ROWS, _M1)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
@@ -90,18 +100,22 @@ class _Instance:
         s2_ring = ring.from_signed_stack(self.s2)
         self.message = ring.uniform_stack(rng, _ELL)
 
-        self.t_a = ring.add(
-            ring.matvec(self.a1, s1_ring), ring.matvec(self.a2, s2_ring)
+        commitment = self.scheme.commit(
+            self.a1, self.a2, self.b, s1_ring, s2_ring, self.message
         )
-        self.t_b = ring.add(ring.matvec(self.b, s2_ring), self.message)
+        self.t_a, self.t_b = commitment.t_a, commitment.t_b
 
         # f(s) = sᵀR2s + r1ᵀs + r0 with r0 solved so the statement is true.
         self.r2 = ring.uniform_stack(rng, n, n)
         self.r1 = ring.uniform_stack(rng, n)
-        s = self.protocol._lift(s1_ring, self.message)
-        quad = ring.matvec(s[None, :], ring.matvec(self.r2, s))
-        linear = ring.matvec(self.r1[None, :], s)
-        self.r0 = ring.neg(ring.add(quad, linear))
+        self.lifted = self.quadratic._lift(s1_ring, self.message)
+        self.r0 = ring.neg(self._vanishing_at(self.r2, self.r1))
+
+    def _vanishing_at(self, square: np.ndarray, linear: np.ndarray) -> np.ndarray:
+        """`sᵀ·square·s + linearᵀ·s` on the lifted witness — the value a
+        relation's constant term must cancel for `f(s) = 0` to hold."""
+        ring, s = self.ring, self.lifted
+        return ring.add(_dot(ring, s, ring.matvec(square, s)), _dot(ring, linear, s))
 
     def _statement(self) -> dict[str, np.ndarray]:
         return dict(
@@ -152,7 +166,7 @@ class QuadraticCompletenessTest(absltest.TestCase):
         """§4's `n = k(m1 + ℓ)` — the statement is written against the
         witness *and* its automorphism images, not the witness alone."""
         instance = _Instance(2)
-        self.assertEqual(instance.assert_width, SIGMA_ORDER * (_M1 + _ELL))
+        self.assertEqual(instance.quadratic.width, SIGMA_ORDER * (_M1 + _ELL))
         self.assertEqual(instance.r2.shape[:2], (SIGMA_ORDER * (_M1 + _ELL),) * 2)
 
     def test_the_statement_really_is_quadratic(self) -> None:
@@ -160,11 +174,8 @@ class QuadraticCompletenessTest(absltest.TestCase):
         nothing, every assertion below would still pass while proving only
         the linear layer's statement."""
         instance = _Instance(3)
-        ring = instance.ring
-        s = instance.protocol._lift(
-            ring.from_signed_stack(instance.s1), instance.message
-        )
-        quad = ring.matvec(s[None, :], ring.matvec(instance.r2, s))
+        ring, s = instance.ring, instance.lifted
+        quad = _dot(ring, s, ring.matvec(instance.r2, s))
         self.assertTrue(quad.any())
 
     def test_sigma_inner_product_is_the_squared_norm(self) -> None:
@@ -180,9 +191,9 @@ class QuadraticCompletenessTest(absltest.TestCase):
         rng = np.random.default_rng(99)
         coeffs = rng.integers(-3, 4, (ring.d,)).astype(np.int64)
         a = ring.from_signed(coeffs)
-        sigma_a = ring.galois(a, 2 * ring.d - 1)
+        sigma_a = ring.galois(a, -1)
         product = ring.mul(sigma_a, a)
-        want = int((coeffs.astype(object) ** 2).sum()) % lnp_fixture.SPLIT_Q[0]
+        want = norms.l2_squared(coeffs) % lnp_fixture.SPLIT_Q[0]
         self.assertEqual(int(ring.constant_coeff(product[None])[0, 0]), want)
 
     def test_distinct_transcripts_give_distinct_proofs(self) -> None:
@@ -201,7 +212,7 @@ class QuadraticCompletenessTest(absltest.TestCase):
         not spin."""
         instance = _Instance(5)
         starved = _quadratic(instance.ring, fail_prob=0.5)
-        with absltest.mock.patch.object(masking_module, "_rej1", return_value=False):
+        with mock.patch.object(masking_module, "_rej1", return_value=False):
             with self.assertRaisesRegex(RuntimeError, "prove"):
                 instance.prove(protocol=starved)
 
@@ -240,28 +251,20 @@ class QuadraticSoundnessTest(absltest.TestCase):
         """`t` is the one first-round message on the wire, so it is the one
         the verifier cannot recompute — and therefore the one a prover
         could try to move after seeing `c`."""
-        import dataclasses
-
-        tampered = dataclasses.replace(
-            self.proof, t=lnp_fixture.bump(self.proof.t, 0, 0, 0)
-        )
+        tampered = replace(self.proof, t=lnp_fixture.bump(self.proof.t, 0, 0, 0))
         self.assertFalse(self.instance.verify(tampered))
 
     def test_tampered_responses_are_rejected(self) -> None:
-        import dataclasses
-
         for field in ("c", "z1", "z2"):
             moved = getattr(self.proof, field).copy()
             moved[(0,) * moved.ndim] += 1
-            tampered = dataclasses.replace(self.proof, **{field: moved})
+            tampered = replace(self.proof, **{field: moved})
             self.assertFalse(self.instance.verify(tampered), field)
 
     def test_an_over_norm_response_is_rejected(self) -> None:
-        import dataclasses
-
         blown = self.proof.z1.copy()
         blown[0, 0] += int(10 * lnp_fixture.STD * self.instance.ring.d)
-        tampered = dataclasses.replace(self.proof, z1=blown)
+        tampered = replace(self.proof, z1=blown)
         self.assertFalse(self.instance.verify(tampered))
 
     def test_a_tampered_commitment_is_rejected(self) -> None:
@@ -287,10 +290,8 @@ class QuadraticWireTest(absltest.TestCase):
         """Drives off `dataclasses.fields`, so a field added to
         `QuadraticProof` without a gate in `_is_well_formed` fails here
         rather than reaching an AttributeError inside `verify`."""
-        import dataclasses
-
-        for field in dataclasses.fields(QuadraticProof):
-            tampered = dataclasses.replace(self.proof, **{field.name: None})  # type: ignore[arg-type]
+        for field in fields(QuadraticProof):
+            tampered = replace(self.proof, **{field.name: None})  # type: ignore[arg-type]
             self.assertFalse(self.instance.verify(tampered), field.name)
 
     def test_a_non_proof_is_a_verdict(self) -> None:
@@ -299,11 +300,9 @@ class QuadraticWireTest(absltest.TestCase):
     def test_an_out_of_range_residue_in_t_is_a_verdict(self) -> None:
         """`wire.is_stack`'s range half: a residue at or above the modulus
         is refused as a verdict, not raised out of a ring op."""
-        import dataclasses
-
         bad = self.proof.t.copy()
         bad[0, 0, 0] = lnp_fixture.SPLIT_Q[0]
-        tampered = dataclasses.replace(self.proof, t=bad)
+        tampered = replace(self.proof, t=bad)
         self.assertFalse(self.instance.verify(tampered))
 
     def test_a_malformed_statement_raises(self) -> None:
@@ -322,74 +321,32 @@ class QuadraticWireTest(absltest.TestCase):
                 call()
 
 
-class _ManyInstance:
+class _ManyInstance(_Instance):
     """N honest quadratic relations over one commitment.
 
-    Each is built the same way the single-relation fixture is — constant
-    term solved so the relation holds — because a statement that is only
-    true in aggregate would pass Fig. 7 while failing what it claims."""
+    The publics, witness and commitment are the single-relation fixture's —
+    Fig. 7 changes only the statement — so this replaces `r2`/`r1`/`r0`
+    with a relation-indexed stack and wraps the protocol. Each relation is
+    built the same way the base one is, constant term solved so it holds on
+    its own, because a statement that is only true in aggregate would pass
+    Fig. 7 while failing what it claims."""
 
     def __init__(self, seed: int, relations: int = 3) -> None:
-        self.base = _Instance(seed)
+        super().__init__(seed)
         self.relations = relations
-        ring = self.base.ring
-        self.protocol = AbdlopQuadraticMany(self.base.protocol)
-        rng = self.base.rng
-        n = self.base.protocol.width
-        s = self.base.protocol._lift(
-            ring.from_signed_stack(self.base.s1), self.base.message
-        )
+        ring, rng, n = self.ring, self.rng, self.quadratic.width
         squares, linears, constants = [], [], []
         for _ in range(relations):
             square = ring.uniform_stack(rng, n, n)
             linear = ring.uniform_stack(rng, n)
             squares.append(square)
             linears.append(linear)
-            constants.append(
-                ring.neg(
-                    ring.add(
-                        ring.matvec(s[None, :], ring.matvec(square, s)),
-                        ring.matvec(linear[None, :], s),
-                    )
-                )
-            )
+            constants.append(ring.neg(self._vanishing_at(square, linear)))
         self.r2 = np.stack(squares)
         self.r1 = np.stack(linears)
         self.r0 = np.stack(constants)
-
-    def _statement(self) -> dict[str, np.ndarray]:
-        return dict(
-            a1=self.base.a1,
-            a2=self.base.a2,
-            b=self.base.b,
-            b_quad=self.base.b_quad,
-            r2=self.r2,
-            r1=self.r1,
-            r0=self.r0,
-        )
-
-    def prove(
-        self, tag: bytes = b"", **overrides: np.ndarray
-    ) -> tuple[QuadraticProof, ByteTranscript]:
-        args = self._statement()
-        args.update(overrides)
-        return self.protocol.prove(
-            s1=self.base.s1,
-            s2=self.base.s2,
-            message=self.base.message,
-            rng=self.base.rng,
-            transcript=_transcript(tag),
-            **args,
-        )
-
-    def verify(
-        self, proof: QuadraticProof, tag: bytes = b"", **overrides: np.ndarray
-    ) -> bool:
-        args = self._statement()
-        args.update(t_a=self.base.t_a, t_b=self.base.t_b)
-        args.update(overrides)
-        ok, _ = self.protocol.verify(proof=proof, transcript=_transcript(tag), **args)
-        return ok
+        self.many = AbdlopQuadraticMany(self.quadratic)
+        self.protocol = self.many
 
 
 class QuadraticManyTest(absltest.TestCase):
@@ -427,8 +384,8 @@ class QuadraticManyTest(absltest.TestCase):
         rests on that: a scalar drawn into the constant coefficient would
         leave the other `d − 1` at zero and cost the degree factor."""
         instance = _ManyInstance(33)
-        ring = instance.base.ring
-        _, mu = instance.protocol._mu(_transcript(), instance.relations)
+        ring = instance.ring
+        _, mu = instance.many._mu(_transcript(), instance.relations)
         self.assertEqual(mu.shape, (instance.relations, 1, ring.d))
         for j in range(instance.relations):
             self.assertGreater(int(np.count_nonzero(mu[j])), 1)

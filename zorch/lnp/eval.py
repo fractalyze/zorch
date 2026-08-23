@@ -48,23 +48,17 @@ is what the layer below is for.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
-from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
 from zorch.lnp.opening import AbdlopOpening, OpeningProof
-from zorch.lnp.transcript import absorb_stacks
+from zorch.lnp.transcript import absorb_stacks, require_u64_modulus, squeeze_uniform
 
 _LABEL_COMMIT = b"lnp/eval/garbage"
 _LABEL_MASK = b"lnp/eval/masked"
-
-# `γ` is drawn as a Z_q scalar off the transcript, and the byte sampler
-# builds its draws from little-endian u64 chunks — so q must fit one.
-_MAX_MODULUS = 1 << 64
 
 
 @dataclass(frozen=True)
@@ -102,18 +96,11 @@ class AbdlopEval:
                 f"messages, too few for lam={lam} garbage terms on top of a "
                 f"message vector — build it over the extended scheme"
             )
-        ring = scheme.ring
-        modulus = math.prod(ring.q_moduli)
-        if modulus >= _MAX_MODULUS:
-            raise ValueError(
-                f"eval: γ is a Z_q scalar drawn from u64 chunks, so q must be "
-                f"below 2^64; this ring's q has {modulus.bit_length()} bits. "
-                f"An RNS chain this wide needs a wider γ sampler first."
-            )
         self.opening = opening
         self.lam = lam
         self.ell = ell
-        self.modulus = modulus
+        # `γ` is a Z_q scalar squeezed off the transcript.
+        self.modulus = require_u64_modulus(scheme.ring, "eval")
 
     def prove(
         self,
@@ -260,8 +247,7 @@ class AbdlopEval:
         one derivation both sides replay."""
         count = self.lam * relations
         t = absorb_stacks(transcript.observe_label(_LABEL_COMMIT), t_g)
-        t, raw = t.sample_scalar(uniform_bytes_needed(self.modulus, count))
-        draws = uniform_from_bytes(raw, self.modulus, count)
+        t, draws = squeeze_uniform(t, self.modulus, count)
         return t, draws.reshape(self.lam, relations)
 
     def _blocks(

@@ -68,23 +68,18 @@ posture.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 
 import numpy as np
-from lattice_frx.sampler import uniform_bytes_needed, uniform_from_bytes
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
 from zorch.lnp.masking import Masking
+from zorch.lnp.transcript import require_u64_modulus, squeeze_uniform
 
 _LABEL = b"lnp/quad"
 _LABEL_MANY = b"lnp/quad/aggregate"
-
-# `µ` is drawn coefficient-wise off the transcript, and the byte sampler
-# builds its draws from little-endian u64 chunks — so q must fit one.
-_MAX_MODULUS = 1 << 64
 
 # §4's `k`: the order of σ₋₁, which is an involution. See the module
 # docstring on why this is pinned rather than taken, and on the collision
@@ -161,7 +156,7 @@ class AbdlopQuadratic:
             y1, y2 = masking.draw(rng)
             y1_ring = ring.from_signed_stack(y1)
             y2_ring = ring.from_signed_stack(y2)
-            w = ring.add(ring.matvec(a1, y1_ring), ring.matvec(a2, y2_ring))
+            w = masking.ajtai_mask(a1, a2, y1_ring, y2_ring)
             # eq. 29: the message half masks `m` through `−B·y2`, because
             # that is the only way the verifier reaches `m`.
             y = self._lift(y1_ring, ring.neg(ring.matvec(b, y2_ring)))
@@ -211,21 +206,16 @@ class AbdlopQuadratic:
             return False, transcript
 
         c_elem = ring.from_signed(proof.c)
-        c_stack = c_elem[None]
         z1_ring = ring.from_signed_stack(proof.z1)
         z2_ring = ring.from_signed_stack(proof.z2)
-        w = ring.sub(
-            ring.add(ring.matvec(a1, z1_ring), ring.matvec(a2, z2_ring)),
-            ring.scale(c_elem, t_a),
-        )
+        masking = self.masking
+        w = masking.recomputed_ajtai_mask(a1, a2, z1_ring, z2_ring, c_elem, t_a)
         # eq. 30's `z`: the response half, and the message half the verifier
-        # can form — `z_m = c·t_B − B·z2` (`opening.py` computes the same
-        # quantity for the linear check).
-        z_m = ring.sub(ring.scale(c_elem, t_b), ring.matvec(b, z2_ring))
-        z = self._lift(z1_ring, z_m)
+        # can form through the shared `c·t_B − B·z2`.
+        z = self._lift(z1_ring, masking.masked_message(c_elem, t_b, b, z2_ring))
         # f := c·t − bᵀ·z2, then v := zᵀR2z + c·r1ᵀz + c²·r0 − f.
         f = ring.sub(ring.scale(c_elem, proof.t), _dot(ring, b_quad, z2_ring))
-        c_sq = ring.scale(c_elem, c_stack)[0]
+        c_sq = ring.mul(c_elem, c_elem)
         v = ring.sub(
             ring.add(
                 ring.add(
@@ -236,7 +226,7 @@ class AbdlopQuadratic:
             ),
             f,
         )
-        advanced, c = self.masking.challenge_from(transcript, _LABEL, w, proof.t, v)
+        advanced, c = masking.challenge_from(transcript, _LABEL, w, proof.t, v)
         return bool(np.array_equal(c, proof.c)), advanced
 
     def _lift(self, s1_part: np.ndarray, message_part: np.ndarray) -> np.ndarray:
@@ -303,16 +293,8 @@ class AbdlopQuadraticMany:
     def __init__(self, quadratic: AbdlopQuadratic) -> None:
         self.quadratic = quadratic
         self.scheme = quadratic.scheme
-        ring = self.scheme.ring
-        modulus = math.prod(ring.q_moduli)
-        if modulus >= _MAX_MODULUS:
-            raise ValueError(
-                f"quadratic: µ is drawn coefficient-wise from u64 chunks, so "
-                f"q must be below 2^64; this ring's q has "
-                f"{modulus.bit_length()} bits. An RNS chain this wide needs a "
-                f"wider sampler first."
-            )
-        self.modulus = modulus
+        # `µ` is squeezed off the transcript one coefficient at a time.
+        self.modulus = require_u64_modulus(self.scheme.ring, "quadratic")
 
     def prove(
         self,
@@ -332,22 +314,9 @@ class AbdlopQuadraticMany:
         """One proof that every `f_j(s) = 0`.
 
         `r2`/`r1`/`r0` carry a leading relation axis over Fig. 6's shapes."""
-        self._require_functions(r2, r1, r0)
-        advanced, mu = self._mu(transcript, r2.shape[0])
-        one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
+        advanced, one_r2, one_r1, one_r0 = self._reduce(transcript, r2, r1, r0)
         return self.quadratic.prove(
-            a1,
-            a2,
-            b,
-            b_quad,
-            one_r2,
-            one_r1,
-            one_r0,
-            s1,
-            s2,
-            message,
-            rng,
-            advanced,
+            a1, a2, b, b_quad, one_r2, one_r1, one_r0, s1, s2, message, rng, advanced
         )
 
     def verify(
@@ -365,22 +334,28 @@ class AbdlopQuadraticMany:
         transcript: ByteTranscript,
     ) -> tuple[bool, ByteTranscript]:
         """Re-derive `µ`, aggregate the same way, and defer to Fig. 6."""
+        advanced, one_r2, one_r1, one_r0 = self._reduce(transcript, r2, r1, r0)
+        return self.quadratic.verify(
+            a1, a2, b, b_quad, one_r2, one_r1, one_r0, t_a, t_b, proof, advanced
+        )
+
+    def _reduce(
+        self,
+        transcript: ByteTranscript,
+        r2: np.ndarray,
+        r1: np.ndarray,
+        r0: np.ndarray,
+    ) -> tuple[ByteTranscript, np.ndarray, np.ndarray, np.ndarray]:
+        """Validate, squeeze `µ`, aggregate — the whole of what Fig. 7 does
+        before Fig. 6 takes over.
+
+        One method rather than three lines repeated on each side: prover and
+        verifier must reach the *same* aggregated function or the protocol
+        breaks, and two hand-kept copies of that derivation is exactly how
+        they would stop."""
         self._require_functions(r2, r1, r0)
         advanced, mu = self._mu(transcript, r2.shape[0])
-        one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
-        return self.quadratic.verify(
-            a1,
-            a2,
-            b,
-            b_quad,
-            one_r2,
-            one_r1,
-            one_r0,
-            t_a,
-            t_b,
-            proof,
-            advanced,
-        )
+        return advanced, *self._aggregate(mu, r2, r1, r0)
 
     def _mu(
         self, transcript: ByteTranscript, relations: int
@@ -391,10 +366,8 @@ class AbdlopQuadraticMany:
         No absorb precedes it: Fig. 7 opens with the verifier's message, and
         the transcript arrived already bound to the statement."""
         ring = self.scheme.ring
-        count = relations * ring.d
         t = transcript.observe_label(_LABEL_MANY)
-        t, raw = t.sample_scalar(uniform_bytes_needed(self.modulus, count))
-        draws = uniform_from_bytes(raw, self.modulus, count)
+        t, draws = squeeze_uniform(t, self.modulus, relations * ring.d)
         return t, ring.from_signed_stack(draws.reshape(relations, ring.d))
 
     def _aggregate(
@@ -427,7 +400,7 @@ class AbdlopQuadraticMany:
     ) -> None:
         """The N functions are three aligned pieces; a mismatch would
         otherwise surface as a `µ` of the wrong width."""
-        relations = getattr(r2, "shape", (0,))[0]
+        relations = r2.shape[0]
         if relations < 1:
             raise ValueError("quadratic: need at least one quadratic function")
         n = self.quadratic.width
@@ -446,11 +419,13 @@ def _orbit(ring: HostSplitRing, stack: np.ndarray) -> np.ndarray:
     loop is written against `SIGMA_ORDER` rather than spelled as a pair so
     that the shape stays right if a later challenge space admits an
     automorphism of higher order. `galois` carries the batch axis, so each
-    image is one call over the whole stack rather than one per element."""
-    exponent = 2 * ring.d - 1  # σ₋₁ : X ↦ X^{-1} = X^{2d-1}
+    image is one call over the whole stack rather than one per element.
+
+    `σ₋₁` is passed as the exponent `-1` the paper writes; the ring reduces
+    it mod `2d` to `X^{2d-1}` itself."""
     images = [stack]
     for _ in range(SIGMA_ORDER - 1):
-        images.append(ring.galois(images[-1], exponent))
+        images.append(ring.galois(images[-1], -1))
     return np.concatenate(images)
 
 

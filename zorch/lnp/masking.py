@@ -10,6 +10,14 @@ go into the transcript and which equation the verifier checks — the
 parameter point, the draw, the response, the Rej1 gates and the `[Ban93]`
 norm bounds are one thing, held here.
 
+So is the commitment algebra they mask *against*. Both send the Ajtai
+mask `w = A1·y1 + A2·y2`, both recompute it as `A1·z1 + A2·z2 − c·t_A`,
+and both reach the BDLOP message only through `c·t_B − B·z2` — the
+relaxed opening `zorch/commit/ajtai.py` names as this layer's notion
+rather than the commitment seam's. Each protocol is then left holding
+only what is genuinely its own: its second first-round message, and the
+equation that recomputes it.
+
 They also have to be *the same* thing rather than merely alike. Fig. 8
 runs a Π_eval-shaped layer over Π_many^(2), so a single proof carries
 both protocols against one commitment; two parameter objects that drifted
@@ -156,6 +164,41 @@ class Masking:
         t, raw = t.sample_scalar(self.challenge_bytes)
         return t, self.challenge.from_bytes(raw)
 
+    def ajtai_mask(
+        self, a1: np.ndarray, a2: np.ndarray, y1: np.ndarray, y2: np.ndarray
+    ) -> np.ndarray:
+        """`A1·y1 + A2·y2` — the Ajtai half of the first-round message, the
+        one first-round message every masked protocol sends."""
+        ring = self.scheme.ring
+        return ring.add(ring.matvec(a1, y1), ring.matvec(a2, y2))
+
+    def recomputed_ajtai_mask(
+        self,
+        a1: np.ndarray,
+        a2: np.ndarray,
+        z1: np.ndarray,
+        z2: np.ndarray,
+        c: np.ndarray,
+        t_a: np.ndarray,
+    ) -> np.ndarray:
+        """`A1·z1 + A2·z2 − c·t_A` — `ajtai_mask`'s verifier dual, i.e. the
+        relaxed opening equation. Equal to the prover's `w` exactly when
+        `(z1, z2)` opens `t_A` with challenge `c`, which is what makes
+        hashing `w` a check on it rather than merely a binding."""
+        ring = self.scheme.ring
+        return ring.sub(self.ajtai_mask(a1, a2, z1, z2), ring.scale(c, t_a))
+
+    def masked_message(
+        self, c: np.ndarray, t_b: np.ndarray, b: np.ndarray, z2: np.ndarray
+    ) -> np.ndarray:
+        """`c·t_B − B·z2`, the masked BDLOP message `c·m`.
+
+        The message is never sent, so this is the only handle a verifier
+        has on it — Fig. 4 feeds it to the linear relation and Fig. 6 lifts
+        it into eq. 30's `z`."""
+        ring = self.scheme.ring
+        return ring.sub(ring.scale(c, t_b), ring.matvec(b, z2))
+
     def respond(
         self, c: np.ndarray, s1: np.ndarray, s2: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -226,9 +269,8 @@ def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
     responses' norm statement lives in unreduced ℤ, so no ring (mod-q)
     product may touch them. int64 is exact here — coefficients are bounded
     by `d·κ·‖s‖∞` plus a Gaussian tail, orders of magnitude under 2^63."""
-    return np.stack(
-        [negacyclic_mul(c.astype(np.int64), row.astype(np.int64)) for row in signed]
-    )
+    c64 = c.astype(np.int64, copy=False)
+    return np.stack([negacyclic_mul(c64, row.astype(np.int64)) for row in signed])
 
 
 def _coin(rng: np.random.Generator) -> float:

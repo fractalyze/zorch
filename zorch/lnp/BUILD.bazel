@@ -21,6 +21,7 @@ py_library(
     visibility = ["//visibility:public"],
     deps = [
         "//zorch:byte_transcript",
+        requirement("lattice_frx"),
         requirement("numpy"),
     ],
 )
@@ -70,6 +71,7 @@ py_library(
         ":masking",
         ":wire",
         "//zorch:byte_transcript",
+        requirement("lattice_frx"),
         requirement("numpy"),
     ],
 )

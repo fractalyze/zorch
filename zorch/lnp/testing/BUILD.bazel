@@ -70,6 +70,7 @@ py_test(
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         "//zorch/lnp:eval",
+        "//zorch/lnp:opening",
         "//zorch/lnp/testing:lnp_fixture",
         requirement("absl_py"),
         requirement("hash_frx"),
