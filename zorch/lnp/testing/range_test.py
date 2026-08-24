@@ -57,14 +57,16 @@ _LAM = 2
 _WITNESS_COLS = _M1 + _ELL
 
 
-def _scheme(ring: HostSplitRing, mask_cols: int) -> AbdlopCommitment:
+def _scheme(
+    ring: HostSplitRing, mask_cols: int, s1_cols: int = _M1
+) -> AbdlopCommitment:
     """The **twice-extended** scheme: its BDLOP half carries `ℓ + 256/d + 1
     + λ` messages, because `m‖y‖b‖g` is what the innermost protocol opens —
     this layer's mask and sign, and the garbage of the layer below."""
     return AbdlopCommitment(
         ring,
         rows=_ROWS,
-        s1_cols=_M1,
+        s1_cols=s1_cols,
         randomness_cols=_M2,
         messages=_ELL + mask_cols + 1 + _LAM,
         beta1_inf=1,
@@ -72,10 +74,21 @@ def _scheme(ring: HostSplitRing, mask_cols: int) -> AbdlopCommitment:
     )
 
 
-def _protocol(ring: HostSplitRing, masking: BimodalMasking) -> ApproximateRange:
-    scheme = _scheme(ring, masking.mask_cols)
-    inner = lnp_fixture.masking(scheme)
-    evaluation = AbdlopQuadraticEval(AbdlopQuadraticMany(AbdlopQuadratic(inner)), _LAM)
+def _protocol(
+    ring: HostSplitRing,
+    masking: BimodalMasking,
+    s1_cols: int = _M1,
+    s1_take: int | None = None,
+) -> ApproximateRange:
+    scheme = _scheme(ring, masking.mask_cols, s1_cols)
+    # Re-derived for the same reason `quadratic_eval_test` re-derives it: the
+    # point's T_1 bounds ‖s1‖ over `_M1` columns, and a wider Ajtai half
+    # masked there rejects its way to `exhausted`.
+    std = lnp_fixture.GAMMA * lnp_fixture.ETA * float(np.sqrt(s1_cols * ring.d))
+    inner = lnp_fixture.masking(scheme, s1_std=std)
+    evaluation = AbdlopQuadraticEval(
+        AbdlopQuadraticMany(AbdlopQuadratic(inner)), _LAM, s1_take=s1_take
+    )
     return ApproximateRange(evaluation, masking)
 
 
@@ -87,17 +100,19 @@ class _Instance:
     """One honest Fig. 9 statement: publics, a short ternary witness, its
     commitment, and the protocol over both."""
 
-    def __init__(self, seed: int) -> None:
+    def __init__(
+        self, seed: int, s1_cols: int = _M1, s1_take: int | None = None
+    ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
         self.masking = lnp_fixture.bimodal(ring, _WITNESS_COLS)
-        self.protocol = _protocol(ring, self.masking)
+        self.protocol = _protocol(ring, self.masking, s1_cols, s1_take)
         self.scheme = self.protocol.scheme
         mask_cols = self.masking.mask_cols
         rng = np.random.default_rng(seed)
         self.rng = rng
 
-        self.a1 = ring.uniform_stack(rng, _ROWS, _M1)
+        self.a1 = ring.uniform_stack(rng, _ROWS, s1_cols)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
         self.b = ring.uniform_stack(rng, _ELL, _M2)
         self.b_mask = ring.uniform_stack(rng, mask_cols, _M2)
@@ -108,7 +123,7 @@ class _Instance:
         # Both halves ternary, and the *message* too — unlike every other
         # suite here, where `m` is uniform. `m` is half of the vector whose
         # norm this protocol bounds, so a uniform one is not a witness.
-        self.s1 = rng.integers(-1, 2, (_M1, ring.d)).astype(np.int64)
+        self.s1 = rng.integers(-1, 2, (s1_cols, ring.d)).astype(np.int64)
         self.s2 = rng.integers(-1, 2, (_M2, ring.d)).astype(np.int64)
         self.message = rng.integers(-1, 2, (_ELL, ring.d)).astype(np.int64)
 
@@ -182,7 +197,9 @@ class _Instance:
             y = np.zeros((self.masking.mask_cols, ring.d), dtype=np.int64)
         return lift(
             ring,
-            ring.from_signed_stack(self.s1),
+            # Carved to what the eval layer's statement covers, since this is
+            # that layer's lift and the positions index into it.
+            ring.from_signed_stack(self.s1[: self.protocol.evaluation.s1_take]),
             ring.from_signed_stack(np.concatenate([self.message, y, sign_row])),
         )
 
@@ -193,6 +210,21 @@ class RangeCompletenessTest(absltest.TestCase):
             with self.subTest(seed=seed):
                 instance = _Instance(seed)
                 self.assertTrue(instance.verify(instance.prove()))
+
+    def test_a_carved_ajtai_half_bounds_only_the_prefix(self) -> None:
+        """The Ajtai carve reaches this layer too.
+
+        `ApproximateRange` derives its positions from the *eval layer's*
+        lift, so when that layer covers a prefix of a wider Ajtai half —
+        which is what Fig. 10 does, committing to `(s1, x)` — this layer's
+        `s1_span`, witness positions and chunk count have to follow it.
+        Reading the scheme's own width instead puts the mask and sign
+        positions past the end of the lift the statement is written
+        against."""
+        instance = _Instance(50, s1_cols=_M1 + 1, s1_take=_M1)
+        self.assertEqual(instance.protocol.evaluation.s1_take, _M1)
+        proof = instance.prove()
+        self.assertTrue(instance.verify(proof))
 
     def test_the_revealed_projection_is_within_the_norm_bound(self) -> None:
         instance = _Instance(4)
@@ -381,6 +413,39 @@ class RangeLayoutTest(absltest.TestCase):
         )
         got = s[instance.protocol._witness_positions]
         np.testing.assert_array_equal(got, want)
+
+    def test_the_positions_follow_a_carved_ajtai_half(self) -> None:
+        """The carve moves every position after `s1`, not just `s1`'s own.
+
+        `lift` orbits each half as a whole, so a narrower Ajtai half shrinks
+        `s1_span` and shifts the message copies — and with them the mask and
+        the sign — left by twice the columns dropped. Pinned against `lift`
+        rather than a round-trip for this suite's standing reason: both
+        sides index identically, so a wrong carve proves a statement about a
+        permutation and both agree on it."""
+        instance = _Instance(17, s1_cols=_M1 + 1, s1_take=_M1)
+        ring = instance.ring
+        protocol = instance.protocol
+        _, y = instance.masking.draw(np.random.default_rng(4))
+        s = instance.lifted(-1, y)
+
+        sign_row = np.zeros((1, ring.d), dtype=np.int64)
+        sign_row[0, 0] = -1
+        np.testing.assert_array_equal(
+            s[protocol._witness_positions],
+            np.concatenate(
+                [
+                    ring.from_signed_stack(instance.s1[:_M1]),
+                    ring.from_signed_stack(instance.message),
+                ]
+            ),
+        )
+        np.testing.assert_array_equal(
+            s[protocol._mask_positions], ring.from_signed_stack(y)
+        )
+        np.testing.assert_array_equal(
+            s[protocol._sign_position], ring.from_signed_stack(sign_row)[0]
+        )
 
     def test_the_mask_and_sign_interleave_into_the_first_automorphism_copy(
         self,

@@ -173,13 +173,19 @@ class ApproximateRange:
         # as the garbage below does. Only the identity copy is ever indexed:
         # `T` already carries the automorphism, so a statement about `σ(x)`
         # written against `σ`'s copy would apply it twice.
-        s1_span = SIGMA_ORDER * scheme.s1_cols
+        # Off the eval layer's carve, not the scheme's own width: that layer
+        # may cover a prefix of the Ajtai half — Fig. 10 commits to `(s1, x)`
+        # and writes its statement about `s1` — and these positions index
+        # *its* lift. Reading `scheme.s1_cols` here puts the mask and sign
+        # past the end of the lift the statement is written against.
+        s1_take = evaluation.s1_take
+        s1_span = SIGMA_ORDER * s1_take
         self._witness_positions = np.concatenate(
-            [np.arange(scheme.s1_cols), s1_span + np.arange(ell)]
+            [np.arange(s1_take), s1_span + np.arange(ell)]
         )
         self._mask_positions = s1_span + ell + np.arange(masking.mask_cols)
         self._sign_position = s1_span + ell + masking.mask_cols
-        self._chunks = scheme.s1_cols + ell
+        self._chunks = s1_take + ell
         # σ₋₁ applied to each monomial `X^j`, which is what `T(⃗δ_j, ·)`
         # contributes. Row `j` of the identity *is* `X^j`'s coefficient
         # vector, so the ring's own constructor builds the table — writing
@@ -225,7 +231,13 @@ class ApproximateRange:
         message_ring = ring.from_signed_stack(message) if self.ell else ring.zeros(0)
         # The projected witness, over ℤ: `⃗s` is the concatenated balanced
         # coefficients of `(s1, m)`, which is the vector Lemma 2.9 bounds.
-        flat = np.concatenate([s1, message]).astype(np.int64).reshape(-1)
+        # `s1` is carved to what the eval layer's statement covers — the
+        # bound is about that prefix, and `R` is squeezed to its width.
+        flat = (
+            np.concatenate([s1[: self.evaluation.s1_take], message])
+            .astype(np.int64)
+            .reshape(-1)
+        )
         blocks = self._blocks(b, b_mask, b_sign)
         # Witness-only, so a rejected attempt would recompute them unchanged
         # — the hoist `quadratic.prove` makes for the same reason. Only the
