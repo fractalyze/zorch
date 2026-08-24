@@ -168,11 +168,13 @@ class GarbageMasking:
 
         Returns block-major stacks, the shape both callers ultimately index
         against; the per-row form one of them used to return had to be
-        transposed back before it could be used."""
+        transposed back before it could be used.
+
+        Γ goes down whole rather than a row at a time: `combine` contracts a
+        weight matrix natively, and feeding it row-wise made it re-walk the
+        same block once per row."""
         ring = self.scheme.ring
-        return tuple(
-            np.stack([ring.combine(row, block) for row in gamma]) for block in blocks
-        )
+        return tuple(ring.combine(gamma, block) for block in blocks)
 
     def sample(self, rng: np.random.Generator) -> np.ndarray:
         """`g ← {x ∈ R_q : x̃ = 0}^λ` — the ring's uniform stack with the
