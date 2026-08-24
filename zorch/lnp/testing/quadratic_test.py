@@ -32,6 +32,7 @@ from zorch.lnp.quadratic import (
     QuadraticProof,
     evaluate,
     lift,
+    lift_positions,
     sigma_exponent,
 )
 from zorch.lnp.testing import lnp_fixture
@@ -149,6 +150,36 @@ class QuadraticCompletenessTest(absltest.TestCase):
         instance = _Instance(1)
         proof, _ = instance.prove()
         self.assertTrue(instance.verify(proof))
+
+    def test_lift_positions_selects_the_sub_lift_it_names(self) -> None:
+        """`lift_positions` is `lift`'s index map: the positions a narrower
+        statement's lift occupies inside a wider one.
+
+        Pinned against `lift` itself rather than a re-derived index list —
+        the whole point of the helper is that the layout has one owner, so a
+        test that re-spells the layout would defeat it. Building the wide
+        lift of a stack whose extra columns are zero and indexing it with
+        the map must give the narrow lift exactly."""
+        ring = _ring()
+        rng = np.random.default_rng(70)
+        s1_take, s1_cols, msg_take, msg_cols = 2, 5, 3, 7
+
+        s1 = ring.uniform_stack(rng, s1_take)
+        msg = ring.uniform_stack(rng, msg_take)
+        wide_s1 = np.concatenate([s1, ring.zeros(s1_cols - s1_take)])
+        wide_msg = np.concatenate([msg, ring.zeros(msg_cols - msg_take)])
+
+        positions = lift_positions(s1_take, s1_cols, msg_take, msg_cols)
+        np.testing.assert_array_equal(
+            lift(ring, wide_s1, wide_msg)[positions], lift(ring, s1, msg)
+        )
+
+    def test_lift_positions_is_the_identity_map_when_nothing_widens(self) -> None:
+        """The case every caller before Fig. 10 was written against: the
+        statement occupies the whole lift, so the map is `arange`."""
+        np.testing.assert_array_equal(
+            lift_positions(4, 4, 6, 6), np.arange(SIGMA_ORDER * (4 + 6))
+        )
 
     def test_the_lifted_width_is_k_times_the_message_and_witness(self) -> None:
         """§4's `n = k(m1 + ℓ)` — the statement is written against the

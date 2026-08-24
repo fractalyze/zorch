@@ -456,6 +456,41 @@ def lift(
     return np.concatenate([_orbit(ring, s1_part), _orbit(ring, message_part)])
 
 
+def lift_positions(
+    s1_take: int, s1_cols: int, message_take: int, message_cols: int
+) -> np.ndarray:
+    """Where a narrower statement's `lift` sits inside a wider one.
+
+    `lift` orbits each half as a whole, so a layer that appends to either
+    half shifts every automorphism copy after the first — the positions are
+    not a prefix, and each of the three places that has derived them by
+    hand derived the same rule again. This is that rule, once.
+
+    Both halves carve the same way. `s1_take` of `s1_cols` and
+    `message_take` of `message_cols` are taken from the head of each copy,
+    which is where a layer that *appends* leaves the caller's own columns:
+    the eval layer appends garbage to the message, and Fig. 10 appends the
+    binary-decomposition vector `x` to the Ajtai half.
+
+    A caller whose statement occupies the whole lift gets `arange` back,
+    which is what the layers written before anything widened `s1` spelled
+    directly.
+    """
+    if not 0 <= s1_take <= s1_cols or not 0 <= message_take <= message_cols:
+        raise ValueError(
+            f"lift_positions: cannot take ({s1_take}, {message_take}) columns "
+            f"out of ({s1_cols}, {message_cols})"
+        )
+    s1_span = SIGMA_ORDER * s1_cols
+    return np.concatenate(
+        [copy * s1_cols + np.arange(s1_take) for copy in range(SIGMA_ORDER)]
+        + [
+            s1_span + copy * message_cols + np.arange(message_take)
+            for copy in range(SIGMA_ORDER)
+        ]
+    )
+
+
 def evaluate(
     ring: HostSplitRing,
     r2: np.ndarray,

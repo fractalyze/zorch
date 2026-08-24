@@ -76,6 +76,7 @@ from zorch.lnp.quadratic import (
     QuadraticProof,
     evaluate,
     lift,
+    lift_positions,
 )
 from zorch.lnp.transcript import absorb_stacks
 
@@ -486,13 +487,12 @@ class AbdlopQuadraticEval:
         # lifts `m‖g` — and `_embed` is the map between them.
         self.width = SIGMA_ORDER * (scheme.s1_cols + self.ell)
         s1_span = SIGMA_ORDER * scheme.s1_cols
-        copy_width = self.ell + lam
-        self._positions = np.concatenate(
-            [np.arange(s1_span)]
-            + [
-                s1_span + copy * copy_width + np.arange(self.ell)
-                for copy in range(SIGMA_ORDER)
-            ]
+        # The caller's statement is written against the whole Ajtai half
+        # and against `ell` of the `ell + lam` the inner protocol's message
+        # copies carry. `lift_positions` owns that rule; Fig. 10 is what
+        # makes the first argument stop being the whole half.
+        self._positions = lift_positions(
+            scheme.s1_cols, scheme.s1_cols, self.ell, self.ell + lam
         )
         # `x^{(g)}_{2,1,i}` of eq. 38 — the garbage of the *first*
         # automorphism copy, which is the only copy the equation reads.
