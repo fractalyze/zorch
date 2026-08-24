@@ -98,6 +98,31 @@ def sigma_exponent(d: int) -> int:
 
 
 @dataclass(frozen=True)
+class Publics:
+    """The commitment matrices a proof is written against, in one object.
+
+    Every layer of this stack takes the same few, and threading them down a
+    four-deep chain as positional parameters is how two same-typed
+    neighbours transpose without a shape error — a `(rows, cols, limbs, d)`
+    stack is one whatever it means, so `b`, `bg` and `b_quad` swap silently.
+
+    `blocks` is the **whole** BDLOP matrix, in the order the message half is
+    concatenated in: the caller's `m`, then each range leg's mask and sign,
+    then the layer below's garbage. It arrives assembled rather than being
+    built layer by layer, because a layer that appends its own rows cannot
+    also be one of several — Fig. 10 (eprint 2022/284, §5.2) runs two range
+    legs over one commitment, and neither can build a matrix that has to
+    contain the other's rows. Whoever knows every leg owns the order; the
+    layers below index into it by their own carve.
+    """
+
+    a1: np.ndarray
+    a2: np.ndarray
+    blocks: np.ndarray
+    b_quad: np.ndarray
+
+
+@dataclass(frozen=True)
 class QuadraticProof:
     """The non-interactive Π^(2) wire: the challenge, the two masked
     responses (signed integer coefficient vectors, as in `opening.py`), and
