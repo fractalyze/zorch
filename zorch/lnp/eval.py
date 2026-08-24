@@ -471,7 +471,9 @@ class AbdlopQuadraticEval:
     commitment in per proof and must not run two proofs against one.
     """
 
-    def __init__(self, many: AbdlopQuadraticMany, lam: int) -> None:
+    def __init__(
+        self, many: AbdlopQuadraticMany, lam: int, s1_take: int | None = None
+    ) -> None:
         scheme = many.scheme
         self.garbage = GarbageMasking(scheme, lam, b"lnp/eval/quad")
         self.many = many
@@ -482,17 +484,28 @@ class AbdlopQuadraticEval:
         self.scheme = scheme
         self.lam = lam
         self.ell = self.garbage.ell
+        # How much of the Ajtai half the caller's statement is about. It is
+        # all of it for every consumer up to Fig. 9, and a prefix for Fig.
+        # 10, which appends the binary-decomposition vector `x` to the half
+        # and writes its functions against `s1` alone.
+        if s1_take is None:
+            s1_take = scheme.s1_cols
+        elif not 0 <= s1_take <= scheme.s1_cols:
+            raise ValueError(
+                f"eval: the statement cannot be written against {s1_take} of "
+                f"the scheme's {scheme.s1_cols} Ajtai columns"
+            )
+        self.s1_take = s1_take
         # The width the caller's two families are written against: the lift
         # of `(s1, m)` alone. The inner protocol's own width is wider — it
         # lifts `m‖g` — and `_embed` is the map between them.
-        self.width = SIGMA_ORDER * (scheme.s1_cols + self.ell)
+        self.width = SIGMA_ORDER * (s1_take + self.ell)
         s1_span = SIGMA_ORDER * scheme.s1_cols
-        # The caller's statement is written against the whole Ajtai half
-        # and against `ell` of the `ell + lam` the inner protocol's message
-        # copies carry. `lift_positions` owns that rule; Fig. 10 is what
-        # makes the first argument stop being the whole half.
+        # Both halves carve: `s1_take` of the Ajtai columns, `ell` of the
+        # `ell + lam` each message copy carries. `lift_positions` owns the
+        # rule; this is the only place that needs to know both numbers.
         self._positions = lift_positions(
-            scheme.s1_cols, scheme.s1_cols, self.ell, self.ell + lam
+            s1_take, scheme.s1_cols, self.ell, self.ell + lam
         )
         # `x^{(g)}_{2,1,i}` of eq. 38 — the garbage of the *first*
         # automorphism copy, which is the only copy the equation reads.
@@ -540,7 +553,11 @@ class AbdlopQuadraticEval:
         #     linearity and costs λ evaluations rather than λ·M, over a ring
         #     whose mul is a deliberate O(d²) host oracle. The aggregates
         #     are the eq.-38 relations' own, so they are built once.
-        s = lift(ring, ring.from_signed_stack(s1), message)
+        # The caller's aggregates are written against its own lift, which
+        # covers `s1_take` of the Ajtai half — the carve applies to the
+        # witness here exactly as it does to `_positions`, or the two are
+        # about different widths.
+        s = lift(ring, ring.from_signed_stack(s1)[: self.s1_take], message)
         aggregates = self._aggregates(gamma, e2, e1, e0)
         # Named apart from this method's `a1`/`a2` — those are the Ajtai
         # matrices, and shadowing them here sends the aggregates down to

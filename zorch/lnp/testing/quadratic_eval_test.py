@@ -49,7 +49,9 @@ _RELATIONS = 2
 _EVALUATIONS = 3
 
 
-def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitment:
+def _scheme(
+    ring: HostSplitRing, messages: int = _ELL + _LAM, s1_cols: int = _M1
+) -> AbdlopCommitment:
     """The **extended** scheme by default: its BDLOP half carries `ℓ + λ`
     messages, because `m‖g` is what the inner protocol opens.
 
@@ -60,7 +62,7 @@ def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitmen
     return AbdlopCommitment(
         ring,
         rows=_ROWS,
-        s1_cols=_M1,
+        s1_cols=s1_cols,
         randomness_cols=_M2,
         messages=messages,
         beta1_inf=1,
@@ -68,9 +70,17 @@ def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitmen
     )
 
 
-def _protocol(ring: HostSplitRing) -> AbdlopQuadraticEval:
-    masking = lnp_fixture.masking(_scheme(ring))
-    return AbdlopQuadraticEval(AbdlopQuadraticMany(AbdlopQuadratic(masking)), _LAM)
+def _protocol(
+    ring: HostSplitRing, s1_cols: int = _M1, s1_take: int | None = None
+) -> AbdlopQuadraticEval:
+    # `s1_std` is re-derived rather than taken from the fixture: the point's
+    # T_1 = η·√(m1·d) is a bound on ‖s1‖, so a wider Ajtai half masked at the
+    # narrow point would reject its way to `exhausted` instead of proving.
+    std = lnp_fixture.GAMMA * lnp_fixture.ETA * float(np.sqrt(s1_cols * ring.d))
+    masking = lnp_fixture.masking(_scheme(ring, s1_cols=s1_cols), s1_std=std)
+    return AbdlopQuadraticEval(
+        AbdlopQuadraticMany(AbdlopQuadratic(masking)), _LAM, s1_take=s1_take
+    )
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
@@ -94,15 +104,22 @@ class _Instance:
     relations that vanish on the lifted witness, and `M` evaluations whose
     constant coefficients vanish on it."""
 
-    def __init__(self, seed: int, relations: int = _RELATIONS) -> None:
+    def __init__(
+        self,
+        seed: int,
+        relations: int = _RELATIONS,
+        s1_cols: int = _M1,
+        s1_take: int | None = None,
+    ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
-        self.protocol = _protocol(ring)
+        self.protocol = _protocol(ring, s1_cols=s1_cols, s1_take=s1_take)
+        self.s1_take = self.protocol.s1_take
         rng = np.random.default_rng(seed)
         self.rng = rng
         width = self.protocol.width
 
-        self.a1 = ring.uniform_stack(rng, _ROWS, _M1)
+        self.a1 = ring.uniform_stack(rng, _ROWS, s1_cols)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
         self.b = ring.uniform_stack(rng, _ELL, _M2)
         self.bg = ring.uniform_stack(rng, _LAM, _M2)
@@ -110,7 +127,7 @@ class _Instance:
 
         # Ternary witness halves, the shape the fixture's std was derived
         # against (α = ‖s1‖ ≤ √(m1·d)).
-        self.s1 = rng.integers(-1, 2, (_M1, ring.d)).astype(np.int64)
+        self.s1 = rng.integers(-1, 2, (s1_cols, ring.d)).astype(np.int64)
         self.s2 = rng.integers(-1, 2, (_M2, ring.d)).astype(np.int64)
         s1_ring = ring.from_signed_stack(self.s1)
         s2_ring = ring.from_signed_stack(self.s2)
@@ -118,14 +135,14 @@ class _Instance:
 
         # The scheme's own commit over the *narrow* BDLOP half — the layer
         # appends its own garbage, so the caller commits to `m` alone.
-        commitment = _scheme(ring, _ELL).commit(
+        commitment = _scheme(ring, _ELL, s1_cols).commit(
             self.a1, self.a2, self.b, s1_ring, s2_ring, self.message
         )
         self.t_a, self.t_b = commitment.t_a, commitment.t_b
 
         # The lift the caller's two families are written against — `m`, not
         # `m‖g`; the protocol appends the garbage itself.
-        self.s = lift(ring, s1_ring, self.message)
+        self.s = lift(ring, s1_ring[: self.s1_take], self.message)
         self.r2 = ring.uniform_stack(rng, relations, width, width)
         self.r1 = ring.uniform_stack(rng, relations, width)
         # `N = 0` is a real statement, so the empty stack is spelled the
@@ -199,6 +216,27 @@ class QuadraticEvalCompletenessTest(absltest.TestCase):
         instance = _Instance(1)
         proof, _ = instance.prove()
         self.assertTrue(instance.verify(proof))
+
+    def test_a_carved_ajtai_half_proves_a_statement_about_its_prefix(self) -> None:
+        """Fig. 10 appends the binary-decomposition vector `x` to the Ajtai
+        half and writes its functions against `s1` alone, so the statement
+        covers a prefix of a half that is wider than it.
+
+        The carve is what says which prefix. Taking the whole half — what
+        every layer up to Fig. 9 did, and what the code spelled directly —
+        puts the caller's functions in the wrong columns of the inner
+        protocol's lift, so this round-trip is the gate on the index map
+        rather than on the algebra."""
+        instance = _Instance(60, s1_cols=_M1 + 1, s1_take=_M1)
+        self.assertEqual(instance.protocol.s1_take, _M1)
+        self.assertEqual(instance.protocol.width, SIGMA_ORDER * (_M1 + _ELL))
+        proof, _ = instance.prove()
+        self.assertTrue(instance.verify(proof))
+
+    def test_the_carve_cannot_exceed_the_half_it_carves(self) -> None:
+        ring = lnp_fixture.ring()
+        with self.assertRaisesRegex(ValueError, r"^eval:"):
+            _protocol(ring, s1_cols=_M1, s1_take=_M1 + 1)
 
     def test_the_evaluations_do_not_vanish_as_ring_elements(self) -> None:
         """What separates this protocol from Fig. 7. If the suite's `F_j`
