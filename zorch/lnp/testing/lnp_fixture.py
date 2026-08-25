@@ -95,7 +95,11 @@ def bimodal(
     and `β = ‖(s1, m)‖₂ ≤ √(witness_cols·d)` is the ternary witness bound
     this package's suites all build. Derived here rather than in each suite
     for the reason `MASKING_PARAMS` is — Fig. 10 needs two of these, one per
-    leg, and two spellings of one derivation is the divergence."""
+    leg, and two spellings of one derivation is the divergence.
+
+    The deviation is the same either way: Fig. 10 derives both legs' `s`
+    from an **ℓ2** bound on the projected vector, and only the verifier's
+    gate splits. Pass `bound=LinfBound()` for the ℓ∞ leg."""
     beta = float(np.sqrt(witness_cols * ring.d))
     params: dict[str, object] = dict(
         mask_std=GAMMA * float(np.sqrt(337.0)) * beta,

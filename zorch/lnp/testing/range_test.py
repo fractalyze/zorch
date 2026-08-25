@@ -34,6 +34,7 @@ alone, turns this suite red.
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections.abc import Sequence
 from typing import Any
 
@@ -45,7 +46,7 @@ from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval
-from zorch.lnp.masking import BimodalMasking
+from zorch.lnp.masking import BimodalMasking, L2Bound, LinfBound
 from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
@@ -82,17 +83,28 @@ def _scheme(
     )
 
 
-def _maskings(ring: HostSplitRing, legs: int) -> tuple[BimodalMasking, ...]:
+def _maskings(
+    ring: HostSplitRing,
+    legs: int,
+    bounds: Sequence[L2Bound | LinfBound] | None = None,
+) -> tuple[BimodalMasking, ...]:
     """`legs` bimodal points, each sized for the budget their *joint* Rej0
-    gate needs.
+    gate needs, and each carrying the gate it is verified under.
 
     `attempts` is passed rather than left to derive because the joint budget
     is strictly above what any one leg's rate implies, and the sampler tier
     is resolved against it — see `BimodalMasking`. At one leg the two
-    numbers coincide, which is why Fig. 9 never had to say this."""
+    numbers coincide, which is why Fig. 9 never had to say this.
+
+    `bounds` defaults to Fig. 9's ℓ2 gate on every leg. Fig. 10's own
+    pairing is one of each, which is what `bounds` exists to spell."""
     joint = attempt_budget(lnp_fixture.FAIL_PROB, (1.0 / lnp_fixture.REP0) ** legs)
+    if bounds is None:
+        bounds = [L2Bound()] * legs
+    assert len(bounds) == legs
     return tuple(
-        lnp_fixture.bimodal(ring, _WITNESS_COLS, attempts=joint) for _ in range(legs)
+        lnp_fixture.bimodal(ring, _WITNESS_COLS, attempts=joint, bound=bound)
+        for bound in bounds
     )
 
 
@@ -128,10 +140,11 @@ class _Instance:
         s1_cols: int = _M1,
         s1_take: int | None = None,
         legs: int = 1,
+        bounds: Sequence[L2Bound | LinfBound] | None = None,
     ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
-        self.maskings = _maskings(ring, legs)
+        self.maskings = _maskings(ring, legs, bounds)
         self.masking = self.maskings[0]
         self.protocol = _protocol(ring, self.maskings, s1_cols, s1_take)
         # Fig. 9 is the one-leg composition, and every layout assertion below
@@ -368,15 +381,20 @@ class RangeSoundnessTest(absltest.TestCase):
     def test_the_norm_gate_is_consulted(self) -> None:
         """An honest proof against a verifier whose bound is too tight.
 
-        The only difference is `accept_t`, which touches nothing the
-        transcript sees — so the inner proof still verifies and the verdict
-        is the norm gate's alone. Tampering `z` upward would not pin this:
-        that changes the statement and the inner proof rejects it first."""
+        The only difference is the gate's `accept_t`, which touches
+        nothing the transcript sees — so the inner proof still verifies and
+        the verdict is the norm gate's alone. Tampering `z` upward would not
+        pin this: that changes the statement and the inner proof rejects it
+        first."""
         instance = _Instance(11)
         proof = instance.prove()
         strict = _protocol(
             instance.ring,
-            [lnp_fixture.bimodal(instance.ring, _WITNESS_COLS, accept_t=1e-6)],
+            [
+                lnp_fixture.bimodal(
+                    instance.ring, _WITNESS_COLS, bound=L2Bound(accept_t=1e-6)
+                )
+            ],
         )
         self.assertFalse(instance.verify(proof, protocol=strict))
 
@@ -965,6 +983,175 @@ class RangeWireTest(absltest.TestCase):
             instance.prove(message=wrong)
 
 
+class NormGateTest(absltest.TestCase):
+    """Fig. 10's two verifier gates.
+
+    Its legs are identical up to this one thing: the same `D_s^{256/d}`
+    draw, the same `s = γ·√337·α` derived from an **ℓ2** bound on the
+    projected vector, the same Rej0 — and then one is accepted in ℓ∞ at
+    `14·s` and the other in ℓ2 at `t·√256·s`. So the gate is a parameter,
+    and these pin that it is the right one and that it bites.
+    """
+
+    def _masking(self, **overrides: Any) -> BimodalMasking:
+        return lnp_fixture.bimodal(lnp_fixture.ring(), _WITNESS_COLS, **overrides)
+
+    def test_each_gate_is_the_expression_the_paper_writes(self) -> None:
+        """`t·√256·s` and `14·s`, floored.
+
+        Pinned as numbers because the gate is the only place the range
+        statement's slack is enforced: one that silently widened would still
+        pass every completeness and soundness round-trip in this file, since
+        an honest reveal sits far inside either bound."""
+        l2 = self._masking()
+        linf = self._masking(bound=LinfBound())
+        std = l2.mask_std
+        self.assertEqual(l2._limit, math.floor((1.64**2) * l2.projection * std**2))
+        self.assertEqual(linf._limit, math.floor(14 * std))
+
+    def test_neither_gate_implies_the_other(self) -> None:
+        """Which is why a leg is told its gate rather than inferring one.
+
+        At `t = 1.64` and 256 rows the ℓ2 bound is `26.24·s` and the ℓ∞ one
+        `14·s`, so a single coordinate at `20·s` clears ℓ2 and fails ℓ∞,
+        while a vector flat at `13·s` clears ℓ∞ and fails ℓ2 by a factor of
+        the dimension."""
+        l2 = self._masking()
+        linf = self._masking(bound=LinfBound())
+        std = l2.mask_std
+        shape = (l2.mask_cols, lnp_fixture.D)
+
+        spike = np.zeros(shape, dtype=np.int64)
+        spike[0, 0] = round(20 * std)
+        self.assertTrue(l2.within_bounds(spike))
+        self.assertFalse(linf.within_bounds(spike))
+
+        flat = np.full(shape, round(13 * std), dtype=np.int64)
+        self.assertTrue(linf.within_bounds(flat))
+        self.assertFalse(l2.within_bounds(flat))
+
+    def test_an_honest_reveal_clears_the_linf_tail(self) -> None:
+        """Completeness of the ℓ∞ gate, and the reason it is a tail bound at
+        all: Rej0's *accepted* output is `D_s^256` centred at zero (Lemma
+        2.14-3), not the bimodal mixture the prover drew from, so `14·s` is
+        a tail an honest run clears rather than a slack it might spend."""
+        linf = self._masking(bound=LinfBound())
+        rng = np.random.default_rng(11)
+        for attempt in range(20):
+            with self.subTest(attempt=attempt):
+                self.assertTrue(linf.within_bounds(linf.draw(rng)[1]))
+
+    def test_accept_t_is_gated_where_it_means_something(self) -> None:
+        """It moved off the masking with this slice: `t` is Prop. 5.1's ℓ2
+        coefficient, so a masking that carried one its gate ignored would be
+        a parameter nobody could act on."""
+        with self.assertRaisesRegex(ValueError, "accept_t must be positive"):
+            L2Bound(accept_t=0.0)
+
+
+class LinfLegTest(absltest.TestCase):
+    """A leg verified in ℓ∞, and Fig. 10's own pairing of one gate of each.
+
+    The ℓ∞ leg proves Equation (52), `‖D_i s − u_i‖_∞ ≤ β_i^(d)` — the
+    approximate bound §5.2 says is proved "with the technique from Figure 9
+    with the ℓ∞-norm instead". Everything below is that: Fig. 9's machinery,
+    a different acceptance norm.
+    """
+
+    def test_an_linf_gated_leg_proves_and_verifies(self) -> None:
+        instance = _Instance(42, bounds=[LinfBound()])
+        proof = instance.prove()
+        self.assertTrue(instance.verify(proof))
+        self.assertTrue(instance.masking.within_bounds(proof.legs[0].z))
+
+    def test_the_gate_never_touches_the_prover(self) -> None:
+        """`bound` is the verifier's alone: the draw, Rej0, the transcript
+        and therefore the whole wire are identical under either. That is
+        what lets Fig. 10 give its two legs different gates without giving
+        them different provers — and it means an ℓ2-proved proof verifies
+        under an ℓ∞ verifier at the same `s`, and back."""
+        l2 = _Instance(43)
+        linf = _Instance(43, bounds=[LinfBound()])
+        proof = l2.prove()
+
+        np.testing.assert_array_equal(proof.legs[0].z, linf.prove().legs[0].z)
+        self.assertTrue(l2.verify(proof, protocol=linf.protocol))
+        self.assertTrue(linf.verify(linf.prove(), protocol=l2.protocol))
+
+    def test_the_linf_gate_is_consulted(self) -> None:
+        """An honest proof against a verifier whose ℓ∞ bound is too tight.
+
+        The gate has no slack knob of its own — 14 is a tail bound, not a
+        coefficient — so the too-tight verifier is one built at a smaller
+        `s`. Nothing the transcript sees changes, so the inner proof still
+        verifies and the verdict is the gate's alone."""
+        instance = _Instance(44, bounds=[LinfBound()])
+        proof = instance.prove()
+        strict = _protocol(
+            instance.ring,
+            [
+                lnp_fixture.bimodal(
+                    instance.ring,
+                    _WITNESS_COLS,
+                    bound=LinfBound(),
+                    mask_std=instance.masking.mask_std / 1000.0,
+                )
+            ],
+        )
+        self.assertFalse(instance.verify(proof, protocol=strict))
+
+    def test_figure_10_pairs_one_gate_of_each_norm(self) -> None:
+        """The composition Fig. 10 actually runs: the approximate-ℓ∞ leg and
+        the exact-ℓ2 leg over one commitment and one `Pi_eval^(2)`, each
+        accepted under its own norm."""
+        instance = _Instance(45, legs=2, bounds=[LinfBound(), L2Bound()])
+        first, second = instance.protocol.legs
+        self.assertIsInstance(first.masking.bound, LinfBound)
+        self.assertIsInstance(second.masking.bound, L2Bound)
+
+        proof = instance.prove()
+        self.assertTrue(instance.verify(proof))
+        for leg, message in zip(instance.protocol.legs, proof.legs):
+            self.assertTrue(leg.within_bounds(message.z))
+
+    def test_each_leg_is_gated_in_its_own_norm(self) -> None:
+        """Not both in whichever one the first leg carries. A reveal that
+        only the ℓ2 leg's bound admits has to be refused when it lands on
+        the ℓ∞ leg, and the composition checks each leg against its own."""
+        instance = _Instance(46, legs=2, bounds=[LinfBound(), L2Bound()])
+        linf_leg, l2_leg = instance.protocol.legs
+        spike = np.zeros((instance.masking.mask_cols, lnp_fixture.D), np.int64)
+        spike[0, 0] = round(20 * instance.masking.mask_std)
+        self.assertFalse(linf_leg.within_bounds(spike))
+        self.assertTrue(l2_leg.within_bounds(spike))
+
+    def test_the_composition_consults_every_leg_and_not_just_the_first(
+        self,
+    ) -> None:
+        """Through `verify`, which is where it matters.
+
+        The test above asserts on the legs directly and a composition that
+        gated all of them by `legs[0]` would still pass it — as would every
+        honest round-trip here, since an honest reveal clears both norms
+        comfortably. So the verdict has to turn on a leg *other than the
+        first*: only the second leg's bound is made impossibly tight, and
+        nothing the transcript sees changes, so a rejection can only be that
+        leg's gate being consulted."""
+        instance = _Instance(47, legs=2, bounds=[LinfBound(), L2Bound()])
+        proof = instance.prove()
+        self.assertTrue(instance.verify(proof))
+
+        honest, joint = instance.maskings[0], instance.maskings[1].attempts
+        tight = lnp_fixture.bimodal(
+            instance.ring,
+            _WITNESS_COLS,
+            attempts=joint,
+            bound=L2Bound(accept_t=1e-6),
+        )
+        strict = _protocol(instance.ring, [honest, tight])
+        self.assertFalse(instance.verify(proof, protocol=strict))
+
+
 class BimodalMaskingTest(absltest.TestCase):
     def test_the_projection_must_tile_the_ring_degree(self) -> None:
         ring = lnp_fixture.ring()
@@ -977,7 +1164,6 @@ class BimodalMaskingTest(absltest.TestCase):
             (dict(projection=0), "projection must be positive"),
             (dict(mask_std=0.0), "mask_std must be positive"),
             (dict(rep0=1.0), "rep0 must exceed 1"),
-            (dict(accept_t=0.0), "accept_t must be positive"),
             (dict(fail_prob=1.0), "fail_prob must be in"),
         ):
             with self.subTest(**kwargs):

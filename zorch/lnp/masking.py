@@ -38,6 +38,8 @@ not transcript-derived.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import numpy as np
 from lattice_frx import norms, sampler
@@ -301,6 +303,69 @@ def _exact_dots(z: np.ndarray, v: np.ndarray) -> tuple[int, int]:
     return int(zo @ vo), int(vo @ vo)
 
 
+# §2.6's tail bound, and the reason the ℓ∞ gate needs no coefficient of its
+# own: `|⟨z, v⟩| < 14·s·‖v‖` holds with probability `1 − 2^-128` for
+# `z ← D_s^ℓ` [Ban93, Lyu12], and a unit `v` reads that one coordinate at a
+# time. The same 14 the Rej1 repetition rate `exp(14/γ + 1/(2γ²))` is built
+# from, so it is one constant in two places rather than two constants.
+_LINF_TAIL = 14
+
+# Whichever norm a gate reads, and the exact integer it compares against.
+_Gate = tuple[Callable[[np.ndarray], int], int]
+
+
+@dataclass(frozen=True)
+class L2Bound:
+    """Prop. 5.1's `‖⃗z‖₂ ≤ t·√256·s` — what Fig. 9, and Fig. 10's exact-ℓ2
+    leg, verify the revealed projection against.
+
+    `accept_t` is the paper's `t ≥ 1.64`, and it lives on the gate rather
+    than on the masking because it is *this* gate's slack and means nothing
+    to the other one. A masking carrying an `accept_t` its gate ignored
+    would be a parameter nobody could act on."""
+
+    accept_t: float = 1.64
+
+    def __post_init__(self) -> None:
+        if self.accept_t <= 0.0:
+            raise ValueError(
+                f"masking: accept_t must be positive, got {self.accept_t!r}"
+            )
+
+    def resolve(self, projection: int, mask_std: float) -> _Gate:
+        # Compared squared over exact ints so the reveal never round-trips
+        # through a float; the floor only tightens the bound, as in
+        # `Masking`.
+        return norms.l2_squared, math.floor(
+            (self.accept_t**2) * projection * mask_std**2
+        )
+
+
+@dataclass(frozen=True)
+class LinfBound:
+    """Fig. 10's `‖⃗z‖_∞ ≤ 14·s` — what its approximate-ℓ∞ leg verifies the
+    revealed projection against.
+
+    A *tail* bound rather than a slack: Rej0's accepted output really is
+    `D_s^{256}` centred at zero (Lemma 2.14-3), not the bimodal mixture the
+    prover drew from, so what the verifier is checking is that a Gaussian
+    stayed inside its own tail. That is why the paper fixes 14 here where it
+    lets the ℓ2 gate carry a tunable `t` — there is nothing to trade against
+    the repetition rate.
+
+    `projection` is unread: `14·s` bounds one coordinate, so the dimension
+    that makes `√256` appear in the ℓ2 bound does not appear here.
+
+    Note what this does *not* change. The leg still draws `256/d` mask
+    elements at `s = γ·√337·α` for an **ℓ2** bound `α` on the projected
+    vector — Fig. 10 derives both legs' deviations that way, since `√337` is
+    Lemma 2.8-2's ℓ2 projection growth either way. Only the verifier's gate
+    differs."""
+
+    def resolve(self, projection: int, mask_std: float) -> _Gate:
+        return norms.linf, math.floor(_LINF_TAIL * mask_std)
+
+
 class BimodalMasking:
     """The parameter point Fig. 9's projection masks and rejects against.
 
@@ -333,9 +398,15 @@ class BimodalMasking:
     Parameters arrive derived, as everywhere in this package: `mask_std` is
     the paper's `s3 = γ·√337·β` (the `√337` is Lemma 2.8's projection
     growth, the `γ` the usual `s = γ·T`), `rep0` its Lemma 2.14-3 rate, and
-    `accept_t` the `t ≥ 1.64` of Prop. 5.1 sizing the verifier's norm gate.
-    Deriving them from a witness bound is the consumer's, since `β` is a
-    property of the statement rather than of this seam.
+    `bound` the norm the verifier gates the reveal in. Deriving them from a
+    witness bound is the consumer's, since `β` is a property of the
+    statement rather than of this seam.
+
+    `bound` is a parameter and not a second class because it is the *only*
+    thing that differs between Fig. 10's two legs: both draw `256/d`
+    elements at a deviation derived the same way and both reject through the
+    same Rej0, and only the verifier's acceptance norm splits — `LinfBound`
+    for the approximate ℓ∞ leg, `L2Bound` for the exact ℓ2 one.
 
     `attempts` is derived from `rep0` and `fail_prob` for a masking used
     alone, and passed in when it is not. A leg composed with others is
@@ -352,7 +423,7 @@ class BimodalMasking:
         mask_std: float,
         rep0: float,
         projection: int = PROJECTION,
-        accept_t: float = 1.64,
+        bound: L2Bound | LinfBound = L2Bound(),
         fail_prob: float = 2.0**-128,
         attempts: int | None = None,
     ) -> None:
@@ -366,9 +437,8 @@ class BimodalMasking:
                 f"projection dimension must be a multiple of the ring degree "
                 f"{ring.d}; got {projection}"
             )
-        for name, value in (("mask_std", mask_std), ("accept_t", accept_t)):
-            if value <= 0.0:
-                raise ValueError(f"masking: {name} must be positive, got {value!r}")
+        if mask_std <= 0.0:
+            raise ValueError(f"masking: mask_std must be positive, got {mask_std!r}")
         if rep0 <= 1.0:
             raise ValueError(f"masking: rep0 must exceed 1, got {rep0!r}")
         if not 0.0 < fail_prob < 1.0:
@@ -378,7 +448,7 @@ class BimodalMasking:
         self.mask_cols = projection // ring.d
         self.mask_std = mask_std
         self.rep0 = rep0
-        self.accept_t = accept_t
+        self.bound = bound
         self.fail_prob = fail_prob
         alone = attempt_budget(fail_prob, 1.0 / rep0)
         if attempts is None:
@@ -399,10 +469,7 @@ class BimodalMasking:
                 f"{self.attempts} — a repetition rate this far from its "
                 f"Lemma 2.14-3 value is a parameter bug"
             )
-        # `‖z‖₂ ≤ t·√256·s3` (Prop. 5.1), compared squared over exact ints
-        # so the reveal never round-trips through a float; the floor only
-        # tightens the bound, as in `Masking`.
-        self._bound_sq = math.floor((accept_t**2) * projection * mask_std**2)
+        self._norm, self._limit = bound.resolve(projection, mask_std)
         self._draw = sampler.sampler_for(mask_std, self.attempts * projection)
         self._centers = np.zeros((self.mask_cols, ring.d), dtype=np.float64)
 
@@ -430,10 +497,16 @@ class BimodalMasking:
         return _rej0(_coin(rng), z, v, self.mask_std, self.rep0)
 
     def within_bounds(self, z: np.ndarray) -> bool:
-        """`‖z‖₂ ≤ t·√256·s3` (Prop. 5.1) — the verifier's gate on the
-        revealed projection, and the only place the range statement's slack
-        is actually enforced."""
-        return norms.l2_squared(z) <= self._bound_sq
+        """The verifier's gate on the revealed projection, in whichever norm
+        `bound` names — and the only place the range statement's slack is
+        actually enforced.
+
+        Flattened here because the two norms disagree about rank:
+        `norms.l2_squared` flattens any input itself and says so, while
+        `norms.linf` walks its argument and raises on the `(256/d, d)` stack
+        a reveal actually is. Doing it once, on the way in, keeps that from
+        being a property of which gate a leg happens to carry."""
+        return self._norm(np.asarray(z).reshape(-1)) <= self._limit
 
 
 def _rej0(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> bool:
