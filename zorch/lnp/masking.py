@@ -341,6 +341,22 @@ class L2Bound:
             (self.accept_t**2) * projection * mask_std**2
         )
 
+    def proven_norm(self, projection: int, mask_std: float) -> int:
+        """`B = 2·√(256/26)·t·s` — what a verifying proof actually says about
+        the *projected vector*, as opposed to about `⃗z`.
+
+        `resolve` above gives the gate on `⃗z`; this is the conclusion Lemma
+        2.9 draws from it, `‖⃗s‖ ≤ B`, and it is a different number. A
+        consumer that needs the bound rather than the gate — §5.2's
+        wraparound conditions are the caller — had no way to ask for it, and
+        `range.py` stated the formula in prose while nothing computed it.
+        The first caller to need it passed the projection *dimension*, a
+        count, and the conditions were slack enough not to notice.
+
+        Rounded up, since it is an upper bound and a floor here would claim
+        something the proof does not."""
+        return math.ceil(2.0 * math.sqrt(projection / 26.0) * self.accept_t * mask_std)
+
 
 @dataclass(frozen=True)
 class LinfBound:
@@ -365,6 +381,19 @@ class LinfBound:
 
     def resolve(self, projection: int, mask_std: float) -> _Gate:
         return norms.linf, math.floor(_LINF_TAIL * mask_std)
+
+    def proven_norm(self, projection: int, mask_std: float) -> int:
+        """Refused: this leg proves an ℓ∞ bound, and every consumer of
+        `proven_norm` so far wants an ℓ2 one.
+
+        §5.2's soundness does draw a conclusion here — `‖e⃗^(d)‖_∞ ≤ 24·s`
+        — but it is a bound in the *other* norm, and returning it where an
+        ℓ2 bound is expected would satisfy a wraparound condition that has
+        not actually been established."""
+        raise ValueError(
+            "masking: the ℓ∞ leg proves an ℓ∞ bound on the projected "
+            "vector, not the ℓ2 one this asks for"
+        )
 
 
 class BimodalMasking:
@@ -519,6 +548,12 @@ class BimodalMasking:
         rather than by contract; passing the centre the response was built
         from is what stays true when a later leg is not symmetric."""
         return _rej0(_coin(rng), z, v, self.mask_std, self.rep0)
+
+    def proven_norm(self) -> int:
+        """The bound a verifying proof establishes about the *projected
+        vector*, in whichever norm `bound` names — Lemma 2.9's conclusion,
+        not the gate on `⃗z` that `within_bounds` applies."""
+        return self.bound.proven_norm(self.projection, self.mask_std)
 
     def within_bounds(self, z: np.ndarray) -> bool:
         """The verifier's gate on the revealed projection, in whichever norm

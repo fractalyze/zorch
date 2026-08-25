@@ -78,7 +78,7 @@ def _protocol(
     # `s1_std` is re-derived rather than taken from the fixture: the point's
     # T_1 = η·√(m1·d) is a bound on ‖s1‖, so a wider Ajtai half masked at the
     # narrow point would reject its way to `exhausted` instead of proving.
-    std = lnp_fixture.GAMMA * lnp_fixture.ETA * float(np.sqrt(s1_cols * ring.d))
+    std = lnp_fixture.s1_std(ring, s1_cols)
     masking = lnp_fixture.masking(_scheme(ring, s1_cols=s1_cols), s1_std=std)
     return AbdlopQuadraticEval(
         AbdlopQuadraticMany(AbdlopQuadratic(masking)), _LAM, s1_take=s1_take

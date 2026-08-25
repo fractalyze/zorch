@@ -78,6 +78,7 @@ from zorch.lnp.quadratic import (
     evaluate,
     lift,
     lift_positions,
+    lift_slots,
 )
 from zorch.lnp.transcript import absorb_stacks
 
@@ -515,7 +516,7 @@ class AbdlopQuadraticEval:
         # of `(s1, m)` alone. The inner protocol's own width is wider — it
         # lifts `m‖g` — and `_embed` is the map between them.
         self.width = SIGMA_ORDER * (s1_take + self.ell)
-        s1_span = SIGMA_ORDER * scheme.s1_cols
+
         # Both halves carve: `s1_take` of the Ajtai columns, `ell` of the
         # `ell + lam` each message copy carries. `lift_positions` owns the
         # rule; this is the only place that needs to know both numbers.
@@ -524,7 +525,12 @@ class AbdlopQuadraticEval:
         )
         # `x^{(g)}_{2,1,i}` of eq. 38 — the garbage of the *first*
         # automorphism copy, which is the only copy the equation reads.
-        self._garbage_slots = s1_span + self.ell + np.arange(lam)
+        # Off `lift_slots` rather than `SIGMA_ORDER * s1_cols` spelled here:
+        # that helper owns where each copy of each half starts, and this was
+        # one of the places that had derived it.
+        self._garbage_slots = lift_slots(scheme.s1_cols, self.ell + lam).message[
+            self.ell :
+        ]
 
     def prove(
         self,

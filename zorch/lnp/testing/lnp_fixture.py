@@ -11,6 +11,8 @@ starts being a divergence, so the point lives here.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from hash_frx.sha256 import HostSha256
 from lattice_frx.split_ring import HostSplitRing
@@ -51,6 +53,27 @@ REP = float(np.exp(14.0 / GAMMA + 1.0 / (2.0 * GAMMA**2)))
 MASKING_PARAMS: dict[str, object] = dict(
     s1_std=STD, s2_std=STD, rep1=REP, rep2=REP, challenge=CHALLENGE
 )
+
+
+def s1_std(ring: HostSplitRing, s1_cols: int) -> float:
+    """`s_1 = γ·η·√(s1_cols·d)` — the Ajtai half's masking deviation.
+
+    `MASKING_PARAMS` fixes it for `M1` columns, and every suite that widens
+    the Ajtai half has to re-derive it or reject its way to `exhausted`.
+    Three of them were doing that with three paraphrases of one comment,
+    which is the divergence this module exists to prevent."""
+    return GAMMA * ETA * float(np.sqrt(s1_cols * ring.d))
+
+
+def ternary_beta(ring: HostSplitRing, witness_cols: int) -> int:
+    """`β = ⌈√(witness_cols·d)⌉`, the exact ℓ2 bound a ternary witness of
+    that width meets.
+
+    The integer twin of the `β` `bimodal` derives below: same quantity, but
+    an exact-norm statement compares squared integers and cannot take a
+    float. Note it is the *worst case* — an all-ones ternary witness sits
+    exactly on it, not past it."""
+    return math.isqrt(witness_cols * ring.d - 1) + 1
 
 
 def masking(scheme: AbdlopCommitment, **overrides: object) -> Masking:

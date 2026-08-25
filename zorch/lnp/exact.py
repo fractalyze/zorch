@@ -54,22 +54,38 @@ from __future__ import annotations
 
 import math
 
+# `υe = 1`: §5.2 sizes the ring degree so `2·log(β) ≤ d`, one ring element
+# holds the decomposition, and the `digits > ring.d` gate below is what
+# enforces it. Not a widening knob — the radix row and `decompose` are both
+# written for a single column, so raising this alone would lose digits
+# silently. A second exact-ℓ2 statement needs a layout, not a bigger number.
+_DIGITS = 1
+
 import numpy as np
-from lattice_frx.split_ring import HostSplitRing
+from lattice_frx import gadget, norms
 
 from zorch.lnp.eval import AbdlopQuadraticEval
-from zorch.lnp.quadratic import lift_slots
+from zorch.lnp.quadratic import constants, lift_slots, sigma_exponent
 
 
 class ExactL2:
     """The two evaluations that turn Fig. 9's approximate bound into
     `‖(s1, m)‖ ≤ β` exactly.
 
-    `message_cols` is the caller's own `m`, the same number
-    `ApproximateRange.ell` reports — not the eval layer's `ell`, which also
-    counts the range legs' mask and sign rows. The bounded vector is
-    `(s1, m)`: the Ajtai half minus the digits this layer appends to it, and
-    the message half's caller-owned prefix.
+    `witness_cols` and `message_cols` name the bounded vector `(s1, m)`:
+    how much of the Ajtai half is witness (the rest of `evaluation.s1_take`
+    being the digits appended here), and how much of the message half is the
+    caller's own `m` — the number `ApproximateRange.ell` reports, not the
+    eval layer's `ell`, which also counts the range legs' mask and sign rows.
+
+    Both are *told*, not derived, for the reason `ProjectionLeg` is told its
+    slots: "the columns after the witness" has one solution only while there
+    is one contributor to the Ajtai half. `E_bin` binarity adds a second.
+    Deriving `witness_cols = s1_take - 1` also read `s1_take` the opposite
+    way from `AbdlopQuadraticEval`, whose carve *excludes* the digits — and
+    a caller who followed that reading would have indexed its last witness
+    column as the digit slot and built a verifiable proof of a different
+    statement, with no shape error anywhere.
 
     **The digits live in the Ajtai half.** They are a small-norm secret, so
     they belong where small-norm secrets go — and footnote 14 of the paper
@@ -82,6 +98,7 @@ class ExactL2:
     def __init__(
         self,
         evaluation: AbdlopQuadraticEval,
+        witness_cols: int,
         message_cols: int,
         bound: int,
     ) -> None:
@@ -100,19 +117,21 @@ class ExactL2:
                 f"past the ring degree {ring.d} — §5.2 sizes `d` so one ring "
                 f"element holds the decomposition"
             )
-        witness_cols = evaluation.s1_take - _DIGIT_COLS
-        if witness_cols < 1 or message_cols < 0:
+        if witness_cols < 1:
+            raise ValueError(f"exact: need a witness column, got {witness_cols!r}")
+        if witness_cols + _DIGITS >= evaluation.s1_take + 1:
             raise ValueError(
-                f"exact: the Ajtai half carries {evaluation.s1_take} columns, "
-                f"too few for a witness plus the {_DIGIT_COLS} the binary "
-                f"decomposition needs — widen the scheme's `s1_cols`"
+                f"exact: a {witness_cols}-column witness plus the {_DIGITS} the "
+                f"decomposition needs does not fit the {evaluation.s1_take} "
+                f"Ajtai columns the statement covers — widen `s1_cols`"
             )
-        self.evaluation = evaluation
         self.ring = ring
         self.bound = bound
         self.digits = digits
-        self.witness_cols = witness_cols
-        self.message_cols = message_cols
+        # The eval layer's *width*, not the eval layer: this is a statement
+        # builder and must never reach the inner `prove`, the same invariant
+        # `ProjectionLeg` keeps structurally rather than by convention.
+        self.width = evaluation.width
 
         slots = lift_slots(evaluation.s1_take, evaluation.ell)
         # `(s1, m)`, and its σ image alongside: every inner product here is
@@ -131,10 +150,17 @@ class ExactL2:
         # argument does everywhere in this package.
         radix = np.zeros((1, ring.d), dtype=np.int64)
         radix[0, :digits] = 1 << np.arange(digits)
-        self._radix = ring.galois(ring.from_signed_stack(radix), 2 * ring.d - 1)[0]
+        self._radix = ring.galois(
+            ring.from_signed_stack(radix), sigma_exponent(ring.d)
+        )[0]
         # `1⃗` over one ring element: `Σ_t X^t`, the all-ones coefficient
         # vector Lemma 5.2 subtracts.
         self._ones = ring.from_signed_stack(np.ones((1, ring.d), dtype=np.int64))[0]
+        # Witness-independent and identical on both sides, so it is built
+        # once — the same reason `ProjectionLeg` caches `_e1` and its sign
+        # relation. At the paper's width this block is ~10 MB, and prove and
+        # verify each ask for it.
+        self._evaluations = self._build()
 
     def decompose(self, witness: np.ndarray) -> np.ndarray:
         """The digits `x⃗` of `β² − ‖(s1, m)‖²`, as a signed-integer stack the
@@ -145,20 +171,27 @@ class ExactL2:
         a reconstruction. Raises when the witness is over the bound, since
         the slack has no binary representation then and a silently wrong
         proof is the alternative."""
-        flat = np.asarray(witness, dtype=object).reshape(-1)
-        slack = self.bound**2 - int(sum(int(v) * int(v) for v in flat))
+        slack = self.bound**2 - norms.l2_squared(witness)
         if slack < 0:
             raise ValueError(
                 f"exact: the witness has ‖·‖² = {self.bound**2 - slack}, past "
                 f"the bound's {self.bound**2} — there is no exact proof of a "
                 f"false statement to build"
             )
-        out = np.zeros((_DIGIT_COLS, self.ring.d), dtype=np.int64)
-        out[0, : self.digits] = [(slack >> i) & 1 for i in range(self.digits)]
+        out = np.zeros((_DIGITS, self.ring.d), dtype=np.int64)
+        out[0, : self.digits] = gadget.decompose_unsigned(slack, 1, self.digits)
         return out
 
     def evaluations(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         """`(G, I)` as the `(e2, e1, e0)` family `AbdlopQuadraticEval` takes.
+
+        The same blocks every call: they depend on the public parameters
+        alone, and nothing downstream writes into them — `_embed` copies
+        into its own wider arrays."""
+        return self._evaluations
+
+    def _build(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """The two functions, laid out over the eval layer's lift.
 
         Both are *evaluations* and not relations: what is claimed is that
         their constant coefficient vanishes, which by Lemma 2.4 is exactly
@@ -167,7 +200,7 @@ class ExactL2:
         other coefficients of `T(x⃗, x⃗ − 1⃗)` are whatever the digits make
         them."""
         ring = self.ring
-        width = self.evaluation.width
+        width = self.width
         e2 = ring.zeros(2, width, width)
         e1 = ring.zeros(2, width)
         e0 = ring.zeros(2, 1)
@@ -179,17 +212,24 @@ class ExactL2:
         # I(s, x⃗) = T(s, s) + T(p⃗, x⃗) − β²                      (eq. 66)
         e2[1, self._sigma_witness, self._witness] = ring.one()
         e1[1, self._digit] = self._radix
-        e0[1, 0] = ring.neg(_constant(ring, self.bound**2))
+        e0[1, 0] = ring.neg(constants(ring, [self.bound**2])[0])
         return e2, e1, e0
 
-    def require_no_wraparound(self, projection_bound: int) -> None:
+    def require_no_wraparound(
+        self, projection_bound: int, binary_cols: int = 0
+    ) -> None:
         """Theorem 5.3's two conditions on the range leg that carries this
         proof from `Z_q` to `ℤ`.
 
         `projection_bound` is `B`, the ℓ2 bound the approximate leg actually
-        proves about `(s ‖ x⃗)`. The exact statements are proved mod q, and
-        an integer identity that wrapped is not an integer identity — these
-        are what rule that out:
+        proves about `(s ‖ x⃗)` — **not** its projection dimension, which is a
+        count. `binary_cols` is Thm 5.3's `k_bin`, the width of the `E_bin`
+        statement's own binary vector: zero here because eq. 54 is not
+        implemented, and a parameter rather than an assumption because it
+        belongs to the *composed* statement and not to this object.
+
+        The exact statements are proved mod q, and an integer identity that
+        wrapped is not an integer identity — these are what rule that out:
 
         - `B² + √((υe + k_bin)·d)·B < q` makes `⟨x', x' − 1⃗⟩ = 0 mod q` hold
           over ℤ, since both terms of the inner product are then bounded well
@@ -200,7 +240,7 @@ class ExactL2:
         anywhere — it is a proof of a statement about residues that reads
         like a proof about integers."""
         modulus = math.prod(self.ring.q_moduli)
-        span = math.isqrt(_DIGIT_COLS * self.ring.d)
+        span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
         for name, value in (
             ("the binarity check", projection_bound**2 + span * projection_bound),
             ("the norm identity", 2 * self.bound**2 + projection_bound**2 - 1),
@@ -211,19 +251,3 @@ class ExactL2:
                     f"identity it proves modulo q need not hold over ℤ — "
                     f"raise q, or tighten the projection bound B"
                 )
-
-
-# One ring element holds the decomposition, per §5.2's `2·log(β) ≤ d`. Named
-# because it is the `υe = 1` this module implements, and every layout below
-# counts in it.
-_DIGIT_COLS = 1
-
-
-def _constant(ring: HostSplitRing, value: int) -> np.ndarray:
-    """`value` as the constant polynomial holding it.
-
-    Through `from_signed` because `β²` is an unreduced integer and reducing
-    it into `Z_q` is what that constructor owns."""
-    row = np.zeros((1, ring.d), dtype=np.int64)
-    row[0, 0] = value
-    return ring.from_signed_stack(row)[0]

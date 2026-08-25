@@ -118,10 +118,10 @@ py_test(
     size = "medium",
     srcs = ["exact_test.py"],
     deps = [
+        "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
         "//zorch/lnp:eval",
         "//zorch/lnp:exact",
-        "//zorch/lnp:masking",
         "//zorch/lnp:quadratic",
         "//zorch/lnp:range",
         "//zorch/lnp/testing:lnp_fixture",

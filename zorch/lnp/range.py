@@ -86,14 +86,13 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
-from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
 from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval, QuadraticEvalProof
 from zorch.lnp.masking import BimodalMasking
-from zorch.lnp.quadratic import Publics, lift_slots
+from zorch.lnp.quadratic import Publics, constants, lift_slots, sigma_exponent
 from zorch.lnp.transcript import absorb_signed, absorb_stacks
 
 _LABEL_COMMIT = b"lnp/range/mask"
@@ -228,7 +227,7 @@ class ProjectionLeg:
         s1_take = evaluation.s1_take
         slots = lift_slots(s1_take, evaluation.ell)
         self._witness_positions = np.concatenate([slots.s1, slots.message[:ell]])
-        self._mask_positions = slots.message[mask_slot:][: masking.mask_cols]
+        self._mask_positions = slots.message[mask_slot : mask_slot + masking.mask_cols]
         self._sign_position = int(slots.message[sign_slot])
         self._chunks = s1_take + ell
         # σ₋₁ applied to each monomial `X^j`, which is what `T(⃗δ_j, ·)`
@@ -237,7 +236,8 @@ class ProjectionLeg:
         # the residues in place would reach into the backend's array layout,
         # which `constant_coeff`'s docstring says consumers must not.
         self._sigma_monomials = ring.galois(
-            ring.from_signed_stack(np.eye(ring.d, dtype=np.int64)), 2 * ring.d - 1
+            ring.from_signed_stack(np.eye(ring.d, dtype=np.int64)),
+            sigma_exponent(ring.d),
         )
         # Everything below is fixed at construction and identical on both
         # sides, so it is built once rather than per proof: the `G_j` half of
@@ -269,7 +269,7 @@ class ProjectionLeg:
         mask_randomness, sign_randomness = randomness
         sign, y = self.masking.draw(rng)
         y_ring = ring.from_signed_stack(y)
-        sign_ring = _constants(ring, [sign])
+        sign_ring = constants(ring, [sign])
         return LegDraw(
             sign=sign,
             y=y,
@@ -409,14 +409,14 @@ class ProjectionLeg:
         rows = ring.from_signed_stack((-projection).reshape(-1, d)).reshape(
             count, self._chunks, len(ring.q_moduli), d
         )
-        sigma_rows = ring.galois(rows, 2 * d - 1)
+        sigma_rows = ring.galois(rows, sigma_exponent(d))
 
         e2 = ring.zeros(count + d - 1, self.width, self.width)
         e2[np.arange(count)[:, None], self._sign_position, self._witness_positions] = (
             sigma_rows
         )
         e0 = ring.zeros(count + d - 1, 1)
-        e0[:count, 0] = _constants(ring, z.reshape(-1))
+        e0[:count, 0] = constants(ring, z.reshape(-1))
         return e2, self._e1, e0
 
     def _linear_block(self) -> np.ndarray:
@@ -843,15 +843,3 @@ def _stack(families: Sequence[_Family]) -> _Family:
         return families[0]
     r2, r1, r0 = (np.concatenate([f[i] for f in families]) for i in range(3))
     return r2, r1, r0
-
-
-def _constants(ring: HostSplitRing, values: Sequence[int] | np.ndarray) -> np.ndarray:
-    """Each value as the constant polynomial holding it, stacked.
-
-    Built through `from_signed` rather than by writing the residue in
-    place, because the value is a signed integer over unreduced ℤ — `⃗z`'s
-    entries, or the sign `±1` — and the reduction into `Z_q` is exactly
-    what that constructor owns."""
-    rows = np.zeros((len(values), ring.d), dtype=np.int64)
-    rows[:, 0] = values
-    return ring.from_signed_stack(rows)

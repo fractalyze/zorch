@@ -81,27 +81,24 @@ class _Instance:
     is tight in the sense that matters here, that nothing below rounds it
     up by a factor of 189."""
 
-    def __init__(self, seed: int, bound: int | None = None) -> None:
+    def __init__(self, seed: int) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
         self.masking = lnp_fixture.bimodal(ring, _WITNESS_COLS + _DIGIT_COLS)
         scheme = _scheme(ring, self.masking.mask_cols)
-        self.scheme = scheme
-        # Re-derived over the wider Ajtai half, as every suite here does: the
-        # fixture's T_1 bounds ‖s1‖ over `_M1` columns and a wider half
-        # masked there rejects its way to `exhausted`.
-        std = lnp_fixture.GAMMA * lnp_fixture.ETA * float(np.sqrt(_S1_COLS * ring.d))
         self.evaluation = AbdlopQuadraticEval(
             AbdlopQuadraticMany(
-                AbdlopQuadratic(lnp_fixture.masking(scheme, s1_std=std))
+                AbdlopQuadratic(
+                    lnp_fixture.masking(
+                        scheme, s1_std=lnp_fixture.s1_std(ring, _S1_COLS)
+                    )
+                )
             ),
             _LAM,
         )
         self.protocol = ApproximateRange(self.evaluation, self.masking)
-        self.bound = (
-            bound if bound is not None else math_ceil_sqrt(_WITNESS_COLS * ring.d)
-        )
-        self.exact = ExactL2(self.evaluation, self.protocol.ell, self.bound)
+        self.bound = lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
+        self.exact = ExactL2(self.evaluation, _M1, self.protocol.ell, self.bound)
 
         rng = np.random.default_rng(seed)
         self.rng = rng
@@ -116,13 +113,13 @@ class _Instance:
         self.a1 = ring.uniform_stack(rng, _ROWS, _S1_COLS)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
         self.b = ring.uniform_stack(rng, _ELL, _M2)
-        self.b_mask = ring.uniform_stack(rng, self.masking.mask_cols, _M2)
-        self.b_sign = ring.uniform_stack(rng, 1, _M2)
-        self.bg = ring.uniform_stack(rng, _LAM, _M2)
+        b_mask = ring.uniform_stack(rng, self.masking.mask_cols, _M2)
+        b_sign = ring.uniform_stack(rng, 1, _M2)
+        bg = ring.uniform_stack(rng, _LAM, _M2)
         self.publics = Publics(
             a1=self.a1,
             a2=self.a2,
-            blocks=np.concatenate([self.b, self.b_mask, self.b_sign, self.bg]),
+            blocks=np.concatenate([self.b, b_mask, b_sign, bg]),
             b_quad=ring.uniform_stack(rng, _M2),
         )
 
@@ -164,14 +161,6 @@ class _Instance:
         )
 
 
-def math_ceil_sqrt(value: int) -> int:
-    """`⌈√value⌉` over exact integers — the ternary witness bound `β`."""
-    root = int(np.isqrt(value)) if hasattr(np, "isqrt") else int(value**0.5)
-    while root * root < value:
-        root += 1
-    return root
-
-
 class ExactDecompositionTest(absltest.TestCase):
     def test_the_digits_read_back_as_the_slack(self) -> None:
         """`⟨p⃗, x⃗⟩ = β² − ‖s‖²`, which is the whole content of the
@@ -202,7 +191,7 @@ class ExactDecompositionTest(absltest.TestCase):
     def test_a_bound_too_wide_for_one_ring_element_is_refused(self) -> None:
         instance = _Instance(4)
         with self.assertRaisesRegex(ValueError, "past the ring degree"):
-            ExactL2(instance.evaluation, instance.protocol.ell, 1 << 40)
+            ExactL2(instance.evaluation, _M1, instance.protocol.ell, 1 << 40)
 
 
 class ExactStatementTest(absltest.TestCase):
@@ -279,9 +268,15 @@ class ExactWraparoundTest(absltest.TestCase):
     def test_the_honest_parameter_point_has_room(self) -> None:
         """The conditions are not tight at any sane point — `q` is ~2^32 and
         the projection of a ternary witness is tiny — so the guard should
-        never fire on the suite's own numbers."""
+        never fire on the suite's own numbers.
+
+        `B` is the ℓ2 bound Prop. 5.1 actually proves about `(s ‖ x⃗)`, not
+        `masking.projection`, which is the projection *dimension*: 256 rows,
+        a count. Passing the count happens to satisfy the conditions too, so
+        the distinction is invisible here and worth spelling — the number
+        this gate reads is a norm."""
         instance = _Instance(10)
-        instance.exact.require_no_wraparound(instance.masking.projection)
+        instance.exact.require_no_wraparound(instance.masking.proven_norm())
 
 
 class ExactRoundTripTest(absltest.TestCase):

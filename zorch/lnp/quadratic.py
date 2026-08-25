@@ -68,6 +68,7 @@ posture.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -479,6 +480,44 @@ class AbdlopQuadraticMany:
             self.scheme.require_stack(f"quadratic: {name}", arr, *lead)
 
 
+@dataclass(frozen=True)
+class LiftSlots:
+    """Where each automorphism copy of each half sits inside a `lift`.
+
+    `lift_positions` answers "where does a *narrower* statement's lift sit
+    inside a wider one"; this answers the question underneath it — where a
+    given copy of a given half starts — which the layers kept re-deriving
+    for their own reasons. A statement that mentions `σ₋₁(v)·v` needs both
+    copies of one half at once (every inner product is that shape), and one
+    that mentions a vector spanning both halves needs a slot from each.
+
+    Two copies and not `k`, because `SIGMA_ORDER` is 2 and this module pins
+    the automorphism — see the module docstring."""
+
+    s1: np.ndarray
+    sigma_s1: np.ndarray
+    message: np.ndarray
+    sigma_message: np.ndarray
+
+
+def lift_slots(s1_cols: int, message_cols: int) -> LiftSlots:
+    """`lift`'s layout, read back as index arrays.
+
+    `lift` orbits each half as a whole — `[s1, σ(s1), m, σ(m)]` — so the
+    message half starts after *both* `s1` copies, and each copy of a half is
+    contiguous. Every place that has open-coded `SIGMA_ORDER * s1_cols` was
+    spelling that same rule."""
+    if s1_cols < 0 or message_cols < 0:
+        raise ValueError(f"lift_slots: negative widths ({s1_cols}, {message_cols})")
+    s1_span = SIGMA_ORDER * s1_cols
+    return LiftSlots(
+        s1=np.arange(s1_cols),
+        sigma_s1=s1_cols + np.arange(s1_cols),
+        message=s1_span + np.arange(message_cols),
+        sigma_message=s1_span + message_cols + np.arange(message_cols),
+    )
+
+
 def lift(
     ring: HostSplitRing, s1_part: np.ndarray, message_part: np.ndarray
 ) -> np.ndarray:
@@ -516,58 +555,42 @@ def lift_positions(
     A caller whose statement occupies the whole lift gets `arange` back,
     which is what the layers written before anything widened `s1` spelled
     directly.
+
+    Spelled through `lift_slots` rather than looping over the copies: that
+    helper owns where each copy of each half starts, and at `SIGMA_ORDER = 2`
+    — which this module pins — naming the four prefixes is the same thing
+    the loop was doing.
     """
     if not 0 <= s1_take <= s1_cols or not 0 <= message_take <= message_cols:
         raise ValueError(
             f"lift_positions: cannot take ({s1_take}, {message_take}) columns "
             f"out of ({s1_cols}, {message_cols})"
         )
-    s1_span = SIGMA_ORDER * s1_cols
+    slots = lift_slots(s1_cols, message_cols)
     return np.concatenate(
-        [copy * s1_cols + np.arange(s1_take) for copy in range(SIGMA_ORDER)]
-        + [
-            s1_span + copy * message_cols + np.arange(message_take)
-            for copy in range(SIGMA_ORDER)
+        [
+            slots.s1[:s1_take],
+            slots.sigma_s1[:s1_take],
+            slots.message[:message_take],
+            slots.sigma_message[:message_take],
         ]
     )
 
 
-@dataclass(frozen=True)
-class LiftSlots:
-    """Where each automorphism copy of each half sits inside a `lift`.
+def constants(ring: HostSplitRing, values: Sequence[int] | np.ndarray) -> np.ndarray:
+    """Each value as the constant polynomial holding it, stacked.
 
-    `lift_positions` answers "where does a *narrower* statement's lift sit
-    inside a wider one"; this answers the question underneath it — where a
-    given copy of a given half starts — which the layers kept re-deriving
-    for their own reasons. A statement that mentions `σ₋₁(v)·v` needs both
-    copies of one half at once (every inner product is that shape), and one
-    that mentions a vector spanning both halves needs a slot from each.
+    Built through `from_signed` rather than by writing the residue in place,
+    because the value is a signed integer over unreduced ℤ — a revealed
+    projection's entries, a sign `±1`, a squared norm bound — and the
+    reduction into `Z_q` is exactly what that constructor owns.
 
-    Two copies and not `k`, because `SIGMA_ORDER` is 2 and this module pins
-    the automorphism — see the module docstring."""
-
-    s1: np.ndarray
-    sigma_s1: np.ndarray
-    message: np.ndarray
-    sigma_message: np.ndarray
-
-
-def lift_slots(s1_cols: int, message_cols: int) -> LiftSlots:
-    """`lift`'s layout, read back as index arrays.
-
-    `lift` orbits each half as a whole — `[s1, σ(s1), m, σ(m)]` — so the
-    message half starts after *both* `s1` copies, and each copy of a half is
-    contiguous. Every place that has open-coded `SIGMA_ORDER * s1_cols` was
-    spelling that same rule."""
-    if s1_cols < 0 or message_cols < 0:
-        raise ValueError(f"lift_slots: negative widths ({s1_cols}, {message_cols})")
-    s1_span = SIGMA_ORDER * s1_cols
-    return LiftSlots(
-        s1=np.arange(s1_cols),
-        sigma_s1=s1_cols + np.arange(s1_cols),
-        message=s1_span + np.arange(message_cols),
-        sigma_message=s1_span + message_cols + np.arange(message_cols),
-    )
+    Here rather than in either caller: `range.py` and `exact.py` both need
+    it and both had spelled it, which put one reduction convention in two
+    modules."""
+    rows = np.zeros((len(values), ring.d), dtype=np.int64)
+    rows[:, 0] = values
+    return ring.from_signed_stack(rows)
 
 
 def evaluate(

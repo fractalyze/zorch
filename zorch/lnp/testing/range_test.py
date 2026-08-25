@@ -116,8 +116,7 @@ def _protocol(
     # Re-derived for the same reason `quadratic_eval_test` re-derives it: the
     # point's T_1 bounds ‖s1‖ over `_M1` columns, and a wider Ajtai half
     # masked there rejects its way to `exhausted`.
-    std = lnp_fixture.GAMMA * lnp_fixture.ETA * float(np.sqrt(s1_cols * ring.d))
-    inner = lnp_fixture.masking(scheme, s1_std=std)
+    inner = lnp_fixture.masking(scheme, s1_std=lnp_fixture.s1_std(ring, s1_cols))
     evaluation = AbdlopQuadraticEval(
         AbdlopQuadraticMany(AbdlopQuadratic(inner)), _LAM, s1_take=s1_take
     )
@@ -1075,6 +1074,36 @@ class NormGateTest(absltest.TestCase):
         for attempt in range(20):
             with self.subTest(attempt=attempt):
                 self.assertTrue(linf.within_bounds(linf.draw(rng)[1]))
+
+    def test_the_proven_bound_is_not_the_gate(self) -> None:
+        """`resolve` gives the gate on `⃗z`; `proven_norm` gives what Lemma
+        2.9 then concludes about the *projected vector*, `‖⃗s‖ ≤
+        2·√(256/26)·t·s`. Two different numbers, and §5.2's wraparound
+        conditions want the second.
+
+        Pinned as a value because those conditions are slack by orders of
+        magnitude at any sane point, so a wrong number still satisfies them
+        — which is how this accessor's first caller came to pass the
+        projection *dimension*, a count, and see a green test."""
+        masking = self._masking()
+        self.assertEqual(
+            masking.proven_norm(),
+            math.ceil(
+                2.0 * math.sqrt(masking.projection / 26.0) * 1.64 * masking.mask_std
+            ),
+        )
+        # It is neither the gate on `⃗z` nor the dimension — the two values
+        # the formula is most easily confused with.
+        self.assertNotEqual(masking.proven_norm(), masking._limit)
+        self.assertNotEqual(masking.proven_norm(), masking.projection)
+
+    def test_the_linf_leg_refuses_to_state_an_l2_bound(self) -> None:
+        """§5.2 does draw a conclusion for the ℓ∞ leg — `‖e⃗‖_∞ ≤ 24·s` —
+        but in the other norm. Returning it where an ℓ2 bound is expected
+        would satisfy a wraparound condition nothing established."""
+        masking = self._masking(bound=LinfBound())
+        with self.assertRaisesRegex(ValueError, "not the ℓ2 one"):
+            masking.proven_norm()
 
     def test_accept_t_is_gated_where_it_means_something(self) -> None:
         """It moved off the masking with this slice: `t` is Prop. 5.1's ℓ2
