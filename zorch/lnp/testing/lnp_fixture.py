@@ -32,7 +32,8 @@ KAPPA, ETA, K = 2, 59, 32
 # margin far past anything a seeded suite can reach (the measured gate
 # rejection is ~1%, so the first block almost always decides) at a third of
 # the hashing; production keeps the library's 2^-128 default.
-CHALLENGE = ChallengeParams(d=D, kappa=KAPPA, eta=ETA, k=K, fail_prob=2.0**-40)
+FAIL_PROB = 2.0**-40
+CHALLENGE = ChallengeParams(d=D, kappa=KAPPA, eta=ETA, k=K, fail_prob=FAIL_PROB)
 
 # Lemma 2.14-1 at γ = 14: M = exp(14/γ + 1/(2γ²)) ≈ e ≈ 2.72 per response,
 # s_i = γ·T_i with T_1 = η·α (α = ‖s1‖ ≤ √(m1·d) for ternary s1) and
@@ -99,6 +100,6 @@ def bimodal(
     params: dict[str, object] = dict(
         mask_std=GAMMA * float(np.sqrt(337.0)) * beta,
         rep0=REP0,
-        fail_prob=2.0**-40,
+        fail_prob=FAIL_PROB,
     )
     return BimodalMasking(ring, **(params | overrides))  # type: ignore[arg-type]

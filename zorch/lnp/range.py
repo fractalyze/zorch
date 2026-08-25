@@ -46,12 +46,23 @@ constant polynomial — which is what the `G_j` establish. Dropping them
 would not fail a round-trip; it would silently prove a statement about a
 different quantity, so they are load-bearing rather than hygiene.
 
+**A leg contributes; it does not compose.** The round above — mask, sign,
+`R`, `⃗z` — is `ProjectionLeg`, and the single Π_eval^(2) call is
+`ApproximateRange`'s, because Fig. 10 (§5.2) runs *two* legs over one
+commitment: the verifier sends both `R` after both legs' commitments, gates
+both `Rej0` together, and then one inner proof covers everything. A leg
+that owned the inner call would have to build a BDLOP matrix and a message
+half containing the other leg's rows, and neither leg knows the other.
+
 **Message layout.** `y` and `b` are committed in the BDLOP half beside the
 caller's `m` (Fig. 9's `B2` and `b1` rows), so what the layer below opens
 is `m‖y‖b`, and what *it* appends on top of that is its own garbage. The
-scheme therefore carries `ℓ + 256/d + 1 + λ` messages, and each layer
-carves its share off the end — the same "build it over the extended
-scheme" contract `GarbageMasking` states, one level up.
+scheme therefore carries `ℓ + legs·(256/d + 1) + λ` messages, and each
+layer carves its share off the end — the same "build it over the extended
+scheme" contract `GarbageMasking` states, one level up. The composing
+layer owns the order and follows Fig. 10's: every mask, then every sign
+(`s* := (s2, (s1, x), (m, y^(d), y^(e), b^(d), b^(e)))`), which for one leg
+is the `m‖y‖b` Fig. 9 spells.
 
 The caller's `m` arrives as *signed integers* rather than as a ring stack,
 unlike every other layer here, and that is deliberate: `m` is half of the
@@ -60,14 +71,17 @@ the object being bounded. Taking a ring stack would mean reconstructing
 them, and which centred reconstruction a bound reads is a pinned choice in
 this codebase (`zorch/commit/ajtai.py`), not a detail to re-decide here.
 
-Fiat-Shamir shape: the prover absorbs `(t_y, t_b)` and receives `R`, then
-absorbs `⃗z` before the inner proof runs, so the statement Π_eval^(2) is
-given is bound to the transcript that produced it. `R` is not on the wire —
-the verifier re-derives it, which is what checks it.
+Fiat-Shamir shape: the prover absorbs every leg's `(t_mask, t_sign)` and
+then draws each `R`, so a projection is bound to *all* the first-round
+commitments and not merely to its own leg's; every `⃗z` is absorbed before
+the inner proof runs, so the statement Π_eval^(2) is given is bound to the
+transcript that produced it. `R` is not on the wire — the verifier
+re-derives it, which is what checks it.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -76,6 +90,7 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
+from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval, QuadraticEvalProof
 from zorch.lnp.masking import BimodalMasking
 from zorch.lnp.quadratic import SIGMA_ORDER, Publics
@@ -98,54 +113,84 @@ _LABEL_REVEAL = b"lnp/range/projection"
 # one prove's four squeezes, and the suite roughly halves.
 _BIN1_BITS = 2
 
+# Three families over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`.
+_Family = tuple[np.ndarray, np.ndarray, np.ndarray]
+
 
 @dataclass(frozen=True)
-class RangeProof:
-    """The Fig. 9 wire: the two extra commitments, the revealed projection,
-    and the Π_eval^(2) proof of its well-formedness.
+class LegDraw:
+    """One attempt's secrets for one leg, and the two commitments they
+    complete.
+
+    Named rather than returned as a tuple because four of its six fields
+    never leave the prover and two of them are the wire, and a caller
+    unpacking six same-typed values positionally is one transposition away
+    from committing the sign under the mask's rows."""
+
+    sign: int
+    y: np.ndarray
+    y_ring: np.ndarray
+    sign_ring: np.ndarray
+    t_mask: np.ndarray
+    t_sign: np.ndarray
+
+
+@dataclass(frozen=True)
+class LegMessage:
+    """One leg's share of the Fig. 9 wire: its two first-round commitments
+    and its revealed projection.
 
     `R` is absent for the reason every challenge in this package is absent —
-    it is Fiat-Shamir output and the verifier re-derives it from `(t_mask,
-    t_sign)`. `⃗z` is *not* derivable and is the whole point of the protocol,
-    so it is sent, as signed integers over unreduced ℤ: its norm is the
-    statement, and a mod-q representative would not have one."""
+    it is Fiat-Shamir output and the verifier re-derives it from every leg's
+    `(t_mask, t_sign)`. `⃗z` is *not* derivable and is the whole point of the
+    protocol, so it is sent, as signed integers over unreduced ℤ: its norm
+    is the statement, and a mod-q representative would not have one."""
 
     t_mask: np.ndarray
     t_sign: np.ndarray
     z: np.ndarray
+
+
+@dataclass(frozen=True)
+class RangeProof:
+    """One proof: what each leg revealed, and the Π_eval^(2) proof that all
+    of it is well formed.
+
+    A sequence rather than one leg's three fields inline, because Fig. 10's
+    wire genuinely carries two of each — `t^(d), t^(d)_b, t^(e), t^(e)_b`
+    then `⃗z^(d), ⃗z^(e)` — under a single inner proof."""
+
+    legs: tuple[LegMessage, ...]
     evaluation: QuadraticEvalProof
 
 
-class ApproximateRange:
-    """Fig. 9 prove/verify over an `AbdlopQuadraticEval`.
+class ProjectionLeg:
+    """One Fig. 9 projection round over an `AbdlopQuadraticEval`'s lift —
+    the mask, the sign, the challenge `R`, the revealed `⃗z`, and the
+    statement they induce — without the inner proof.
 
-    Built over the eval layer rather than beside it, because the projection
-    statement is not provable on its own: `F_i`, `G_j` and `f` are what a
-    verifier checks, and only Π_eval^(2) can check them together against one
-    commitment. This layer's own contribution is the `(b, y, R, ⃗z)` round
-    and the norm gate on `⃗z`.
+    **Why it is told where its rows are.** A leg's mask and sign occupy
+    columns of the shared message half, and "the columns after the caller's
+    `m`" has exactly one solution, so a leg that derived them could only
+    ever be the only leg. Fig. 10's message is `(m, y^(d), y^(e), b^(d),
+    b^(e))` — the two legs' masks are adjacent and their signs are
+    elsewhere — which no rule local to a leg produces. `mask_slot` and
+    `sign_slot` are message-half indices, and they index the BDLOP matrix's
+    rows and the lift's message columns alike, since those correspond one
+    for one.
 
-    **The scheme it needs.** `evaluation` must already be built over a
-    scheme whose BDLOP half carries `ℓ + 256/d + 1 + λ` messages; `self.ell`
-    is what is left for the caller after this layer's mask and sign and the
-    layer below's garbage. A scheme sized for the caller's `m` alone fails
-    here rather than silently proving a statement about a shorter witness.
-
-    **What is proven, and what is not.** A verifying proof says
-    `‖(s1, m)‖₂ ≤ 2√(256/26)·t·γ·√337·β` for the `β` the caller derived
-    `mask_std` from — a bound roughly 189β, not β. Anything needing the
-    tight bound composes this with §5's exact proof; this layer is where
-    that composition gets its "no wraparound mod q" premise.
-
-    Commit-and-prove, not zero-knowledge over a reusable commitment — §3.2,
-    inherited from the layer below and made stronger here, since this layer
-    appends `y` and `b` to the message on every run.
+    Only the identity automorphism copy is ever indexed: `T` already
+    carries the automorphism, so a statement about `σ(x)` written against
+    `σ`'s copy would apply it twice.
     """
 
     def __init__(
         self,
         evaluation: AbdlopQuadraticEval,
         masking: BimodalMasking,
+        ell: int,
+        mask_slot: int,
+        sign_slot: int,
     ) -> None:
         scheme = evaluation.scheme
         ring = scheme.ring
@@ -154,25 +199,17 @@ class ApproximateRange:
                 "range: the masking and the scheme must hold one ring — a "
                 "projection masked over a different ring is a parameter bug"
             )
-        ell = evaluation.ell - masking.mask_cols - 1
-        if ell < 0:
-            raise ValueError(
-                f"range: the BDLOP half leaves {evaluation.ell} messages to "
-                f"the layers above the garbage, too few for a {masking.mask_cols}"
-                f"-element mask and a sign on top of a message vector — build "
-                f"it over the extended scheme"
-            )
         self.evaluation = evaluation
         self.masking = masking
         self.scheme = scheme
         self.ell = ell
+        self.mask_slot = mask_slot
+        self.sign_slot = sign_slot
 
-        # Positions in the *eval layer's* lift, `[s1, σ(s1), m, y, b, σ(m),
-        # σ(y), σ(b)]` — the message stack is orbited as a whole, so this
-        # layer's two additions land inside each automorphism copy exactly
-        # as the garbage below does. Only the identity copy is ever indexed:
-        # `T` already carries the automorphism, so a statement about `σ(x)`
-        # written against `σ`'s copy would apply it twice.
+        # Positions in the *eval layer's* lift, `[s1, σ(s1), m‖…, σ(m‖…)]`
+        # — the message stack is orbited as a whole, so this leg's two
+        # additions land inside each automorphism copy exactly as the
+        # garbage below does.
         # Off the eval layer's carve, not the scheme's own width: that layer
         # may cover a prefix of the Ajtai half — Fig. 10 commits to `(s1, x)`
         # and writes its statement about `s1` — and these positions index
@@ -183,8 +220,8 @@ class ApproximateRange:
         self._witness_positions = np.concatenate(
             [np.arange(s1_take), s1_span + np.arange(ell)]
         )
-        self._mask_positions = s1_span + ell + np.arange(masking.mask_cols)
-        self._sign_position = s1_span + ell + masking.mask_cols
+        self._mask_positions = s1_span + mask_slot + np.arange(masking.mask_cols)
+        self._sign_position = s1_span + sign_slot
         self._chunks = s1_take + ell
         # σ₋₁ applied to each monomial `X^j`, which is what `T(⃗δ_j, ·)`
         # contributes. Row `j` of the identity *is* `X^j`'s coefficient
@@ -200,174 +237,146 @@ class ApproximateRange:
         self._e1 = self._linear_block()
         self._sign_relation = self._relation()
 
-    def prove(
-        self,
-        publics: Publics,
-        s1: np.ndarray,
-        s2: np.ndarray,
-        message: np.ndarray,
-        rng: np.random.Generator,
-        transcript: ByteTranscript,
-    ) -> tuple[RangeProof, ByteTranscript]:
-        """One non-interactive proof that `‖(s1, m)‖₂` is within the bound
-        `masking` was parameterised for.
+    # The prover's half. `randomness` is separate from `draw` so the
+    # composing layer can hoist it out of its attempt loop: a rejected
+    # attempt redraws `(b, y)` but not the witness-only matvecs, which is
+    # the hoist `quadratic.prove` makes for the same reason.
 
-        Fig. 9's `B2` and `b1` — the BDLOP rows the mask and the sign are
-        committed under — are carved out of `publics.blocks` rather than
-        passed beside it; see `_mask_rows`. `s1`, `s2` and `message` are
-        signed integer arrays: the first two as everywhere in this package,
-        the third because it is half of the vector being bounded.
-        """
+    def randomness(
+        self, publics: Publics, s2_ring: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """`B2·s2` and `b1·s2` — the halves of this leg's two commitments
+        that depend only on the witness."""
         ring = self.scheme.ring
-        publics.require(self.scheme)
-        self._require_witness(s1, s2, message)
-        s2_ring = ring.from_signed_stack(s2)
-        message_ring = ring.from_signed_stack(message) if self.ell else ring.zeros(0)
-        # The projected witness, over ℤ: `⃗s` is the concatenated balanced
-        # coefficients of `(s1, m)`, which is the vector Lemma 2.9 bounds.
-        # `s1` is carved to what the eval layer's statement covers — the
-        # bound is about that prefix, and `R` is squeezed to its width.
-        flat = (
-            np.concatenate([s1[: self.evaluation.s1_take], message])
-            .astype(np.int64)
-            .reshape(-1)
+        return (
+            ring.matvec(self._mask_rows(publics), s2_ring),
+            ring.matvec(self._sign_rows(publics), s2_ring),
         )
-        # Witness-only, so a rejected attempt would recompute them unchanged
-        # — the hoist `quadratic.prove` makes for the same reason. Only the
-        # `add` of the fresh mask is per-attempt.
-        mask_randomness = ring.matvec(self._mask_rows(publics), s2_ring)
-        sign_randomness = ring.matvec(self._sign_rows(publics), s2_ring)
 
-        for _ in range(self.masking.attempts):
-            sign, y = self.masking.draw(rng)
-            y_ring = ring.from_signed_stack(y)
-            sign_ring = _constants(ring, [sign])
-            t_mask = ring.add(mask_randomness, y_ring)
-            t_sign = ring.add(sign_randomness, sign_ring)
+    def draw(
+        self, randomness: tuple[np.ndarray, np.ndarray], rng: np.random.Generator
+    ) -> LegDraw:
+        """A fresh `(b, y)` and the two commitments they complete."""
+        ring = self.scheme.ring
+        mask_randomness, sign_randomness = randomness
+        sign, y = self.masking.draw(rng)
+        y_ring = ring.from_signed_stack(y)
+        sign_ring = _constants(ring, [sign])
+        return LegDraw(
+            sign=sign,
+            y=y,
+            y_ring=y_ring,
+            sign_ring=sign_ring,
+            t_mask=ring.add(mask_randomness, y_ring),
+            t_sign=ring.add(sign_randomness, sign_ring),
+        )
 
-            advanced, projection = self._challenge(transcript, t_mask, t_sign)
-            # `v = b·R⃗s` is the centre Rej0 is stated against, and `z` its
-            # mask. Both over unreduced ℤ — int64 is exact here, the entries
-            # of `R` being ternary and `⃗s` short.
-            centre = sign * (projection @ flat)
-            revealed = centre + y.reshape(-1)
-            if not self.masking.accepts(rng, revealed, centre):
-                continue
-
-            z = revealed.reshape(y.shape)
-            t, (r2, r1, r0, e2, e1, e0) = self._statement(advanced, projection, z)
-            inner, t = self.evaluation.prove(
-                publics,
-                r2,
-                r1,
-                r0,
-                e2,
-                e1,
-                e0,
-                s1,
-                s2,
-                np.concatenate([message_ring, y_ring, sign_ring]),
-                rng,
-                t,
-            )
-            return (
-                RangeProof(t_mask=t_mask, t_sign=t_sign, z=z, evaluation=inner),
-                t,
-            )
-        raise self.masking.exhausted("range.prove")
-
-    def verify(
+    def respond(
         self,
-        publics: Publics,
-        t_a: np.ndarray,
-        t_b: np.ndarray,
-        proof: RangeProof,
-        transcript: ByteTranscript,
-    ) -> tuple[bool, ByteTranscript]:
-        """Fig. 9's two checks: `‖⃗z‖₂` is within the Prop. 5.1 bound, and
-        the Π_eval^(2) proof of the statement `⃗z` induces verifies.
+        draw: LegDraw,
+        projection: np.ndarray,
+        flat: np.ndarray,
+        rng: np.random.Generator,
+    ) -> np.ndarray | None:
+        """`⃗z = b·R⃗s + ⃗y`, or `None` when Rej0 rejects it.
 
-        `t_b` is the caller's commitment to `m` alone; the mask and sign
-        commitments arrive on the proof and are appended here, in the order
-        the message was built."""
-        # The statement is the caller's and raises; the proof is the
-        # prover's and is a verdict. See `zorch/lnp/wire.py`.
-        publics.require(self.scheme)
-        if not self._is_well_formed(proof):
-            return False, transcript
-        if not self.masking.within_bounds(proof.z):
-            return False, transcript
+        `None` rather than a raise or a retry here, because the composing
+        layer gates every leg together — Fig. 10 abandons the attempt unless
+        *both* legs' Rej0 accept, since one transcript carries them both —
+        so a leg's verdict is a value its caller combines, never control
+        flow the leg owns.
 
-        advanced, projection = self._challenge(transcript, proof.t_mask, proof.t_sign)
-        t, (r2, r1, r0, e2, e1, e0) = self._statement(advanced, projection, proof.z)
-        return self.evaluation.verify(
-            publics,
-            r2,
-            r1,
-            r0,
-            e2,
-            e1,
-            e0,
-            t_a,
-            np.concatenate([t_b, proof.t_mask, proof.t_sign]),
-            proof.evaluation,
-            t,
-        )
+        `⃗v = b·R⃗s` is the centre Rej0 is stated against, and `⃗z` its mask.
+        Both over unreduced ℤ — int64 is exact here, the entries of `R`
+        being ternary and `⃗s` short."""
+        centre = draw.sign * (projection @ flat)
+        revealed = centre + draw.y.reshape(-1)
+        if not self.masking.accepts(rng, revealed, centre):
+            return None
+        return revealed.reshape(draw.y.shape)
 
-    def _statement(
-        self, transcript: ByteTranscript, projection: np.ndarray, z: np.ndarray
-    ) -> tuple[
-        ByteTranscript,
-        tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray],
-    ]:
-        """Absorb the revealed projection, then the six blocks it induces.
+    # What both sides replay, in the order they replay it.
 
-        One method rather than a copy on each side: the two must build
-        byte-identical statements from `(R, ⃗z)` or the inner proof does not
-        replay, and that identity is what this layer's soundness rests on.
-        The order is `AbdlopQuadraticEval`'s own — one relation, then the
-        evaluations."""
-        t = absorb_signed(transcript.observe_label(_LABEL_REVEAL), self.scheme.ring, z)
-        return t, (*self._sign_relation, *self._evaluations(projection, z))
-
-    def _mask_rows(self, publics: Publics) -> np.ndarray:
-        """Fig. 9's `B2` — the BDLOP rows the mask `y` is committed under.
-
-        Carved out of the assembled matrix rather than taken beside it, for
-        the reason `Publics` gives: a layer that concatenates its own rows
-        onto the caller's cannot also be one of two legs, since neither leg
-        can build a matrix that has to contain the other's rows. The slice
-        is the same arithmetic `_mask_positions` is, one axis over."""
-        return publics.blocks[self.ell : self.ell + self.masking.mask_cols]
-
-    def _sign_rows(self, publics: Publics) -> np.ndarray:
-        """Fig. 9's `b1` — the single row the sign is committed under.
-
-        Sliced rather than indexed: the layer below takes a stack, and a
-        bare row would reach `matvec` one axis short."""
-        start = self.ell + self.masking.mask_cols
-        return publics.blocks[start : start + 1]
-
-    def _challenge(
+    def observe(
         self, transcript: ByteTranscript, t_mask: np.ndarray, t_sign: np.ndarray
+    ) -> ByteTranscript:
+        """Bind this leg's two first-round commitments."""
+        return absorb_stacks(transcript.observe_label(_LABEL_COMMIT), t_mask, t_sign)
+
+    def challenge(
+        self, transcript: ByteTranscript
     ) -> tuple[ByteTranscript, np.ndarray]:
-        """Absorb the mask and sign commitments and squeeze
-        `R ← Bin_1^{256 × d(m1+ℓ)}` — the one derivation both sides replay.
+        """Squeeze `R ← Bin_1^{256 × d(m1+ℓ)}` — the one derivation both
+        sides replay.
+
+        Separate from `observe` because Fig. 10 sends every commitment
+        before any challenge, so the composing layer absorbs all of them and
+        only then draws each `R`. No label of its own: two legs squeezing
+        back to back still get different matrices, since `sample_scalar`
+        re-absorbs what it squeezed, and a separator here would move the
+        one-leg bytes Fig. 9's suite is pinned against.
 
         Shaped `(256, d(m1+ℓ))` rather than as a stack of ring elements
         because that is what it is: a `Z`-linear map on coefficient vectors,
         which only becomes ring-shaped once `T` reads it row by row."""
         rows = self.masking.projection
         count = rows * self._chunks * self.scheme.ring.d
-        t = absorb_stacks(transcript.observe_label(_LABEL_COMMIT), t_mask, t_sign)
-        t, raw = t.sample_scalar(-(-count * _BIN1_BITS // 8))
+        t, raw = transcript.sample_scalar(-(-count * _BIN1_BITS // 8))
         bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8))
         pairs = bits[: count * _BIN1_BITS].reshape(count, _BIN1_BITS).astype(np.int64)
         return t, (pairs[:, 1] - pairs[:, 0]).reshape(rows, -1)
 
-    def _evaluations(
+    def reveal(self, transcript: ByteTranscript, z: np.ndarray) -> ByteTranscript:
+        """Bind the revealed projection, which the inner proof runs after."""
+        return absorb_signed(
+            transcript.observe_label(_LABEL_REVEAL), self.scheme.ring, z
+        )
+
+    def statement(
         self, projection: np.ndarray, z: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ) -> tuple[_Family, _Family]:
+        """The relations and the evaluations `(R, ⃗z)` induce, in
+        `AbdlopQuadraticEval`'s two families.
+
+        One method rather than a copy on each side: the two must build
+        byte-identical statements from `(R, ⃗z)` or the inner proof does not
+        replay, and that identity is what this layer's soundness rests on."""
+        return self._sign_relation, self._evaluations(projection, z)
+
+    def within_bounds(self, z: np.ndarray) -> bool:
+        """Prop. 5.1's `‖⃗z‖₂ ≤ t·√256·s3`, forwarded so the composing layer
+        need not reach through to the masking for the one check it owes each
+        leg."""
+        return self.masking.within_bounds(z)
+
+    def is_well_formed(self, message: LegMessage) -> bool:
+        """Whether this leg's share of the wire is structurally usable, per
+        `zorch/lnp/wire.py`. `z` routes through the same raising gate as
+        every other signed array here rather than restating its predicate,
+        which is the rule that module's docstring states."""
+        return (
+            isinstance(message, LegMessage)
+            and wire.is_stack(self.scheme, message.t_mask, self.masking.mask_cols)
+            and wire.is_stack(self.scheme, message.t_sign, 1)
+            and wire.is_signed(self.scheme.ring, message.z, self.masking.mask_cols)
+        )
+
+    def _mask_rows(self, publics: Publics) -> np.ndarray:
+        """Fig. 9's `B2` — the BDLOP rows this leg's mask is committed
+        under, carved out of the assembled matrix by the slot it was told.
+        The slice is the same arithmetic `_mask_positions` is, one axis
+        over."""
+        return publics.blocks[self.mask_slot : self.mask_slot + self.masking.mask_cols]
+
+    def _sign_rows(self, publics: Publics) -> np.ndarray:
+        """Fig. 9's `b1` — the single row this leg's sign is committed
+        under.
+
+        Sliced rather than indexed: the layer below takes a stack, and a
+        bare row would reach `matvec` one axis short."""
+        return publics.blocks[self.sign_slot : self.sign_slot + 1]
+
+    def _evaluations(self, projection: np.ndarray, z: np.ndarray) -> _Family:
         """The `256 + (d − 1)` functions whose constant coefficients vanish:
         `F_i` (eq. 43) then `G_j`.
 
@@ -417,7 +426,7 @@ class ApproximateRange:
         e1[count + np.arange(d - 1), self._sign_position] = self._sigma_monomials[1:]
         return e1
 
-    def _relation(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _relation(self) -> _Family:
         """`f(b) = b² − 1`, the one function claimed zero as a ring element.
 
         Paired with the `G_j` above, not usable without them: `b² = 1` alone
@@ -431,6 +440,277 @@ class ApproximateRange:
         r0 = ring.neg(ring.one())[None, None]
         return r2, r1, r0
 
+
+class ApproximateRange:
+    """Fig. 9's prove/verify over an `AbdlopQuadraticEval`, and the shape
+    Fig. 10 composes: `n` `ProjectionLeg`s, one inner proof.
+
+    Built over the eval layer rather than beside it, because the projection
+    statement is not provable on its own: `F_i`, `G_j` and `f` are what a
+    verifier checks, and only Π_eval^(2) can check them together against one
+    commitment. What this layer contributes is the round schedule — every
+    leg's commitments absorbed, then every `R` drawn, then every `⃗z`
+    responded and gated together — the message half's order, and the single
+    call below.
+
+    **The scheme it needs.** `evaluation` must already be built over a
+    scheme whose BDLOP half carries `ℓ + legs·(256/d + 1) + λ` messages;
+    `self.ell` is what is left for the caller after every leg's mask and
+    sign and the layer below's garbage. A scheme sized for the caller's `m`
+    alone fails here rather than silently proving a statement about a
+    shorter witness.
+
+    **What is proven, and what is not.** A verifying proof says
+    `‖(s1, m)‖₂ ≤ 2√(256/26)·t·γ·√337·β` for the `β` the caller derived
+    each `mask_std` from — a bound roughly 189β, not β. Anything needing the
+    tight bound composes this with §5's exact proof; this layer is where
+    that composition gets its "no wraparound mod q" premise.
+
+    Commit-and-prove, not zero-knowledge over a reusable commitment — §3.2,
+    inherited from the layer below and made stronger here, since this layer
+    appends a `y` and a `b` per leg to the message on every run.
+    """
+
+    def __init__(
+        self, evaluation: AbdlopQuadraticEval, *maskings: BimodalMasking
+    ) -> None:
+        if not maskings:
+            raise ValueError(
+                "range: a range proof needs at least one projection leg, and "
+                "none was given"
+            )
+        rows = sum(masking.mask_cols + 1 for masking in maskings)
+        ell = evaluation.ell - rows
+        if ell < 0:
+            raise ValueError(
+                f"range: the BDLOP half leaves {evaluation.ell} messages to "
+                f"the layers above the garbage, too few for {len(maskings)} "
+                f"leg(s) needing {rows} on top of a message vector — build it "
+                f"over the extended scheme"
+            )
+        self.evaluation = evaluation
+        self.scheme = evaluation.scheme
+        self.ell = ell
+        # Fig. 10's order for the legs' share of the message half: every
+        # mask, then every sign. For one leg that is Fig. 9's `m‖y‖b`.
+        mask_slot = ell
+        sign_slot = ell + sum(masking.mask_cols for masking in maskings)
+        legs = []
+        for masking in maskings:
+            legs.append(ProjectionLeg(evaluation, masking, ell, mask_slot, sign_slot))
+            mask_slot += masking.mask_cols
+            sign_slot += 1
+        self.legs = tuple(legs)
+        self.attempts = self._budget(maskings)
+
+    def prove(
+        self,
+        publics: Publics,
+        s1: np.ndarray,
+        s2: np.ndarray,
+        message: np.ndarray,
+        rng: np.random.Generator,
+        transcript: ByteTranscript,
+    ) -> tuple[RangeProof, ByteTranscript]:
+        """One non-interactive proof that `‖(s1, m)‖₂` is within the bound
+        each leg's masking was parameterised for.
+
+        Fig. 9's `B2` and `b1` — the BDLOP rows a leg's mask and sign are
+        committed under — are carved out of `publics.blocks` rather than
+        passed beside it; see `ProjectionLeg._mask_rows`. `s1`, `s2` and
+        `message` are signed integer arrays: the first two as everywhere in
+        this package, the third because it is half of the vector being
+        bounded.
+        """
+        ring = self.scheme.ring
+        publics.require(self.scheme)
+        self._require_witness(s1, s2, message)
+        s2_ring = ring.from_signed_stack(s2)
+        message_ring = ring.from_signed_stack(message) if self.ell else ring.zeros(0)
+        # The projected witness, over ℤ: `⃗s` is the concatenated balanced
+        # coefficients of `(s1, m)`, which is the vector Lemma 2.9 bounds.
+        # `s1` is carved to what the eval layer's statement covers — the
+        # bound is about that prefix, and `R` is squeezed to its width.
+        flat = (
+            np.concatenate([s1[: self.evaluation.s1_take], message])
+            .astype(np.int64)
+            .reshape(-1)
+        )
+        randomness = [leg.randomness(publics, s2_ring) for leg in self.legs]
+
+        for _ in range(self.attempts):
+            draws = [
+                leg.draw(hoisted, rng)
+                for leg, hoisted in zip(self.legs, randomness, strict=True)
+            ]
+            t = transcript
+            for leg, draw in zip(self.legs, draws, strict=True):
+                t = leg.observe(t, draw.t_mask, draw.t_sign)
+            projections = []
+            for leg in self.legs:
+                t, projection = leg.challenge(t)
+                projections.append(projection)
+            responses = [
+                leg.respond(draw, projection, flat, rng)
+                for leg, draw, projection in zip(
+                    self.legs, draws, projections, strict=True
+                )
+            ]
+            # One gate over every leg, not one loop per leg: Fig. 10 abandons
+            # the attempt unless *every* Rej0 accepts, because one transcript
+            # carries them all and a leg that kept its accepted `⃗z` while a
+            # sibling redrew would be revealing a projection of a witness
+            # under a challenge the redrawn transcript no longer produces.
+            if any(z is None for z in responses):
+                continue
+            # Re-bound rather than reused: `any(... is None)` rules out every
+            # `None` but does not narrow the list it ruled them out of, and
+            # the layers below take responses, not maybe-responses.
+            revealed = [z for z in responses if z is not None]
+
+            t, (relations, evaluations) = self._statement(t, projections, revealed)
+            inner, t = self.evaluation.prove(
+                publics,
+                *relations,
+                *evaluations,
+                s1,
+                s2,
+                np.concatenate(
+                    [message_ring]
+                    + [draw.y_ring for draw in draws]
+                    + [draw.sign_ring for draw in draws]
+                ),
+                rng,
+                t,
+            )
+            return (
+                RangeProof(
+                    legs=tuple(
+                        LegMessage(t_mask=draw.t_mask, t_sign=draw.t_sign, z=z)
+                        for draw, z in zip(draws, revealed, strict=True)
+                    ),
+                    evaluation=inner,
+                ),
+                t,
+            )
+        raise self._exhausted()
+
+    def verify(
+        self,
+        publics: Publics,
+        t_a: np.ndarray,
+        t_b: np.ndarray,
+        proof: RangeProof,
+        transcript: ByteTranscript,
+    ) -> tuple[bool, ByteTranscript]:
+        """Fig. 9's two checks: every `‖⃗z‖₂` is within the Prop. 5.1 bound,
+        and the Π_eval^(2) proof of the statement they induce verifies.
+
+        `t_b` is the caller's commitment to `m` alone; the mask and sign
+        commitments arrive on the proof and are appended here, in the order
+        the message was built."""
+        # The statement is the caller's and raises; the proof is the
+        # prover's and is a verdict. See `zorch/lnp/wire.py`.
+        publics.require(self.scheme)
+        if not self._is_well_formed(proof):
+            return False, transcript
+        if not all(
+            leg.within_bounds(message.z)
+            for leg, message in zip(self.legs, proof.legs, strict=True)
+        ):
+            return False, transcript
+
+        t = transcript
+        for leg, message in zip(self.legs, proof.legs, strict=True):
+            t = leg.observe(t, message.t_mask, message.t_sign)
+        projections = []
+        for leg in self.legs:
+            t, projection = leg.challenge(t)
+            projections.append(projection)
+        t, (relations, evaluations) = self._statement(
+            t, projections, [message.z for message in proof.legs]
+        )
+        return self.evaluation.verify(
+            publics,
+            *relations,
+            *evaluations,
+            t_a,
+            np.concatenate(
+                [t_b]
+                + [message.t_mask for message in proof.legs]
+                + [message.t_sign for message in proof.legs]
+            ),
+            proof.evaluation,
+            t,
+        )
+
+    def _statement(
+        self,
+        transcript: ByteTranscript,
+        projections: Sequence[np.ndarray],
+        responses: Sequence[np.ndarray],
+    ) -> tuple[ByteTranscript, tuple[_Family, _Family]]:
+        """Absorb every revealed projection, then collect the families they
+        induce.
+
+        Every `⃗z` is bound before any statement is built, which is Fig. 10's
+        order and — for one leg — Fig. 9's unchanged. The two sides must
+        reach byte-identical statements here or the inner proof does not
+        replay."""
+        t = transcript
+        for leg, z in zip(self.legs, responses, strict=True):
+            t = leg.reveal(t, z)
+        per_leg = [
+            leg.statement(projection, z)
+            for leg, projection, z in zip(
+                self.legs, projections, responses, strict=True
+            )
+        ]
+        return t, (
+            _stack([relation for relation, _ in per_leg]),
+            _stack([evaluations for _, evaluations in per_leg]),
+        )
+
+    def _budget(self, maskings: Sequence[BimodalMasking]) -> int:
+        """The attempt budget for the joint gate, and the check that every
+        leg was sized for it.
+
+        Every leg redraws when *any* leg's Rej0 rejects, so one attempt
+        succeeds with probability `∏ 1/rep0_i` — the product rule `Masking`
+        already applies to its own two Gaussians. `fail_prob` is the
+        tightest the legs were built with, since the budget has to satisfy
+        each of them. For one leg this is that leg's own number, unchanged.
+
+        A leg's Gaussian sampler resolved its tier against the leg's
+        `attempts` (`sampler_for`'s `sample_count`), so a composition that
+        can draw from a leg more often than it was sized for is using a
+        sampler chosen under a claim that no longer holds. That never
+        happens by accident and cannot be fixed by widening `fail_prob` —
+        the joint budget is strictly above each leg's own at any shared
+        `fail_prob`, which is why `BimodalMasking` takes the number instead
+        of deriving it."""
+        accept = math.prod(1.0 / masking.rep0 for masking in maskings)
+        budget = attempt_budget(min(m.fail_prob for m in maskings), accept)
+        for index, masking in enumerate(maskings):
+            if budget > masking.attempts:
+                raise ValueError(
+                    f"range: {len(maskings)} legs reject together often enough "
+                    f"to need {budget} attempts, but leg {index}'s Gaussian "
+                    f"sampler was sized for {masking.attempts} — build that "
+                    f"leg's BimodalMasking with attempts={budget}"
+                )
+        return budget
+
+    def _exhausted(self) -> RuntimeError:
+        """The composition's own `exhausted`: the budget it raises against is
+        the joint one, so it cannot defer to a single leg's message."""
+        return RuntimeError(
+            f"range.prove: every attempt was rejected — {self.attempts} "
+            f"attempts at all {len(self.legs)} leg(s) accepting together fail "
+            f"together with negligible probability, so suspect the parameters "
+            f"(a repetition rate far from its Lemma 2.14-3 value), not bad luck."
+        )
+
     def _require_witness(
         self, s1: np.ndarray, s2: np.ndarray, message: np.ndarray
     ) -> None:
@@ -441,16 +721,31 @@ class ApproximateRange:
 
     def _is_well_formed(self, proof: RangeProof) -> bool:
         """Whether `proof` is structurally usable — every field of it, in one
-        place, per `zorch/lnp/wire.py`. `z` routes through the same raising
-        gate as every other signed array here rather than restating its
-        predicate, which is the rule that module's docstring states."""
+        place, per `zorch/lnp/wire.py`. The per-leg share defers to the leg
+        that owns it, and the count is checked before the zip so a proof
+        carrying the wrong number of legs is a verdict rather than a
+        `ValueError` out of `strict=True`."""
         return (
             isinstance(proof, RangeProof)
-            and wire.is_stack(self.scheme, proof.t_mask, self.masking.mask_cols)
-            and wire.is_stack(self.scheme, proof.t_sign, 1)
-            and wire.is_signed(self.scheme.ring, proof.z, self.masking.mask_cols)
+            and isinstance(proof.legs, tuple)
+            and len(proof.legs) == len(self.legs)
+            and all(
+                leg.is_well_formed(message)
+                for leg, message in zip(self.legs, proof.legs)
+            )
             and self.evaluation._is_well_formed(proof.evaluation)
         )
+
+
+def _stack(families: Sequence[_Family]) -> _Family:
+    """Concatenate function families block by block along their leading
+    (function) axis.
+
+    One helper because the three blocks of a family must stay aligned, and
+    three hand-written `np.concatenate` calls are three chances to stack two
+    of them and forget the third."""
+    r2, r1, r0 = (np.concatenate([f[i] for f in families]) for i in range(3))
+    return r2, r1, r0
 
 
 def _constants(ring: HostSplitRing, values: Sequence[int] | np.ndarray) -> np.ndarray:

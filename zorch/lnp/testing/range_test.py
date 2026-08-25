@@ -34,6 +34,7 @@ alone, turns this suite red.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -42,6 +43,7 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
+from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.masking import BimodalMasking
 from zorch.lnp.quadratic import (
@@ -64,29 +66,43 @@ _WITNESS_COLS = _M1 + _ELL
 
 
 def _scheme(
-    ring: HostSplitRing, mask_cols: int, s1_cols: int = _M1
+    ring: HostSplitRing, mask_cols: int, s1_cols: int = _M1, legs: int = 1
 ) -> AbdlopCommitment:
-    """The **twice-extended** scheme: its BDLOP half carries `ℓ + 256/d + 1
-    + λ` messages, because `m‖y‖b‖g` is what the innermost protocol opens —
-    this layer's mask and sign, and the garbage of the layer below."""
+    """The **twice-extended** scheme: its BDLOP half carries `ℓ + legs·(256/d
+    + 1) + λ` messages, because `m‖y…‖b…‖g` is what the innermost protocol
+    opens — every leg's mask and sign, and the garbage of the layer below."""
     return AbdlopCommitment(
         ring,
         rows=_ROWS,
         s1_cols=s1_cols,
         randomness_cols=_M2,
-        messages=_ELL + mask_cols + 1 + _LAM,
+        messages=_ELL + legs * (mask_cols + 1) + _LAM,
         beta1_inf=1,
         beta2_inf=1,
     )
 
 
+def _maskings(ring: HostSplitRing, legs: int) -> tuple[BimodalMasking, ...]:
+    """`legs` bimodal points, each sized for the budget their *joint* Rej0
+    gate needs.
+
+    `attempts` is passed rather than left to derive because the joint budget
+    is strictly above what any one leg's rate implies, and the sampler tier
+    is resolved against it — see `BimodalMasking`. At one leg the two
+    numbers coincide, which is why Fig. 9 never had to say this."""
+    joint = attempt_budget(lnp_fixture.FAIL_PROB, (1.0 / lnp_fixture.REP0) ** legs)
+    return tuple(
+        lnp_fixture.bimodal(ring, _WITNESS_COLS, attempts=joint) for _ in range(legs)
+    )
+
+
 def _protocol(
     ring: HostSplitRing,
-    masking: BimodalMasking,
+    maskings: Sequence[BimodalMasking],
     s1_cols: int = _M1,
     s1_take: int | None = None,
 ) -> ApproximateRange:
-    scheme = _scheme(ring, masking.mask_cols, s1_cols)
+    scheme = _scheme(ring, maskings[0].mask_cols, s1_cols, len(maskings))
     # Re-derived for the same reason `quadratic_eval_test` re-derives it: the
     # point's T_1 bounds ‖s1‖ over `_M1` columns, and a wider Ajtai half
     # masked there rejects its way to `exhausted`.
@@ -95,7 +111,7 @@ def _protocol(
     evaluation = AbdlopQuadraticEval(
         AbdlopQuadraticMany(AbdlopQuadratic(inner)), _LAM, s1_take=s1_take
     )
-    return ApproximateRange(evaluation, masking)
+    return ApproximateRange(evaluation, *maskings)
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
@@ -107,12 +123,20 @@ class _Instance:
     commitment, and the protocol over both."""
 
     def __init__(
-        self, seed: int, s1_cols: int = _M1, s1_take: int | None = None
+        self,
+        seed: int,
+        s1_cols: int = _M1,
+        s1_take: int | None = None,
+        legs: int = 1,
     ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
-        self.masking = lnp_fixture.bimodal(ring, _WITNESS_COLS)
-        self.protocol = _protocol(ring, self.masking, s1_cols, s1_take)
+        self.maskings = _maskings(ring, legs)
+        self.masking = self.maskings[0]
+        self.protocol = _protocol(ring, self.maskings, s1_cols, s1_take)
+        # Fig. 9 is the one-leg composition, and every layout assertion below
+        # is about the leg rather than about the layer that schedules it.
+        self.leg = self.protocol.legs[0]
         self.scheme = self.protocol.scheme
         mask_cols = self.masking.mask_cols
         rng = np.random.default_rng(seed)
@@ -121,8 +145,10 @@ class _Instance:
         self.a1 = ring.uniform_stack(rng, _ROWS, s1_cols)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
         self.b = ring.uniform_stack(rng, _ELL, _M2)
-        self.b_mask = ring.uniform_stack(rng, mask_cols, _M2)
-        self.b_sign = ring.uniform_stack(rng, 1, _M2)
+        # Every leg's mask rows, then every leg's sign row — the composing
+        # layer's order, which is Fig. 10's `(m, y^(d), y^(e), b^(d), b^(e))`.
+        self.b_mask = ring.uniform_stack(rng, mask_cols * legs, _M2)
+        self.b_sign = ring.uniform_stack(rng, legs, _M2)
         self.bg = ring.uniform_stack(rng, _LAM, _M2)
         self.b_quad = ring.uniform_stack(rng, _M2)
         # The whole BDLOP matrix in the order the message is concatenated
@@ -180,14 +206,27 @@ class _Instance:
         self, t_mask: np.ndarray | None = None, t_sign: np.ndarray | None = None
     ) -> np.ndarray:
         """`R` off a chosen pair of first-round commitments, defaulting to
-        zero stacks — the derivation the statement tests index against."""
+        zero stacks — the derivation the statement tests index against.
+
+        Absorb then squeeze, the two steps the leg keeps apart so Fig. 10
+        can bind every commitment before drawing any challenge."""
         ring = self.ring
-        _, projection = self.protocol._challenge(
+        leg = self.leg
+        observed = leg.observe(
             _transcript(),
             ring.zeros(self.masking.mask_cols) if t_mask is None else t_mask,
             ring.zeros(1) if t_sign is None else t_sign,
         )
+        _, projection = leg.challenge(observed)
         return projection
+
+    def tamper(self, proof: RangeProof, **field: np.ndarray) -> RangeProof:
+        """A copy of `proof` with one field of its only leg replaced — the
+        `dataclasses.replace` idiom, one level deeper now that the wire
+        carries a leg per projection."""
+        return dataclasses.replace(
+            proof, legs=(dataclasses.replace(proof.legs[0], **field),)
+        )
 
     def lifted(self, sign: int = 1, y: np.ndarray | None = None) -> np.ndarray:
         """The eval layer's lift of `(s1, m‖y‖b)` at a chosen sign and mask.
@@ -235,9 +274,9 @@ class RangeCompletenessTest(absltest.TestCase):
 
     def test_the_revealed_projection_is_within_the_norm_bound(self) -> None:
         instance = _Instance(4)
-        proof = instance.prove()
-        self.assertEqual(proof.z.shape, (instance.masking.mask_cols, instance.ring.d))
-        self.assertTrue(instance.masking.within_bounds(proof.z))
+        z = instance.prove().legs[0].z
+        self.assertEqual(z.shape, (instance.masking.mask_cols, instance.ring.d))
+        self.assertTrue(instance.masking.within_bounds(z))
 
     def test_a_proof_does_not_verify_under_a_different_transcript(self) -> None:
         instance = _Instance(5)
@@ -248,31 +287,21 @@ class RangeSoundnessTest(absltest.TestCase):
     def test_a_tampered_projection_is_rejected(self) -> None:
         instance = _Instance(6)
         proof = instance.prove()
-        z = proof.z.copy()
+        z = proof.legs[0].z.copy()
         z[0, 0] += 1
-        self.assertFalse(instance.verify(dataclasses.replace(proof, z=z)))
+        self.assertFalse(instance.verify(instance.tamper(proof, z=z)))
 
     def test_a_tampered_mask_commitment_is_rejected(self) -> None:
         instance = _Instance(7)
         proof = instance.prove()
-        self.assertFalse(
-            instance.verify(
-                dataclasses.replace(
-                    proof, t_mask=lnp_fixture.bump(proof.t_mask, 0, 0, 0)
-                )
-            )
-        )
+        bumped = lnp_fixture.bump(proof.legs[0].t_mask, 0, 0, 0)
+        self.assertFalse(instance.verify(instance.tamper(proof, t_mask=bumped)))
 
     def test_a_tampered_sign_commitment_is_rejected(self) -> None:
         instance = _Instance(8)
         proof = instance.prove()
-        self.assertFalse(
-            instance.verify(
-                dataclasses.replace(
-                    proof, t_sign=lnp_fixture.bump(proof.t_sign, 0, 0, 0)
-                )
-            )
-        )
+        bumped = lnp_fixture.bump(proof.legs[0].t_sign, 0, 0, 0)
+        self.assertFalse(instance.verify(instance.tamper(proof, t_sign=bumped)))
 
     def test_a_tampered_inner_proof_is_rejected(self) -> None:
         instance = _Instance(9)
@@ -304,7 +333,7 @@ class RangeSoundnessTest(absltest.TestCase):
         proof = instance.prove()
         strict = _protocol(
             instance.ring,
-            lnp_fixture.bimodal(instance.ring, _WITNESS_COLS, accept_t=1e-6),
+            [lnp_fixture.bimodal(instance.ring, _WITNESS_COLS, accept_t=1e-6)],
         )
         self.assertFalse(instance.verify(proof, protocol=strict))
 
@@ -325,7 +354,7 @@ class RangeStatementTest(absltest.TestCase):
         z = sign * (projection @ witness.reshape(-1)) + y.reshape(-1)
 
         s = instance.lifted(sign, y)
-        e2, e1, e0 = protocol._evaluations(projection, z.reshape(y.shape))
+        e2, e1, e0 = instance.leg._evaluations(projection, z.reshape(y.shape))
         values = np.concatenate(
             [evaluate(ring, e2[i], e1[i], e0[i], s) for i in range(len(e2))]
         )
@@ -342,7 +371,7 @@ class RangeStatementTest(absltest.TestCase):
         ring = instance.ring
         protocol = instance.protocol
         zeros = np.zeros((instance.masking.mask_cols, ring.d), dtype=np.int64)
-        _, e1, _ = protocol._evaluations(instance.challenge(), zeros)
+        _, e1, _ = instance.leg._evaluations(instance.challenge(), zeros)
         coefficient = e1[instance.masking.projection :]
         empty = ring.zeros(protocol.evaluation.width, protocol.evaluation.width)
 
@@ -358,8 +387,8 @@ class RangeStatementTest(absltest.TestCase):
 
         # A sign carrying an `X^1` term is exactly what `G_1` is there for.
         crooked = instance.lifted(1)
-        crooked[protocol._sign_position] = ring.add(
-            crooked[protocol._sign_position],
+        crooked[instance.leg._sign_position] = ring.add(
+            crooked[instance.leg._sign_position],
             ring.from_signed([0, 1] + [0] * (ring.d - 2)),
         )
         self.assertTrue(coefficients_of(crooked).any())
@@ -380,22 +409,22 @@ class RangeStatementTest(absltest.TestCase):
         z = np.zeros((instance.masking.mask_cols, ring.d), dtype=np.int64)
         moved = z.copy()
         moved[0, 0] = 1
-        base, _ = instance.protocol._statement(_transcript(), projection, z)
-        other, _ = instance.protocol._statement(_transcript(), projection, moved)
+        base, _ = instance.protocol._statement(_transcript(), [projection], [z])
+        other, _ = instance.protocol._statement(_transcript(), [projection], [moved])
         self.assertNotEqual(base.sample_scalar(16)[1], other.sample_scalar(16)[1])
 
     def test_the_sign_relation_vanishes_only_for_a_sign(self) -> None:
         instance = _Instance(14)
         ring = instance.ring
         protocol = instance.protocol
-        r2, r1, r0 = protocol._relation()
+        r2, r1, r0 = instance.leg._relation()
         for sign in (1, -1):
             with self.subTest(sign=sign):
                 value = evaluate(ring, r2[0], r1[0], r0[0], instance.lifted(sign))
                 self.assertFalse(value.any())
         # `b = 2` satisfies integrality but not `b² = 1`.
         two = instance.lifted(1)
-        two[protocol._sign_position] = ring.from_signed([2] + [0] * (ring.d - 1))
+        two[instance.leg._sign_position] = ring.from_signed([2] + [0] * (ring.d - 1))
         self.assertTrue(evaluate(ring, r2[0], r1[0], r0[0], two).any())
 
 
@@ -418,7 +447,7 @@ class RangeLayoutTest(absltest.TestCase):
                 ring.from_signed_stack(instance.message),
             ]
         )
-        got = s[instance.protocol._witness_positions]
+        got = s[instance.leg._witness_positions]
         np.testing.assert_array_equal(got, want)
 
     def test_the_positions_follow_a_carved_ajtai_half(self) -> None:
@@ -439,7 +468,7 @@ class RangeLayoutTest(absltest.TestCase):
         sign_row = np.zeros((1, ring.d), dtype=np.int64)
         sign_row[0, 0] = -1
         np.testing.assert_array_equal(
-            s[protocol._witness_positions],
+            s[instance.leg._witness_positions],
             np.concatenate(
                 [
                     ring.from_signed_stack(instance.s1[:_M1]),
@@ -448,10 +477,10 @@ class RangeLayoutTest(absltest.TestCase):
             ),
         )
         np.testing.assert_array_equal(
-            s[protocol._mask_positions], ring.from_signed_stack(y)
+            s[instance.leg._mask_positions], ring.from_signed_stack(y)
         )
         np.testing.assert_array_equal(
-            s[protocol._sign_position], ring.from_signed_stack(sign_row)[0]
+            s[instance.leg._sign_position], ring.from_signed_stack(sign_row)[0]
         )
 
     def test_the_mask_and_sign_interleave_into_the_first_automorphism_copy(
@@ -468,10 +497,10 @@ class RangeLayoutTest(absltest.TestCase):
         sign_row = np.zeros((1, ring.d), dtype=np.int64)
         sign_row[0, 0] = -1
         np.testing.assert_array_equal(
-            s[protocol._mask_positions], ring.from_signed_stack(y)
+            s[instance.leg._mask_positions], ring.from_signed_stack(y)
         )
         np.testing.assert_array_equal(
-            s[protocol._sign_position], ring.from_signed_stack(sign_row)[0]
+            s[instance.leg._sign_position], ring.from_signed_stack(sign_row)[0]
         )
 
     def test_the_layer_carves_its_share_off_the_extended_scheme(self) -> None:
@@ -498,6 +527,214 @@ class RangeLayoutTest(absltest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "extended scheme"):
             ApproximateRange(evaluation, masking)
+
+    def test_a_range_proof_with_no_leg_is_refused(self) -> None:
+        """`*maskings` makes the empty composition spellable, and a proof of
+        nothing would otherwise reach `AbdlopQuadraticEval` with an empty
+        evaluation family and fail there."""
+        instance = _Instance(26)
+        with self.assertRaisesRegex(ValueError, "at least one projection leg"):
+            ApproximateRange(instance.protocol.evaluation)
+
+
+class ProjectionLegTest(absltest.TestCase):
+    """The round, exercised without the proof it used to be fused to.
+
+    Fig. 9 fuses them and Fig. 10 cannot: it gates *both* legs' Rej0 and
+    then runs one Π_eval^(2), so no leg can own the inner call. These pin
+    that the round stands alone — a leg commits, takes its challenge and
+    responds — and that its verdict is a value rather than control flow.
+    """
+
+    def test_the_projection_round_runs_without_the_inner_proof(self) -> None:
+        instance = _Instance(27)
+        ring, leg = instance.ring, instance.leg
+        rng = np.random.default_rng(5)
+        s2_ring = ring.from_signed_stack(instance.s2)
+
+        draw = leg.draw(leg.randomness(instance.publics, s2_ring), rng)
+        observed = leg.observe(_transcript(), draw.t_mask, draw.t_sign)
+        _, projection = leg.challenge(observed)
+        flat = np.concatenate([instance.s1, instance.message]).reshape(-1)
+        z = leg.respond(draw, projection, flat, rng)
+
+        # Not a rejection at this parameter point (Rej0 accepts ~99.7% of
+        # the time), and the response is what the figure says it is.
+        self.assertIsNotNone(z)
+        assert z is not None
+        np.testing.assert_array_equal(
+            z.reshape(-1), draw.sign * (projection @ flat) + draw.y.reshape(-1)
+        )
+        self.assertTrue(leg.within_bounds(z))
+
+    def test_the_commitments_are_the_mask_and_sign_over_their_own_rows(
+        self,
+    ) -> None:
+        """`t_mask = B2·s2 + y` and `t_sign = b1·s2 + b`, against the rows
+        the leg was told are its own — the arithmetic that goes wrong when a
+        leg reads the wrong slice of the assembled matrix."""
+        instance = _Instance(28)
+        ring, leg = instance.ring, instance.leg
+        s2_ring = ring.from_signed_stack(instance.s2)
+        draw = leg.draw(
+            leg.randomness(instance.publics, s2_ring), np.random.default_rng(6)
+        )
+        np.testing.assert_array_equal(
+            draw.t_mask,
+            ring.add(ring.matvec(instance.b_mask, s2_ring), draw.y_ring),
+        )
+        np.testing.assert_array_equal(
+            draw.t_sign,
+            ring.add(ring.matvec(instance.b_sign, s2_ring), draw.sign_ring),
+        )
+
+    def test_a_rejected_response_is_a_value_not_a_raise(self) -> None:
+        """The composing layer abandons an attempt when *any* leg rejects,
+        so a leg reports its verdict rather than retrying or raising. Forced
+        with a centre far outside the mask's range, where Rej0 cannot
+        accept."""
+        instance = _Instance(29)
+        leg = instance.leg
+        rng = np.random.default_rng(7)
+        s2_ring = instance.ring.from_signed_stack(instance.s2)
+        draw = leg.draw(leg.randomness(instance.publics, s2_ring), rng)
+        _, projection = leg.challenge(
+            leg.observe(_transcript(), draw.t_mask, draw.t_sign)
+        )
+        huge = np.full(projection.shape[1], 10**6, dtype=np.int64)
+        self.assertIsNone(leg.respond(draw, projection, huge, rng))
+
+
+class TwoLegTest(absltest.TestCase):
+    """Fig. 10's *shape* over one commitment: two projection legs, one
+    Π_eval^(2).
+
+    Both legs bound the same `(s1, m)` here, which is redundant as a
+    statement and exactly right as a structural fixture — it is the
+    composition Fig. 10 needs, with the ℓ∞ gate, the binary/exact-ℓ2
+    machinery and the φ/Ψ packing that make the two legs actually *differ*
+    still to come. What is pinned is that neither leg can see the other's
+    columns and that one inner proof covers both.
+    """
+
+    def test_two_legs_share_no_column(self) -> None:
+        instance = _Instance(30, legs=2)
+        first, second = instance.protocol.legs
+        occupied = [
+            set(leg._mask_positions.tolist()) | {int(leg._sign_position)}
+            for leg in (first, second)
+        ]
+        self.assertEqual(len(occupied[0]), instance.masking.mask_cols + 1)
+        self.assertFalse(occupied[0] & occupied[1])
+        # ...and neither reaches into the caller's `m`, which they share.
+        witness = set(first._witness_positions.tolist())
+        self.assertFalse(witness & (occupied[0] | occupied[1]))
+        np.testing.assert_array_equal(
+            first._witness_positions, second._witness_positions
+        )
+
+    def test_the_legs_read_their_own_rows_of_the_assembled_matrix(self) -> None:
+        """The slot a leg was told indexes `blocks` and the lift alike. A
+        round-trip cannot see this: both sides carve identically, so a leg
+        reading its sibling's rows commits to the wrong thing and agrees
+        with itself about it."""
+        instance = _Instance(31, legs=2)
+        mask_cols = instance.masking.mask_cols
+        for index, leg in enumerate(instance.protocol.legs):
+            with self.subTest(leg=index):
+                np.testing.assert_array_equal(
+                    leg._mask_rows(instance.publics),
+                    instance.b_mask[index * mask_cols : (index + 1) * mask_cols],
+                )
+                np.testing.assert_array_equal(
+                    leg._sign_rows(instance.publics),
+                    instance.b_sign[index : index + 1],
+                )
+
+    def test_the_legs_share_the_slots_the_message_is_built_in(self) -> None:
+        """Fig. 10's message is `(m, y^(d), y^(e), b^(d), b^(e))` — every
+        mask, then every sign — and the slots have to be that same order or
+        the commitment opens to a permuted message."""
+        instance = _Instance(32, legs=2)
+        first, second = instance.protocol.legs
+        mask_cols = instance.masking.mask_cols
+        self.assertEqual(first.mask_slot, _ELL)
+        self.assertEqual(second.mask_slot, _ELL + mask_cols)
+        self.assertEqual(first.sign_slot, _ELL + 2 * mask_cols)
+        self.assertEqual(second.sign_slot, _ELL + 2 * mask_cols + 1)
+
+    def test_two_legs_prove_and_verify_under_one_inner_proof(self) -> None:
+        instance = _Instance(33, legs=2)
+        proof = instance.prove()
+        self.assertLen(proof.legs, 2)
+        # One Π_eval^(2), not two: the wire carries a single inner proof
+        # however many legs contributed statements to it.
+        self.assertTrue(instance.verify(proof))
+
+    def test_tampering_either_leg_is_rejected(self) -> None:
+        """Each leg's `⃗z` reaches the shared statement, so neither can be
+        moved without the single inner proof failing to replay."""
+        instance = _Instance(34, legs=2)
+        proof = instance.prove()
+        for index in range(2):
+            with self.subTest(leg=index):
+                legs = list(proof.legs)
+                z = legs[index].z.copy()
+                z[0, 0] += 1
+                legs[index] = dataclasses.replace(legs[index], z=z)
+                self.assertFalse(
+                    instance.verify(dataclasses.replace(proof, legs=tuple(legs)))
+                )
+
+    def test_one_leg_rejecting_abandons_the_whole_attempt(self) -> None:
+        """Fig. 10 continues only if *every* Rej0 accepts.
+
+        A leg that kept its accepted `⃗z` while a sibling redrew would be
+        revealing a projection under a challenge the redrawn transcript no
+        longer produces. Rej0 accepts ~99.7% of the time at this parameter
+        point, so no round-trip ever reaches the mixed verdict — one leg is
+        stubbed to reject once, and what is asserted is that the *other*
+        leg's accepted response is thrown away with it."""
+        instance = _Instance(35, legs=2)
+        first, second = instance.protocol.legs
+        accepted: list[np.ndarray] = []
+        honest_first, honest_second = first.respond, second.respond
+        pending_rejection = [True]
+
+        def record(*args: Any) -> np.ndarray | None:
+            z = honest_first(*args)
+            if z is not None:
+                accepted.append(z)
+            return z
+
+        def reject_once(*args: Any) -> np.ndarray | None:
+            z = honest_second(*args)
+            return None if pending_rejection and pending_rejection.pop() else z
+
+        first.respond = record  # type: ignore[assignment]
+        second.respond = reject_once  # type: ignore[assignment]
+        proof = instance.prove()
+
+        self.assertTrue(instance.verify(proof))
+        # Twice, because the rejected attempt cost it its first response...
+        self.assertLen(accepted, 2)
+        # ...and that response is nowhere on the wire.
+        self.assertFalse(any(np.array_equal(accepted[0], leg.z) for leg in proof.legs))
+
+    def test_a_leg_sized_for_itself_alone_is_refused(self) -> None:
+        """Two legs reject together often enough to need more attempts than
+        either's own rate implies, and a leg's Gaussian sampler resolved its
+        tier against that number. Widening `fail_prob` cannot fix it — the
+        joint budget stays above each leg's own — so the masking has to be
+        built for the composition."""
+        ring = lnp_fixture.ring()
+        alone = lnp_fixture.bimodal(ring, _WITNESS_COLS)
+        scheme = _scheme(ring, alone.mask_cols, _M1, legs=2)
+        evaluation = AbdlopQuadraticEval(
+            AbdlopQuadraticMany(AbdlopQuadratic(lnp_fixture.masking(scheme))), _LAM
+        )
+        with self.assertRaisesRegex(ValueError, "build that leg's BimodalMasking"):
+            ApproximateRange(evaluation, alone, alone)
 
 
 class RangeChallengeTest(absltest.TestCase):
@@ -528,21 +765,36 @@ class RangeChallengeTest(absltest.TestCase):
 
 class RangeWireTest(absltest.TestCase):
     def test_every_proof_field_is_gated(self) -> None:
-        """Proof fields are a verdict, never a raise — `zorch/lnp/wire.py`."""
+        """Proof fields are a verdict, never a raise — `zorch/lnp/wire.py`.
+
+        Two levels now: the leg owns its three, the composition owns the
+        sequence holding them. The count case is the one a `strict=True` zip
+        would otherwise turn into a `ValueError` out of `verify`."""
         instance = _Instance(20)
         proof = instance.prove()
         ring = instance.ring
+        leg = proof.legs[0]
         malformed: tuple[tuple[str, Any], ...] = (
             ("t_mask", ring.zeros(instance.masking.mask_cols + 1)),
             ("t_sign", ring.zeros(2)),
             ("z", np.zeros((instance.masking.mask_cols + 1, ring.d), np.int64)),
-            ("z", proof.z.astype(np.float64)),
-            ("evaluation", None),
+            ("z", leg.z.astype(np.float64)),
         )
         for field, value in malformed:
             with self.subTest(field=field):
                 self.assertFalse(
-                    instance.verify(dataclasses.replace(proof, **{field: value}))
+                    instance.verify(instance.tamper(proof, **{field: value}))
+                )
+
+        for name, replacement in (
+            ("evaluation", dict(evaluation=None)),
+            ("legs is not a tuple", dict(legs=None)),
+            ("legs is the wrong length", dict(legs=(leg, leg))),
+            ("a leg is not a LegMessage", dict(legs=(object(),))),
+        ):
+            with self.subTest(name):
+                self.assertFalse(
+                    instance.verify(dataclasses.replace(proof, **replacement))
                 )
 
     def test_a_foreign_proof_object_is_gated(self) -> None:
@@ -612,10 +864,12 @@ class BimodalMaskingTest(absltest.TestCase):
         self.assertGreater(accepted, 190)
 
     def test_an_exhausted_budget_names_the_rate(self) -> None:
-        ring = lnp_fixture.ring()
-        masking = lnp_fixture.bimodal(ring, _WITNESS_COLS)
+        """The budget the composition gives up on is the *joint* one, so the
+        message is `ApproximateRange`'s and not a single masking's — one leg
+        cannot name a number that depends on every leg's rate."""
+        instance = _Instance(25)
         with self.assertRaisesRegex(RuntimeError, "Lemma 2.14-3"):
-            raise masking.exhausted("range.prove")
+            raise instance.protocol._exhausted()
 
 
 if __name__ == "__main__":

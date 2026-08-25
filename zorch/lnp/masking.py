@@ -336,6 +336,14 @@ class BimodalMasking:
     `accept_t` the `t ≥ 1.64` of Prop. 5.1 sizing the verifier's norm gate.
     Deriving them from a witness bound is the consumer's, since `β` is a
     property of the statement rather than of this seam.
+
+    `attempts` is derived from `rep0` and `fail_prob` for a masking used
+    alone, and passed in when it is not. A leg composed with others is
+    redrawn whenever *any* leg rejects, so it is drawn from more often than
+    its own rate implies — and that count is what resolves the Gaussian
+    sampler's tier (`sampler_for`'s `sample_count`), so it has to be the
+    composition's number rather than this leg's. Only the composition knows
+    it; see `range.ApproximateRange`.
     """
 
     def __init__(
@@ -346,6 +354,7 @@ class BimodalMasking:
         projection: int = PROJECTION,
         accept_t: float = 1.64,
         fail_prob: float = 2.0**-128,
+        attempts: int | None = None,
     ) -> None:
         if projection < 1:
             raise ValueError(
@@ -371,7 +380,19 @@ class BimodalMasking:
         self.rep0 = rep0
         self.accept_t = accept_t
         self.fail_prob = fail_prob
-        self.attempts = attempt_budget(fail_prob, 1.0 / rep0)
+        alone = attempt_budget(fail_prob, 1.0 / rep0)
+        if attempts is None:
+            attempts = alone
+        elif attempts < alone:
+            # Refused rather than quietly taken: a budget below the one this
+            # masking's own rate implies means the caller's loop gives up
+            # before `fail_prob` is reached, which is the guarantee the
+            # number exists to make.
+            raise ValueError(
+                f"masking: attempts = {attempts} is below the {alone} this "
+                f"rep0 = {rep0!r} and fail_prob = {fail_prob!r} imply"
+            )
+        self.attempts = attempts
         if self.attempts > _MAX_ATTEMPTS:
             raise ValueError(
                 f"masking: rep0 = {rep0!r} implies an attempt budget of "
@@ -413,15 +434,6 @@ class BimodalMasking:
         revealed projection, and the only place the range statement's slack
         is actually enforced."""
         return norms.l2_squared(z) <= self._bound_sq
-
-    def exhausted(self, protocol: str) -> RuntimeError:
-        """The Rej0 twin of `Masking.exhausted`."""
-        return RuntimeError(
-            f"{protocol}: every attempt was rejected — {self.attempts} "
-            f"attempts at acceptance ≈ 1/rep0 fail together with probability "
-            f"<= {self.fail_prob!r}, so suspect the parameters (a repetition "
-            f"rate far from its Lemma 2.14-3 value), not bad luck."
-        )
 
 
 def _rej0(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> bool:
