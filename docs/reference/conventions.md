@@ -123,6 +123,26 @@ graph every time — orders of magnitude over the work being scanned, and silent
 `zorch/scan_body.py` memoizes a body factory for that; a scan inside a `@jit`
 zone needs nothing, since the jit cache absorbs it.
 
+**Which of compile and dispatch dominates is measured, not assumed: time the
+first call at a shape against a repeat at that same shape.** The two regimes
+want opposite fixes, and the reasoning above only applies to one of them.
+
+- Repeats cost full price → **eager dispatch dominates**. Cutting calls is the
+  lever: batch the loop, or move the `@jit` boundary out so the driver traces
+  once.
+- Repeats are ~free → **compile per shape dominates**. Cutting calls buys
+  nothing, because it removes dispatches and not shapes. The lever is fewer
+  distinct shapes, or one graph reused across them — the fixed-width mask below
+  is that move.
+
+Non-amortisation is what discriminates, and it is positive evidence rather than
+an absence: if compilation dominated, calls 2..N at one shape would already be
+nearly free, so their costing full price can only mean per-call work. A caller
+who skips the probe reaches for the wrong lever with no signal that they have —
+batching a compile-bound loop removes real dispatches and changes the wall clock
+by nothing, which reads as "the optimization didn't help much" rather than as
+"that was the wrong axis".
+
 The **fixed-width-mask exception** reaches one level up when the shrink is
 *predictable*: pad every layer to the max width with the fold-neutral fraction,
 carry the live count as a traced threshold (`poly.geq.VirtualGeq`), and on a
