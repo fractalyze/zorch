@@ -6,6 +6,15 @@ New to JAX? Read [`jax.md`](jax.md) first — the mental models these rules foll
 from, plus the canonical external references. This page is the rules; that one is
 the why.
 
+The rules every FRX repo shares — which transform a loop shape wants, what a
+registered pytree owes, what host is allowed to mean, whether a slow path is
+compile-bound or dispatch-bound — are not restated here. They follow from FRX
+and XLA semantics rather than from what this repo computes, so no repo owns
+them, and the playbook injects them at session start as
+[`conventions/frx.md`](https://github.com/fractalyze/claude-plugins/blob/main/plugins/playbook/conventions/frx.md).
+What follows is how they land here: which tool each component uses, and the
+cases this repo's shapes force that the general rule does not cover.
+
 ## Device-first, and what "host" is allowed to mean
 
 Every numeric path is designed to trace — device-resident, capturable as one
@@ -117,11 +126,8 @@ The **shape of the per-iteration output** picks the tool.
   artifact changes shape (`fold_rounds`, the FRI fold phase, the GKR
   `prove_rounds`). Safe as a host-orchestrated loop of separate dispatches.
 
-A `lax.scan` reached from eager code needs a **stable body**: the trace cache is
-keyed on the body's identity, so one built per call recompiles an identical
-graph every time — orders of magnitude over the work being scanned, and silent.
-`zorch/scan_body.py` memoizes a body factory for that; a scan inside a `@jit`
-zone needs nothing, since the jit cache absorbs it.
+`zorch/scan_body.py` is this repo's memoized body factory, for the stable-body
+rule a `lax.scan` reached from eager code carries.
 
 The **fixed-width-mask exception** reaches one level up when the shrink is
 *predictable*: pad every layer to the max width with the fold-neutral fraction,
@@ -145,19 +151,12 @@ class LogupSumcheckRound(Round):
     lam: Array
 ```
 
-- **`data_fields`** are the `Array` leaves the transform traces over;
-  **`meta_fields`** are static config baked into the trace, and must be hashable
-  and **compare by value**. Identity equality does not error — it silently
-  re-traces the enclosing jit zone per freshly built instance (~2 min/call on a
-  replay whose kernels run in 20 ms). An object-typed meta field needs explicit
-  `__eq__`/`__hash__`.
-- Validate in `__post_init__`, never `__init__`, and only on shapes and static
-  fields — it reruns on **tracers** during `unflatten`, so branching on an
-  `Array` value there breaks under `jit`/`vmap`.
-- Every registered class gets a `*PytreeTest`: a flatten/unflatten round-trip
-  asserting the **leaf count** (catching a meta-vs-data misclassification), plus
-  a threads-through-`jit` check, plus the `vmap`-over-a-leaf case where it
-  applies — the capability registration buys that a closed-over constant cannot.
+The mechanics — what `data_fields` and `meta_fields` mean, why a meta field
+compares by value, why validation belongs in `__post_init__` — are the shared
+rule. What this repo adds is the scale: a by-identity meta field re-traces at
+~2 min per call on a replay whose kernels run in 20 ms. Every registered class
+gets a `*PytreeTest`, and where a leaf is `vmap`ped the test covers that case
+too — the capability registration buys that a closed-over constant cannot.
 
 **Register what a transform threads, nothing else.** The per-variable sumcheck
 rounds and `DuplexTranscript` are registered because `prove` / `verify` carry
@@ -175,17 +174,8 @@ Never **WHAT** the code does — that has two drift-proof homes already, the cod
 and the tests. A prose usage guide duplicates the tests and rots at the first API
 move, so we don't write one.
 
-- **WHY, not WHAT.** `# loop over factors` is noise; `# direct Lagrange, not
-  barycentric, so a challenge on a node doesn't divide by zero` earns its line.
-- **Temporally neutral.** No "used to", "before this commit", "lands in a
-  follow-up" — `git blame` carries the chronology and in-tree narration rots
-  within a commit or two.
-- **Self-contained.** A reader has only the source tree and history: no
-  session/spec labels, no uncommitted files, no scratch paths.
-- **No bare external symbol names.** Another project's symbol rots silently when
-  it renames — the reader can't grep it here to notice. Name the durable concept
-  and permalink the pinned line. The project name alone is fine.
-- **A `docs/` page is design notes**, not an API tour.
+- **A `docs/` page is design notes**, not an API tour — which the skeleton below
+  makes concrete.
 
 ### Subsystem doc skeleton
 
