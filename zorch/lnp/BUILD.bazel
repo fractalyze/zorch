@@ -91,6 +91,18 @@ py_library(
 )
 
 py_library(
+    name = "exact",
+    srcs = ["exact.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":eval",
+        ":quadratic",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
     name = "range",
     srcs = ["range.py"],
     visibility = ["//visibility:public"],

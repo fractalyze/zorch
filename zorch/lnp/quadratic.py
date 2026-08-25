@@ -532,6 +532,44 @@ def lift_positions(
     )
 
 
+@dataclass(frozen=True)
+class LiftSlots:
+    """Where each automorphism copy of each half sits inside a `lift`.
+
+    `lift_positions` answers "where does a *narrower* statement's lift sit
+    inside a wider one"; this answers the question underneath it — where a
+    given copy of a given half starts — which the layers kept re-deriving
+    for their own reasons. A statement that mentions `σ₋₁(v)·v` needs both
+    copies of one half at once (every inner product is that shape), and one
+    that mentions a vector spanning both halves needs a slot from each.
+
+    Two copies and not `k`, because `SIGMA_ORDER` is 2 and this module pins
+    the automorphism — see the module docstring."""
+
+    s1: np.ndarray
+    sigma_s1: np.ndarray
+    message: np.ndarray
+    sigma_message: np.ndarray
+
+
+def lift_slots(s1_cols: int, message_cols: int) -> LiftSlots:
+    """`lift`'s layout, read back as index arrays.
+
+    `lift` orbits each half as a whole — `[s1, σ(s1), m, σ(m)]` — so the
+    message half starts after *both* `s1` copies, and each copy of a half is
+    contiguous. Every place that has open-coded `SIGMA_ORDER * s1_cols` was
+    spelling that same rule."""
+    if s1_cols < 0 or message_cols < 0:
+        raise ValueError(f"lift_slots: negative widths ({s1_cols}, {message_cols})")
+    s1_span = SIGMA_ORDER * s1_cols
+    return LiftSlots(
+        s1=np.arange(s1_cols),
+        sigma_s1=s1_cols + np.arange(s1_cols),
+        message=s1_span + np.arange(message_cols),
+        sigma_message=s1_span + message_cols + np.arange(message_cols),
+    )
+
+
 def evaluate(
     ring: HostSplitRing,
     r2: np.ndarray,

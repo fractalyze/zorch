@@ -114,6 +114,25 @@ py_test(
 )
 
 py_test(
+    name = "exact_test",
+    size = "medium",
+    srcs = ["exact_test.py"],
+    deps = [
+        "//zorch/commit:ajtai",
+        "//zorch/lnp:eval",
+        "//zorch/lnp:exact",
+        "//zorch/lnp:masking",
+        "//zorch/lnp:quadratic",
+        "//zorch/lnp:range",
+        "//zorch/lnp/testing:lnp_fixture",
+        requirement("absl_py"),
+        requirement("hash_frx"),
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "range_test",
     size = "medium",
     srcs = ["range_test.py"],

@@ -93,7 +93,7 @@ from zorch.lnp import wire
 from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval, QuadraticEvalProof
 from zorch.lnp.masking import BimodalMasking
-from zorch.lnp.quadratic import SIGMA_ORDER, Publics
+from zorch.lnp.quadratic import Publics, lift_slots
 from zorch.lnp.transcript import absorb_signed, absorb_stacks
 
 _LABEL_COMMIT = b"lnp/range/mask"
@@ -226,12 +226,10 @@ class ProjectionLeg:
         # *its* lift. Reading `scheme.s1_cols` here puts the mask and sign
         # past the end of the lift the statement is written against.
         s1_take = evaluation.s1_take
-        s1_span = SIGMA_ORDER * s1_take
-        self._witness_positions = np.concatenate(
-            [np.arange(s1_take), s1_span + np.arange(ell)]
-        )
-        self._mask_positions = s1_span + mask_slot + np.arange(masking.mask_cols)
-        self._sign_position = s1_span + sign_slot
+        slots = lift_slots(s1_take, evaluation.ell)
+        self._witness_positions = np.concatenate([slots.s1, slots.message[:ell]])
+        self._mask_positions = slots.message[mask_slot:][: masking.mask_cols]
+        self._sign_position = int(slots.message[sign_slot])
         self._chunks = s1_take + ell
         # σ₋₁ applied to each monomial `X^j`, which is what `T(⃗δ_j, ·)`
         # contributes. Row `j` of the identity *is* `X^j`'s coefficient
