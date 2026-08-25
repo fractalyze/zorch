@@ -37,6 +37,7 @@ not transcript-derived.
 
 from __future__ import annotations
 
+import copy
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -408,13 +409,9 @@ class BimodalMasking:
     same Rej0, and only the verifier's acceptance norm splits — `LinfBound`
     for the approximate ℓ∞ leg, `L2Bound` for the exact ℓ2 one.
 
-    `attempts` is derived from `rep0` and `fail_prob` for a masking used
-    alone, and passed in when it is not. A leg composed with others is
-    redrawn whenever *any* leg rejects, so it is drawn from more often than
-    its own rate implies — and that count is what resolves the Gaussian
-    sampler's tier (`sampler_for`'s `sample_count`), so it has to be the
-    composition's number rather than this leg's. Only the composition knows
-    it; see `range.ApproximateRange`.
+    `attempts` is derived here from `rep0` and `fail_prob`, for this point
+    used alone. A composition that draws from it more often re-resolves it
+    through `for_attempts`.
     """
 
     def __init__(
@@ -425,7 +422,6 @@ class BimodalMasking:
         projection: int = PROJECTION,
         bound: L2Bound | LinfBound = L2Bound(),
         fail_prob: float = 2.0**-128,
-        attempts: int | None = None,
     ) -> None:
         if projection < 1:
             raise ValueError(
@@ -450,19 +446,7 @@ class BimodalMasking:
         self.rep0 = rep0
         self.bound = bound
         self.fail_prob = fail_prob
-        alone = attempt_budget(fail_prob, 1.0 / rep0)
-        if attempts is None:
-            attempts = alone
-        elif attempts < alone:
-            # Refused rather than quietly taken: a budget below the one this
-            # masking's own rate implies means the caller's loop gives up
-            # before `fail_prob` is reached, which is the guarantee the
-            # number exists to make.
-            raise ValueError(
-                f"masking: attempts = {attempts} is below the {alone} this "
-                f"rep0 = {rep0!r} and fail_prob = {fail_prob!r} imply"
-            )
-        self.attempts = attempts
+        self.attempts = attempt_budget(fail_prob, 1.0 / rep0)
         if self.attempts > _MAX_ATTEMPTS:
             raise ValueError(
                 f"masking: rep0 = {rep0!r} implies an attempt budget of "
@@ -472,6 +456,46 @@ class BimodalMasking:
         self._norm, self._limit = bound.resolve(projection, mask_std)
         self._draw = sampler.sampler_for(mask_std, self.attempts * projection)
         self._centers = np.zeros((self.mask_cols, ring.d), dtype=np.float64)
+
+    def for_attempts(self, attempts: int) -> BimodalMasking:
+        """This same parameter point, re-resolved for a loop that may run
+        `attempts` times.
+
+        A leg composed with others is redrawn whenever *any* leg rejects,
+        so it is drawn from more often than its own rate implies, and
+        `sampler_for`'s `sample_count` is contractually "the number of
+        scalar Gaussian draws the caller's whole protocol run makes". Only
+        the composition knows that number, and only after it has seen every
+        leg, so a leg cannot be *built* with it. That circle is why this is a
+        method and not a constructor argument: the caller states a parameter
+        point and `range.ApproximateRange` sizes it for the loop it is about
+        to run.
+
+        **The count is currently inert, and this is still not optional.**
+        `sampler_for` picks its tier by `sample_count` only through a
+        `distance(σ) · count < 2^-64` gate, and `distance` falls as ~1/σ²,
+        so the middle tier is unreachable below σ ≈ 10^11 — at every
+        parameter point this package can reach, σ alone decides. Nothing
+        observable therefore separates a re-resolved sampler from a stale
+        one today. It is honoured anyway because under-counting is the
+        direction `sampler_for` says is unsafe, and a tightened distance
+        bound upstream would make it bite silently.
+
+        Returns `self` when the number is already right, which is every
+        single-leg composition — Fig. 9 included."""
+        if attempts < self.attempts:
+            raise ValueError(
+                f"masking: {attempts} attempts is below the {self.attempts} "
+                f"this rep0 = {self.rep0!r} and fail_prob = {self.fail_prob!r} "
+                f"imply — a loop that gives up sooner never reaches the "
+                f"failure probability this point was built for"
+            )
+        if attempts == self.attempts:
+            return self
+        resized = copy.copy(self)
+        resized.attempts = attempts
+        resized._draw = sampler.sampler_for(self.mask_std, attempts * self.projection)
+        return resized
 
     def draw(self, rng: np.random.Generator) -> tuple[int, np.ndarray]:
         """One attempt's `(b, y)`: a sign and a `(256/d, d)` Gaussian mask.

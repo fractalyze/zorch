@@ -151,6 +151,20 @@ class GarbageMasking:
         """The BDLOP matrix the inner protocol opens `m‖g` against."""
         return np.concatenate([b, bg])
 
+    def rows(self, blocks: np.ndarray) -> np.ndarray:
+        """`B_g` — this layer's own rows of an *already assembled* matrix.
+
+        `blocks` above builds the layout; this reads it back. Both live here
+        because this is the class that owns `ell` and `lam`, and "the
+        garbage is the tail" asserted in two classes in two spellings is the
+        drift `GarbageMasking` was extracted to prevent — no round-trip can
+        see them disagree, since both sides would carve the same wrong way.
+
+        The caller that assembles the whole matrix up front (`Publics`, once
+        a range leg is in the picture) takes this; the caller that still
+        concatenates its own takes `blocks`."""
+        return blocks[self.ell :]
+
     def commitment(self, t_b: np.ndarray, t_g: np.ndarray) -> np.ndarray:
         """The commitment to `m‖g`, in the order `blocks` is stacked in.
 
@@ -542,7 +556,7 @@ class AbdlopQuadraticEval:
 
         # (1) λ garbage terms with zero constant coefficient, committed
         #     under B_g beside the message.
-        g, t_g = self.garbage.commit(self._bg(publics), s2_ring, rng)
+        g, t_g = self.garbage.commit(self.garbage.rows(publics.blocks), s2_ring, rng)
 
         # (2) Γ, once t_g is bound.
         t, gamma = self.garbage.gamma(transcript, t_g, _count(e2))
@@ -626,16 +640,6 @@ class AbdlopQuadraticEval:
             proof.quadratic,
             t,
         )
-
-    def _bg(self, publics: Publics) -> np.ndarray:
-        """This layer's own rows of the BDLOP matrix — `B_g`, the λ the
-        garbage is committed under.
-
-        The carve `Publics` describes, from the side that owns the tail:
-        every row past the `ell` the layers above share out among
-        themselves is this layer's, because the garbage is what is appended
-        last."""
-        return publics.blocks[self.ell :]
 
     def require_witness(self, name: str, s1: np.ndarray, s2: np.ndarray) -> None:
         """The witness gate of the masking this protocol ultimately proves

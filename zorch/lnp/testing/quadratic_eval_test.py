@@ -89,18 +89,6 @@ def _transcript(tag: bytes = b"") -> ByteTranscript:
     return lnp_fixture.transcript(b"lnp-quadratic-eval-test", tag)
 
 
-def _constant(ring: HostSplitRing, value: np.ndarray) -> np.ndarray:
-    """The one-element stack holding `value` in its constant coefficient and
-    nothing else.
-
-    Written through the array layout the way `GarbageMasking.sample` zeroes
-    that slot, and for the same reason: `constant_coeff` reads it, and the
-    module convention has no constructor that writes it."""
-    out = ring.zeros(1)
-    out[0, :, 0] = value
-    return out
-
-
 class _Instance:
     """One honest Fig. 8 statement: publics, witness, commitment, `N`
     relations that vanish on the lifted witness, and `M` evaluations whose
@@ -173,15 +161,14 @@ class _Instance:
         self.e2 = ring.uniform_stack(rng, _EVALUATIONS, width, width)
         self.e1 = ring.uniform_stack(rng, _EVALUATIONS, width)
         self.e0 = np.stack(
-            [self._vanishing(self.e2[j], self.e1[j]) for j in range(_EVALUATIONS)]
+            [
+                lnp_fixture.vanishing_constant(
+                    ring,
+                    evaluate(ring, self.e2[j], self.e1[j], ring.zeros(1), self.s),
+                )
+                for j in range(_EVALUATIONS)
+            ]
         )
-
-    def _vanishing(self, e2: np.ndarray, e1: np.ndarray) -> np.ndarray:
-        """`e0` chosen so `F̃(s) = 0` while `F(s)` itself stays nonzero —
-        a constant polynomial, not the whole value negated."""
-        ring = self.ring
-        value = evaluate(ring, e2, e1, ring.zeros(1), self.s)
-        return ring.neg(_constant(ring, ring.constant_coeff(value)[0]))
 
     def statement(self) -> dict[str, Any]:
         return dict(

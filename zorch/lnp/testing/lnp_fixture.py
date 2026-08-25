@@ -69,6 +69,38 @@ def transcript(domain: bytes, tag: bytes = b"") -> ByteTranscript:
     return ByteHashTranscript.new(domain, HostSha256()).observe_bytes(tag)
 
 
+def constant(ring: HostSplitRing, value: np.ndarray) -> np.ndarray:
+    """The one-element stack holding `value` in its constant coefficient and
+    nothing else.
+
+    Written through the array layout the way `GarbageMasking.sample` zeroes
+    that slot, and for the same reason: `constant_coeff` reads it, and the
+    module convention has no constructor that writes it. Here rather than in
+    a suite because *which slot* `constant_coeff` reads is one convention,
+    and two suites spelling it is how a ring-layout change breaks one and
+    not the other."""
+    out = ring.zeros(1)
+    out[0, :, 0] = value
+    return out
+
+
+def vanishing_constant(ring: HostSplitRing, value: np.ndarray) -> np.ndarray:
+    """The `e0` that makes `F̃(s) = 0` for a function whose value on the
+    witness is `value` — while `F(s)` itself stays nonzero, since only the
+    constant coefficient is negated and not the whole thing.
+
+    The construction every suite needs to state an *evaluation* that is true
+    on its witness, as opposed to a relation: `quadratic_eval_test` builds
+    Fig. 8's `F_j` with it and `range_test` a caller's `F_i`.
+
+    Takes the already-evaluated value rather than `(e2, e1, s)` so this
+    module keeps needing nothing but a ring. It is the shared *parameter
+    point*, and every suite depends on it — pulling `quadratic.evaluate` in
+    here would put the quadratic protocol behind `opening_test`, which is
+    about Fig. 4 and has no quadratic anything."""
+    return ring.neg(constant(ring, ring.constant_coeff(value)[0]))
+
+
 def bump(stack: np.ndarray, *index: int) -> np.ndarray:
     """A copy with one residue moved by one — the tamper idiom, so a
     soundness test states only *what* it tampered."""

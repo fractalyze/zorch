@@ -132,11 +132,17 @@ class Publics:
         """Every matrix here against the scheme whose parameters fix its
         shape.
 
-        Gated in one place because these four are what the whole chain is
-        written against, and `blocks` in particular had no gate anywhere: a
-        wrong row count surfaced from a ring `matvec` several layers down
-        instead of naming itself, which is the failure `GarbageMasking`
-        gates `bg` for one layer up."""
+        One gate for all four because they travel as one object, and
+        `blocks` in particular had no gate anywhere before it: a wrong row
+        count surfaced from a ring `matvec` several layers down instead of
+        naming itself, which is the failure `GarbageMasking` gates `bg` for
+        one layer up.
+
+        Every layer that *takes* a `Publics` calls this, so on a full range
+        proof it runs three times over the same four stacks. That is the
+        package's "statement fields raise at the boundary" rule and not an
+        oversight — each of those layers is a public entry point with its
+        own suite — and the repeat costs four shape comparisons."""
         scheme.require_stack("publics: a1", self.a1, scheme.rows, scheme.s1_cols)
         scheme.require_stack(
             "publics: a2", self.a2, scheme.rows, scheme.randomness_cols

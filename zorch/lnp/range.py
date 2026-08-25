@@ -203,12 +203,18 @@ class ProjectionLeg:
                 "range: the masking and the scheme must hold one ring — a "
                 "projection masked over a different ring is a parameter bug"
             )
-        self.evaluation = evaluation
         self.masking = masking
         self.scheme = scheme
-        self.ell = ell
         self.mask_slot = mask_slot
         self.sign_slot = sign_slot
+        # The eval layer's *width*, not the eval layer. A leg contributes
+        # and does not compose — it must never reach the inner `prove` — so
+        # what it keeps of that layer is the width its statement is written
+        # against, and the carve below, and nothing else. Holding the
+        # protocol object would leave the invariant to convention, and
+        # re-fusing the inner call into a leg is exactly the regression this
+        # split exists to prevent.
+        self.width = evaluation.width
 
         # Positions in the *eval layer's* lift, `[s1, σ(s1), m‖…, σ(m‖…)]`
         # — the message stack is orbited as a whole, so this leg's two
@@ -327,8 +333,13 @@ class ProjectionLeg:
         count = rows * self._chunks * self.scheme.ring.d
         t, raw = transcript.sample_scalar(-(-count * _BIN1_BITS // 8))
         bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8))
-        pairs = bits[: count * _BIN1_BITS].reshape(count, _BIN1_BITS).astype(np.int64)
-        return t, (pairs[:, 1] - pairs[:, 0]).reshape(rows, -1)
+        pairs = bits[: count * _BIN1_BITS].reshape(count, _BIN1_BITS)
+        # Subtracted straight into int64 rather than casting both columns
+        # first: the cast would materialise a `(count, 2)` int64 temp, which
+        # at production width (`d = 128`, ~20 chunks) is 10.5 MB per attempt
+        # per leg on each side.
+        drawn = np.subtract(pairs[:, 1], pairs[:, 0], dtype=np.int64)
+        return t, drawn.reshape(rows, -1)
 
     def reveal(self, transcript: ByteTranscript, z: np.ndarray) -> ByteTranscript:
         """Bind the revealed projection, which the inner proof runs after."""
@@ -346,12 +357,6 @@ class ProjectionLeg:
         byte-identical statements from `(R, ⃗z)` or the inner proof does not
         replay, and that identity is what this layer's soundness rests on."""
         return self._sign_relation, self._evaluations(projection, z)
-
-    def within_bounds(self, z: np.ndarray) -> bool:
-        """Prop. 5.1's `‖⃗z‖₂ ≤ t·√256·s3`, forwarded so the composing layer
-        need not reach through to the masking for the one check it owes each
-        leg."""
-        return self.masking.within_bounds(z)
 
     def is_well_formed(self, message: LegMessage) -> bool:
         """Whether this leg's share of the wire is structurally usable, per
@@ -399,12 +404,16 @@ class ProjectionLeg:
         # `from_signed_stack` over every chunk at once — it is already
         # "`from_signed` per row", so stacking its results by hand would be
         # re-spelling its own batching.
-        rows = ring.from_signed_stack(projection.reshape(-1, d)).reshape(
+        # `−σ₋₁(⃗r_i)` with the negation taken on the *signed* input, where
+        # it is a numpy sign flip, rather than on the residues afterwards,
+        # where `ring.neg` is another full coerce-and-reduce pass over
+        # `count·chunks·limbs·d`. Byte-identical, and measurably cheaper.
+        rows = ring.from_signed_stack((-projection).reshape(-1, d)).reshape(
             count, self._chunks, len(ring.q_moduli), d
         )
-        sigma_rows = ring.neg(ring.galois(rows, 2 * d - 1))
+        sigma_rows = ring.galois(rows, 2 * d - 1)
 
-        e2 = ring.zeros(count + d - 1, self.evaluation.width, self.evaluation.width)
+        e2 = ring.zeros(count + d - 1, self.width, self.width)
         e2[np.arange(count)[:, None], self._sign_position, self._witness_positions] = (
             sigma_rows
         )
@@ -422,7 +431,7 @@ class ProjectionLeg:
         ring = self.scheme.ring
         d = ring.d
         count = self.masking.projection
-        e1 = ring.zeros(count + d - 1, self.evaluation.width)
+        e1 = ring.zeros(count + d - 1, self.width)
         index = np.arange(count)
         e1[index, self._mask_positions[index // d]] = ring.neg(
             self._sigma_monomials[index % d]
@@ -437,7 +446,7 @@ class ProjectionLeg:
         admits any square root of one in `R_q`, and it is integrality that
         cuts those down to `±1`."""
         ring = self.scheme.ring
-        width = self.evaluation.width
+        width = self.width
         r2 = ring.zeros(1, width, width)
         r2[0, self._sign_position, self._sign_position] = ring.one()
         r1 = ring.zeros(1, width)
@@ -483,7 +492,8 @@ class ApproximateRange:
                 "range: a range proof needs at least one projection leg, and "
                 "none was given"
             )
-        rows = sum(masking.mask_cols + 1 for masking in maskings)
+        masks = sum(masking.mask_cols for masking in maskings)
+        rows = masks + len(maskings)
         ell = evaluation.ell - rows
         if ell < 0:
             raise ValueError(
@@ -498,14 +508,25 @@ class ApproximateRange:
         # Fig. 10's order for the legs' share of the message half: every
         # mask, then every sign. For one leg that is Fig. 9's `m‖y‖b`.
         mask_slot = ell
-        sign_slot = ell + sum(masking.mask_cols for masking in maskings)
+        sign_slot = ell + masks
+        # The budget first, because it is what each leg's Gaussian sampler
+        # has to be sized for — see `_joint_budget` and
+        # `BimodalMasking.for_attempts`.
+        self.attempts = _joint_budget(maskings)
         legs = []
         for masking in maskings:
-            legs.append(ProjectionLeg(evaluation, masking, ell, mask_slot, sign_slot))
+            legs.append(
+                ProjectionLeg(
+                    evaluation,
+                    masking.for_attempts(self.attempts),
+                    ell,
+                    mask_slot,
+                    sign_slot,
+                )
+            )
             mask_slot += masking.mask_cols
             sign_slot += 1
         self.legs = tuple(legs)
-        self.attempts = self._budget(maskings)
 
     def prove(
         self,
@@ -561,13 +582,9 @@ class ApproximateRange:
                 leg.draw(hoisted, rng)
                 for leg, hoisted in zip(self.legs, randomness, strict=True)
             ]
-            t = transcript
-            for leg, draw in zip(self.legs, draws, strict=True):
-                t = leg.observe(t, draw.t_mask, draw.t_sign)
-            projections = []
-            for leg in self.legs:
-                t, projection = leg.challenge(t)
-                projections.append(projection)
+            t, projections = self._round(
+                transcript, [(draw.t_mask, draw.t_sign) for draw in draws]
+            )
             responses = [
                 leg.respond(draw, projection, flat, rng)
                 for leg, draw, projection in zip(
@@ -579,12 +596,9 @@ class ApproximateRange:
             # carries them all and a leg that kept its accepted `⃗z` while a
             # sibling redrew would be revealing a projection of a witness
             # under a challenge the redrawn transcript no longer produces.
-            if any(z is None for z in responses):
-                continue
-            # Re-bound rather than reused: `any(... is None)` rules out every
-            # `None` but does not narrow the list it ruled them out of, and
-            # the layers below take responses, not maybe-responses.
             revealed = [z for z in responses if z is not None]
+            if len(revealed) != len(responses):
+                continue
 
             t, families = self._statement(t, projections, revealed)
             inner, t = self.evaluation.prove(
@@ -592,10 +606,10 @@ class ApproximateRange:
                 *self._families(families, relations, evaluations),
                 s1,
                 s2,
-                np.concatenate(
-                    [message_ring]
-                    + [draw.y_ring for draw in draws]
-                    + [draw.sign_ring for draw in draws]
+                _ordered(
+                    message_ring,
+                    [draw.y_ring for draw in draws],
+                    [draw.sign_ring for draw in draws],
                 ),
                 rng,
                 t,
@@ -637,18 +651,14 @@ class ApproximateRange:
         if not self._is_well_formed(proof):
             return False, transcript
         if not all(
-            leg.within_bounds(message.z)
+            leg.masking.within_bounds(message.z)
             for leg, message in zip(self.legs, proof.legs, strict=True)
         ):
             return False, transcript
 
-        t = transcript
-        for leg, message in zip(self.legs, proof.legs, strict=True):
-            t = leg.observe(t, message.t_mask, message.t_sign)
-        projections = []
-        for leg in self.legs:
-            t, projection = leg.challenge(t)
-            projections.append(projection)
+        t, projections = self._round(
+            transcript, [(m.t_mask, m.t_sign) for m in proof.legs]
+        )
         t, families = self._statement(
             t, projections, [message.z for message in proof.legs]
         )
@@ -656,23 +666,50 @@ class ApproximateRange:
             publics,
             *self._families(families, relations, evaluations),
             t_a,
-            np.concatenate(
-                [t_b]
-                + [message.t_mask for message in proof.legs]
-                + [message.t_sign for message in proof.legs]
+            _ordered(
+                t_b,
+                [m.t_mask for m in proof.legs],
+                [m.t_sign for m in proof.legs],
             ),
             proof.evaluation,
             t,
         )
+
+    def _round(
+        self,
+        transcript: ByteTranscript,
+        commitments: Sequence[tuple[np.ndarray, np.ndarray]],
+    ) -> tuple[ByteTranscript, list[np.ndarray]]:
+        """Fig. 10's first two moves: every leg's `(t_mask, t_sign)` bound,
+        and only then every leg's `R` drawn.
+
+        One method rather than a copy on each side, for the reason
+        `_statement` gives — the two must replay byte for byte or the inner
+        proof does not verify — and the reason the leg keeps `observe` and
+        `challenge` apart at all: a projection is bound to *all* the
+        first-round commitments, not merely its own leg's."""
+        t = transcript
+        for leg, (t_mask, t_sign) in zip(self.legs, commitments, strict=True):
+            t = leg.observe(t, t_mask, t_sign)
+        projections = []
+        for leg in self.legs:
+            t, projection = leg.challenge(t)
+            projections.append(projection)
+        return t, projections
 
     def _statement(
         self,
         transcript: ByteTranscript,
         projections: Sequence[np.ndarray],
         responses: Sequence[np.ndarray],
-    ) -> tuple[ByteTranscript, tuple[_Family, _Family]]:
+    ) -> tuple[ByteTranscript, list[tuple[_Family, _Family]]]:
         """Absorb every revealed projection, then collect the families they
-        induce.
+        induce, one `(relations, evaluations)` pair per leg.
+
+        Returned per leg rather than pre-stacked because `_families` has to
+        concatenate anyway to put the caller's ahead of them, and stacking
+        here would copy every block twice — `e2` alone is
+        `(256 + d − 1, width, width)`, the largest array this layer builds.
 
         Every `⃗z` is bound before any statement is built, which is Fig. 10's
         order and — for one leg — Fig. 9's unchanged. The two sides must
@@ -681,20 +718,16 @@ class ApproximateRange:
         t = transcript
         for leg, z in zip(self.legs, responses, strict=True):
             t = leg.reveal(t, z)
-        per_leg = [
+        return t, [
             leg.statement(projection, z)
             for leg, projection, z in zip(
                 self.legs, projections, responses, strict=True
             )
         ]
-        return t, (
-            _stack([relation for relation, _ in per_leg]),
-            _stack([evaluations for _, evaluations in per_leg]),
-        )
 
     def _families(
         self,
-        legs: tuple[_Family, _Family],
+        legs: Sequence[tuple[_Family, _Family]],
         relations: _Family | None,
         evaluations: _Family | None,
     ) -> _Blocks:
@@ -705,41 +738,14 @@ class ApproximateRange:
         indexes `f_i` and `F_i` from one and defines `ϕ`, `Ψ` over them,
         with the legs' obligations appended. Only the agreement between the
         two sides is load-bearing; being the paper's order is what makes it
-        checkable against the figure."""
-        leg_relations, leg_evaluations = legs
-        r2, r1, r0 = _stack(_ahead(relations, leg_relations))
-        e2, e1, e0 = _stack(_ahead(evaluations, leg_evaluations))
+        checkable against the figure.
+
+        One pass over everything, caller and legs together: stacking the
+        legs first and the caller's onto that would copy every leg's blocks
+        twice."""
+        r2, r1, r0 = _stack(_ahead(relations, [family for family, _ in legs]))
+        e2, e1, e0 = _stack(_ahead(evaluations, [ev for _, ev in legs]))
         return r2, r1, r0, e2, e1, e0
-
-    def _budget(self, maskings: Sequence[BimodalMasking]) -> int:
-        """The attempt budget for the joint gate, and the check that every
-        leg was sized for it.
-
-        Every leg redraws when *any* leg's Rej0 rejects, so one attempt
-        succeeds with probability `∏ 1/rep0_i` — the product rule `Masking`
-        already applies to its own two Gaussians. `fail_prob` is the
-        tightest the legs were built with, since the budget has to satisfy
-        each of them. For one leg this is that leg's own number, unchanged.
-
-        A leg's Gaussian sampler resolved its tier against the leg's
-        `attempts` (`sampler_for`'s `sample_count`), so a composition that
-        can draw from a leg more often than it was sized for is using a
-        sampler chosen under a claim that no longer holds. That never
-        happens by accident and cannot be fixed by widening `fail_prob` —
-        the joint budget is strictly above each leg's own at any shared
-        `fail_prob`, which is why `BimodalMasking` takes the number instead
-        of deriving it."""
-        accept = math.prod(1.0 / masking.rep0 for masking in maskings)
-        budget = attempt_budget(min(m.fail_prob for m in maskings), accept)
-        for index, masking in enumerate(maskings):
-            if budget > masking.attempts:
-                raise ValueError(
-                    f"range: {len(maskings)} legs reject together often enough "
-                    f"to need {budget} attempts, but leg {index}'s Gaussian "
-                    f"sampler was sized for {masking.attempts} — build that "
-                    f"leg's BimodalMasking with attempts={budget}"
-                )
-        return budget
 
     def _exhausted(self) -> RuntimeError:
         """The composition's own `exhausted`: the budget it raises against is
@@ -777,13 +783,46 @@ class ApproximateRange:
         )
 
 
-def _ahead(caller: _Family | None, legs: _Family) -> list[_Family]:
+def _joint_budget(maskings: Sequence[BimodalMasking]) -> int:
+    """The attempt budget for the joint gate.
+
+    Every leg redraws when *any* leg's Rej0 rejects, so one attempt succeeds
+    with probability `∏ 1/rep0_i` — the product rule `Masking` already
+    applies to its own two Gaussians. `fail_prob` is the tightest the legs
+    were built with, since the budget has to satisfy each of them. For one
+    leg this is that leg's own number, unchanged, which is why Fig. 9 never
+    had to say any of this.
+
+    Module-level so a caller sizing a parameter point can ask what a
+    composition of it will need without building the composition first —
+    the number was otherwise derivable only by reading `ApproximateRange`
+    and re-spelling the rule."""
+    accept = math.prod(1.0 / masking.rep0 for masking in maskings)
+    return attempt_budget(min(m.fail_prob for m in maskings), accept)
+
+
+def _ordered(
+    head: np.ndarray, masks: Sequence[np.ndarray], signs: Sequence[np.ndarray]
+) -> np.ndarray:
+    """The legs' share of a stack in the order the message half is built:
+    the caller's own rows, then every leg's mask, then every leg's sign.
+
+    Named because three things have to agree on it — the BDLOP matrix the
+    caller assembles, the message the prover concatenates, and the
+    commitment the verifier reassembles — and a round-trip cannot see them
+    disagree, since both sides build the last two the same way. Fig. 10
+    writes it as `(m, y^(d), y^(e), b^(d), b^(e))`; for one leg it is
+    Fig. 9's `m‖y‖b`."""
+    return np.concatenate([head, *masks, *signs])
+
+
+def _ahead(caller: _Family | None, legs: Sequence[_Family]) -> Sequence[_Family]:
     """The caller's family in front of the legs', or the legs' alone.
 
     Spelled out rather than tested inline, because `if caller` on a tuple of
     three ring stacks reads as an array truth test and is one edit away from
     becoming one."""
-    return [legs] if caller is None else [caller, legs]
+    return list(legs) if caller is None else [caller, *legs]
 
 
 def _stack(families: Sequence[_Family]) -> _Family:
@@ -792,7 +831,18 @@ def _stack(families: Sequence[_Family]) -> _Family:
 
     One helper because the three blocks of a family must stay aligned, and
     three hand-written `np.concatenate` calls are three chances to stack two
-    of them and forget the third."""
+    of them and forget the third.
+
+    A single family is returned as it stands. `np.concatenate([x])` is a
+    full copy, and this layer's blocks are big enough for that to dominate:
+    at the test point `e2` is 41.8 MB, so Fig. 9 — one leg, no caller
+    family, every block already the answer — was spending more on copying
+    `e2` than on building it. Nothing downstream writes to these blocks
+    (`eval` and `quadratic` only reshape, index and matvec them), which is
+    also why the layer could hand `self._e1` straight down before this
+    helper existed."""
+    if len(families) == 1:
+        return families[0]
     r2, r1, r0 = (np.concatenate([f[i] for f in families]) for i in range(3))
     return r2, r1, r0
 

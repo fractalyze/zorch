@@ -44,7 +44,6 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
-from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.masking import BimodalMasking, L2Bound, LinfBound
 from zorch.lnp.quadratic import (
@@ -54,7 +53,7 @@ from zorch.lnp.quadratic import (
     evaluate,
     lift,
 )
-from zorch.lnp.range import ApproximateRange, RangeProof
+from zorch.lnp.range import ApproximateRange, RangeProof, _joint_budget
 from zorch.lnp.testing import lnp_fixture
 
 _ROWS = 2
@@ -88,23 +87,22 @@ def _maskings(
     legs: int,
     bounds: Sequence[L2Bound | LinfBound] | None = None,
 ) -> tuple[BimodalMasking, ...]:
-    """`legs` bimodal points, each sized for the budget their *joint* Rej0
-    gate needs, and each carrying the gate it is verified under.
+    """One bimodal point per leg, each carrying the gate it is verified
+    under.
 
-    `attempts` is passed rather than left to derive because the joint budget
-    is strictly above what any one leg's rate implies, and the sampler tier
-    is resolved against it — see `BimodalMasking`. At one leg the two
-    numbers coincide, which is why Fig. 9 never had to say this.
+    `bounds` is the count when it is given — `legs` only means "that many
+    default-gated legs" — so the number lives in one place. `bounds`
+    defaults to Fig. 9's ℓ2 gate throughout; Fig. 10's own pairing is one of
+    each, which is what it exists to spell.
 
-    `bounds` defaults to Fig. 9's ℓ2 gate on every leg. Fig. 10's own
-    pairing is one of each, which is what `bounds` exists to spell."""
-    joint = attempt_budget(lnp_fixture.FAIL_PROB, (1.0 / lnp_fixture.REP0) ** legs)
+    Nothing here sizes the Gaussian sampler for the composition:
+    `ApproximateRange` re-resolves each leg through `for_attempts`, so the
+    joint-budget rule has one owner and this fixture is not a second
+    spelling of it."""
     if bounds is None:
-        bounds = [L2Bound()] * legs
-    assert len(bounds) == legs
+        bounds = (L2Bound(),) * legs
     return tuple(
-        lnp_fixture.bimodal(ring, _WITNESS_COLS, attempts=joint, bound=bound)
-        for bound in bounds
+        lnp_fixture.bimodal(ring, _WITNESS_COLS, bound=bound) for bound in bounds
     )
 
 
@@ -145,6 +143,7 @@ class _Instance:
         ring = lnp_fixture.ring()
         self.ring = ring
         self.maskings = _maskings(ring, legs, bounds)
+        legs = len(self.maskings)
         self.masking = self.maskings[0]
         self.protocol = _protocol(ring, self.maskings, s1_cols, s1_take)
         # Fig. 9 is the one-leg composition, and every layout assertion below
@@ -264,16 +263,9 @@ class _Instance:
         r2, r1 = supported()
         r0 = np.stack([ring.neg(evaluate(ring, r2[0], r1[0], ring.zeros(1), s))])
 
-        # `F~(s) = 0` while `F(s)` itself stays nonzero: the constant
-        # coefficient negated, not the whole value. Written through the
-        # array layout the way `GarbageMasking.sample` zeroes that slot, and
-        # for the same reason — `constant_coeff` reads it, and the module
-        # convention has no constructor that writes it.
         e2, e1 = supported()
         value = evaluate(ring, e2[0], e1[0], ring.zeros(1), s)
-        constant = ring.zeros(1)
-        constant[0, :, 0] = ring.constant_coeff(value)[0]
-        e0 = np.stack([ring.neg(constant)])
+        e0 = np.stack([lnp_fixture.vanishing_constant(ring, value)])
         return (r2, r1, r0), (e2, e1, e0)
 
     def tamper(self, proof: RangeProof, **field: np.ndarray) -> RangeProof:
@@ -569,14 +561,20 @@ class CallerFamilyTest(absltest.TestCase):
         caller's relation is row 0, and the leg's `b^2 - 1` follows it."""
         instance = _Instance(41)
         relations, evaluations = instance.caller_family(86)
+        # One leg's `(relations, evaluations)` pair, in the per-leg sequence
+        # `_families` now takes — it stacks caller and legs in one pass.
         merged = instance.protocol._families(
-            (
-                instance.leg._sign_relation,
-                instance.leg._evaluations(
-                    instance.challenge(),
-                    np.zeros((instance.masking.mask_cols, instance.ring.d), np.int64),
-                ),
-            ),
+            [
+                (
+                    instance.leg._sign_relation,
+                    instance.leg._evaluations(
+                        instance.challenge(),
+                        np.zeros(
+                            (instance.masking.mask_cols, instance.ring.d), np.int64
+                        ),
+                    ),
+                )
+            ],
             relations,
             evaluations,
         )
@@ -725,7 +723,7 @@ class ProjectionLegTest(absltest.TestCase):
         np.testing.assert_array_equal(
             z.reshape(-1), draw.sign * (projection @ flat) + draw.y.reshape(-1)
         )
-        self.assertTrue(leg.within_bounds(z))
+        self.assertTrue(leg.masking.within_bounds(z))
 
     def test_the_commitments_are_the_mask_and_sign_over_their_own_rows(
         self,
@@ -823,6 +821,26 @@ class TwoLegTest(absltest.TestCase):
         self.assertEqual(first.sign_slot, _ELL + 2 * mask_cols)
         self.assertEqual(second.sign_slot, _ELL + 2 * mask_cols + 1)
 
+    def test_a_projection_is_bound_to_every_leg(self) -> None:
+        """Fig. 10 sends *all* four first-round commitments before *any* `R`,
+        so leg 0's challenge has to move when leg 1's mask commitment does.
+
+        No round-trip can see this: a composition that bound only each leg's
+        own pair would have both sides derive the same wrong `R` and verify
+        happily. It is the entire reason the leg keeps `observe` and
+        `challenge` as two steps instead of the one `_challenge` Fig. 9
+        needed, so it is asserted against the derivation directly."""
+        instance = _Instance(50, legs=2)
+        ring = instance.ring
+        mask, sign = ring.zeros(instance.masking.mask_cols), ring.zeros(1)
+        # Only the *second* leg's mask commitment differs between the two.
+        _, base = instance.protocol._round(_transcript(), [(mask, sign), (mask, sign)])
+        _, moved = instance.protocol._round(
+            _transcript(),
+            [(mask, sign), (lnp_fixture.bump(mask, 0, 0, 0), sign)],
+        )
+        self.assertFalse(np.array_equal(base[0], moved[0]))
+
     def test_two_legs_prove_and_verify_under_one_inner_proof(self) -> None:
         instance = _Instance(33, legs=2)
         proof = instance.prove()
@@ -881,20 +899,37 @@ class TwoLegTest(absltest.TestCase):
         # ...and that response is nowhere on the wire.
         self.assertFalse(any(np.array_equal(accepted[0], leg.z) for leg in proof.legs))
 
-    def test_a_leg_sized_for_itself_alone_is_refused(self) -> None:
+    def test_the_composition_sizes_each_leg_for_the_joint_budget(self) -> None:
         """Two legs reject together often enough to need more attempts than
-        either's own rate implies, and a leg's Gaussian sampler resolved its
-        tier against that number. Widening `fail_prob` cannot fix it — the
-        joint budget stays above each leg's own — so the masking has to be
-        built for the composition."""
+        either's own rate implies, and a leg's Gaussian sampler picks its
+        tier from that number. The caller states a parameter point and the
+        composition sizes it — nothing is refused, and no caller has to
+        derive the joint budget to build a leg."""
         ring = lnp_fixture.ring()
         alone = lnp_fixture.bimodal(ring, _WITNESS_COLS)
-        scheme = _scheme(ring, alone.mask_cols, _M1, legs=2)
-        evaluation = AbdlopQuadraticEval(
-            AbdlopQuadraticMany(AbdlopQuadratic(lnp_fixture.masking(scheme))), _LAM
-        )
-        with self.assertRaisesRegex(ValueError, "build that leg's BimodalMasking"):
-            ApproximateRange(evaluation, alone, alone)
+        joint = _joint_budget([alone, alone])
+        self.assertGreater(joint, alone.attempts)
+
+        instance = _Instance(48, legs=2)
+        self.assertEqual(instance.protocol.attempts, joint)
+        for leg in instance.protocol.legs:
+            self.assertEqual(leg.masking.attempts, joint)
+        # ...and the point the caller handed in is left as it was.
+        self.assertEqual(instance.maskings[0].attempts, alone.attempts)
+
+    def test_a_single_leg_reuses_its_masking_untouched(self) -> None:
+        """Fig. 9's budget already is the joint one, so `for_attempts` has
+        nothing to re-resolve and hands back the same object."""
+        instance = _Instance(49)
+        self.assertIs(instance.protocol.legs[0].masking, instance.maskings[0])
+
+    def test_a_shorter_loop_than_the_point_implies_is_refused(self) -> None:
+        """`for_attempts` only ever sizes *up*. Down would mean a loop that
+        gives up before `fail_prob`, which is the guarantee the number is
+        derived to make."""
+        masking = lnp_fixture.bimodal(lnp_fixture.ring(), _WITNESS_COLS)
+        with self.assertRaisesRegex(ValueError, "is below the"):
+            masking.for_attempts(masking.attempts - 1)
 
 
 class RangeChallengeTest(absltest.TestCase):
@@ -1112,7 +1147,7 @@ class LinfLegTest(absltest.TestCase):
         proof = instance.prove()
         self.assertTrue(instance.verify(proof))
         for leg, message in zip(instance.protocol.legs, proof.legs):
-            self.assertTrue(leg.within_bounds(message.z))
+            self.assertTrue(leg.masking.within_bounds(message.z))
 
     def test_each_leg_is_gated_in_its_own_norm(self) -> None:
         """Not both in whichever one the first leg carries. A reveal that
@@ -1122,8 +1157,8 @@ class LinfLegTest(absltest.TestCase):
         linf_leg, l2_leg = instance.protocol.legs
         spike = np.zeros((instance.masking.mask_cols, lnp_fixture.D), np.int64)
         spike[0, 0] = round(20 * instance.masking.mask_std)
-        self.assertFalse(linf_leg.within_bounds(spike))
-        self.assertTrue(l2_leg.within_bounds(spike))
+        self.assertFalse(linf_leg.masking.within_bounds(spike))
+        self.assertTrue(l2_leg.masking.within_bounds(spike))
 
     def test_the_composition_consults_every_leg_and_not_just_the_first(
         self,
@@ -1141,14 +1176,10 @@ class LinfLegTest(absltest.TestCase):
         proof = instance.prove()
         self.assertTrue(instance.verify(proof))
 
-        honest, joint = instance.maskings[0], instance.maskings[1].attempts
         tight = lnp_fixture.bimodal(
-            instance.ring,
-            _WITNESS_COLS,
-            attempts=joint,
-            bound=L2Bound(accept_t=1e-6),
+            instance.ring, _WITNESS_COLS, bound=L2Bound(accept_t=1e-6)
         )
-        strict = _protocol(instance.ring, [honest, tight])
+        strict = _protocol(instance.ring, [instance.maskings[0], tight])
         self.assertFalse(instance.verify(proof, protocol=strict))
 
 
