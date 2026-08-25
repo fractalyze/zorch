@@ -60,7 +60,7 @@ from zorch.byte_transcript import (
     _len8,
     _validate_pow_bits,
 )
-from zorch.grind import GRIND_WINDOW, grind_search, leading_zero_bits_ok
+from zorch.grind import grind_search, grind_window_for, leading_zero_bits_ok
 
 # SHA-256 digest width — the PoW state digest and every squeeze block are 32 B.
 _DIGEST_BYTES = 32
@@ -300,7 +300,7 @@ class Sha256FieldTranscript:
         return self._absorb(self._witness_wire(witness))
 
     def grind(
-        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+        self, pow_bits: int, *, chunk: int | None = None
     ) -> tuple[Sha256FieldTranscript, Array]:
         """Find a proof-of-work witness — the lowest nonce whose
         `SHA256(state_digest || nonce_le8)` has `pow_bits` leading zero bits —
@@ -312,10 +312,12 @@ class Sha256FieldTranscript:
         witness = self._find_witness(pow_bits, chunk)
         return self._absorb_witness(witness), witness
 
-    def _find_witness(self, pow_bits: int, chunk: int) -> Array:
+    def _find_witness(self, pow_bits: int, chunk: int | None) -> Array:
         """The PoW search alone, with nothing absorbed. `grind` puts the witness
         on the wire itself; `grind_and_sample` folds it into a draw's framing."""
         _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        if chunk is None:
+            chunk = grind_window_for(pow_bits)
         if chunk < 1:
             raise ValueError(f"chunk must be >= 1, got {chunk}")
         if pow_bits == 0:
@@ -335,7 +337,7 @@ class Sha256FieldTranscript:
         return grind_search(check_batch, 2**32, chunk)
 
     def grind_and_sample(
-        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+        self, pow_bits: int, *, chunk: int | None = None
     ) -> tuple[Sha256FieldTranscript, Array, Array]:
         """Grind, then draw one scalar challenge, as ONE marked region — the
         BLAKE3 row's `grind_and_sample`, on this wire."""

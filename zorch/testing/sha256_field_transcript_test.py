@@ -17,6 +17,7 @@ from absl.testing import absltest
 from hash_frx.sha256 import HostSha256, Sha256
 
 from zorch.byte_transcript import KIND_SCALAR, OP_SQUEEZE, ByteHashTranscript
+from zorch.grind import GRIND_WINDOW, MIN_GRIND_WINDOW, grind_window_for
 from zorch.sha256_field_transcript import (
     SHA256_SQUEEZE_MARKER,
     Sha256FieldTranscript,
@@ -135,6 +136,45 @@ class Sha256FieldTranscriptTest(absltest.TestCase):
         bad = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
         _, bad_ok = bad.check_witness(int(witness) + 1, pow_bits=8)
         self.assertFalse(bool(bad_ok))
+
+    def test_window_width_does_not_change_the_witness(self) -> None:
+        # The window is a work/launch trade, never a protocol parameter: the
+        # search scans windows in increasing order and takes the lowest hit
+        # inside one, so every width returns the same counter and leaves the
+        # transcript in the same state. This is what lets `grind_window_for`
+        # size the window to the difficulty without touching the proof — widths
+        # deliberately span both sides of the expected hit (2^bits) so a
+        # multi-window search is covered, not just a one-shot one.
+        root_u8 = fnp.asarray(np.frombuffer(b"root", np.uint8))
+        bits = 10
+        ref_witness = ref_ch = None
+        for chunk in (1, 7, 64, 1 << 10, 1 << 16, None):
+            t = Sha256FieldTranscript.new(b"pow", np.uint32).observe_bytes(root_u8)
+            t, witness = t.grind(bits) if chunk is None else t.grind(bits, chunk=chunk)
+            _, ch = t.sample_scalar()
+            ch_bytes = np.asarray(ch).astype("<u4").tobytes()
+            if ref_witness is None:
+                ref_witness, ref_ch = int(witness), ch_bytes
+                self.assertGreater(ref_witness, 0)  # a real search, not witness 0
+                continue
+            self.assertEqual(int(witness), ref_witness, f"chunk={chunk}")
+            self.assertEqual(ch_bytes, ref_ch, f"chunk={chunk}")
+
+    def test_grind_window_for_is_bounded_and_difficulty_sized(self) -> None:
+        # Sized to the difficulty between a floor that keeps an easy search one
+        # wide batch and the GRIND_WINDOW ceiling the large grinds already used.
+        self.assertEqual(grind_window_for(0), MIN_GRIND_WINDOW)
+        self.assertEqual(grind_window_for(40), GRIND_WINDOW)
+        for bits in range(0, 40):
+            w = grind_window_for(bits)
+            self.assertGreaterEqual(w, MIN_GRIND_WINDOW)
+            self.assertLessEqual(w, GRIND_WINDOW)
+            self.assertEqual(w & (w - 1), 0, f"bits={bits} window not a power of two")
+        # Monotone in the difficulty, so a harder grind never gets a narrower batch.
+        widths = [grind_window_for(b) for b in range(0, 40)]
+        self.assertEqual(widths, sorted(widths))
+        with self.assertRaises(ValueError):
+            grind_window_for(-1)
 
     def test_grind_bits_out_of_range_rejected(self) -> None:
         # Mirrors the byte transcript: > 256 (or negative) leading-zero bits on a
