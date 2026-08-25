@@ -23,6 +23,7 @@ against the ring rather than against the protocol.
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import numpy as np
 from absl.testing import absltest
@@ -35,6 +36,7 @@ from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadratic,
     AbdlopQuadraticMany,
+    Publics,
     evaluate,
     lift,
 )
@@ -124,6 +126,15 @@ class _Instance:
         self.b = ring.uniform_stack(rng, _ELL, _M2)
         self.bg = ring.uniform_stack(rng, _LAM, _M2)
         self.b_quad = ring.uniform_stack(rng, _M2)
+        # The whole BDLOP matrix in message order — the caller's `m`, then
+        # the garbage this layer appends. `self.b` stays separate because
+        # the *commitment* is to `m` alone; `t_g` arrives on the proof.
+        self.publics = Publics(
+            a1=self.a1,
+            a2=self.a2,
+            blocks=np.concatenate([self.b, self.bg]),
+            b_quad=self.b_quad,
+        )
 
         # Ternary witness halves, the shape the fixture's std was derived
         # against (α = ‖s1‖ ≤ √(m1·d)).
@@ -172,13 +183,9 @@ class _Instance:
         value = evaluate(ring, e2, e1, ring.zeros(1), self.s)
         return ring.neg(_constant(ring, ring.constant_coeff(value)[0]))
 
-    def statement(self) -> dict[str, np.ndarray]:
+    def statement(self) -> dict[str, Any]:
         return dict(
-            a1=self.a1,
-            a2=self.a2,
-            b=self.b,
-            bg=self.bg,
-            b_quad=self.b_quad,
+            publics=self.publics,
             r2=self.r2,
             r1=self.r1,
             r0=self.r0,
@@ -188,7 +195,7 @@ class _Instance:
         )
 
     def prove(
-        self, tag: bytes = b"", **overrides: np.ndarray
+        self, tag: bytes = b"", **overrides: Any
     ) -> tuple[QuadraticEvalProof, ByteTranscript]:
         args = self.statement()
         args.update(overrides)
@@ -202,7 +209,7 @@ class _Instance:
         )
 
     def verify(
-        self, proof: QuadraticEvalProof, tag: bytes = b"", **overrides: np.ndarray
+        self, proof: QuadraticEvalProof, tag: bytes = b"", **overrides: Any
     ) -> bool:
         args = self.statement()
         args.update(t_a=self.t_a, t_b=self.t_b)

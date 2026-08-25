@@ -74,6 +74,7 @@ import numpy as np
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
+from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import wire
 from zorch.lnp.masking import Masking
 from zorch.lnp.transcript import sampling_modulus, squeeze_uniform
@@ -107,19 +108,43 @@ class Publics:
     stack is one whatever it means, so `b`, `bg` and `b_quad` swap silently.
 
     `blocks` is the **whole** BDLOP matrix, in the order the message half is
-    concatenated in: the caller's `m`, then each range leg's mask and sign,
-    then the layer below's garbage. It arrives assembled rather than being
-    built layer by layer, because a layer that appends its own rows cannot
-    also be one of several — Fig. 10 (eprint 2022/284, §5.2) runs two range
-    legs over one commitment, and neither can build a matrix that has to
-    contain the other's rows. Whoever knows every leg owns the order; the
-    layers below index into it by their own carve.
+    concatenated in: the caller's `m`, then the range legs' rows, then the
+    layer below's garbage. It arrives assembled rather than being built
+    layer by layer, because a layer that appends its own rows cannot also be
+    one of several — Fig. 10 (eprint 2022/284, §5.2) runs two range legs
+    over one commitment, and neither can build a matrix that has to contain
+    the other's rows. Whoever knows every leg owns the order; the layers
+    below index into it by their own carve.
+
+    That order *within* the legs' rows is deliberately not fixed here.
+    Fig. 10's message is `(m, y^(d), y^(e), b^(d), b^(e))` — every mask,
+    then every sign — rather than each leg's pair kept together, so a leg
+    is told which rows are its own instead of deriving them from a rule
+    this dataclass would have to pick.
     """
 
     a1: np.ndarray
     a2: np.ndarray
     blocks: np.ndarray
     b_quad: np.ndarray
+
+    def require(self, scheme: AbdlopCommitment) -> None:
+        """Every matrix here against the scheme whose parameters fix its
+        shape.
+
+        Gated in one place because these four are what the whole chain is
+        written against, and `blocks` in particular had no gate anywhere: a
+        wrong row count surfaced from a ring `matvec` several layers down
+        instead of naming itself, which is the failure `GarbageMasking`
+        gates `bg` for one layer up."""
+        scheme.require_stack("publics: a1", self.a1, scheme.rows, scheme.s1_cols)
+        scheme.require_stack(
+            "publics: a2", self.a2, scheme.rows, scheme.randomness_cols
+        )
+        scheme.require_stack(
+            "publics: blocks", self.blocks, scheme.messages, scheme.randomness_cols
+        )
+        scheme.require_stack("publics: b_quad", self.b_quad, scheme.randomness_cols)
 
 
 @dataclass(frozen=True)
@@ -154,10 +179,7 @@ class AbdlopQuadratic:
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -169,15 +191,16 @@ class AbdlopQuadratic:
     ) -> tuple[QuadraticProof, ByteTranscript]:
         """One non-interactive proof that `f(s) = 0`.
 
-        `b_quad` is Fig. 6's `b`, the R_q^{m2} vector the cross-term
-        commitment `t` is taken against — distinct from the BDLOP matrix
-        `b`, and from Fig. 8's `B_g`. `s1`/`s2` are signed integer
-        `(m_i, d)` arrays; `message` is the ring stack `m` that `commit`
-        was called with. The commitment is absent for the reason it is
-        absent in `opening.py` — the transcript arrived bound to it."""
+        `s1`/`s2` are signed integer `(m_i, d)` arrays; `message` is the
+        ring stack `m` that `commit` was called with, and `publics.blocks`
+        the matrix it is committed under. The commitment is absent for the
+        reason it is absent in `opening.py` — the transcript arrived bound
+        to it."""
         ring = self.scheme.ring
         masking = self.masking
-        self._require_statement(b_quad, r2, r1, r0)
+        b = publics.blocks
+        b_quad = publics.b_quad
+        self._require_statement(publics, r2, r1, r0)
         masking.require_witness("quadratic.prove", s1, s2)
         s1_ring = ring.from_signed_stack(s1)
         s2_ring = ring.from_signed_stack(s2)
@@ -191,7 +214,7 @@ class AbdlopQuadratic:
             y1, y2 = masking.draw(rng)
             y1_ring = ring.from_signed_stack(y1)
             y2_ring = ring.from_signed_stack(y2)
-            w = masking.ajtai_image(a1, a2, y1_ring, y2_ring)
+            w = masking.ajtai_image(publics.a1, publics.a2, y1_ring, y2_ring)
             # eq. 29: the message half masks `m` through `−B·y2`, because
             # that is the only way the verifier reaches `m`.
             y = lift(ring, y1_ring, ring.neg(ring.matvec(b, y2_ring)))
@@ -215,10 +238,7 @@ class AbdlopQuadratic:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -232,9 +252,11 @@ class AbdlopQuadratic:
         which folds the commitment equation and the quadratic identity into
         the hash."""
         ring = self.scheme.ring
+        b = publics.blocks
+        b_quad = publics.b_quad
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
-        self._require_statement(b_quad, r2, r1, r0)
+        self._require_statement(publics, r2, r1, r0)
         if not self._is_well_formed(proof):
             return False, transcript
         if not self.masking.within_bounds(proof.z1, proof.z2):
@@ -244,7 +266,7 @@ class AbdlopQuadratic:
         z1_ring = ring.from_signed_stack(proof.z1)
         z2_ring = ring.from_signed_stack(proof.z2)
         w = ring.sub(
-            self.masking.ajtai_image(a1, a2, z1_ring, z2_ring),
+            self.masking.ajtai_image(publics.a1, publics.a2, z1_ring, z2_ring),
             ring.scale(c_elem, t_a),
         )
         # eq. 30's `z`: the response half, and the message half the verifier
@@ -279,18 +301,18 @@ class AbdlopQuadratic:
 
     def _require_statement(
         self,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
     ) -> None:
-        """The quadratic function is three aligned pieces over the lifted
-        width, plus the vector its garbage commitment is taken against; a
-        mismatch would otherwise surface deep inside a ring op."""
+        """The commitment matrices, plus the quadratic function as three
+        aligned pieces over the lifted width; a mismatch in either would
+        otherwise surface deep inside a ring op."""
         scheme = self.scheme
+        publics.require(scheme)
         n = self.width
         for name, arr, lead in (
-            ("b_quad", b_quad, (scheme.randomness_cols,)),
             ("r2", r2, (n, n)),
             ("r1", r1, (n,)),
             ("r0", r0, (1,)),
@@ -330,10 +352,7 @@ class AbdlopQuadraticMany:
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -350,10 +369,7 @@ class AbdlopQuadraticMany:
         advanced, mu = self._mu(transcript, r2.shape[0])
         one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
         return self.quadratic.prove(
-            a1,
-            a2,
-            b,
-            b_quad,
+            publics,
             one_r2,
             one_r1,
             one_r0,
@@ -366,10 +382,7 @@ class AbdlopQuadraticMany:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -383,10 +396,7 @@ class AbdlopQuadraticMany:
         advanced, mu = self._mu(transcript, r2.shape[0])
         one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
         return self.quadratic.verify(
-            a1,
-            a2,
-            b,
-            b_quad,
+            publics,
             one_r2,
             one_r1,
             one_r0,

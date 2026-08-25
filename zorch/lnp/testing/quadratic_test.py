@@ -18,6 +18,8 @@ against the protocol.
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 from absl.testing import absltest
 from lattice_frx.split_ring import HostSplitRing
@@ -29,6 +31,7 @@ from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadratic,
     AbdlopQuadraticMany,
+    Publics,
     QuadraticProof,
     evaluate,
     lift,
@@ -84,6 +87,11 @@ class _Instance:
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
         self.b = ring.uniform_stack(rng, _ELL, _M2)
         self.b_quad = ring.uniform_stack(rng, _M2)
+        # Nothing is carved out of `blocks` at this layer — Fig. 6 opens the
+        # whole message stack it is handed — so the scheme's `b` is it.
+        self.publics = Publics(
+            a1=self.a1, a2=self.a2, blocks=self.b, b_quad=self.b_quad
+        )
 
         # Ternary witness halves, the shape the fixture's std was derived
         # against (α = ‖s1‖ ≤ √(m1·d)).
@@ -107,12 +115,9 @@ class _Instance:
         s = lift(ring, s1_ring, self.message)
         self.r0 = ring.neg(evaluate(ring, self.r2, self.r1, ring.zeros(1), s))
 
-    def _statement(self) -> dict[str, np.ndarray]:
+    def _statement(self) -> dict[str, Any]:
         return dict(
-            a1=self.a1,
-            a2=self.a2,
-            b=self.b,
-            b_quad=self.b_quad,
+            publics=self.publics,
             r2=self.r2,
             r1=self.r1,
             r0=self.r0,
@@ -122,7 +127,7 @@ class _Instance:
         self,
         tag: bytes = b"",
         protocol: AbdlopQuadratic | None = None,
-        **overrides: np.ndarray,
+        **overrides: Any,
     ) -> tuple[QuadraticProof, ByteTranscript]:
         args = self._statement()
         args.update(overrides)
@@ -135,9 +140,7 @@ class _Instance:
             **args,
         )
 
-    def verify(
-        self, proof: QuadraticProof, tag: bytes = b"", **overrides: np.ndarray
-    ) -> bool:
+    def verify(self, proof: QuadraticProof, tag: bytes = b"", **overrides: Any) -> bool:
         args = self._statement()
         args.update(t_a=self.t_a, t_b=self.t_b)
         args.update(overrides)
@@ -343,18 +346,26 @@ class QuadraticWireTest(absltest.TestCase):
         self.assertFalse(self.instance.verify(tampered))
 
     def test_a_malformed_statement_raises(self) -> None:
+        import dataclasses
+
         bad = np.zeros((2, 3))
         instance, proof = self.instance, self.proof
+
+        def with_publics(**field: np.ndarray) -> bool:
+            return instance.verify(
+                proof, publics=dataclasses.replace(instance.publics, **field)
+            )
+
         for name, call in (
-            ("r2", lambda: instance.verify(proof, r2=bad)),
-            ("r1", lambda: instance.verify(proof, r1=bad)),
-            ("r0", lambda: instance.verify(proof, r0=bad)),
-            ("b_quad", lambda: instance.verify(proof, b_quad=bad)),
+            ("quadratic: r2", lambda: instance.verify(proof, r2=bad)),
+            ("quadratic: r1", lambda: instance.verify(proof, r1=bad)),
+            ("quadratic: r0", lambda: instance.verify(proof, r0=bad)),
+            ("publics: a1", lambda: with_publics(a1=bad)),
+            ("publics: a2", lambda: with_publics(a2=bad)),
+            ("publics: blocks", lambda: with_publics(blocks=bad)),
+            ("publics: b_quad", lambda: with_publics(b_quad=bad)),
         ):
-            with (
-                self.subTest(name),
-                self.assertRaisesRegex(ValueError, f"quadratic: {name}"),
-            ):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, name):
                 call()
 
 

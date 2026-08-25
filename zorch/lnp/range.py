@@ -78,7 +78,7 @@ from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
 from zorch.lnp.eval import AbdlopQuadraticEval, QuadraticEvalProof
 from zorch.lnp.masking import BimodalMasking
-from zorch.lnp.quadratic import SIGMA_ORDER
+from zorch.lnp.quadratic import SIGMA_ORDER, Publics
 from zorch.lnp.transcript import absorb_signed, absorb_stacks
 
 _LABEL_COMMIT = b"lnp/range/mask"
@@ -202,13 +202,7 @@ class ApproximateRange:
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_mask: np.ndarray,
-        b_sign: np.ndarray,
-        bg: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         s1: np.ndarray,
         s2: np.ndarray,
         message: np.ndarray,
@@ -218,14 +212,14 @@ class ApproximateRange:
         """One non-interactive proof that `‖(s1, m)‖₂` is within the bound
         `masking` was parameterised for.
 
-        `b_mask` and `b_sign` are Fig. 9's `B2` and `b1`, the BDLOP rows the
-        mask and the sign are committed under — distinct from the message's
-        `b`, from `bg`, and from Fig. 6's `b_quad`. `s1`, `s2` and `message`
-        are signed integer arrays: the first two as everywhere in this
-        package, the third because it is half of the vector being bounded.
+        Fig. 9's `B2` and `b1` — the BDLOP rows the mask and the sign are
+        committed under — are carved out of `publics.blocks` rather than
+        passed beside it; see `_mask_rows`. `s1`, `s2` and `message` are
+        signed integer arrays: the first two as everywhere in this package,
+        the third because it is half of the vector being bounded.
         """
         ring = self.scheme.ring
-        self._require_statement(b, b_mask, b_sign)
+        publics.require(self.scheme)
         self._require_witness(s1, s2, message)
         s2_ring = ring.from_signed_stack(s2)
         message_ring = ring.from_signed_stack(message) if self.ell else ring.zeros(0)
@@ -238,12 +232,11 @@ class ApproximateRange:
             .astype(np.int64)
             .reshape(-1)
         )
-        blocks = self._blocks(b, b_mask, b_sign)
         # Witness-only, so a rejected attempt would recompute them unchanged
         # — the hoist `quadratic.prove` makes for the same reason. Only the
         # `add` of the fresh mask is per-attempt.
-        mask_randomness = ring.matvec(b_mask, s2_ring)
-        sign_randomness = ring.matvec(b_sign, s2_ring)
+        mask_randomness = ring.matvec(self._mask_rows(publics), s2_ring)
+        sign_randomness = ring.matvec(self._sign_rows(publics), s2_ring)
 
         for _ in range(self.masking.attempts):
             sign, y = self.masking.draw(rng)
@@ -264,11 +257,7 @@ class ApproximateRange:
             z = revealed.reshape(y.shape)
             t, (r2, r1, r0, e2, e1, e0) = self._statement(advanced, projection, z)
             inner, t = self.evaluation.prove(
-                a1,
-                a2,
-                blocks,
-                bg,
-                b_quad,
+                publics,
                 r2,
                 r1,
                 r0,
@@ -289,13 +278,7 @@ class ApproximateRange:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_mask: np.ndarray,
-        b_sign: np.ndarray,
-        bg: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         t_a: np.ndarray,
         t_b: np.ndarray,
         proof: RangeProof,
@@ -309,7 +292,7 @@ class ApproximateRange:
         the message was built."""
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
-        self._require_statement(b, b_mask, b_sign)
+        publics.require(self.scheme)
         if not self._is_well_formed(proof):
             return False, transcript
         if not self.masking.within_bounds(proof.z):
@@ -318,11 +301,7 @@ class ApproximateRange:
         advanced, projection = self._challenge(transcript, proof.t_mask, proof.t_sign)
         t, (r2, r1, r0, e2, e1, e0) = self._statement(advanced, projection, proof.z)
         return self.evaluation.verify(
-            a1,
-            a2,
-            self._blocks(b, b_mask, b_sign),
-            bg,
-            b_quad,
+            publics,
             r2,
             r1,
             r0,
@@ -351,16 +330,23 @@ class ApproximateRange:
         t = absorb_signed(transcript.observe_label(_LABEL_REVEAL), self.scheme.ring, z)
         return t, (*self._sign_relation, *self._evaluations(projection, z))
 
-    def _blocks(
-        self, b: np.ndarray, b_mask: np.ndarray, b_sign: np.ndarray
-    ) -> np.ndarray:
-        """The BDLOP matrix the layer below opens `m‖y‖b` against.
+    def _mask_rows(self, publics: Publics) -> np.ndarray:
+        """Fig. 9's `B2` — the BDLOP rows the mask `y` is committed under.
 
-        Named because the order here, the order the message is concatenated
-        in, and the order `_mask_positions`/`_sign_position` were derived in
-        are one contract asserted in three places — and a round-trip cannot
-        see them disagree, since both sides build them the same way."""
-        return np.concatenate([b, b_mask, b_sign])
+        Carved out of the assembled matrix rather than taken beside it, for
+        the reason `Publics` gives: a layer that concatenates its own rows
+        onto the caller's cannot also be one of two legs, since neither leg
+        can build a matrix that has to contain the other's rows. The slice
+        is the same arithmetic `_mask_positions` is, one axis over."""
+        return publics.blocks[self.ell : self.ell + self.masking.mask_cols]
+
+    def _sign_rows(self, publics: Publics) -> np.ndarray:
+        """Fig. 9's `b1` — the single row the sign is committed under.
+
+        Sliced rather than indexed: the layer below takes a stack, and a
+        bare row would reach `matvec` one axis short."""
+        start = self.ell + self.masking.mask_cols
+        return publics.blocks[start : start + 1]
 
     def _challenge(
         self, transcript: ByteTranscript, t_mask: np.ndarray, t_sign: np.ndarray
@@ -444,16 +430,6 @@ class ApproximateRange:
         r1 = ring.zeros(1, width)
         r0 = ring.neg(ring.one())[None, None]
         return r2, r1, r0
-
-    def _require_statement(
-        self, b: np.ndarray, b_mask: np.ndarray, b_sign: np.ndarray
-    ) -> None:
-        """The three BDLOP blocks this layer's message is committed under."""
-        scheme = self.scheme
-        cols = scheme.randomness_cols
-        scheme.require_stack("range: b", b, self.ell, cols)
-        scheme.require_stack("range: b_mask", b_mask, self.masking.mask_cols, cols)
-        scheme.require_stack("range: b_sign", b_sign, 1, cols)
 
     def _require_witness(
         self, s1: np.ndarray, s2: np.ndarray, message: np.ndarray

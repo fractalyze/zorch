@@ -44,7 +44,13 @@ from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.masking import BimodalMasking
-from zorch.lnp.quadratic import AbdlopQuadratic, AbdlopQuadraticMany, evaluate, lift
+from zorch.lnp.quadratic import (
+    AbdlopQuadratic,
+    AbdlopQuadraticMany,
+    Publics,
+    evaluate,
+    lift,
+)
 from zorch.lnp.range import ApproximateRange, RangeProof
 from zorch.lnp.testing import lnp_fixture
 
@@ -119,6 +125,15 @@ class _Instance:
         self.b_sign = ring.uniform_stack(rng, 1, _M2)
         self.bg = ring.uniform_stack(rng, _LAM, _M2)
         self.b_quad = ring.uniform_stack(rng, _M2)
+        # The whole BDLOP matrix in the order the message is concatenated
+        # in — `m`, this layer's mask and sign, the garbage below. Each
+        # layer carves its own rows back out; see `Publics`.
+        self.publics = Publics(
+            a1=self.a1,
+            a2=self.a2,
+            blocks=np.concatenate([self.b, self.b_mask, self.b_sign, self.bg]),
+            b_quad=self.b_quad,
+        )
 
         # Both halves ternary, and the *message* too — unlike every other
         # suite here, where `m` is uniform. `m` is half of the vector whose
@@ -139,15 +154,7 @@ class _Instance:
     def statement(self) -> dict[str, Any]:
         """The publics both sides take, by name — the shape every sibling
         suite uses, so a test that varies one states only that."""
-        return dict(
-            a1=self.a1,
-            a2=self.a2,
-            b=self.b,
-            b_mask=self.b_mask,
-            b_sign=self.b_sign,
-            bg=self.bg,
-            b_quad=self.b_quad,
-        )
+        return dict(publics=self.publics)
 
     def prove(self, tag: bytes = b"", **overrides: Any) -> RangeProof:
         args = self.statement() | dict(s1=self.s1, s2=self.s2, message=self.message)
@@ -544,12 +551,18 @@ class RangeWireTest(absltest.TestCase):
 
     def test_a_malformed_statement_raises(self) -> None:
         """Statement fields are the caller's bug and raise, so a parameter
-        mistake cannot become a silently always-false verifier."""
+        mistake cannot become a silently always-false verifier.
+
+        A row short of the assembled matrix rather than a wrong `b_mask`:
+        the legs' rows are carved out of `blocks` now, so the whole matrix
+        is what a caller can get wrong and `Publics` is what gates it."""
         instance = _Instance(22)
         proof = instance.prove()
-        wrong = instance.ring.zeros(instance.masking.mask_cols + 1, _M2)
-        with self.assertRaisesRegex(ValueError, "range: b_mask"):
-            instance.verify(proof, b_mask=wrong)
+        wrong = instance.publics.blocks[:-1]
+        with self.assertRaisesRegex(ValueError, "publics: blocks"):
+            instance.verify(
+                proof, publics=dataclasses.replace(instance.publics, blocks=wrong)
+            )
 
     def test_a_malformed_witness_raises(self) -> None:
         instance = _Instance(23)

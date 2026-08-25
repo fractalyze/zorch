@@ -73,6 +73,7 @@ from zorch.lnp.opening import AbdlopOpening, OpeningProof
 from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadraticMany,
+    Publics,
     QuadraticProof,
     evaluate,
     lift,
@@ -513,11 +514,7 @@ class AbdlopQuadraticEval:
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        bg: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -535,15 +532,17 @@ class AbdlopQuadraticEval:
 
         `s1`/`s2` are signed integer `(m_i, d)` arrays as in `opening.py`;
         `message` is the ring stack `m` that `commit` was called with —
-        without the garbage, which this layer appends itself. `b_quad` is
-        Fig. 6's `b`, distinct from both the BDLOP matrix `b` and `bg`."""
+        without the garbage, which this layer appends itself. `publics
+        .blocks` is the whole BDLOP matrix, garbage rows included, so it
+        goes down to Fig. 7 untouched."""
         ring = self.many.scheme.ring
+        publics.require(self.scheme)
         self._require_functions(r2, r1, r0, e2, e1, e0)
         s2_ring = ring.from_signed_stack(s2)
 
         # (1) λ garbage terms with zero constant coefficient, committed
         #     under B_g beside the message.
-        g, t_g = self.garbage.commit(bg, s2_ring, rng)
+        g, t_g = self.garbage.commit(self._bg(publics), s2_ring, rng)
 
         # (2) Γ, once t_g is bound.
         t, gamma = self.garbage.gamma(transcript, t_g, _count(e2))
@@ -575,10 +574,7 @@ class AbdlopQuadraticEval:
         t = self.garbage.observe(t, h)
         f2, f1, f0 = self._relations(aggregates, r2, r1, r0, h)
         proof, t = self.many.prove(
-            a1,
-            a2,
-            self.garbage.blocks(b, bg),
-            b_quad,
+            publics,
             f2,
             f1,
             f0,
@@ -592,11 +588,7 @@ class AbdlopQuadraticEval:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        bg: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -612,6 +604,7 @@ class AbdlopQuadraticEval:
         and the Π_many^(2) proof of the `N + λ` relations verifies."""
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
+        publics.require(self.scheme)
         self._require_functions(r2, r1, r0, e2, e1, e0)
         if not self._is_well_formed(proof):
             return False, transcript
@@ -624,10 +617,7 @@ class AbdlopQuadraticEval:
             self._aggregates(gamma, e2, e1, e0), r2, r1, r0, proof.h
         )
         return self.many.verify(
-            a1,
-            a2,
-            self.garbage.blocks(b, bg),
-            b_quad,
+            publics,
             f2,
             f1,
             f0,
@@ -636,6 +626,16 @@ class AbdlopQuadraticEval:
             proof.quadratic,
             t,
         )
+
+    def _bg(self, publics: Publics) -> np.ndarray:
+        """This layer's own rows of the BDLOP matrix — `B_g`, the λ the
+        garbage is committed under.
+
+        The carve `Publics` describes, from the side that owns the tail:
+        every row past the `ell` the layers above share out among
+        themselves is this layer's, because the garbage is what is appended
+        last."""
+        return publics.blocks[self.ell :]
 
     def require_witness(self, name: str, s1: np.ndarray, s2: np.ndarray) -> None:
         """The witness gate of the masking this protocol ultimately proves
