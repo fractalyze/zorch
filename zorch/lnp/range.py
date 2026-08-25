@@ -113,8 +113,12 @@ _LABEL_REVEAL = b"lnp/range/projection"
 # one prove's four squeezes, and the suite roughly halves.
 _BIN1_BITS = 2
 
-# Three families over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`.
+# Three blocks over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`.
 _Family = tuple[np.ndarray, np.ndarray, np.ndarray]
+# Both families flattened, which is what `AbdlopQuadraticEval` takes. Spelled
+# out rather than left variadic so a miscount is a type error at the call
+# rather than a shape error inside the layer below.
+_Blocks = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
 
 @dataclass(frozen=True)
@@ -511,6 +515,8 @@ class ApproximateRange:
         message: np.ndarray,
         rng: np.random.Generator,
         transcript: ByteTranscript,
+        relations: _Family | None = None,
+        evaluations: _Family | None = None,
     ) -> tuple[RangeProof, ByteTranscript]:
         """One non-interactive proof that `‖(s1, m)‖₂` is within the bound
         each leg's masking was parameterised for.
@@ -521,6 +527,18 @@ class ApproximateRange:
         `message` are signed integer arrays: the first two as everywhere in
         this package, the third because it is half of the vector being
         bounded.
+
+        `relations` and `evaluations` are the caller's own `f_i` and `F_i`
+        over the eval layer's width, proved in the same shot as the range
+        statement. Fig. 10 takes exactly those alongside its two legs and
+        packs them into `ϕ` and `Ψ`, and a caller that instead ran them as a
+        second proof would hold two parameter points for one witness and
+        could not see them drift — the reason `AbdlopQuadraticEval` proves
+        its own two families together one layer down.
+
+        They must not touch the mask or sign columns: those hold values the
+        prover draws per attempt, so a function of them is not a statement
+        the caller can have written down.
         """
         ring = self.scheme.ring
         publics.require(self.scheme)
@@ -568,11 +586,10 @@ class ApproximateRange:
             # the layers below take responses, not maybe-responses.
             revealed = [z for z in responses if z is not None]
 
-            t, (relations, evaluations) = self._statement(t, projections, revealed)
+            t, families = self._statement(t, projections, revealed)
             inner, t = self.evaluation.prove(
                 publics,
-                *relations,
-                *evaluations,
+                *self._families(families, relations, evaluations),
                 s1,
                 s2,
                 np.concatenate(
@@ -602,13 +619,18 @@ class ApproximateRange:
         t_b: np.ndarray,
         proof: RangeProof,
         transcript: ByteTranscript,
+        relations: _Family | None = None,
+        evaluations: _Family | None = None,
     ) -> tuple[bool, ByteTranscript]:
         """Fig. 9's two checks: every `‖⃗z‖₂` is within the Prop. 5.1 bound,
         and the Π_eval^(2) proof of the statement they induce verifies.
 
         `t_b` is the caller's commitment to `m` alone; the mask and sign
         commitments arrive on the proof and are appended here, in the order
-        the message was built."""
+        the message was built. `relations` and `evaluations` are the
+        prover's, and are part of the statement rather than of the proof —
+        a verifier given different ones checks a different claim, and the
+        inner proof simply fails to replay."""
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
         publics.require(self.scheme)
@@ -627,13 +649,12 @@ class ApproximateRange:
         for leg in self.legs:
             t, projection = leg.challenge(t)
             projections.append(projection)
-        t, (relations, evaluations) = self._statement(
+        t, families = self._statement(
             t, projections, [message.z for message in proof.legs]
         )
         return self.evaluation.verify(
             publics,
-            *relations,
-            *evaluations,
+            *self._families(families, relations, evaluations),
             t_a,
             np.concatenate(
                 [t_b]
@@ -670,6 +691,25 @@ class ApproximateRange:
             _stack([relation for relation, _ in per_leg]),
             _stack([evaluations for _, evaluations in per_leg]),
         )
+
+    def _families(
+        self,
+        legs: tuple[_Family, _Family],
+        relations: _Family | None,
+        evaluations: _Family | None,
+    ) -> _Blocks:
+        """The caller's two families ahead of the legs' own, flattened into
+        the six blocks `AbdlopQuadraticEval` takes.
+
+        The caller's first because that is the order Fig. 10 writes — it
+        indexes `f_i` and `F_i` from one and defines `ϕ`, `Ψ` over them,
+        with the legs' obligations appended. Only the agreement between the
+        two sides is load-bearing; being the paper's order is what makes it
+        checkable against the figure."""
+        leg_relations, leg_evaluations = legs
+        r2, r1, r0 = _stack(_ahead(relations, leg_relations))
+        e2, e1, e0 = _stack(_ahead(evaluations, leg_evaluations))
+        return r2, r1, r0, e2, e1, e0
 
     def _budget(self, maskings: Sequence[BimodalMasking]) -> int:
         """The attempt budget for the joint gate, and the check that every
@@ -735,6 +775,15 @@ class ApproximateRange:
             )
             and self.evaluation._is_well_formed(proof.evaluation)
         )
+
+
+def _ahead(caller: _Family | None, legs: _Family) -> list[_Family]:
+    """The caller's family in front of the legs', or the legs' alone.
+
+    Spelled out rather than tested inline, because `if caller` on a tuple of
+    three ring stacks reads as an array truth test and is one edit away from
+    becoming one."""
+    return [legs] if caller is None else [caller, legs]
 
 
 def _stack(families: Sequence[_Family]) -> _Family:

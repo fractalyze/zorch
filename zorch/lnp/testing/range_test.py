@@ -220,6 +220,49 @@ class _Instance:
         _, projection = leg.challenge(observed)
         return projection
 
+    def caller_family(self, seed: int) -> tuple[Any, Any]:
+        """One relation and one evaluation of the caller's own, both true on
+        this witness — the `(f_i, F_i)` Fig. 10 takes alongside its legs.
+
+        Supported on the witness columns alone. The mask and sign columns
+        hold values the prover draws per attempt, so a constant term solved
+        against them here would be solved against a `y` that no run will
+        use — and a caller could not have written such a function down
+        either, having never seen the mask.
+
+        The relation vanishes as a ring element and the evaluation only in
+        its constant coefficient, which is the distinction the two families
+        exist for."""
+        ring = self.ring
+        rng = np.random.default_rng(seed)
+        width = self.protocol.evaluation.width
+        positions = self.leg._witness_positions
+        s = self.lifted()
+
+        def supported() -> tuple[np.ndarray, np.ndarray]:
+            quadratic = ring.zeros(1, width, width)
+            quadratic[0, positions[:, None], positions[None, :]] = ring.uniform_stack(
+                rng, len(positions), len(positions)
+            )
+            linear = ring.zeros(1, width)
+            linear[0, positions] = ring.uniform_stack(rng, len(positions))
+            return quadratic, linear
+
+        r2, r1 = supported()
+        r0 = np.stack([ring.neg(evaluate(ring, r2[0], r1[0], ring.zeros(1), s))])
+
+        # `F~(s) = 0` while `F(s)` itself stays nonzero: the constant
+        # coefficient negated, not the whole value. Written through the
+        # array layout the way `GarbageMasking.sample` zeroes that slot, and
+        # for the same reason — `constant_coeff` reads it, and the module
+        # convention has no constructor that writes it.
+        e2, e1 = supported()
+        value = evaluate(ring, e2[0], e1[0], ring.zeros(1), s)
+        constant = ring.zeros(1)
+        constant[0, :, 0] = ring.constant_coeff(value)[0]
+        e0 = np.stack([ring.neg(constant)])
+        return (r2, r1, r0), (e2, e1, e0)
+
     def tamper(self, proof: RangeProof, **field: np.ndarray) -> RangeProof:
         """A copy of `proof` with one field of its only leg replaced — the
         `dataclasses.replace` idiom, one level deeper now that the wire
@@ -426,6 +469,105 @@ class RangeStatementTest(absltest.TestCase):
         two = instance.lifted(1)
         two[instance.leg._sign_position] = ring.from_signed([2] + [0] * (ring.d - 1))
         self.assertTrue(evaluate(ring, r2[0], r1[0], r0[0], two).any())
+
+
+class CallerFamilyTest(absltest.TestCase):
+    """A caller's own `(f_i, F_i)` riding along with the range statement.
+
+    Fig. 10's whole shape is "these relations *and* these norm bounds, over
+    one commitment", so the range layer has to carry a caller's families
+    down to the single `Pi_eval^(2)` rather than making the caller run a
+    second proof against the same witness. `AbdlopQuadraticEval` already
+    allows `N = 0` relations, which is why the legs' own statement did not
+    need this before.
+    """
+
+    def test_a_caller_family_proves_beside_the_range_statement(self) -> None:
+        instance = _Instance(36)
+        relations, evaluations = instance.caller_family(80)
+        proof = instance.prove(relations=relations, evaluations=evaluations)
+        self.assertTrue(
+            instance.verify(proof, relations=relations, evaluations=evaluations)
+        )
+
+    def test_either_family_may_be_given_alone(self) -> None:
+        """`N = 0` relations is legal one layer down and `M >= 1` is not, so
+        the two halves are not symmetric — but the legs always contribute an
+        evaluation, so a caller supplying only relations is fine too."""
+        instance = _Instance(37)
+        relations, evaluations = instance.caller_family(81)
+        for name, extra in (
+            ("relations only", dict(relations=relations)),
+            ("evaluations only", dict(evaluations=evaluations)),
+        ):
+            with self.subTest(name):
+                proof = instance.prove(**extra)
+                self.assertTrue(instance.verify(proof, **extra))
+
+    def test_a_false_caller_relation_is_rejected(self) -> None:
+        """The caller's relations are proved, not carried: `f(s) != 0` has
+        to fail even though every range obligation still holds.
+
+        Rejected by the verifier, not refused by the prover. Fig. 6 never
+        evaluates `f(s)` — it commits the cross terms and answers a
+        challenge — so a false relation costs the prover nothing and shows
+        up as the verifier's recomputed `v` differing by `c^2 f(s)`, which
+        is exactly what the replayed challenge catches."""
+        instance = _Instance(38)
+        (r2, r1, r0), _ = instance.caller_family(82)
+        false = (r2, r1, lnp_fixture.bump(r0, 0, 0, 0, 0))
+        proof = instance.prove(relations=false)
+        self.assertFalse(instance.verify(proof, relations=false))
+
+    def test_a_false_caller_evaluation_is_rejected(self) -> None:
+        """`F(s)` with a nonzero constant coefficient. Its aggregate lands
+        in `h`, whose `h~ = 0` check is the verifier's."""
+        instance = _Instance(39)
+        _, (e2, e1, e0) = instance.caller_family(83)
+        false = lnp_fixture.bump(e0, 0, 0, 0, 0)
+        proof = instance.prove(evaluations=(e2, e1, false))
+        self.assertFalse(instance.verify(proof, evaluations=(e2, e1, false)))
+
+    def test_the_caller_family_is_part_of_the_statement(self) -> None:
+        """A verifier given different families checks a different claim, so
+        the inner proof does not replay. Pinned both ways round: dropping
+        them and swapping them each fail."""
+        instance = _Instance(40)
+        relations, evaluations = instance.caller_family(84)
+        proof = instance.prove(relations=relations, evaluations=evaluations)
+        self.assertFalse(instance.verify(proof))
+        self.assertFalse(
+            instance.verify(
+                proof,
+                relations=relations,
+                evaluations=instance.caller_family(85)[1],
+            )
+        )
+
+    def test_the_caller_family_comes_first(self) -> None:
+        """Fig. 10 indexes `f_i` and `F_i` from one and appends the legs'
+        obligations, and the two sides only agree because both build the
+        statement through `_families`. Pinned against the block itself: the
+        caller's relation is row 0, and the leg's `b^2 - 1` follows it."""
+        instance = _Instance(41)
+        relations, evaluations = instance.caller_family(86)
+        merged = instance.protocol._families(
+            (
+                instance.leg._sign_relation,
+                instance.leg._evaluations(
+                    instance.challenge(),
+                    np.zeros((instance.masking.mask_cols, instance.ring.d), np.int64),
+                ),
+            ),
+            relations,
+            evaluations,
+        )
+        r2, r1, r0, e2, e1, e0 = merged
+        np.testing.assert_array_equal(r2[0], relations[0][0])
+        np.testing.assert_array_equal(r2[1], instance.leg._sign_relation[0][0])
+        np.testing.assert_array_equal(e2[0], evaluations[0][0])
+        self.assertLen(r2, 2)
+        self.assertLen(e2, 1 + instance.masking.projection + instance.ring.d - 1)
 
 
 class RangeLayoutTest(absltest.TestCase):
