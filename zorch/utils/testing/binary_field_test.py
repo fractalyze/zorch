@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest import mock
 
+import frx
 import frx.numpy as fnp
 import numpy as np
 import zk_dtypes  # noqa: F401  (registers the binary_field_* dtypes)
@@ -181,6 +183,99 @@ class BinaryFieldReprTest(parameterized.TestCase):
                 if rows[i, bit]:
                     want[i] ^= value_limbs[bit]
         np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_portable_arm_still_matches(self, dtype: Any) -> None:
+        """The portable expression, on a machine whose backend has handlers.
+
+        Every backend this runs on now takes an accelerated arm for both
+        reductions at these dtypes, so without forcing the fallback the portable
+        expression is dead code in the test suite — and it is what any future
+        backend, and any shape outside a handler's coverage, lands on.
+        `default_backend` is what the dispatch keys on, so naming a platform
+        with no handler is the whole fixture.
+
+        The cache clears are load-bearing, not hygiene: the dispatch runs inside
+        `bit_select_xor_reduce`'s own `jit`, so the chosen arm is baked into the
+        traced jaxpr. Without the first clear a same-shape call from an earlier
+        test returns its cached FFI trace and the patch does nothing; without
+        the second this test's portable trace is what a later same-shape call
+        gets. Both directions were observed before the clears went in.
+        """
+        width = field_bit_width(dtype)
+        selectors = _rand_field(dtype, 11, 2)
+        element_values = _rand_field(dtype, 11, 3)
+        bit_values = _rand_field(dtype, width, 4)
+
+        bit_select_xor_reduce.clear_cache()
+        try:
+            with mock.patch.object(frx, "default_backend", lambda: "no-such-backend"):
+                by_element = bit_select_xor_reduce(
+                    selectors, element_values, reduce="elements"
+                )
+                by_bit = bit_select_xor_reduce(selectors, bit_values, reduce="bits")
+        finally:
+            bit_select_xor_reduce.clear_cache()
+
+        bits = _selector_bits(selectors, 11)
+        element_limbs = np.asarray(_to_limbs(element_values))
+        bit_limbs = np.asarray(_to_limbs(bit_values))
+        want_by_element = np.zeros((width, element_limbs.shape[1]), np.uint32)
+        want_by_bit = np.zeros((11, bit_limbs.shape[1]), np.uint32)
+        for i in range(11):
+            for bit in range(width):
+                if bits[i, bit]:
+                    want_by_element[bit] ^= element_limbs[i]
+                    want_by_bit[i] ^= bit_limbs[bit]
+        np.testing.assert_array_equal(
+            np.asarray(_to_limbs(by_element)), want_by_element
+        )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(by_bit)), want_by_bit)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_cpu_routes_only_the_shapes_with_host_handlers(self, dtype: Any) -> None:
+        """Which shapes reach the host custom call, and — the load-bearing half
+        — which must not.
+
+        An unregistered platform raises rather than falling back, so widening
+        the CPU arms to a shape with no host handler is not a slow path, it is a
+        crash. `xla#550` registered two handlers; the batched stack and the
+        unpacked 0/1 matrix have none, and the unpacked matrix is what
+        flock-zorch's fold passes. Asserted on the lowering rather than by
+        running, so this holds on any backend and on a wheel that predates the
+        handlers.
+        """
+        width = field_bit_width(dtype)
+        n = 11
+        selectors = _rand_field(dtype, n, 30)
+        elements = _rand_field(dtype, n, 31)
+        bit_values = _rand_field(dtype, width, 32)
+        batched = _rand_field(dtype, n * 3, 33).reshape(n, 3)
+        unpacked = fnp.asarray(
+            np.random.default_rng(34).integers(0, 2, size=(n, width), dtype=np.uint8)
+        )
+
+        def lowered(*args: Any, reduce: str) -> str:
+            bit_select_xor_reduce.clear_cache()
+            try:
+                with mock.patch.object(frx, "default_backend", lambda: "cpu"):
+                    return bit_select_xor_reduce.lower(*args, reduce=reduce).as_text()
+            finally:
+                bit_select_xor_reduce.clear_cache()
+
+        elements_target = "frx_bit_select_xor_reduce_elements"
+        bytes_target = "frx_bit_select_xor_reduce_packed_bytes"
+
+        self.assertIn(elements_target, lowered(selectors, elements, reduce="elements"))
+        self.assertIn(bytes_target, lowered(selectors, bit_values, reduce="bits"))
+
+        batched_text = lowered(selectors, batched, reduce="elements")
+        self.assertNotIn(elements_target, batched_text)
+        self.assertNotIn(bytes_target, batched_text)
+
+        unpacked_text = lowered(unpacked, bit_values, reduce="bits")
+        self.assertNotIn(elements_target, unpacked_text)
+        self.assertNotIn(bytes_target, unpacked_text)
 
     @parameterized.parameters(*_DTYPES)
     def test_byte_select_xor_reduce_accepts_packed_rows(self, dtype: Any) -> None:
