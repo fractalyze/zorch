@@ -42,7 +42,7 @@ hash-frx==0.2.0.dev20260820080354
 # module-lattice commitments in `zorch/commit/ajtai.py`. Same layering story
 # as hash-frx: it sits BELOW zorch (enc-frx and sig-frx share it), so zorch
 # imports it rather than owning a copy. Dev wheels off the Fractalyze index.
-lattice-frx==0.0.1.dev20260823120808
+lattice-frx==0.0.1.dev20260826211222
 
 # Benchmark harness (shared across fractalyze repos); used only by the
 # //zorch/...:*bench* py_binary targets, not by the zorch wheel itself.
