@@ -23,6 +23,7 @@ against the ring rather than against the protocol.
 from __future__ import annotations
 
 import dataclasses
+from typing import Any
 
 import numpy as np
 from absl.testing import absltest
@@ -35,6 +36,7 @@ from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadratic,
     AbdlopQuadraticMany,
+    Publics,
     evaluate,
     lift,
 )
@@ -49,7 +51,9 @@ _RELATIONS = 2
 _EVALUATIONS = 3
 
 
-def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitment:
+def _scheme(
+    ring: HostSplitRing, messages: int = _ELL + _LAM, s1_cols: int = _M1
+) -> AbdlopCommitment:
     """The **extended** scheme by default: its BDLOP half carries `ℓ + λ`
     messages, because `m‖g` is what the inner protocol opens.
 
@@ -60,7 +64,7 @@ def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitmen
     return AbdlopCommitment(
         ring,
         rows=_ROWS,
-        s1_cols=_M1,
+        s1_cols=s1_cols,
         randomness_cols=_M2,
         messages=messages,
         beta1_inf=1,
@@ -68,25 +72,21 @@ def _scheme(ring: HostSplitRing, messages: int = _ELL + _LAM) -> AbdlopCommitmen
     )
 
 
-def _protocol(ring: HostSplitRing) -> AbdlopQuadraticEval:
-    masking = lnp_fixture.masking(_scheme(ring))
-    return AbdlopQuadraticEval(AbdlopQuadraticMany(AbdlopQuadratic(masking)), _LAM)
+def _protocol(
+    ring: HostSplitRing, s1_cols: int = _M1, s1_take: int | None = None
+) -> AbdlopQuadraticEval:
+    # `s1_std` is re-derived rather than taken from the fixture: the point's
+    # T_1 = η·√(m1·d) is a bound on ‖s1‖, so a wider Ajtai half masked at the
+    # narrow point would reject its way to `exhausted` instead of proving.
+    std = lnp_fixture.s1_std(ring, s1_cols)
+    masking = lnp_fixture.masking(_scheme(ring, s1_cols=s1_cols), s1_std=std)
+    return AbdlopQuadraticEval(
+        AbdlopQuadraticMany(AbdlopQuadratic(masking)), _LAM, s1_take=s1_take
+    )
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
     return lnp_fixture.transcript(b"lnp-quadratic-eval-test", tag)
-
-
-def _constant(ring: HostSplitRing, value: np.ndarray) -> np.ndarray:
-    """The one-element stack holding `value` in its constant coefficient and
-    nothing else.
-
-    Written through the array layout the way `GarbageMasking.sample` zeroes
-    that slot, and for the same reason: `constant_coeff` reads it, and the
-    module convention has no constructor that writes it."""
-    out = ring.zeros(1)
-    out[0, :, 0] = value
-    return out
 
 
 class _Instance:
@@ -94,23 +94,39 @@ class _Instance:
     relations that vanish on the lifted witness, and `M` evaluations whose
     constant coefficients vanish on it."""
 
-    def __init__(self, seed: int, relations: int = _RELATIONS) -> None:
+    def __init__(
+        self,
+        seed: int,
+        relations: int = _RELATIONS,
+        s1_cols: int = _M1,
+        s1_take: int | None = None,
+    ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
-        self.protocol = _protocol(ring)
+        self.protocol = _protocol(ring, s1_cols=s1_cols, s1_take=s1_take)
+        self.s1_take = self.protocol.s1_take
         rng = np.random.default_rng(seed)
         self.rng = rng
         width = self.protocol.width
 
-        self.a1 = ring.uniform_stack(rng, _ROWS, _M1)
+        self.a1 = ring.uniform_stack(rng, _ROWS, s1_cols)
         self.a2 = ring.uniform_stack(rng, _ROWS, _M2)
         self.b = ring.uniform_stack(rng, _ELL, _M2)
         self.bg = ring.uniform_stack(rng, _LAM, _M2)
         self.b_quad = ring.uniform_stack(rng, _M2)
+        # The whole BDLOP matrix in message order — the caller's `m`, then
+        # the garbage this layer appends. `self.b` stays separate because
+        # the *commitment* is to `m` alone; `t_g` arrives on the proof.
+        self.publics = Publics(
+            a1=self.a1,
+            a2=self.a2,
+            blocks=np.concatenate([self.b, self.bg]),
+            b_quad=self.b_quad,
+        )
 
         # Ternary witness halves, the shape the fixture's std was derived
         # against (α = ‖s1‖ ≤ √(m1·d)).
-        self.s1 = rng.integers(-1, 2, (_M1, ring.d)).astype(np.int64)
+        self.s1 = rng.integers(-1, 2, (s1_cols, ring.d)).astype(np.int64)
         self.s2 = rng.integers(-1, 2, (_M2, ring.d)).astype(np.int64)
         s1_ring = ring.from_signed_stack(self.s1)
         s2_ring = ring.from_signed_stack(self.s2)
@@ -118,14 +134,14 @@ class _Instance:
 
         # The scheme's own commit over the *narrow* BDLOP half — the layer
         # appends its own garbage, so the caller commits to `m` alone.
-        commitment = _scheme(ring, _ELL).commit(
+        commitment = _scheme(ring, _ELL, s1_cols).commit(
             self.a1, self.a2, self.b, s1_ring, s2_ring, self.message
         )
         self.t_a, self.t_b = commitment.t_a, commitment.t_b
 
         # The lift the caller's two families are written against — `m`, not
         # `m‖g`; the protocol appends the garbage itself.
-        self.s = lift(ring, s1_ring, self.message)
+        self.s = lift(ring, s1_ring[: self.s1_take], self.message)
         self.r2 = ring.uniform_stack(rng, relations, width, width)
         self.r1 = ring.uniform_stack(rng, relations, width)
         # `N = 0` is a real statement, so the empty stack is spelled the
@@ -145,23 +161,18 @@ class _Instance:
         self.e2 = ring.uniform_stack(rng, _EVALUATIONS, width, width)
         self.e1 = ring.uniform_stack(rng, _EVALUATIONS, width)
         self.e0 = np.stack(
-            [self._vanishing(self.e2[j], self.e1[j]) for j in range(_EVALUATIONS)]
+            [
+                lnp_fixture.vanishing_constant(
+                    ring,
+                    evaluate(ring, self.e2[j], self.e1[j], ring.zeros(1), self.s),
+                )
+                for j in range(_EVALUATIONS)
+            ]
         )
 
-    def _vanishing(self, e2: np.ndarray, e1: np.ndarray) -> np.ndarray:
-        """`e0` chosen so `F̃(s) = 0` while `F(s)` itself stays nonzero —
-        a constant polynomial, not the whole value negated."""
-        ring = self.ring
-        value = evaluate(ring, e2, e1, ring.zeros(1), self.s)
-        return ring.neg(_constant(ring, ring.constant_coeff(value)[0]))
-
-    def statement(self) -> dict[str, np.ndarray]:
+    def statement(self) -> dict[str, Any]:
         return dict(
-            a1=self.a1,
-            a2=self.a2,
-            b=self.b,
-            bg=self.bg,
-            b_quad=self.b_quad,
+            publics=self.publics,
             r2=self.r2,
             r1=self.r1,
             r0=self.r0,
@@ -171,7 +182,7 @@ class _Instance:
         )
 
     def prove(
-        self, tag: bytes = b"", **overrides: np.ndarray
+        self, tag: bytes = b"", **overrides: Any
     ) -> tuple[QuadraticEvalProof, ByteTranscript]:
         args = self.statement()
         args.update(overrides)
@@ -185,7 +196,7 @@ class _Instance:
         )
 
     def verify(
-        self, proof: QuadraticEvalProof, tag: bytes = b"", **overrides: np.ndarray
+        self, proof: QuadraticEvalProof, tag: bytes = b"", **overrides: Any
     ) -> bool:
         args = self.statement()
         args.update(t_a=self.t_a, t_b=self.t_b)
@@ -199,6 +210,27 @@ class QuadraticEvalCompletenessTest(absltest.TestCase):
         instance = _Instance(1)
         proof, _ = instance.prove()
         self.assertTrue(instance.verify(proof))
+
+    def test_a_carved_ajtai_half_proves_a_statement_about_its_prefix(self) -> None:
+        """Fig. 10 appends the binary-decomposition vector `x` to the Ajtai
+        half and writes its functions against `s1` alone, so the statement
+        covers a prefix of a half that is wider than it.
+
+        The carve is what says which prefix. Taking the whole half — what
+        every layer up to Fig. 9 did, and what the code spelled directly —
+        puts the caller's functions in the wrong columns of the inner
+        protocol's lift, so this round-trip is the gate on the index map
+        rather than on the algebra."""
+        instance = _Instance(60, s1_cols=_M1 + 1, s1_take=_M1)
+        self.assertEqual(instance.protocol.s1_take, _M1)
+        self.assertEqual(instance.protocol.width, SIGMA_ORDER * (_M1 + _ELL))
+        proof, _ = instance.prove()
+        self.assertTrue(instance.verify(proof))
+
+    def test_the_carve_cannot_exceed_the_half_it_carves(self) -> None:
+        ring = lnp_fixture.ring()
+        with self.assertRaisesRegex(ValueError, r"^eval:"):
+            _protocol(ring, s1_cols=_M1, s1_take=_M1 + 1)
 
     def test_the_evaluations_do_not_vanish_as_ring_elements(self) -> None:
         """What separates this protocol from Fig. 7. If the suite's `F_j`

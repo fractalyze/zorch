@@ -11,6 +11,8 @@ starts being a divergence, so the point lives here.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from hash_frx.sha256 import HostSha256
 from lattice_frx.split_ring import HostSplitRing
@@ -32,7 +34,8 @@ KAPPA, ETA, K = 2, 59, 32
 # margin far past anything a seeded suite can reach (the measured gate
 # rejection is ~1%, so the first block almost always decides) at a third of
 # the hashing; production keeps the library's 2^-128 default.
-CHALLENGE = ChallengeParams(d=D, kappa=KAPPA, eta=ETA, k=K, fail_prob=2.0**-40)
+FAIL_PROB = 2.0**-40
+CHALLENGE = ChallengeParams(d=D, kappa=KAPPA, eta=ETA, k=K, fail_prob=FAIL_PROB)
 
 # Lemma 2.14-1 at γ = 14: M = exp(14/γ + 1/(2γ²)) ≈ e ≈ 2.72 per response,
 # s_i = γ·T_i with T_1 = η·α (α = ‖s1‖ ≤ √(m1·d) for ternary s1) and
@@ -52,6 +55,27 @@ MASKING_PARAMS: dict[str, object] = dict(
 )
 
 
+def s1_std(ring: HostSplitRing, s1_cols: int) -> float:
+    """`s_1 = γ·η·√(s1_cols·d)` — the Ajtai half's masking deviation.
+
+    `MASKING_PARAMS` fixes it for `M1` columns, and every suite that widens
+    the Ajtai half has to re-derive it or reject its way to `exhausted`.
+    Three of them were doing that with three paraphrases of one comment,
+    which is the divergence this module exists to prevent."""
+    return GAMMA * ETA * float(np.sqrt(s1_cols * ring.d))
+
+
+def ternary_beta(ring: HostSplitRing, witness_cols: int) -> int:
+    """`β = ⌈√(witness_cols·d)⌉`, the exact ℓ2 bound a ternary witness of
+    that width meets.
+
+    The integer twin of the `β` `bimodal` derives below: same quantity, but
+    an exact-norm statement compares squared integers and cannot take a
+    float. Note it is the *worst case* — an all-ones ternary witness sits
+    exactly on it, not past it."""
+    return math.isqrt(witness_cols * ring.d - 1) + 1
+
+
 def masking(scheme: AbdlopCommitment, **overrides: object) -> Masking:
     """The test masking point over `scheme`, with one kwarg moved per call
     so a test that varies `fail_prob` states only that."""
@@ -66,6 +90,38 @@ def transcript(domain: bytes, tag: bytes = b"") -> ByteTranscript:
     """A fresh transcript in `domain`, with `tag` absorbed — the per-test
     separator that makes two proofs of one statement distinguishable."""
     return ByteHashTranscript.new(domain, HostSha256()).observe_bytes(tag)
+
+
+def constant(ring: HostSplitRing, value: np.ndarray) -> np.ndarray:
+    """The one-element stack holding `value` in its constant coefficient and
+    nothing else.
+
+    Written through the array layout the way `GarbageMasking.sample` zeroes
+    that slot, and for the same reason: `constant_coeff` reads it, and the
+    module convention has no constructor that writes it. Here rather than in
+    a suite because *which slot* `constant_coeff` reads is one convention,
+    and two suites spelling it is how a ring-layout change breaks one and
+    not the other."""
+    out = ring.zeros(1)
+    out[0, :, 0] = value
+    return out
+
+
+def vanishing_constant(ring: HostSplitRing, value: np.ndarray) -> np.ndarray:
+    """The `e0` that makes `F̃(s) = 0` for a function whose value on the
+    witness is `value` — while `F(s)` itself stays nonzero, since only the
+    constant coefficient is negated and not the whole thing.
+
+    The construction every suite needs to state an *evaluation* that is true
+    on its witness, as opposed to a relation: `quadratic_eval_test` builds
+    Fig. 8's `F_j` with it and `range_test` a caller's `F_i`.
+
+    Takes the already-evaluated value rather than `(e2, e1, s)` so this
+    module keeps needing nothing but a ring. It is the shared *parameter
+    point*, and every suite depends on it — pulling `quadratic.evaluate` in
+    here would put the quadratic protocol behind `opening_test`, which is
+    about Fig. 4 and has no quadratic anything."""
+    return ring.neg(constant(ring, ring.constant_coeff(value)[0]))
 
 
 def bump(stack: np.ndarray, *index: int) -> np.ndarray:
@@ -94,11 +150,15 @@ def bimodal(
     and `β = ‖(s1, m)‖₂ ≤ √(witness_cols·d)` is the ternary witness bound
     this package's suites all build. Derived here rather than in each suite
     for the reason `MASKING_PARAMS` is — Fig. 10 needs two of these, one per
-    leg, and two spellings of one derivation is the divergence."""
+    leg, and two spellings of one derivation is the divergence.
+
+    The deviation is the same either way: Fig. 10 derives both legs' `s`
+    from an **ℓ2** bound on the projected vector, and only the verifier's
+    gate splits. Pass `bound=LinfBound()` for the ℓ∞ leg."""
     beta = float(np.sqrt(witness_cols * ring.d))
     params: dict[str, object] = dict(
         mask_std=GAMMA * float(np.sqrt(337.0)) * beta,
         rep0=REP0,
-        fail_prob=2.0**-40,
+        fail_prob=FAIL_PROB,
     )
     return BimodalMasking(ring, **(params | overrides))  # type: ignore[arg-type]

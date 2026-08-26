@@ -73,9 +73,12 @@ from zorch.lnp.opening import AbdlopOpening, OpeningProof
 from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadraticMany,
+    Publics,
     QuadraticProof,
     evaluate,
     lift,
+    lift_positions,
+    lift_slots,
 )
 from zorch.lnp.transcript import absorb_stacks
 
@@ -148,6 +151,20 @@ class GarbageMasking:
     def blocks(self, b: np.ndarray, bg: np.ndarray) -> np.ndarray:
         """The BDLOP matrix the inner protocol opens `m‖g` against."""
         return np.concatenate([b, bg])
+
+    def rows(self, blocks: np.ndarray) -> np.ndarray:
+        """`B_g` — this layer's own rows of an *already assembled* matrix.
+
+        `blocks` above builds the layout; this reads it back. Both live here
+        because this is the class that owns `ell` and `lam`, and "the
+        garbage is the tail" asserted in two classes in two spellings is the
+        drift `GarbageMasking` was extracted to prevent — no round-trip can
+        see them disagree, since both sides would carve the same wrong way.
+
+        The caller that assembles the whole matrix up front (`Publics`, once
+        a range leg is in the picture) takes this; the caller that still
+        concatenates its own takes `blocks`."""
+        return blocks[self.ell :]
 
     def commitment(self, t_b: np.ndarray, t_g: np.ndarray) -> np.ndarray:
         """The commitment to `m‖g`, in the order `blocks` is stacked in.
@@ -470,7 +487,9 @@ class AbdlopQuadraticEval:
     commitment in per proof and must not run two proofs against one.
     """
 
-    def __init__(self, many: AbdlopQuadraticMany, lam: int) -> None:
+    def __init__(
+        self, many: AbdlopQuadraticMany, lam: int, s1_take: int | None = None
+    ) -> None:
         scheme = many.scheme
         self.garbage = GarbageMasking(scheme, lam, b"lnp/eval/quad")
         self.many = many
@@ -481,30 +500,41 @@ class AbdlopQuadraticEval:
         self.scheme = scheme
         self.lam = lam
         self.ell = self.garbage.ell
+        # How much of the Ajtai half the caller's statement is about. It is
+        # all of it for every consumer up to Fig. 9, and a prefix for Fig.
+        # 10, which appends the binary-decomposition vector `x` to the half
+        # and writes its functions against `s1` alone.
+        if s1_take is None:
+            s1_take = scheme.s1_cols
+        elif not 0 <= s1_take <= scheme.s1_cols:
+            raise ValueError(
+                f"eval: the statement cannot be written against {s1_take} of "
+                f"the scheme's {scheme.s1_cols} Ajtai columns"
+            )
+        self.s1_take = s1_take
         # The width the caller's two families are written against: the lift
         # of `(s1, m)` alone. The inner protocol's own width is wider — it
         # lifts `m‖g` — and `_embed` is the map between them.
-        self.width = SIGMA_ORDER * (scheme.s1_cols + self.ell)
-        s1_span = SIGMA_ORDER * scheme.s1_cols
-        copy_width = self.ell + lam
-        self._positions = np.concatenate(
-            [np.arange(s1_span)]
-            + [
-                s1_span + copy * copy_width + np.arange(self.ell)
-                for copy in range(SIGMA_ORDER)
-            ]
+        self.width = SIGMA_ORDER * (s1_take + self.ell)
+
+        # Both halves carve: `s1_take` of the Ajtai columns, `ell` of the
+        # `ell + lam` each message copy carries. `lift_positions` owns the
+        # rule; this is the only place that needs to know both numbers.
+        self._positions = lift_positions(
+            s1_take, scheme.s1_cols, self.ell, self.ell + lam
         )
         # `x^{(g)}_{2,1,i}` of eq. 38 — the garbage of the *first*
         # automorphism copy, which is the only copy the equation reads.
-        self._garbage_slots = s1_span + self.ell + np.arange(lam)
+        # Off `lift_slots` rather than `SIGMA_ORDER * s1_cols` spelled here:
+        # that helper owns where each copy of each half starts, and this was
+        # one of the places that had derived it.
+        self._garbage_slots = lift_slots(scheme.s1_cols, self.ell + lam).message[
+            self.ell :
+        ]
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        bg: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -522,15 +552,17 @@ class AbdlopQuadraticEval:
 
         `s1`/`s2` are signed integer `(m_i, d)` arrays as in `opening.py`;
         `message` is the ring stack `m` that `commit` was called with —
-        without the garbage, which this layer appends itself. `b_quad` is
-        Fig. 6's `b`, distinct from both the BDLOP matrix `b` and `bg`."""
+        without the garbage, which this layer appends itself. `publics
+        .blocks` is the whole BDLOP matrix, garbage rows included, so it
+        goes down to Fig. 7 untouched."""
         ring = self.many.scheme.ring
+        publics.require(self.scheme)
         self._require_functions(r2, r1, r0, e2, e1, e0)
         s2_ring = ring.from_signed_stack(s2)
 
         # (1) λ garbage terms with zero constant coefficient, committed
         #     under B_g beside the message.
-        g, t_g = self.garbage.commit(bg, s2_ring, rng)
+        g, t_g = self.garbage.commit(self.garbage.rows(publics.blocks), s2_ring, rng)
 
         # (2) Γ, once t_g is bound.
         t, gamma = self.garbage.gamma(transcript, t_g, _count(e2))
@@ -540,7 +572,11 @@ class AbdlopQuadraticEval:
         #     linearity and costs λ evaluations rather than λ·M, over a ring
         #     whose mul is a deliberate O(d²) host oracle. The aggregates
         #     are the eq.-38 relations' own, so they are built once.
-        s = lift(ring, ring.from_signed_stack(s1), message)
+        # The caller's aggregates are written against its own lift, which
+        # covers `s1_take` of the Ajtai half — the carve applies to the
+        # witness here exactly as it does to `_positions`, or the two are
+        # about different widths.
+        s = lift(ring, ring.from_signed_stack(s1)[: self.s1_take], message)
         aggregates = self._aggregates(gamma, e2, e1, e0)
         # Named apart from this method's `a1`/`a2` — those are the Ajtai
         # matrices, and shadowing them here sends the aggregates down to
@@ -558,10 +594,7 @@ class AbdlopQuadraticEval:
         t = self.garbage.observe(t, h)
         f2, f1, f0 = self._relations(aggregates, r2, r1, r0, h)
         proof, t = self.many.prove(
-            a1,
-            a2,
-            self.garbage.blocks(b, bg),
-            b_quad,
+            publics,
             f2,
             f1,
             f0,
@@ -575,11 +608,7 @@ class AbdlopQuadraticEval:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        bg: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -595,6 +624,7 @@ class AbdlopQuadraticEval:
         and the Π_many^(2) proof of the `N + λ` relations verifies."""
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
+        publics.require(self.scheme)
         self._require_functions(r2, r1, r0, e2, e1, e0)
         if not self._is_well_formed(proof):
             return False, transcript
@@ -607,10 +637,7 @@ class AbdlopQuadraticEval:
             self._aggregates(gamma, e2, e1, e0), r2, r1, r0, proof.h
         )
         return self.many.verify(
-            a1,
-            a2,
-            self.garbage.blocks(b, bg),
-            b_quad,
+            publics,
             f2,
             f1,
             f0,

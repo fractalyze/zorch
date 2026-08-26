@@ -68,12 +68,14 @@ posture.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
+from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import wire
 from zorch.lnp.masking import Masking
 from zorch.lnp.transcript import sampling_modulus, squeeze_uniform
@@ -95,6 +97,61 @@ def sigma_exponent(d: int) -> int:
     one is a silently different statement rather than an error, and it had
     been open-coded at every site that applies σ."""
     return 2 * d - 1
+
+
+@dataclass(frozen=True)
+class Publics:
+    """The commitment matrices a proof is written against, in one object.
+
+    Every layer of this stack takes the same few, and threading them down a
+    four-deep chain as positional parameters is how two same-typed
+    neighbours transpose without a shape error — a `(rows, cols, limbs, d)`
+    stack is one whatever it means, so `b`, `bg` and `b_quad` swap silently.
+
+    `blocks` is the **whole** BDLOP matrix, in the order the message half is
+    concatenated in: the caller's `m`, then the range legs' rows, then the
+    layer below's garbage. It arrives assembled rather than being built
+    layer by layer, because a layer that appends its own rows cannot also be
+    one of several — Fig. 10 (eprint 2022/284, §5.2) runs two range legs
+    over one commitment, and neither can build a matrix that has to contain
+    the other's rows. Whoever knows every leg owns the order; the layers
+    below index into it by their own carve.
+
+    That order *within* the legs' rows is deliberately not fixed here.
+    Fig. 10's message is `(m, y^(d), y^(e), b^(d), b^(e))` — every mask,
+    then every sign — rather than each leg's pair kept together, so a leg
+    is told which rows are its own instead of deriving them from a rule
+    this dataclass would have to pick.
+    """
+
+    a1: np.ndarray
+    a2: np.ndarray
+    blocks: np.ndarray
+    b_quad: np.ndarray
+
+    def require(self, scheme: AbdlopCommitment) -> None:
+        """Every matrix here against the scheme whose parameters fix its
+        shape.
+
+        One gate for all four because they travel as one object, and
+        `blocks` in particular had no gate anywhere before it: a wrong row
+        count surfaced from a ring `matvec` several layers down instead of
+        naming itself, which is the failure `GarbageMasking` gates `bg` for
+        one layer up.
+
+        Every layer that *takes* a `Publics` calls this, so on a full range
+        proof it runs three times over the same four stacks. That is the
+        package's "statement fields raise at the boundary" rule and not an
+        oversight — each of those layers is a public entry point with its
+        own suite — and the repeat costs four shape comparisons."""
+        scheme.require_stack("publics: a1", self.a1, scheme.rows, scheme.s1_cols)
+        scheme.require_stack(
+            "publics: a2", self.a2, scheme.rows, scheme.randomness_cols
+        )
+        scheme.require_stack(
+            "publics: blocks", self.blocks, scheme.messages, scheme.randomness_cols
+        )
+        scheme.require_stack("publics: b_quad", self.b_quad, scheme.randomness_cols)
 
 
 @dataclass(frozen=True)
@@ -129,10 +186,7 @@ class AbdlopQuadratic:
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -144,15 +198,16 @@ class AbdlopQuadratic:
     ) -> tuple[QuadraticProof, ByteTranscript]:
         """One non-interactive proof that `f(s) = 0`.
 
-        `b_quad` is Fig. 6's `b`, the R_q^{m2} vector the cross-term
-        commitment `t` is taken against — distinct from the BDLOP matrix
-        `b`, and from Fig. 8's `B_g`. `s1`/`s2` are signed integer
-        `(m_i, d)` arrays; `message` is the ring stack `m` that `commit`
-        was called with. The commitment is absent for the reason it is
-        absent in `opening.py` — the transcript arrived bound to it."""
+        `s1`/`s2` are signed integer `(m_i, d)` arrays; `message` is the
+        ring stack `m` that `commit` was called with, and `publics.blocks`
+        the matrix it is committed under. The commitment is absent for the
+        reason it is absent in `opening.py` — the transcript arrived bound
+        to it."""
         ring = self.scheme.ring
         masking = self.masking
-        self._require_statement(b_quad, r2, r1, r0)
+        b = publics.blocks
+        b_quad = publics.b_quad
+        self._require_statement(publics, r2, r1, r0)
         masking.require_witness("quadratic.prove", s1, s2)
         s1_ring = ring.from_signed_stack(s1)
         s2_ring = ring.from_signed_stack(s2)
@@ -166,7 +221,7 @@ class AbdlopQuadratic:
             y1, y2 = masking.draw(rng)
             y1_ring = ring.from_signed_stack(y1)
             y2_ring = ring.from_signed_stack(y2)
-            w = masking.ajtai_image(a1, a2, y1_ring, y2_ring)
+            w = masking.ajtai_image(publics.a1, publics.a2, y1_ring, y2_ring)
             # eq. 29: the message half masks `m` through `−B·y2`, because
             # that is the only way the verifier reaches `m`.
             y = lift(ring, y1_ring, ring.neg(ring.matvec(b, y2_ring)))
@@ -190,10 +245,7 @@ class AbdlopQuadratic:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -207,9 +259,11 @@ class AbdlopQuadratic:
         which folds the commitment equation and the quadratic identity into
         the hash."""
         ring = self.scheme.ring
+        b = publics.blocks
+        b_quad = publics.b_quad
         # The statement is the caller's and raises; the proof is the
         # prover's and is a verdict. See `zorch/lnp/wire.py`.
-        self._require_statement(b_quad, r2, r1, r0)
+        self._require_statement(publics, r2, r1, r0)
         if not self._is_well_formed(proof):
             return False, transcript
         if not self.masking.within_bounds(proof.z1, proof.z2):
@@ -219,7 +273,7 @@ class AbdlopQuadratic:
         z1_ring = ring.from_signed_stack(proof.z1)
         z2_ring = ring.from_signed_stack(proof.z2)
         w = ring.sub(
-            self.masking.ajtai_image(a1, a2, z1_ring, z2_ring),
+            self.masking.ajtai_image(publics.a1, publics.a2, z1_ring, z2_ring),
             ring.scale(c_elem, t_a),
         )
         # eq. 30's `z`: the response half, and the message half the verifier
@@ -254,18 +308,18 @@ class AbdlopQuadratic:
 
     def _require_statement(
         self,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
     ) -> None:
-        """The quadratic function is three aligned pieces over the lifted
-        width, plus the vector its garbage commitment is taken against; a
-        mismatch would otherwise surface deep inside a ring op."""
+        """The commitment matrices, plus the quadratic function as three
+        aligned pieces over the lifted width; a mismatch in either would
+        otherwise surface deep inside a ring op."""
         scheme = self.scheme
+        publics.require(scheme)
         n = self.width
         for name, arr, lead in (
-            ("b_quad", b_quad, (scheme.randomness_cols,)),
             ("r2", r2, (n, n)),
             ("r1", r1, (n,)),
             ("r0", r0, (1,)),
@@ -305,10 +359,7 @@ class AbdlopQuadraticMany:
 
     def prove(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -325,10 +376,7 @@ class AbdlopQuadraticMany:
         advanced, mu = self._mu(transcript, r2.shape[0])
         one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
         return self.quadratic.prove(
-            a1,
-            a2,
-            b,
-            b_quad,
+            publics,
             one_r2,
             one_r1,
             one_r0,
@@ -341,10 +389,7 @@ class AbdlopQuadraticMany:
 
     def verify(
         self,
-        a1: np.ndarray,
-        a2: np.ndarray,
-        b: np.ndarray,
-        b_quad: np.ndarray,
+        publics: Publics,
         r2: np.ndarray,
         r1: np.ndarray,
         r0: np.ndarray,
@@ -358,10 +403,7 @@ class AbdlopQuadraticMany:
         advanced, mu = self._mu(transcript, r2.shape[0])
         one_r2, one_r1, one_r0 = self._aggregate(mu, r2, r1, r0)
         return self.quadratic.verify(
-            a1,
-            a2,
-            b,
-            b_quad,
+            publics,
             one_r2,
             one_r1,
             one_r0,
@@ -438,6 +480,44 @@ class AbdlopQuadraticMany:
             self.scheme.require_stack(f"quadratic: {name}", arr, *lead)
 
 
+@dataclass(frozen=True)
+class LiftSlots:
+    """Where each automorphism copy of each half sits inside a `lift`.
+
+    `lift_positions` answers "where does a *narrower* statement's lift sit
+    inside a wider one"; this answers the question underneath it — where a
+    given copy of a given half starts — which the layers kept re-deriving
+    for their own reasons. A statement that mentions `σ₋₁(v)·v` needs both
+    copies of one half at once (every inner product is that shape), and one
+    that mentions a vector spanning both halves needs a slot from each.
+
+    Two copies and not `k`, because `SIGMA_ORDER` is 2 and this module pins
+    the automorphism — see the module docstring."""
+
+    s1: np.ndarray
+    sigma_s1: np.ndarray
+    message: np.ndarray
+    sigma_message: np.ndarray
+
+
+def lift_slots(s1_cols: int, message_cols: int) -> LiftSlots:
+    """`lift`'s layout, read back as index arrays.
+
+    `lift` orbits each half as a whole — `[s1, σ(s1), m, σ(m)]` — so the
+    message half starts after *both* `s1` copies, and each copy of a half is
+    contiguous. Every place that has open-coded `SIGMA_ORDER * s1_cols` was
+    spelling that same rule."""
+    if s1_cols < 0 or message_cols < 0:
+        raise ValueError(f"lift_slots: negative widths ({s1_cols}, {message_cols})")
+    s1_span = SIGMA_ORDER * s1_cols
+    return LiftSlots(
+        s1=np.arange(s1_cols),
+        sigma_s1=s1_cols + np.arange(s1_cols),
+        message=s1_span + np.arange(message_cols),
+        sigma_message=s1_span + message_cols + np.arange(message_cols),
+    )
+
+
 def lift(
     ring: HostSplitRing, s1_part: np.ndarray, message_part: np.ndarray
 ) -> np.ndarray:
@@ -454,6 +534,63 @@ def lift(
     layer appending `g` depends on.
     """
     return np.concatenate([_orbit(ring, s1_part), _orbit(ring, message_part)])
+
+
+def lift_positions(
+    s1_take: int, s1_cols: int, message_take: int, message_cols: int
+) -> np.ndarray:
+    """Where a narrower statement's `lift` sits inside a wider one.
+
+    `lift` orbits each half as a whole, so a layer that appends to either
+    half shifts every automorphism copy after the first — the positions are
+    not a prefix, and each of the three places that has derived them by
+    hand derived the same rule again. This is that rule, once.
+
+    Both halves carve the same way. `s1_take` of `s1_cols` and
+    `message_take` of `message_cols` are taken from the head of each copy,
+    which is where a layer that *appends* leaves the caller's own columns:
+    the eval layer appends garbage to the message, and Fig. 10 appends the
+    binary-decomposition vector `x` to the Ajtai half.
+
+    A caller whose statement occupies the whole lift gets `arange` back,
+    which is what the layers written before anything widened `s1` spelled
+    directly.
+
+    Spelled through `lift_slots` rather than looping over the copies: that
+    helper owns where each copy of each half starts, and at `SIGMA_ORDER = 2`
+    — which this module pins — naming the four prefixes is the same thing
+    the loop was doing.
+    """
+    if not 0 <= s1_take <= s1_cols or not 0 <= message_take <= message_cols:
+        raise ValueError(
+            f"lift_positions: cannot take ({s1_take}, {message_take}) columns "
+            f"out of ({s1_cols}, {message_cols})"
+        )
+    slots = lift_slots(s1_cols, message_cols)
+    return np.concatenate(
+        [
+            slots.s1[:s1_take],
+            slots.sigma_s1[:s1_take],
+            slots.message[:message_take],
+            slots.sigma_message[:message_take],
+        ]
+    )
+
+
+def constants(ring: HostSplitRing, values: Sequence[int] | np.ndarray) -> np.ndarray:
+    """Each value as the constant polynomial holding it, stacked.
+
+    Built through `from_signed` rather than by writing the residue in place,
+    because the value is a signed integer over unreduced ℤ — a revealed
+    projection's entries, a sign `±1`, a squared norm bound — and the
+    reduction into `Z_q` is exactly what that constructor owns.
+
+    Here rather than in either caller: `range.py` and `exact.py` both need
+    it and both had spelled it, which put one reduction convention in two
+    modules."""
+    rows = np.zeros((len(values), ring.d), dtype=np.int64)
+    rows[:, 0] = values
+    return ring.from_signed_stack(rows)
 
 
 def evaluate(
