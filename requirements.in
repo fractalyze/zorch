@@ -15,15 +15,20 @@ absl-py
 numpy
 # PEP 696 TypeVar defaults, which `typing` gains only in 3.13.
 typing-extensions
-frx==0.10.2.dev20260823131354
-frxlib==0.10.2.dev20260823131354
-frx-cuda12-pjrt==0.10.2.dev20260823131354
-frx-cuda12-plugin==0.10.2.dev20260823131354
-# 0.0.15 is the frx floor since the wheel that registers the classical-curve
-# field dtypes (frx pins zk_dtypes >= 0.0.15 from 0.10.2.dev20260820235505);
-# lattice-frx's 0.0.14 floor (`prime_field` arrives there) and the older frx
-# floors (>= 0.0.6, >= 0.0.10) are satisfied a fortiori.
-zk-dtypes==0.0.16
+frx==0.10.2.dev20260826110348
+frxlib==0.10.2.dev20260826110348
+frx-cuda12-pjrt==0.10.2.dev20260826110348
+frx-cuda12-plugin==0.10.2.dev20260826110348
+# 0.0.17 is the frx floor: this frx build registers the ed25519 twisted-Edwards
+# G1 point dtypes, so it resolves `zk_dtypes.ed25519_g1_affine`, which does not
+# exist before 0.0.17. An older pin still resolves — the failure lands at import
+# as `AttributeError: module 'zk_dtypes' has no attribute 'ed25519_g1_affine'`
+# in every test — so the floor has to be pinned here rather than left to the
+# resolver, and it must move in the same commit as the frx quad above.
+# lattice-frx's 0.0.14 floor (`prime_field` arrives there), the classical-curve
+# field dtypes (>= 0.0.15), and the older frx floors (>= 0.0.6, >= 0.0.10) are
+# satisfied a fortiori.
+zk-dtypes==0.0.17
 # The symmetric layer (permutations, sponges, compressions, byte hashes) and the
 # `fused_region` / `composite` marker seam they lower through. It sits BELOW
 # zorch so `sig-frx` can share it without taking a proving-block dependency, so
