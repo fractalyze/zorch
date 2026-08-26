@@ -38,16 +38,23 @@ _SELECT_BLOCK = 128
 # CPU", and this comment is the one place that says why — the branches
 # themselves only note what is local to them.
 #
-# The two backends differ in *route*: CUDA reaches its kernels through Pallas
+# The three backends differ in *route*: CUDA reaches its kernels through Pallas
 # plus one hand kernel behind FFI, Metal through plugin custom calls only,
-# having no Pallas at all. They also differ in *coverage*, which is what makes
-# the branches asymmetric rather than a single "is accelerated" test. Metal has
-# kernels for the unbatched 128-bit `elements` reduce and for the packed-byte
-# gather; it takes the portable oracle for the batched stack, the non-128
-# widths, and the unpacked 0/1 selector matrix. Anything that is neither
-# backend takes the portable oracle throughout.
+# having no Pallas at all, and CPU through host FFI handlers that ship in the
+# frx wheel. They also differ in *coverage*, which is what makes the branches
+# asymmetric rather than a single "is accelerated" test. Metal and CPU both
+# have the unbatched 128-bit `elements` reduce and the packed-byte gather, and
+# both take the portable oracle for the batched stack, the non-128 widths, and
+# the unpacked 0/1 selector matrix. Anything that is none of the three takes the
+# portable oracle throughout.
+#
+# Adding a backend to an arm whose handler it lacks does NOT degrade to the
+# oracle — the custom call raises on an unregistered platform. So each arm names
+# exactly who has a handler for that shape, and the two CPU arms below are the
+# two host handlers that exist, not a blanket "CPU is accelerated".
 _CUDA = "gpu"
 _METAL = "metal"
+_CPU = "cpu"
 
 BitSelectReduction = Literal["bits", "elements"]
 
@@ -201,16 +208,19 @@ def _bit_select_reduce_elements_ffi(selectors_l: Array, values_l: Array) -> Arra
     """Plugin custom-call lowering for the `(n,) x (n,) -> (W, L)` reduce at
     `W = 128`.
 
-    CUDA and Metal both register a handler for this target and XLA selects by
-    platform, so this is one lowering rather than two. The call site still has
-    to name those platforms: an unregistered one raises rather than falling
-    back to the portable expression. Each hand kernel
+    CUDA, Metal and CPU each register a handler for this target and XLA selects
+    by platform, so this is one lowering rather than three. The call site still
+    has to name those platforms: an unregistered one raises rather than falling
+    back to the portable expression. Each device kernel
     holds the XOR accumulator in registers while both operand streams pass
     through on-chip scratch — shared memory on CUDA, threadgroup memory on
     Metal — decoupling the accumulate from the load stream, which the Pallas
     lowerings cannot express (Triton has no scratch memory; Mosaic-GPU cannot
-    partition rows across warps). XOR commutes, so the result is byte-identical
-    to [`_bit_select_reduce_elements_pallas`] for any kernel grid.
+    partition rows across warps). The host handler is a flat scan that skips a
+    whole selector word when it is clear; what it buys over the portable
+    expression is not the scan but never materializing the `(n, W, L)`
+    selection. XOR commutes, so the result is byte-identical to
+    [`_bit_select_reduce_elements_pallas`] for any kernel grid.
     """
     return frx.ffi.ffi_call(
         "frx_bit_select_xor_reduce_elements",
@@ -224,6 +234,10 @@ def _bit_select_packed_bytes_ffi(selectors: Array, values: Array, limbs: int) ->
     Drop-in for [`_bit_select_packed_bytes_pallas`], down to sharing its
     [`_byte_xor_table`]: `reduce="bits"` and [`byte_select_xor_reduce`] are the
     same reduction over the bit axis, so one kernel serves both.
+
+    Metal and CPU both route here; CUDA has a Pallas lowering for this shape and
+    does not. The table is `(W/8, 256, L)` — 64 KiB at W=128, L=4 — which is
+    what makes the host handler a cache-resident scan rather than a gather.
     """
     table = _byte_xor_table(values, selectors.shape[1], limbs)
     return frx.ffi.ffi_call(
@@ -552,13 +566,13 @@ def bit_select_xor_reduce(
                 f'reduce="elements": {values.shape} vs {selectors.shape}'
             )
         backend = frx.default_backend()
-        # One lowering, not two: both backends register a handler for this
+        # One lowering, not three: each backend registers a handler for this
         # target and XLA selects by platform. The set stays explicit because an
         # unregistered platform raises rather than falling back, so it has to
-        # name exactly who has a handler. Metal appears in no arm below, which
-        # is why its batched stacks and non-128 widths take the portable
+        # name exactly who has a handler. Metal and CPU appear in no arm below,
+        # which is why their batched stacks and non-128 widths take the portable
         # expression until one is measured to matter.
-        if backend in (_CUDA, _METAL) and not batched and width == 128:
+        if backend in (_CUDA, _METAL, _CPU) and not batched and width == 128:
             out_l = _bit_select_reduce_elements_ffi(selectors_l, values_l)
         elif backend == _CUDA:
             elements_pallas = (
@@ -585,10 +599,12 @@ def bit_select_xor_reduce(
                 f"{values.shape}"
             )
         backend = frx.default_backend()
-        if backend in (_CUDA, _METAL):
+        if backend in (_CUDA, _METAL, _CPU):
             selector_bytes = lax.bitcast_convert_type(selectors_l, fnp.uint8).reshape(
                 selectors.shape[0], width // 8
             )
+            # Metal and CPU share the custom call; only CUDA has a Pallas
+            # lowering for this shape.
             packed_bytes = (
                 _bit_select_packed_bytes_pallas
                 if backend == _CUDA
