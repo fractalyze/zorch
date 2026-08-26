@@ -92,7 +92,14 @@ from zorch.lnp import wire
 from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval, QuadraticEvalProof
 from zorch.lnp.masking import BimodalMasking
-from zorch.lnp.quadratic import Publics, constants, lift_slots, sigma_exponent
+from zorch.lnp.quadratic import (
+    Family,
+    Publics,
+    constants,
+    lift_slots,
+    sigma_exponent,
+    stack_families,
+)
 from zorch.lnp.transcript import absorb_signed, absorb_stacks
 
 _LABEL_COMMIT = b"lnp/range/mask"
@@ -112,8 +119,6 @@ _LABEL_REVEAL = b"lnp/range/projection"
 # one prove's four squeezes, and the suite roughly halves.
 _BIN1_BITS = 2
 
-# Three blocks over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`.
-_Family = tuple[np.ndarray, np.ndarray, np.ndarray]
 # Both families flattened, which is what `AbdlopQuadraticEval` takes. Spelled
 # out rather than left variadic so a miscount is a type error at the call
 # rather than a shape error inside the layer below.
@@ -345,9 +350,7 @@ class ProjectionLeg:
             transcript.observe_label(_LABEL_REVEAL), self.scheme.ring, z
         )
 
-    def statement(
-        self, projection: np.ndarray, z: np.ndarray
-    ) -> tuple[_Family, _Family]:
+    def statement(self, projection: np.ndarray, z: np.ndarray) -> tuple[Family, Family]:
         """The relations and the evaluations `(R, ⃗z)` induce, in
         `AbdlopQuadraticEval`'s two families.
 
@@ -383,7 +386,7 @@ class ProjectionLeg:
         bare row would reach `matvec` one axis short."""
         return publics.blocks[self.sign_slot : self.sign_slot + 1]
 
-    def _evaluations(self, projection: np.ndarray, z: np.ndarray) -> _Family:
+    def _evaluations(self, projection: np.ndarray, z: np.ndarray) -> Family:
         """The `256 + (d − 1)` functions whose constant coefficients vanish:
         `F_i` (eq. 43) then `G_j`.
 
@@ -437,7 +440,7 @@ class ProjectionLeg:
         e1[count + np.arange(d - 1), self._sign_position] = self._sigma_monomials[1:]
         return e1
 
-    def _relation(self) -> _Family:
+    def _relation(self) -> Family:
         """`f(b) = b² − 1`, the one function claimed zero as a ring element.
 
         Paired with the `G_j` above, not usable without them: `b² = 1` alone
@@ -534,8 +537,8 @@ class ApproximateRange:
         message: np.ndarray,
         rng: np.random.Generator,
         transcript: ByteTranscript,
-        relations: _Family | None = None,
-        evaluations: _Family | None = None,
+        relations: Family | None = None,
+        evaluations: Family | None = None,
     ) -> tuple[RangeProof, ByteTranscript]:
         """One non-interactive proof that `‖(s1, m)‖₂` is within the bound
         each leg's masking was parameterised for.
@@ -631,8 +634,8 @@ class ApproximateRange:
         t_b: np.ndarray,
         proof: RangeProof,
         transcript: ByteTranscript,
-        relations: _Family | None = None,
-        evaluations: _Family | None = None,
+        relations: Family | None = None,
+        evaluations: Family | None = None,
     ) -> tuple[bool, ByteTranscript]:
         """Fig. 9's two checks: every `‖⃗z‖₂` is within the Prop. 5.1 bound,
         and the Π_eval^(2) proof of the statement they induce verifies.
@@ -700,7 +703,7 @@ class ApproximateRange:
         transcript: ByteTranscript,
         projections: Sequence[np.ndarray],
         responses: Sequence[np.ndarray],
-    ) -> tuple[ByteTranscript, list[tuple[_Family, _Family]]]:
+    ) -> tuple[ByteTranscript, list[tuple[Family, Family]]]:
         """Absorb every revealed projection, then collect the families they
         induce, one `(relations, evaluations)` pair per leg.
 
@@ -725,24 +728,38 @@ class ApproximateRange:
 
     def _families(
         self,
-        legs: Sequence[tuple[_Family, _Family]],
-        relations: _Family | None,
-        evaluations: _Family | None,
+        legs: Sequence[tuple[Family, Family]],
+        relations: Family | None,
+        evaluations: Family | None,
     ) -> _Blocks:
         """The caller's two families ahead of the legs' own, flattened into
         the six blocks `AbdlopQuadraticEval` takes.
 
-        The caller's first because that is the order Fig. 10 writes — it
-        indexes `f_i` and `F_i` from one and defines `ϕ`, `Ψ` over them,
-        with the legs' obligations appended. Only the agreement between the
-        two sides is load-bearing; being the paper's order is what makes it
-        checkable against the figure.
+        **`ϕ` matches Fig. 10 exactly.** Eq. 68 is
+        `ϕ = (f_1, …, f_ρ, g^(d), g^(e))` — the caller's relations, then one
+        sign relation per leg — which is what the relation half assembles.
+
+        **`Ψ` does not, deliberately.** Eq. 69 groups it
+        `((F_i), G, (H_j^(d)), (H_j^(e)), (I_i), (J_j^(i)))` — every
+        projection function together, then every coefficient function —
+        where this yields `[caller's, leg 0's (H then J), leg 1's (H then
+        J), …]`. Matching would mean the caller handing over `F`, `G` and
+        `I` as three separately-placed groups so the composer could
+        interleave them, which is a materially more complex seam.
+
+        It buys nothing. `Ψ` is aggregated by `Γ`, a fresh uniform matrix
+        drawn after the functions are fixed, so any permutation of it is the
+        same statement with the columns of `Γ` relabelled — and both sides
+        build the order here, so they cannot disagree. The paper's grouping
+        is presentational. What *is* load-bearing, and is preserved, is that
+        the caller's functions come first and each leg's stay contiguous, so
+        a reader can find a given obligation.
 
         One pass over everything, caller and legs together: stacking the
         legs first and the caller's onto that would copy every leg's blocks
         twice."""
-        r2, r1, r0 = _stack(_ahead(relations, [family for family, _ in legs]))
-        e2, e1, e0 = _stack(_ahead(evaluations, [ev for _, ev in legs]))
+        r2, r1, r0 = stack_families(_ahead(relations, [family for family, _ in legs]))
+        e2, e1, e0 = stack_families(_ahead(evaluations, [ev for _, ev in legs]))
         return r2, r1, r0, e2, e1, e0
 
     def _exhausted(self) -> RuntimeError:
@@ -814,32 +831,10 @@ def _ordered(
     return np.concatenate([head, *masks, *signs])
 
 
-def _ahead(caller: _Family | None, legs: Sequence[_Family]) -> Sequence[_Family]:
+def _ahead(caller: Family | None, legs: Sequence[Family]) -> Sequence[Family]:
     """The caller's family in front of the legs', or the legs' alone.
 
     Spelled out rather than tested inline, because `if caller` on a tuple of
     three ring stacks reads as an array truth test and is one edit away from
     becoming one."""
     return list(legs) if caller is None else [caller, *legs]
-
-
-def _stack(families: Sequence[_Family]) -> _Family:
-    """Concatenate function families block by block along their leading
-    (function) axis.
-
-    One helper because the three blocks of a family must stay aligned, and
-    three hand-written `np.concatenate` calls are three chances to stack two
-    of them and forget the third.
-
-    A single family is returned as it stands. `np.concatenate([x])` is a
-    full copy, and this layer's blocks are big enough for that to dominate:
-    at the test point `e2` is 41.8 MB, so Fig. 9 — one leg, no caller
-    family, every block already the answer — was spending more on copying
-    `e2` than on building it. Nothing downstream writes to these blocks
-    (`eval` and `quadratic` only reshape, index and matvec them), which is
-    also why the layer could hand `self._e1` straight down before this
-    helper existed."""
-    if len(families) == 1:
-        return families[0]
-    r2, r1, r0 = (np.concatenate([f[i] for f in families]) for i in range(3))
-    return r2, r1, r0

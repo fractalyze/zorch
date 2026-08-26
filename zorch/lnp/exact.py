@@ -53,6 +53,7 @@ positions are the witness's own.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 # `υe = 1`: §5.2 sizes the ring degree so `2·log(β) ≤ d`, one ring element
 # holds the decomposition, and the `digits > ring.d` gate below is what
@@ -63,9 +64,82 @@ _DIGITS = 1
 
 import numpy as np
 from lattice_frx import gadget, norms
+from lattice_frx.split_ring import HostSplitRing
 
 from zorch.lnp.eval import AbdlopQuadraticEval
-from zorch.lnp.quadratic import constants, lift_slots, sigma_exponent
+from zorch.lnp.quadratic import (
+    Family,
+    constants,
+    lift_slots,
+    sigma_exponent,
+    stack_families,
+)
+
+
+def binarity(
+    evaluation: AbdlopQuadraticEval,
+    s1_columns: Sequence[int] = (),
+    message_columns: Sequence[int] = (),
+) -> Family:
+    """Eq. 54's `G` — the named committed columns hold binary coefficients.
+
+    Lemma 5.2 in one evaluation: `⟨v⃗, v⃗ − 1⃗⟩ = 0` forces `v⃗ ∈ {0,1}`,
+    because every term `v_t(v_t − 1)` is nonnegative over ℤ and vanishes
+    only at 0 and 1, so the sum vanishes only when each term does.
+
+    **Over ℤ, and it is proved over `Z_q`.** The argument is an integer one
+    — nonnegativity is not a `Z_q` notion — so a caller owes the same
+    wraparound premise the exact-ℓ2 proof owes, and gets it the same way:
+    the columns named here must be inside a vector the range leg bounds. At
+    `E_bin` a *selection* of already-committed columns, which is what this
+    implements, that premise is inherited rather than re-proved — the
+    columns are part of the witness the leg already projects.
+
+    Columns are named per half because the lift has two, and both
+    automorphism copies of each are read: `T(v⃗, ·)` puts `σ₋₁(v)` on one
+    side of the product, so a statement about `v` touches `σ(v)`'s slot too.
+
+    The general `E_bin s − v_bin` of eq. 54 is an affine image and would
+    make this a dense quadratic form over the whole lift; see this module's
+    header for why that case is deferred.
+    """
+    ring = evaluation.scheme.ring
+    slots = lift_slots(evaluation.s1_take, evaluation.ell)
+    s1_take, message = list(s1_columns), list(message_columns)
+    for name, chosen, available in (
+        ("s1", s1_take, evaluation.s1_take),
+        ("message", message, evaluation.ell),
+    ):
+        if any(not 0 <= c < available for c in chosen):
+            raise ValueError(
+                f"exact: a binary {name} column outside the {available} the "
+                f"statement covers: {chosen}"
+            )
+    if not s1_take and not message:
+        raise ValueError(
+            "exact: binarity needs a column to be about — an empty claim is "
+            "an evaluation that vanishes for every witness"
+        )
+    identity = np.concatenate([slots.s1[s1_take], slots.message[message]]).astype(
+        np.int64
+    )
+    sigma = np.concatenate(
+        [slots.sigma_s1[s1_take], slots.sigma_message[message]]
+    ).astype(np.int64)
+
+    width = evaluation.width
+    e2 = ring.zeros(1, width, width)
+    e1 = ring.zeros(1, width)
+    e2[0, sigma, identity] = ring.one()
+    e1[0, sigma] = ring.neg(_ones(ring))
+    return e2, e1, ring.zeros(1, 1)
+
+
+def _ones(ring: HostSplitRing) -> np.ndarray:
+    """`1⃗` over one ring element — `Σ_t X^t`, the all-ones coefficient
+    vector Lemma 5.2 subtracts. Not `ring.one()`, which is the
+    multiplicative identity and has a single nonzero coefficient."""
+    return ring.from_signed_stack(np.ones((1, ring.d), dtype=np.int64))[0]
 
 
 class ExactL2:
@@ -128,6 +202,8 @@ class ExactL2:
         self.ring = ring
         self.bound = bound
         self.digits = digits
+        self.witness_cols = witness_cols
+        self.message_cols = message_cols
         # The eval layer's *width*, not the eval layer: this is a statement
         # builder and must never reach the inner `prove`, the same invariant
         # `ProjectionLeg` keeps structurally rather than by convention.
@@ -155,7 +231,11 @@ class ExactL2:
         )[0]
         # `1⃗` over one ring element: `Σ_t X^t`, the all-ones coefficient
         # vector Lemma 5.2 subtracts.
-        self._ones = ring.from_signed_stack(np.ones((1, ring.d), dtype=np.int64))[0]
+        # The digits' own binarity, through the shared builder: `x⃗` is
+        # exactly the `x'` of eq. 63 when no `E_bin` columns join it.
+        self._binarity = binarity(
+            evaluation, s1_columns=range(witness_cols, evaluation.s1_take)
+        )
         # Witness-independent and identical on both sides, so it is built
         # once — the same reason `ProjectionLeg` caches `_e1` and its sign
         # relation. At the paper's width this block is ~10 MB, and prove and
@@ -201,25 +281,21 @@ class ExactL2:
         them."""
         ring = self.ring
         width = self.width
-        e2 = ring.zeros(2, width, width)
-        e1 = ring.zeros(2, width)
-        e0 = ring.zeros(2, 1)
-
-        # G(x⃗) = T(x⃗, x⃗ − 1⃗) = Σ σ₋₁(x_i)·x_i − Σ σ₋₁(x_i)·1⃗   (eq. 63)
-        e2[0, self._sigma_digit, self._digit] = ring.one()
-        e1[0, self._sigma_digit] = ring.neg(self._ones)
-
         # I(s, x⃗) = T(s, s) + T(p⃗, x⃗) − β²                      (eq. 66)
-        e2[1, self._sigma_witness, self._witness] = ring.one()
-        e1[1, self._digit] = self._radix
-        e0[1, 0] = ring.neg(constants(ring, [self.bound**2])[0])
-        return e2, e1, e0
+        e2 = ring.zeros(1, width, width)
+        e1 = ring.zeros(1, width)
+        e0 = ring.zeros(1, 1)
+        e2[0, self._sigma_witness, self._witness] = ring.one()
+        e1[0, self._digit] = self._radix
+        e0[0, 0] = ring.neg(constants(ring, [self.bound**2])[0])
+        # `G` first, matching eq. 69's order within what this builder owns.
+        return stack_families([self._binarity, (e2, e1, e0)])
 
     def require_no_wraparound(
         self, projection_bound: int, binary_cols: int = 0
     ) -> None:
-        """Theorem 5.3's two conditions on the range leg that carries this
-        proof from `Z_q` to `ℤ`.
+        """Theorem 5.3's conditions on the range leg that carries this proof
+        from `Z_q` to `ℤ`.
 
         `projection_bound` is `B`, the ℓ2 bound the approximate leg actually
         proves about `(s ‖ x⃗)` — **not** its projection dimension, which is a
@@ -231,6 +307,11 @@ class ExactL2:
         The exact statements are proved mod q, and an integer identity that
         wrapped is not an integer identity — these are what rule that out:
 
+        - `B < q/(41·c)` is Lemma 2.9's own precondition (`b ≤ P/(41m)`),
+          without which the projection says nothing at all. `c` is the
+          challenge dimension `d·(k_bin + Σ(p_i + 1))` — the *integer* width
+          of the projected vector, which at `E = I` is the witness, the
+          digits and any binary columns.
         - `B² + √((υe + k_bin)·d)·B < q` makes `⟨x', x' − 1⃗⟩ = 0 mod q` hold
           over ℤ, since both terms of the inner product are then bounded well
           inside one period.
@@ -241,6 +322,18 @@ class ExactL2:
         like a proof about integers."""
         modulus = math.prod(self.ring.q_moduli)
         span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
+        # `c` of Thm 5.3: the projected vector's width in *integers*, not in
+        # ring elements — the witness, the digits, and any binary columns.
+        challenge_width = (
+            self.witness_cols + self.message_cols + _DIGITS + binary_cols
+        ) * self.ring.d
+        if 41 * challenge_width * projection_bound >= modulus:
+            raise ValueError(
+                f"exact: Lemma 2.9 needs B = {projection_bound} < "
+                f"q/(41·c) = {modulus}/{41 * challenge_width}, or the "
+                f"projection bounds nothing at all — raise q, or shrink the "
+                f"projected vector"
+            )
         for name, value in (
             ("the binarity check", projection_bound**2 + span * projection_bound),
             ("the norm identity", 2 * self.bound**2 + projection_bound**2 - 1),

@@ -88,6 +88,11 @@ _LABEL_MANY = b"lnp/quad/aggregate"
 # with `ChallengeParams.k`.
 SIGMA_ORDER = 2
 
+# Three blocks over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`. Public
+# because every layer that builds a statement hands one of these down, and the
+# three blocks only mean anything together.
+Family = tuple[np.ndarray, np.ndarray, np.ndarray]
+
 
 def sigma_exponent(d: int) -> int:
     """σ₋₁'s exponent in `roots.galois_map`'s vocabulary: `X ↦ X^{-1}`, and
@@ -591,6 +596,26 @@ def constants(ring: HostSplitRing, values: Sequence[int] | np.ndarray) -> np.nda
     rows = np.zeros((len(values), ring.d), dtype=np.int64)
     rows[:, 0] = values
     return ring.from_signed_stack(rows)
+
+
+def stack_families(families: Sequence[Family]) -> Family:
+    """Concatenate function families block by block along their leading
+    (function) axis.
+
+    One helper because the three blocks of a family must stay aligned, and
+    three hand-written `np.concatenate` calls are three chances to stack two
+    of them and forget the third.
+
+    A single family is returned as it stands. `np.concatenate([x])` is a full
+    copy, and these blocks are big enough for that to dominate — at the LNP
+    test point a range leg's `e2` is 41.8 MB, so Fig. 9 was spending more on
+    copying it than on building it. Nothing downstream writes to them (`eval`
+    and `quadratic` only reshape, index and matvec), which is what makes
+    handing the caller's own array straight down safe."""
+    if len(families) == 1:
+        return families[0]
+    r2, r1, r0 = (np.concatenate([f[i] for f in families]) for i in range(3))
+    return r2, r1, r0
 
 
 def evaluate(
