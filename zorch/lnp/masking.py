@@ -519,6 +519,20 @@ class BimodalMasking:
                 f"imply — a loop that gives up sooner never reaches the "
                 f"failure probability this point was built for"
             )
+        if attempts > _MAX_ATTEMPTS:
+            # The same gate the constructor applies to its own derived
+            # budget, because this is the other way one is set and the limit
+            # is a property of the class rather than of one code path.
+            # Composition is what makes it reachable: legs that each clear
+            # the constructor can multiply past it, since the joint budget
+            # is `∏ 1/rep0_i` and three legs at rep0 = 100 need ~8.9e7
+            # attempts while each alone needs ~8.8e3.
+            raise ValueError(
+                f"masking: a composition of this point needs {attempts} "
+                f"attempts — repetition rates this far from their Lemma "
+                f"2.14-3 values are a parameter bug, and a loop this long is "
+                f"a hang rather than a rejection budget"
+            )
         if attempts == self.attempts:
             return self
         resized = copy.copy(self)

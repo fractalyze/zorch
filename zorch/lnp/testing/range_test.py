@@ -44,6 +44,7 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
+from zorch.lnp import masking as masking_module
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.masking import BimodalMasking, L2Bound, LinfBound
 from zorch.lnp.quadratic import (
@@ -1237,6 +1238,30 @@ class BimodalMaskingTest(absltest.TestCase):
         ring = lnp_fixture.ring()
         with self.assertRaisesRegex(ValueError, "Lemma 2.14-3"):
             BimodalMasking(ring, mask_std=1.0, rep0=1e9, projection=ring.d)
+
+    def test_a_composition_cannot_resize_past_the_safety_limit(self) -> None:
+        """`for_attempts` applies the constructor's `_MAX_ATTEMPTS` gate.
+
+        Composition is what makes the limit reachable from legs that each
+        pass it: the joint budget is `∏ 1/rep0_i`, so three legs at
+        `rep0 = 100` each need ~8.8e3 attempts alone and ~8.9e7 together.
+        Without the gate `ApproximateRange` schedules that loop instead of
+        refusing the parameter point, which is a hang — and `_MAX_ATTEMPTS`
+        exists precisely to turn "a rate far from its Lemma 2.14-3 value"
+        into an error rather than an unbounded run."""
+        ring = lnp_fixture.ring()
+        legs = [
+            BimodalMasking(ring, mask_std=1000.0, rep0=100.0, projection=ring.d)
+            for _ in range(3)
+        ]
+        # Each is individually acceptable...
+        for leg in legs:
+            self.assertLessEqual(leg.attempts, masking_module._MAX_ATTEMPTS)
+        # ...and together they are not.
+        joint = _joint_budget(legs)
+        self.assertGreater(joint, masking_module._MAX_ATTEMPTS)
+        with self.assertRaisesRegex(ValueError, "Lemma 2.14-3"):
+            legs[0].for_attempts(joint)
 
     def test_the_gate_accepts_near_its_repetition_rate(self) -> None:
         """Rej0's whole claim: at `s = γ·T` the bimodal gate accepts about
