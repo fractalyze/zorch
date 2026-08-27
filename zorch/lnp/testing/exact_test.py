@@ -664,6 +664,74 @@ class ExactWraparoundTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "eq. 61's composition"):
             exact.require_no_wraparound(_leg_at_bound(probe, 16, short))
 
+    def test_a_leg_of_the_right_width_but_another_statement_is_refused(self) -> None:
+        """A width alone cannot see this: an `E` over the leg's own lift with
+        the right row count, about the wrong columns.
+
+        The leg then proves a perfectly good bound on some other vector, the
+        wraparound conditions are priced against it, and both proofs verify.
+        Only comparing the image against `range_image()` catches it — which
+        is why the check is on the statement and not on its size."""
+        probe, _ = _imaged(74)
+        exact = probe.exact
+        required = exact.range_image()
+        assert required is not None
+
+        # Same lift, same rows, no rotations — a selection where the
+        # composition has `[1, 6, 2]`.
+        wrong_columns = _leg_image(probe, _leg_columns(probe))
+        self.assertEqual(wrong_columns.rows, required.rows)
+        with self.assertRaisesRegex(ValueError, "not eq. 61's composition"):
+            exact.require_no_wraparound(_leg_at_bound(probe, 16, wrong_columns))
+
+        # Same `E`, shifted `⃗v` — the half a rotation check would miss.
+        shifted = AffineImage(
+            matrix=required.matrix,
+            offset=probe.ring.add(required.offset, probe.ring.one()),
+        )
+        with self.assertRaisesRegex(ValueError, "not eq. 61's composition"):
+            exact.require_no_wraparound(_leg_at_bound(probe, 16, shifted))
+
+    def test_undeclared_extra_rows_are_refused(self) -> None:
+        """The width agreement's own job, now that the image check owns the
+        leading rows: a leg may bound *more* than the composition, but only
+        the `binary_cols` it was told about.
+
+        This leg opens with `range_image()` exactly — so the image check
+        passes — and then bounds one row nobody declared. Left unchecked,
+        `span` and `c` would both be priced for a narrower vector than the
+        proof actually covers."""
+        probe, _ = _imaged(76)
+        exact = probe.exact
+        required = exact.range_image()
+        assert required is not None
+        padded = AffineImage(
+            matrix=np.concatenate([required.matrix, required.matrix[:1]]),
+            offset=np.concatenate([required.offset, required.offset[:1]]),
+        )
+        leg = _leg_at_bound(probe, 16, padded)
+        with self.assertRaisesRegex(ValueError, "eq. 61's composition over"):
+            exact.require_no_wraparound(leg)
+        # Declared, it is the same leg and the conditions apply to it.
+        exact.require_no_wraparound(leg, binary_cols=1)
+
+    def test_an_imageless_leg_cannot_carry_an_imaged_statement(self) -> None:
+        """The widths coincide here — the composition is `E`'s rows plus the
+        digit row, and an imageless leg bounds `(s1‖x, m)`, which at this
+        parameter point is the same count.
+
+        So the width agreement passes and the statement is still wrong: the
+        leg bounds the witness while eq. 66's inner product is written about
+        `E⃗s − ⃗v`."""
+        probe, _ = _imaged(75)
+        exact = probe.exact
+        required = exact.range_image()
+        assert required is not None
+        imageless = _leg_at_bound(probe, 16)
+        self.assertEqual(imageless.bounded_width(), required.rows * probe.ring.d)
+        with self.assertRaisesRegex(ValueError, "not eq. 61's composition"):
+            exact.require_no_wraparound(imageless)
+
     def test_an_ell_infinity_leg_cannot_carry_an_exact_statement(self) -> None:
         """Fig. 10 runs two legs and only the ℓ2 one carries an exact
         statement: Theorem 5.3 states all three conditions over `B^(e)`

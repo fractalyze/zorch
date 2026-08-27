@@ -181,6 +181,21 @@ def _ones(ring: HostSplitRing) -> np.ndarray:
     return ring.from_signed_stack(np.ones((1, ring.d), dtype=np.int64))[0]
 
 
+def _leads_with(image: AffineImage | None, required: AffineImage) -> bool:
+    """Whether `image` opens with `required`, row for row.
+
+    Not equality: a leg carrying `E_bin` columns bounds the composition and
+    then those, so the composition is a *prefix*. Both operands are public
+    parameters, so this compares the statement and never a witness."""
+    if image is None or image.rows < required.rows:
+        return False
+    rows = required.rows
+    return bool(
+        np.array_equal(image.matrix[:rows], required.matrix)
+        and np.array_equal(image.offset[:rows], required.offset)
+    )
+
+
 class ExactL2:
     """The two evaluations that turn Fig. 9's approximate bound into
     `‖(s1, m)‖ ≤ β` exactly.
@@ -538,18 +553,26 @@ class ExactL2:
         anywhere — it is a proof of a statement about residues that reads
         like a proof about integers.
 
-        What the width agreement does *not* check is that the leg's image is
-        this statement's `range_image()` entry for entry — only that it
-        bounds a vector of the right width.
+        When this statement carries an image, the leg's own is compared
+        against `range_image()` row for row — a width alone would accept an
+        `E` over the right lift with the wrong columns, coefficients or
+        offset, and the conditions would then be priced for a vector the
+        proof never bounded, with both proofs verifying. `E` and `⃗v` are
+        public parameters, so comparing them is a statement about the
+        protocol rather than about any witness. The leg may carry *more*
+        rows than the composition — that is what `binary_cols` counts — so
+        the agreement is on the leading rows plus the total width.
 
-        That is the reachable failure. Handing a leg this statement's own
-        `E` is already impossible: it is written over `2(m1+ℓ)` and the
-        leg's lift is `2(s1_take+ℓ)`, so `require_image` refuses it on
-        shape. What survives that is an image over the *right* lift with the
-        wrong row count — a caller writing the leg's `E` by hand and leaving
-        off the rows that select `x⃗`. An `E` of the right shape about the
-        wrong columns stays a statement the caller wrote down and this
-        object never sees."""
+        At `E = I` the check is the width alone. The composition is then the
+        witness itself, and an imageless leg bounds it by construction;
+        pairing a *binary-column* image with an imageless statement is the
+        one shape this cannot yet certify, and it has no caller (see
+        `binarity`).
+
+        Building `range_image()` here costs an allocation the gate did not
+        used to make. It is once per call, off any proving path, and buys
+        the only check that can see a well-shaped `E` about the wrong
+        columns."""
         if binary_cols < 0:
             raise ValueError(
                 f"exact: the binary-column width cannot be negative, got "
@@ -571,6 +594,15 @@ class ExactL2:
                 f"has to be built with `range_image()` (plus any "
                 f"`binary_cols`), or its bound is about a different vector "
                 f"than the one Theorem 5.3's conditions are priced for"
+            )
+        required = self.range_image()
+        if required is not None and not _leads_with(leg.image, required):
+            raise ValueError(
+                "exact: this leg's image is not eq. 61's composition over "
+                "this statement — same width, different statement. Build it "
+                "with `range_image()` (any `binary_cols` rows follow), or "
+                "the bound it proves is about another vector than the one "
+                "Theorem 5.3's conditions are priced for"
             )
         modulus = math.prod(self.ring.q_moduli)
         span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
