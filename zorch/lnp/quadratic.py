@@ -524,6 +524,98 @@ def lift_slots(s1_cols: int, message_cols: int) -> LiftSlots:
     )
 
 
+@dataclass(frozen=True)
+class AffineImage:
+    """Fig. 10's `(D_i, u_i)` and `(E_i, v_i)` — the affine image of the lift
+    a statement is written about, `‖E·s − v‖ ≤ β` (eq. 52 and 53).
+
+    `matrix` is `E`, `rows` ring rows over a lift `(s1, σ(s1), m, σ(m))`, and
+    `offset` is `v`, one ring element per row. Both are public parameters:
+    the verifier rebuilds the statement out of them, so neither may depend
+    on the witness.
+
+    Shared by the two layers that consume it, and deliberately not owned by
+    either: `range.py` bounds `E·s − v` approximately (eq. 52 and the `e^(e)`
+    half of eq. 53) while `exact.py` writes the inner product `T(E·s − v,
+    E·s − v)` of eq. 66 about the same image. The two are one statement in
+    Fig. 10, and a type per layer would let them drift apart silently.
+
+    **Over the lift, not over the witness.** The paper writes `E_i ∈ R_q^{p_i
+    × 2(m1+ℓ)}`, indexing `s = (s1, σ(s1), m, σ(m))` — a statement about
+    `σ(s1)` is as writable as one about `s1`, and the σ columns are where an
+    inner-product statement puts one of its two factors. Taking the columns
+    to be the witness alone would be the narrow case wearing a general name.
+
+    **Why `None` is not the identity spelled out.** No image means the
+    statement is about the witness itself, which is what Fig. 9 states and
+    all this package proved before. That path stays a *selection* — a scatter
+    to the witness columns — rather than a contraction against an identity
+    block, because the block is `rows·width` ring elements the selection
+    never materialises, and because a range leg squeezes bytes sized by
+    `rows`: routing the old case through the new one would move the
+    transcript Fig. 9's suite is pinned against.
+    """
+
+    matrix: np.ndarray
+    offset: np.ndarray
+
+    @property
+    def rows(self) -> int:
+        """`p_i` — how many ring elements the bounded vector has, which is
+        what sizes the challenge matrix and the revealed projection."""
+        return int(self.matrix.shape[0])
+
+
+def require_image(
+    image: AffineImage | None, ring: HostSplitRing, width: int
+) -> AffineImage | None:
+    """`(E, v)` checked against the lift it is written over, or `None`
+    passed through.
+
+    Shape only, and shape is the whole contract here: both are public
+    parameters, so nothing this can catch is a witness bug. What it does
+    catch is an `E` whose columns were counted over the identity copies
+    alone, or over the eval layer's full width rather than the caller's
+    `2(m1+ℓ)` — mistakes otherwise invisible until `matmul` raises inside
+    the first proof, one round into a transcript."""
+    if image is None:
+        return None
+    # `project` recovers `E⃗s − ⃗v` over ℤ by reading one limb's balanced
+    # range, which is the whole integer only when there is one limb. A chain
+    # needs a CRT reconstruction, and silently bounding limb 0 instead would
+    # be a proof about a different vector.
+    if len(ring.q_moduli) != 1:
+        raise ValueError(
+            f"range: an affine image needs a single-prime ring, and this one "
+            f"chains {len(ring.q_moduli)} moduli — recovering `E·s − v` over "
+            f"ℤ from one limb's balanced range says nothing about a value "
+            f"only a reconstruction across limbs resolves"
+        )
+    limbs_d = (len(ring.q_moduli), ring.d)
+    if image.matrix.ndim != 4 or image.matrix.shape[0] < 1:
+        raise ValueError(
+            f"range: an affine image of shape {image.matrix.shape} — `E` is "
+            f"`(rows, {width}, {limbs_d[0]}, {limbs_d[1]})` with at least one "
+            f"row, and a leg bounding an empty vector proves a statement "
+            f"every witness satisfies"
+        )
+    expected = (image.rows, width, *limbs_d)
+    if image.matrix.shape != expected:
+        raise ValueError(
+            f"range: an affine image of shape {image.matrix.shape} where the "
+            f"lift this leg's statement is written over needs {expected} — "
+            f"`E` has one ring column per position of `(s1, σ(s1), m, σ(m))`, "
+            f"the caller's own halves and not the layer's mask and sign"
+        )
+    if image.offset.shape != (image.rows, *limbs_d):
+        raise ValueError(
+            f"range: an offset of shape {image.offset.shape} against "
+            f"{image.rows} matrix row(s) — `v` is one ring element per row "
+            f"of `E`, and `ring.zeros({image.rows})` is the `v = 0` case"
+        )
+    return image
+
+
 def lift(
     ring: HostSplitRing, s1_part: np.ndarray, message_part: np.ndarray
 ) -> np.ndarray:

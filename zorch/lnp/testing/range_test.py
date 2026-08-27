@@ -50,17 +50,13 @@ from zorch.lnp.masking import BimodalMasking, L2Bound, LinfBound
 from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
+    AffineImage,
     Publics,
     evaluate,
     lift,
     lift_slots,
 )
-from zorch.lnp.range import (
-    AffineImage,
-    ApproximateRange,
-    RangeProof,
-    _joint_budget,
-)
+from zorch.lnp.range import ApproximateRange, RangeProof, _joint_budget
 from zorch.lnp.testing import lnp_fixture
 
 _ROWS = 2
