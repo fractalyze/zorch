@@ -41,6 +41,32 @@ branch, a repeat loop), shape it as a host loop around a traced core with a
 fixed budget, and keep the traced core's inputs device-resident — the host
 touches verdicts, not arrays.
 
+## Host ring products: `matmul` is the default, `matvec` is the oracle
+
+`lattice_frx`'s `matvec` is deliberately the schoolbook path — one `mul` per
+entry, pure-Python `O(d²)` — because it is the oracle the traced
+twisted-convolution matvec will be checked against, so it must not borrow the
+fast path. `matmul` is the fast one: a negacyclic product *is* a matrix-vector
+product, so the contraction becomes one `int64` sum with the anticirculant
+built once as a view and reused down every column.
+
+Reach for `matmul` by default, including for matrix-vector products — pass the
+column and slice it back:
+
+```python
+ring.matmul(a, v[:, None])[:, 0]   # not ring.matvec(a, v)
+```
+
+It is **never slower**: past `cols · d · ‖a‖∞ · ‖b‖∞ < 2⁶³` it falls back to
+composing `matvec` per column. What varies is only whether it is faster, and
+the win needs one *small* operand — a `Bin_1` challenge matrix, a ternary
+witness, gadget digits. Two uniform ring stacks do not fit and gain nothing.
+Where it does apply the gap is large: 73–86x measured across the LNP shapes,
+byte-identical output.
+
+Use `matvec` when you specifically want the oracle — a contract test checking
+a fast path against the slow one.
+
 ## `@jit`
 
 `@jit` the leaf numeric kernels; compose them in plain Python.
