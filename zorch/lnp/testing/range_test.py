@@ -53,8 +53,14 @@ from zorch.lnp.quadratic import (
     Publics,
     evaluate,
     lift,
+    lift_slots,
 )
-from zorch.lnp.range import ApproximateRange, RangeProof, _joint_budget
+from zorch.lnp.range import (
+    AffineImage,
+    ApproximateRange,
+    RangeProof,
+    _joint_budget,
+)
 from zorch.lnp.testing import lnp_fixture
 
 _ROWS = 2
@@ -87,6 +93,7 @@ def _maskings(
     ring: HostSplitRing,
     legs: int,
     bounds: Sequence[L2Bound | LinfBound] | None = None,
+    witness_cols: int = _WITNESS_COLS,
 ) -> tuple[BimodalMasking, ...]:
     """One bimodal point per leg, each carrying the gate it is verified
     under.
@@ -103,7 +110,7 @@ def _maskings(
     if bounds is None:
         bounds = (L2Bound(),) * legs
     return tuple(
-        lnp_fixture.bimodal(ring, _WITNESS_COLS, bound=bound) for bound in bounds
+        lnp_fixture.bimodal(ring, witness_cols, bound=bound) for bound in bounds
     )
 
 
@@ -112,6 +119,7 @@ def _protocol(
     maskings: Sequence[BimodalMasking],
     s1_cols: int = _M1,
     s1_take: int | None = None,
+    images: Sequence[AffineImage | None] = (),
 ) -> ApproximateRange:
     scheme = _scheme(ring, maskings[0].mask_cols, s1_cols, len(maskings))
     # Re-derived for the same reason `quadratic_eval_test` re-derives it: the
@@ -121,7 +129,7 @@ def _protocol(
     evaluation = AbdlopQuadraticEval(
         AbdlopQuadraticMany(AbdlopQuadratic(inner)), _LAM, s1_take=s1_take
     )
-    return ApproximateRange(evaluation, *maskings)
+    return ApproximateRange(evaluation, *maskings, images=images)
 
 
 def _transcript(tag: bytes = b"") -> ByteTranscript:
@@ -139,13 +147,15 @@ class _Instance:
         s1_take: int | None = None,
         legs: int = 1,
         bounds: Sequence[L2Bound | LinfBound] | None = None,
+        images: Sequence[AffineImage | None] = (),
+        witness_cols: int = _WITNESS_COLS,
     ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
-        self.maskings = _maskings(ring, legs, bounds)
+        self.maskings = _maskings(ring, legs, bounds, witness_cols)
         legs = len(self.maskings)
         self.masking = self.maskings[0]
-        self.protocol = _protocol(ring, self.maskings, s1_cols, s1_take)
+        self.protocol = _protocol(ring, self.maskings, s1_cols, s1_take, images)
         # Fig. 9 is the one-leg composition, and every layout assertion below
         # is about the leg rather than about the layer that schedules it.
         self.leg = self.protocol.legs[0]
@@ -1283,6 +1293,251 @@ class BimodalMaskingTest(absltest.TestCase):
         instance = _Instance(25)
         with self.assertRaisesRegex(RuntimeError, "Lemma 2.14-3"):
             raise instance.protocol._exhausted()
+
+
+def _rotation_image(
+    ring: HostSplitRing,
+    width: int,
+    columns: Sequence[int],
+    exponents: Sequence[int] | None = None,
+    offset: np.ndarray | None = None,
+) -> AffineImage:
+    """An `E` with one monomial per row: row `i` reads lift column
+    `columns[i]`, rotated by `X^{exponents[i]}`.
+
+    Norm-preserving by construction, which is what makes it usable as a
+    round-trip witness at all — multiplication by `X^k` is a negacyclic
+    rotation, so `‖E⃗s‖ = ‖⃗s‖` exactly and the leg's Gaussian stays sized
+    for the witness the bound was derived from. A *uniform* `E` would be a
+    perfectly correct statement about a vector no masking in this suite is
+    parameterised for, and would reject its way to `exhausted` rather than
+    tell anyone the image was the problem."""
+    rows = len(columns)
+    if exponents is None:
+        exponents = [0] * rows
+    matrix = ring.zeros(rows, width)
+    monomials = ring.from_signed_stack(np.eye(ring.d, dtype=np.int64))
+    for row, (column, exponent) in enumerate(zip(columns, exponents, strict=True)):
+        matrix[row, column] = monomials[exponent]
+    return AffineImage(
+        matrix=matrix, offset=ring.zeros(rows) if offset is None else offset
+    )
+
+
+def _identity_columns(s1_take: int, ell: int) -> list[int]:
+    """Where `(s1, m)` sit in the narrow lift `(s1, σ(s1), m, σ(m))` an
+    affine image is written over — the columns an imageless leg selects."""
+    slots = lift_slots(s1_take, ell)
+    return list(np.concatenate([slots.s1, slots.message]))
+
+
+class AffineImageTest(absltest.TestCase):
+    """Fig. 10's `(D_i, u_i)` and `(E_i, v_i)`: a leg bounds an affine image
+    of the lift (eq. 52, 53) instead of the witness itself.
+
+    The weight is on the two structural tests, for this suite's usual
+    reason — both sides build the statement from one method, so a wrong
+    contraction verifies as happily as a right one. `E = I` is pinned
+    against the scatter it must reproduce, and `project` against the image
+    computed by hand.
+    """
+
+    def test_an_identity_image_rebuilds_the_selection_statement(self) -> None:
+        """`matmul(σ₋₁(R), I)` lands exactly where `_witness_positions`
+        scattered `σ₋₁(R)` — block for block, over the whole statement.
+
+        The claim the general path rests on: the contraction and the
+        selection are one map at `E = I`. Nothing downstream can see this
+        difference, because a verifier contracts the same wrong way a prover
+        does."""
+        plain = _Instance(40)
+        ring = plain.ring
+        take = plain.protocol.evaluation.s1_take
+        ell = plain.protocol.ell
+        width = len(plain.leg._image_positions)
+        identity = _rotation_image(ring, width, _identity_columns(take, ell))
+        spelled = _Instance(40, images=[identity])
+
+        # Same leg, same draw, same challenge — only how `E` reaches the
+        # quadratic form differs.
+        self.assertEqual(plain.leg._chunks, spelled.leg._chunks)
+        sign, y = plain.masking.draw(np.random.default_rng(7))
+        projection = plain.challenge()
+        witness = np.concatenate([plain.s1[:take], plain.message])
+        z = (sign * (projection @ witness.reshape(-1)) + y.reshape(-1)).reshape(y.shape)
+
+        for block, (want, got) in enumerate(
+            zip(
+                plain.leg._evaluations(projection, z),
+                spelled.leg._evaluations(projection, z),
+                strict=True,
+            )
+        ):
+            with self.subTest(block=block):
+                np.testing.assert_array_equal(got, want)
+
+    def test_the_projected_vector_is_the_image_of_the_lift(self) -> None:
+        """`project` is `E⃗s − ⃗v` read back on `(−q/2, q/2]`, and it is what
+        `respond` contracts `R` against.
+
+        Pinned against the image computed directly rather than against a
+        proof: `respond` would happily bound any vector handed to it."""
+        instance = _Instance(41)
+        ring = instance.ring
+        take = instance.protocol.evaluation.s1_take
+        ell = instance.protocol.ell
+        width = 2 * (take + ell)
+        offset = ring.from_signed_stack(
+            np.random.default_rng(5).integers(-1, 2, (2, ring.d)).astype(np.int64)
+        )
+        # Reads one σ column on purpose: a statement about `σ(s1)` is as
+        # writable as one about `s1`, and an image that could only reach the
+        # identity copies would be the narrow case wearing a general name.
+        slots = lift_slots(take, ell)
+        columns = [int(slots.sigma_s1[0]), int(slots.message[0])]
+        image = _rotation_image(ring, width, columns, [3, 0], offset)
+        leg = _Instance(41, images=[image]).leg
+
+        narrow = lift(
+            ring,
+            ring.from_signed_stack(instance.s1[:take]),
+            ring.from_signed_stack(instance.message),
+        )
+        want = np.concatenate(
+            [
+                ring.to_balanced_limb0(row)
+                for row in ring.sub(ring.matvec(image.matrix, narrow), offset)
+            ]
+        )
+        np.testing.assert_array_equal(leg.project(narrow), want)
+
+    def test_an_honest_image_proof_verifies(self) -> None:
+        """A genuine `E` — a rotation of a permutation of the lift, reading
+        both automorphism copies — proves and verifies end to end."""
+        for seed in (42, 43, 44):
+            with self.subTest(seed=seed):
+                probe = _Instance(seed)
+                ring = probe.ring
+                take = probe.protocol.evaluation.s1_take
+                ell = probe.protocol.ell
+                slots = lift_slots(take, ell)
+                columns = [
+                    int(slots.message[0]),
+                    int(slots.s1[0]),
+                    int(slots.sigma_s1[0]),
+                ]
+                image = _rotation_image(ring, 2 * (take + ell), columns, [0, 5, 1])
+                instance = _Instance(seed, images=[image])
+                self.assertTrue(instance.verify(instance.prove()))
+
+    def test_an_offset_is_part_of_the_statement(self) -> None:
+        """`⃗v` moves what is bounded, so a verifier holding a different one
+        checks a different claim and the inner proof stops replaying.
+
+        The masking is widened because `E⃗s − ⃗v` is genuinely longer than
+        the witness — a ternary offset against a ternary image reaches
+        coefficients of 2 — and a gate sized for `⃗s` alone would reject an
+        honest prover."""
+        ring = lnp_fixture.ring()
+        take, ell = _M1, _ELL
+        columns = _identity_columns(take, ell)
+        offset = ring.from_signed_stack(
+            np.random.default_rng(11)
+            .integers(-1, 2, (len(columns), ring.d))
+            .astype(np.int64)
+        )
+        image = _rotation_image(ring, 2 * (take + ell), columns, None, offset)
+        wide = 4 * _WITNESS_COLS
+        instance = _Instance(45, images=[image], witness_cols=wide)
+        proof = instance.prove()
+        self.assertTrue(instance.verify(proof))
+
+        # The same proof against the same `E` and a different `⃗v`.
+        other = _rotation_image(
+            ring, 2 * (take + ell), columns, None, ring.zeros(len(columns))
+        )
+        self.assertFalse(
+            instance.verify(
+                proof,
+                protocol=_Instance(45, images=[other], witness_cols=wide).protocol,
+            )
+        )
+
+    def test_an_image_sizes_the_challenge_matrix(self) -> None:
+        """`R` is squeezed to the *image's* width, not the witness's — the
+        projected vector is `E⃗s − ⃗v`, and a leg that kept the witness's
+        width would draw a matrix its own verifier could not replay."""
+        ring = lnp_fixture.ring()
+        take, ell = _M1, _ELL
+        columns = _identity_columns(take, ell)[:1]
+        image = _rotation_image(ring, 2 * (take + ell), columns)
+        instance = _Instance(46, images=[image])
+        self.assertEqual(instance.leg._chunks, 1)
+        self.assertEqual(
+            instance.challenge().shape, (instance.masking.projection, ring.d)
+        )
+
+    def test_an_image_may_not_reach_the_mask_or_the_sign(self) -> None:
+        """The columns an image is written over are the caller's own halves,
+        which is Fig. 10's `2(m1+ℓ)`. The mask and the sign hold values the
+        prover redraws per attempt, so no statement can be a function of
+        them — and here that is a width, not a check."""
+        instance = _Instance(47)
+        self.assertEqual(
+            len(instance.leg._image_positions),
+            2 * (instance.protocol.evaluation.s1_take + instance.protocol.ell),
+        )
+        self.assertLess(len(instance.leg._image_positions), instance.leg.width)
+
+    def test_projecting_without_an_image_is_refused(self) -> None:
+        """A leg bounding the witness takes the caller's own integers, so
+        there is nothing here to compute — and handing back the witness
+        instead would leave a caller that thought it had passed an image
+        proving Fig. 9's statement under Fig. 10's name."""
+        instance = _Instance(51)
+        with self.assertRaisesRegex(ValueError, "no image"):
+            instance.leg.project(instance.lifted())
+
+    def test_a_misshapen_image_is_refused(self) -> None:
+        ring = lnp_fixture.ring()
+        take, ell = _M1, _ELL
+        width = 2 * (take + ell)
+        columns = _identity_columns(take, ell)
+        cases = {
+            "one ring column per position": AffineImage(
+                matrix=ring.zeros(2, width + 1), offset=ring.zeros(2)
+            ),
+            "at least one": AffineImage(
+                matrix=ring.zeros(0, width), offset=ring.zeros(0)
+            ),
+            "one ring element per row": AffineImage(
+                matrix=ring.zeros(2, width), offset=ring.zeros(3)
+            ),
+        }
+        for message, image in cases.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    _Instance(48, images=[image])
+
+    def test_one_image_per_leg_or_none(self) -> None:
+        ring = lnp_fixture.ring()
+        image = _rotation_image(ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL))
+        with self.assertRaisesRegex(ValueError, "affine image"):
+            _Instance(49, legs=2, images=[image])
+
+    def test_a_leg_without_an_image_bounds_the_witness_beside_one_that_does(
+        self,
+    ) -> None:
+        """Fig. 10's own shape: `D` and `E` are different maps on the same
+        commitment, and `None` is the leg that keeps Fig. 9's case."""
+        ring = lnp_fixture.ring()
+        image = _rotation_image(
+            ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL), [2, 2, 2]
+        )
+        instance = _Instance(50, legs=2, images=[None, image])
+        self.assertIsNone(instance.protocol.legs[0].image)
+        self.assertIsNotNone(instance.protocol.legs[1].image)
+        self.assertTrue(instance.verify(instance.prove()))
 
 
 if __name__ == "__main__":

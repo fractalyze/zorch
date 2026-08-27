@@ -86,6 +86,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
+from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.lnp import wire
@@ -96,6 +97,7 @@ from zorch.lnp.quadratic import (
     Family,
     Publics,
     constants,
+    lift,
     lift_slots,
     sigma_exponent,
     stack_families,
@@ -123,6 +125,42 @@ _BIN1_BITS = 2
 # out rather than left variadic so a miscount is a type error at the call
 # rather than a shape error inside the layer below.
 _Blocks = tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+
+
+@dataclass(frozen=True)
+class AffineImage:
+    """Fig. 10's `(D_i, u_i)` and `(E_i, v_i)` — the affine image of the lift
+    that a leg bounds, `‖E·s − v‖ ≤ β` (eq. 52 and 53).
+
+    `matrix` is `E`, `rows` ring rows over the eval layer's whole lift, and
+    `offset` is `v`, one ring element per row. Both are public parameters:
+    the verifier rebuilds the leg's statement out of them, so neither may
+    depend on the witness.
+
+    **Over the lift, not over the witness.** The paper writes `E_i ∈ R_q^{p_i
+    × 2(m1+ℓ)}`, indexing `s = (s1, σ(s1), m, σ(m))` — a statement about
+    `σ(s1)` is as writable as one about `s1`, and the σ columns are where an
+    inner-product statement puts one of its two factors. Taking the columns
+    to be the witness alone would be the narrow case wearing a general name.
+
+    **Why `None` is not the identity spelled out.** A leg with no image
+    bounds the witness itself, which is what Fig. 9 states and all this
+    package proved before. That path stays a *selection* — the projection
+    scattered to the witness columns — rather than a contraction against an
+    identity block, because the block is `rows·width` ring elements the
+    selection never materialises, and because the bytes a leg squeezes are
+    sized by `rows`: routing the old case through the new one would move the
+    transcript Fig. 9's suite is pinned against.
+    """
+
+    matrix: np.ndarray
+    offset: np.ndarray
+
+    @property
+    def rows(self) -> int:
+        """`p_i` — how many ring elements the bounded vector has, which is
+        what sizes the challenge matrix and the revealed projection."""
+        return int(self.matrix.shape[0])
 
 
 @dataclass(frozen=True)
@@ -199,6 +237,7 @@ class ProjectionLeg:
         ell: int,
         mask_slot: int,
         sign_slot: int,
+        image: AffineImage | None = None,
     ) -> None:
         scheme = evaluation.scheme
         ring = scheme.ring
@@ -234,7 +273,23 @@ class ProjectionLeg:
         self._witness_positions = np.concatenate([slots.s1, slots.message[:ell]])
         self._mask_positions = slots.message[mask_slot : mask_slot + masking.mask_cols]
         self._sign_position = int(slots.message[sign_slot])
-        self._chunks = s1_take + ell
+        # Where an affine image's columns live in the eval layer's lift:
+        # `(s1, σ(s1), m, σ(m))` and nothing else. That is the paper's own
+        # `2(m1+ℓ)` (§5.2), and carving it here rather than handing `E` the
+        # whole width is what makes "an image may not touch the mask or the
+        # sign columns" un-violable instead of merely checked — those hold
+        # values the prover redraws per attempt, so a function of them is
+        # not a statement anyone could have written down in advance.
+        self._image_positions = np.concatenate(
+            [slots.s1, slots.sigma_s1, slots.message[:ell], slots.sigma_message[:ell]]
+        )
+        self.image = _require_image(image, ring, len(self._image_positions))
+        # What the projection is *of*, in ring elements: the witness at
+        # `E = I`, and `E`'s own row count otherwise. It sizes the challenge
+        # matrix on both sides, so a leg that got this wrong would squeeze a
+        # different `R` than its verifier and fail to replay rather than
+        # prove the wrong thing.
+        self._chunks = (s1_take + ell) if image is None else image.rows
         # σ₋₁ applied to each monomial `X^j`, which is what `T(⃗δ_j, ·)`
         # contributes. Row `j` of the identity *is* `X^j`'s coefficient
         # vector, so the ring's own constructor builds the table — writing
@@ -283,6 +338,38 @@ class ProjectionLeg:
             t_mask=ring.add(mask_randomness, y_ring),
             t_sign=ring.add(sign_randomness, sign_ring),
         )
+
+    def project(self, lift: np.ndarray) -> np.ndarray:
+        """`E⃗s − ⃗v` (eq. 61) as the balanced integer coefficients `respond`
+        contracts `R` against.
+
+        `lift` is `(s1, σ(s1), m, σ(m))` over the caller's own halves —
+        `quadratic.lift` of exactly what the image was written against, in
+        the order `_image_positions` reads it back.
+
+        **The premise it reads under.** The image is computed in `R_q` and
+        read back on `(−q/2, q/2]`, so it is the integer vector the statement
+        is about precisely while that vector fits one period. `‖E⃗s − ⃗v‖ ≤ β`
+        is that premise, and Lemma 2.9 needs `β` far below `q` anyway. A
+        witness violating it is not caught here, and the failure is quiet:
+        what gets proven is then a true bound on the balanced representative,
+        which is a different vector from the one the caller meant."""
+        if self.image is None:
+            raise ValueError(
+                "range: this leg bounds the witness itself, which reaches "
+                "`respond` as the caller's own integers — there is no image "
+                "here to project, and returning the witness instead would "
+                "hide a caller that thought it had passed one"
+            )
+        ring = self.scheme.ring
+        image = ring.sub(ring.matvec(self.image.matrix, lift), self.image.offset)
+        # Row by row because the balanced read is a per-element op, and
+        # through it rather than around it because reading limb 0 out of the
+        # array by hand is the one thing this ring's contract tells consumers
+        # not to do. The loop is `p` iterations once per proof — `_bounded`
+        # hoists this out of the attempt loop, so it costs nothing against
+        # the matvec above it.
+        return np.concatenate([ring.to_balanced_limb0(row) for row in image])
 
     def respond(
         self,
@@ -395,7 +482,14 @@ class ProjectionLeg:
         at `(b, s_j)` in the quadratic form because `T` contracts `⃗r_i`'s
         `j`-th chunk against `⃗s`'s. `G_j = T(⃗δ_j, b)` is linear in `b`
         alone. Both are rebuilt identically by the verifier, which is what
-        binds `⃗z` to the proof."""
+        binds `⃗z` to the proof.
+
+        With an affine image the projected vector is `⃗e = E⃗s − ⃗v` (eq. 61)
+        rather than the witness, and `F_i` becomes eq. 64/65's `z_i −
+        b·T(⃗r_i, ⃗e) − y_i`. Only where the `b·T` term lands changes: `E`
+        contracts into the quadratic form and `⃗v` — public — falls out of it
+        onto the sign. Nothing else in the leg moves, which is why the two
+        cases share every other line here."""
         ring = self.scheme.ring
         d = ring.d
         count = self.masking.projection
@@ -415,12 +509,35 @@ class ProjectionLeg:
         sigma_rows = ring.galois(rows, sigma_exponent(d))
 
         e2 = ring.zeros(count + d - 1, self.width, self.width)
-        e2[np.arange(count)[:, None], self._sign_position, self._witness_positions] = (
-            sigma_rows
-        )
+        e1 = self._e1
+        if self.image is None:
+            e2[
+                np.arange(count)[:, None], self._sign_position, self._witness_positions
+            ] = sigma_rows
+        else:
+            # `T(⃗r_i, E⃗s)` reassociated onto the lift: the coefficient the
+            # statement puts on column `k` is `Σ_j σ₋₁(r_{i,j})·E_{j,k}`, so
+            # the public half contracts against `E` once and what reaches the
+            # quadratic form is a dense row rather than a scatter. `matmul`
+            # is the shape this contraction is: `(256, p) × (p, width)`, and
+            # its own docstring names a `Bin_1` matrix against a ~32-bit
+            # modulus as the case it keeps in `int64`.
+            e2[
+                np.arange(count)[:, None], self._sign_position, self._image_positions
+            ] = ring.matmul(sigma_rows, self.image.matrix)
+            # `−b·T(⃗r_i, E⃗s − ⃗v)` splits, and `+b·T(⃗r_i, ⃗v)` is the half
+            # with no witness in it: `⃗v` is public, so the offset leaves the
+            # quadratic form entirely and lands on the sign alone, linear in
+            # `b`. Copied rather than written into `_e1`, which is built once
+            # and shared across every attempt and both sides; the rows below
+            # `count` are the `G_j` half and are untouched here.
+            e1 = e1.copy()
+            e1[:count, self._sign_position] = ring.neg(
+                ring.matvec(sigma_rows, self.image.offset)
+            )
         e0 = ring.zeros(count + d - 1, 1)
         e0[:count, 0] = constants(ring, z.reshape(-1))
-        return e2, self._e1, e0
+        return e2, e1, e0
 
     def _linear_block(self) -> np.ndarray:
         """The linear half of both families, which depends on neither `R`
@@ -486,12 +603,22 @@ class ApproximateRange:
     """
 
     def __init__(
-        self, evaluation: AbdlopQuadraticEval, *maskings: BimodalMasking
+        self,
+        evaluation: AbdlopQuadraticEval,
+        *maskings: BimodalMasking,
+        images: Sequence[AffineImage | None] = (),
     ) -> None:
         if not maskings:
             raise ValueError(
                 "range: a range proof needs at least one projection leg, and "
                 "none was given"
+            )
+        if images and len(images) != len(maskings):
+            raise ValueError(
+                f"range: {len(images)} affine image(s) against "
+                f"{len(maskings)} leg(s) — Fig. 10 pairs each `(E_i, v_i)` "
+                f"with the leg that bounds it, so pass one per leg, `None` "
+                f"where a leg bounds the witness itself, or none at all"
             )
         masks = sum(masking.mask_cols for masking in maskings)
         rows = masks + len(maskings)
@@ -515,7 +642,9 @@ class ApproximateRange:
         # `BimodalMasking.for_attempts`.
         self.attempts = _joint_budget(maskings)
         legs = []
-        for masking in maskings:
+        for masking, image in zip(
+            maskings, images or [None] * len(maskings), strict=True
+        ):
             legs.append(
                 ProjectionLeg(
                     evaluation,
@@ -523,6 +652,7 @@ class ApproximateRange:
                     ell,
                     mask_slot,
                     sign_slot,
+                    image,
                 )
             )
             mask_slot += masking.mask_cols
@@ -567,15 +697,7 @@ class ApproximateRange:
         self._require_witness(s1, s2, message)
         s2_ring = ring.from_signed_stack(s2)
         message_ring = ring.from_signed_stack(message) if self.ell else ring.zeros(0)
-        # The projected witness, over ℤ: `⃗s` is the concatenated balanced
-        # coefficients of `(s1, m)`, which is the vector Lemma 2.9 bounds.
-        # `s1` is carved to what the eval layer's statement covers — the
-        # bound is about that prefix, and `R` is squeezed to its width.
-        flat = (
-            np.concatenate([s1[: self.evaluation.s1_take], message])
-            .astype(np.int64)
-            .reshape(-1)
-        )
+        bounded = self._bounded(s1, message, message_ring)
         randomness = [leg.randomness(publics, s2_ring) for leg in self.legs]
 
         for _ in range(self.attempts):
@@ -587,9 +709,9 @@ class ApproximateRange:
                 transcript, [(draw.t_mask, draw.t_sign) for draw in draws]
             )
             responses = [
-                leg.respond(draw, projection, flat, rng)
-                for leg, draw, projection in zip(
-                    self.legs, draws, projections, strict=True
+                leg.respond(draw, projection, vector, rng)
+                for leg, draw, projection, vector in zip(
+                    self.legs, draws, projections, bounded, strict=True
                 )
             ]
             # One gate over every leg, not one loop per leg: Fig. 10 abandons
@@ -698,6 +820,38 @@ class ApproximateRange:
             projections.append(projection)
         return t, projections
 
+    def _bounded(
+        self, s1: np.ndarray, message: np.ndarray, message_ring: np.ndarray
+    ) -> list[np.ndarray]:
+        """Each leg's own vector over ℤ — `E_i⃗s − ⃗v_i` (eq. 61) for a leg
+        carrying an affine image, and the witness itself for one without.
+
+        Hoisted out of the attempt loop for the same reason `randomness` is:
+        it is a function of the witness alone, and what an attempt redraws is
+        `⃗y` and `b`.
+
+        The imageless path stays the caller's own integers rather than a
+        round-trip through the ring. The values agree — `(s1, m)` are
+        canonical and short — but the bound is stated about *those*, and
+        reading them back out of `R_q` would put Fig. 9's own case one
+        wraparound premise deeper than it needs to be. `s1` is carved to what
+        the eval layer's statement covers: the bound is about that prefix,
+        and `R` is squeezed to its width."""
+        flat = (
+            np.concatenate([s1[: self.evaluation.s1_take], message])
+            .astype(np.int64)
+            .reshape(-1)
+        )
+        if all(leg.image is None for leg in self.legs):
+            return [flat] * len(self.legs)
+        ring = self.scheme.ring
+        witness = lift(
+            ring, ring.from_signed_stack(s1[: self.evaluation.s1_take]), message_ring
+        )
+        return [
+            flat if leg.image is None else leg.project(witness) for leg in self.legs
+        ]
+
     def _statement(
         self,
         transcript: ByteTranscript,
@@ -796,6 +950,56 @@ class ApproximateRange:
             )
             and self.evaluation._is_well_formed(proof.evaluation)
         )
+
+
+def _require_image(
+    image: AffineImage | None, ring: HostSplitRing, width: int
+) -> AffineImage | None:
+    """`(E, v)` checked against the lift it is written over, or `None`
+    passed through.
+
+    Shape only, and shape is the whole contract here: both are public
+    parameters, so nothing this can catch is a witness bug. What it does
+    catch is an `E` whose columns were counted over the identity copies
+    alone, or over the eval layer's full width rather than the caller's
+    `2(m1+ℓ)` — mistakes otherwise invisible until `matmul` raises inside
+    the first proof, one round into a transcript."""
+    if image is None:
+        return None
+    # `project` recovers `E⃗s − ⃗v` over ℤ by reading one limb's balanced
+    # range, which is the whole integer only when there is one limb. A chain
+    # needs a CRT reconstruction, and silently bounding limb 0 instead would
+    # be a proof about a different vector.
+    if len(ring.q_moduli) != 1:
+        raise ValueError(
+            f"range: an affine image needs a single-prime ring, and this one "
+            f"chains {len(ring.q_moduli)} moduli — recovering `E·s − v` over "
+            f"ℤ from one limb's balanced range says nothing about a value "
+            f"only a reconstruction across limbs resolves"
+        )
+    limbs_d = (len(ring.q_moduli), ring.d)
+    if image.matrix.ndim != 4 or image.matrix.shape[0] < 1:
+        raise ValueError(
+            f"range: an affine image of shape {image.matrix.shape} — `E` is "
+            f"`(rows, {width}, {limbs_d[0]}, {limbs_d[1]})` with at least one "
+            f"row, and a leg bounding an empty vector proves a statement "
+            f"every witness satisfies"
+        )
+    expected = (image.rows, width, *limbs_d)
+    if image.matrix.shape != expected:
+        raise ValueError(
+            f"range: an affine image of shape {image.matrix.shape} where the "
+            f"lift this leg's statement is written over needs {expected} — "
+            f"`E` has one ring column per position of `(s1, σ(s1), m, σ(m))`, "
+            f"the caller's own halves and not the layer's mask and sign"
+        )
+    if image.offset.shape != (image.rows, *limbs_d):
+        raise ValueError(
+            f"range: an offset of shape {image.offset.shape} against "
+            f"{image.rows} matrix row(s) — `v` is one ring element per row "
+            f"of `E`, and `ring.zeros({image.rows})` is the `v = 0` case"
+        )
+    return image
 
 
 def _joint_budget(maskings: Sequence[BimodalMasking]) -> int:
