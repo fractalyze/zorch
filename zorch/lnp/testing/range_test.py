@@ -1468,9 +1468,6 @@ class AffineImageTest(absltest.TestCase):
         self.assertEqual(
             instance.challenge().shape, (instance.masking.projection, ring.d)
         )
-        # Theorem 5.3's `c`, the same width in integers — what
-        # `exact.ExactL2.require_no_wraparound` prices Lemma 2.9 against.
-        self.assertEqual(instance.leg.bounded_width(), ring.d)
 
     def test_the_bounded_width_is_the_projected_vector_in_integers(self) -> None:
         """`c` is a width over `Z_q`, where each ring element is `d`

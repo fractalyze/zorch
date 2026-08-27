@@ -28,7 +28,6 @@ have to collapse, and no proof going through would show it if they did not.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 import numpy as np
@@ -40,7 +39,7 @@ from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.exact import ExactL2, binarity
-from zorch.lnp.masking import PROJECTION, L2Bound, LinfBound
+from zorch.lnp.masking import LinfBound
 from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadratic,
@@ -64,16 +63,6 @@ _DIGIT_COLS = 1
 _S1_COLS = _M1 + _DIGIT_COLS
 # The vector whose norm is the statement: `(s1, m)`, without the digits.
 _WITNESS_COLS = _M1 + _ELL
-# A second split prime at the fixture's width, so a test can build a leg over
-# a ring that is not this statement's. Any `q ≡ 5 (mod 8)` will do — what the
-# guard reads is object identity, not the value.
-_OTHER_Q = (
-    next(
-        q
-        for q in primes.find_nearest_split_primes(32.0, 2)
-        if q not in lnp_fixture.SPLIT_Q
-    ),
-)
 
 
 def _scheme(ring: HostSplitRing, mask_cols: int) -> AbdlopCommitment:
@@ -426,13 +415,20 @@ def _leg_at_bound(
     `target`, so a test can put `B` where the condition it wants to trip
     lives.
 
-    `B = ⌈2·√(256/26)·t·s⌉` is monotone in `s` and nothing else, so the
-    inversion is exact up to the ceiling. Going through a real leg rather
-    than passing a number is the point of the API under test: `B` and `c`
-    now describe a proof that exists."""
-    std = target / (2.0 * math.sqrt(PROJECTION / 26.0) * L2Bound().accept_t)
+    Scaled off a reference masking rather than by inverting the formula:
+    `L2Bound.proven_norm` is linear in `mask_std` and nothing else, so one
+    division lands on `target` up to its ceiling — and the constant chain
+    `2·√(256/26)·t` stays spelled in exactly one place, `masking.py`. (It is
+    also pinned as a value by the range suite; a third copy here would be the
+    one nobody updates.)
+
+    Going through a real leg rather than passing a number is the point of the
+    API under test: `B` and `c` now describe a proof that exists."""
+    reference = lnp_fixture.bimodal(instance.ring, _WITNESS_COLS + _DIGIT_COLS)
     masking = lnp_fixture.bimodal(
-        instance.ring, _WITNESS_COLS + _DIGIT_COLS, mask_std=std
+        instance.ring,
+        _WITNESS_COLS + _DIGIT_COLS,
+        mask_std=reference.mask_std * target / reference.proven_norm(),
     )
     protocol = ApproximateRange(
         instance.evaluation, masking, images=[image] if image is not None else ()
@@ -440,21 +436,53 @@ def _leg_at_bound(
     return protocol.legs[0]
 
 
-def _wide_leg_image(instance: _Instance, extra_cols: int) -> tuple[AffineImage, int]:
+def _leg_image(instance: _Instance, extra_cols: int = 0) -> AffineImage:
     """A leg image bounding the honest composition plus `extra_cols` more
     ring elements — what a statement carrying `E_bin` columns rides on.
 
-    Returns the image and the row count, since `c` is what the tests read."""
+    Written over the leg's lift `(s1‖x, m)`, which is wider than the one
+    `ExactL2`'s own `E` is written over — the gap `range_image` composes
+    across. A negative `extra_cols` drops rows instead, which is how a test
+    spells the leg that forgot to bound the digits."""
     ring, ell = instance.ring, instance.protocol.ell
-    # The leg's lift, `(s1‖x, m)` — wider than the one `ExactL2`'s own `E`
-    # is written over, which is exactly what `range_image` composes across.
     columns = lnp_fixture.identity_columns(_S1_COLS, ell)
-    columns = list(columns) + [columns[0]] * extra_cols
-    rows = len(columns)
-    image = lnp_fixture.rotation_image(
-        ring, SIGMA_ORDER * (_S1_COLS + ell), columns, [0] * rows
+    if extra_cols < 0:
+        columns = columns[:extra_cols]
+    else:
+        columns = columns + [columns[0]] * extra_cols
+    return lnp_fixture.rotation_image(ring, SIGMA_ORDER * (_S1_COLS + ell), columns)
+
+
+def _probe_image(
+    ring: HostSplitRing, ell: int, offset: np.ndarray | None = None
+) -> AffineImage:
+    """The suite's standard non-trivial `E`: one rotation per lift position
+    of `(s1, m)`, written over `ExactL2`'s own narrow lift.
+
+    Norm-preserving, so an honest witness still decomposes under the fixture
+    bound — a uniform `E` would be a correct statement about a vector no
+    masking here is parameterised for. `offset` is `⃗v`, zero when omitted.
+
+    The rotations are held here rather than passed in: two tests comparing
+    the same statement through different paths have to be about one `E`, and
+    a per-test spelling is how they stop being."""
+    return lnp_fixture.rotation_image(
+        ring,
+        SIGMA_ORDER * (_M1 + ell),
+        lnp_fixture.identity_columns(_M1, ell),
+        [1, 6, 2],
+        offset,
     )
-    return image, rows
+
+
+def _ternary_offset(ring: HostSplitRing, rows: int) -> np.ndarray:
+    """A ternary `⃗v` — non-zero, so a statement that drops it is visible.
+
+    Against a ternary image this reaches coefficients of 2, so every caller
+    also widens the bound it hands `ExactL2`."""
+    return ring.from_signed_stack(
+        np.random.default_rng(3).integers(-1, 2, (rows, ring.d))
+    )
 
 
 class ExactRangeImageTest(absltest.TestCase):
@@ -466,16 +494,32 @@ class ExactRangeImageTest(absltest.TestCase):
     So the composition is pinned against what it must evaluate to, over the
     ring, on an honest witness."""
 
-    def _imaged(self, seed: int) -> tuple[_Instance, AffineImage]:
+    def _imaged(
+        self, seed: int, offset: np.ndarray | None = None, **overrides: Any
+    ) -> tuple[_Instance, AffineImage]:
+        """An instance carrying the suite's standard `E`, and that `E`."""
         probe = _Instance(seed)
-        ring, ell = probe.ring, probe.protocol.ell
-        image = lnp_fixture.rotation_image(
+        ell = probe.protocol.ell
+        image = _probe_image(probe.ring, ell, offset)
+        return _Instance(seed, image=image, **overrides), image
+
+    def _assert_composes(self, instance: _Instance, image: AffineImage) -> None:
+        """The composed image, applied to the leg's lift `(s1‖x, m)`,
+        evaluates to `E⃗s − ⃗v` on `E`'s rows and `x⃗` on the rest."""
+        ring = instance.ring
+        composed = instance.exact.range_image()
+        assert composed is not None
+        self.assertEqual(composed.rows, image.rows + _DIGIT_COLS)
+        wide = lift(
             ring,
-            SIGMA_ORDER * (_M1 + ell),
-            lnp_fixture.identity_columns(_M1, ell),
-            [1, 6, 2],
+            ring.from_signed_stack(instance.s1),
+            ring.from_signed_stack(instance.message),
         )
-        return _Instance(seed, image=image), image
+        # `apply` hands back flat balanced coefficients, as `_Instance` and
+        # `ProjectionLeg.respond` both read them.
+        got = composed.apply(ring, wide).reshape(composed.rows, ring.d)
+        np.testing.assert_array_equal(got[: image.rows], instance.bounded)
+        np.testing.assert_array_equal(got[image.rows :], instance.digits)
 
     def test_the_witness_case_needs_no_image(self) -> None:
         """At `E = I` the imageless leg already bounds `(s1‖x, m)`, whose
@@ -494,21 +538,7 @@ class ExactRangeImageTest(absltest.TestCase):
         digits out of the same object is what ties the two halves of eq. 53
         to one vector."""
         instance, image = self._imaged(71)
-        ring = instance.ring
-        composed = instance.exact.range_image()
-        assert composed is not None
-        self.assertEqual(composed.rows, image.rows + _DIGIT_COLS)
-
-        wide = lift(
-            ring,
-            ring.from_signed_stack(instance.s1),
-            ring.from_signed_stack(instance.message),
-        )
-        # `apply` hands back flat balanced coefficients, as `_Instance` and
-        # `ProjectionLeg.respond` both read them.
-        got = composed.apply(ring, wide).reshape(composed.rows, ring.d)
-        np.testing.assert_array_equal(got[: image.rows], instance.bounded)
-        np.testing.assert_array_equal(got[image.rows :], instance.digits)
+        self._assert_composes(instance, image)
 
     def test_the_composition_carries_the_offset(self) -> None:
         """`⃗v` is half of `E⃗s − ⃗v`, and the composition has to carry it —
@@ -520,34 +550,19 @@ class ExactRangeImageTest(absltest.TestCase):
         `E⃗s − ⃗v`, and both proofs verify. The digit rows select `x⃗`
         outright, so their offset must stay zero."""
         ring = lnp_fixture.ring()
-        ell = _Instance(73).protocol.ell
-        columns = lnp_fixture.identity_columns(_M1, ell)
-        offset = ring.from_signed_stack(
-            np.random.default_rng(3).integers(-1, 2, (len(columns), ring.d))
-        )
-        image = lnp_fixture.rotation_image(
-            ring, SIGMA_ORDER * (_M1 + ell), columns, None, offset
-        )
+        offset = _ternary_offset(ring, _M1 + _ELL)
         # A ternary offset against a ternary image reaches coefficients of
         # 2, so the bound is widened or `decompose` refuses the witness.
-        instance = _Instance(
-            73, image=image, bound=2 * lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
+        instance, image = self._imaged(
+            73, offset, bound=2 * lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
         )
         composed = instance.exact.range_image()
         assert composed is not None
-
         np.testing.assert_array_equal(composed.offset[: image.rows], offset)
         np.testing.assert_array_equal(
             composed.offset[image.rows :], ring.zeros(_DIGIT_COLS)
         )
-        wide = lift(
-            ring,
-            ring.from_signed_stack(instance.s1),
-            ring.from_signed_stack(instance.message),
-        )
-        got = composed.apply(ring, wide).reshape(composed.rows, ring.d)
-        np.testing.assert_array_equal(got[: image.rows], instance.bounded)
-        np.testing.assert_array_equal(got[image.rows :], instance.digits)
+        self._assert_composes(instance, image)
 
     def test_the_composed_image_spans_the_legs_lift(self) -> None:
         """`E` is written over `2(m1+ℓ)` and the leg's lift is
@@ -597,10 +612,10 @@ class ExactWraparoundTest(absltest.TestCase):
         ring = instance.ring
         for extra in (0, 30):
             with self.subTest(binary_cols=extra):
-                image, rows = _wide_leg_image(instance, extra)
+                image = _leg_image(instance, extra)
                 leg = _leg_at_bound(instance, 500_000, image)
                 with self.assertRaisesRegex(
-                    ValueError, rf"Lemma 2\.9.*/{41 * rows * ring.d}\b"
+                    ValueError, rf"Lemma 2\.9.*/{41 * image.rows * ring.d}\b"
                 ):
                     instance.exact.require_no_wraparound(leg, binary_cols=extra)
 
@@ -630,25 +645,15 @@ class ExactWraparoundTest(absltest.TestCase):
         leg's `E` by hand and leaving off the rows that select `x⃗`. Only
         the width agreement sees it."""
         probe = _Instance(66)
-        ring, ell = probe.ring, probe.protocol.ell
-        image = lnp_fixture.rotation_image(
-            ring,
-            SIGMA_ORDER * (_M1 + ell),
-            lnp_fixture.identity_columns(_M1, ell),
-            [1, 6, 2],
-        )
+        ell = probe.protocol.ell
+        image = _probe_image(probe.ring, ell)
         exact = ExactL2(probe.evaluation, _M1, ell, probe.bound, image)
         composed = exact.range_image()
         assert composed is not None
         self.assertEqual(composed.rows, image.rows + _DIGIT_COLS)
         exact.require_no_wraparound(_leg_at_bound(probe, 16, composed))
 
-        columns = lnp_fixture.identity_columns(_S1_COLS, ell)
-        short = lnp_fixture.rotation_image(
-            ring,
-            SIGMA_ORDER * (_S1_COLS + ell),
-            columns[: composed.rows - _DIGIT_COLS],
-        )
+        short = _leg_image(probe, -_DIGIT_COLS)
         with self.assertRaisesRegex(ValueError, "eq. 61's composition"):
             exact.require_no_wraparound(_leg_at_bound(probe, 16, short))
 
@@ -675,7 +680,14 @@ class ExactWraparoundTest(absltest.TestCase):
         """A bound proved over another modulus prices nothing here, and the
         conditions are all comparisons against *this* ring's `q`."""
         instance = _Instance(68)
-        other = _Instance(69, ring=HostSplitRing(_OTHER_Q, lnp_fixture.D))
+        # Any `q ≡ 5 (mod 8)` will do — what the guard reads is object
+        # identity, not the value.
+        other_q = next(
+            q
+            for q in primes.find_nearest_split_primes(32.0, 2)
+            if q not in lnp_fixture.SPLIT_Q
+        )
+        other = _Instance(69, ring=HostSplitRing((other_q,), lnp_fixture.D))
         with self.assertRaisesRegex(ValueError, "one ring"):
             instance.exact.require_no_wraparound(other.protocol.legs[0])
 
@@ -771,7 +783,7 @@ class ExactAffineImageTest(absltest.TestCase):
         ring = plain.ring
         columns = lnp_fixture.identity_columns(_M1, plain.protocol.ell)
         identity = lnp_fixture.rotation_image(
-            ring, 2 * (_M1 + plain.protocol.ell), columns
+            ring, SIGMA_ORDER * (_M1 + plain.protocol.ell), columns
         )
         spelled = _Instance(60, image=identity)
 
@@ -794,7 +806,10 @@ class ExactAffineImageTest(absltest.TestCase):
         columns = lnp_fixture.identity_columns(_M1, ell)
         # Read the first witness column twice and the message not at all.
         image = lnp_fixture.rotation_image(
-            ring, 2 * (_M1 + ell), [columns[0], columns[0], columns[1]], [0, 7, 3]
+            ring,
+            SIGMA_ORDER * (_M1 + ell),
+            [columns[0], columns[0], columns[1]],
+            [0, 7, 3],
         )
         instance = _Instance(61, image=image)
         self.assertFalse(ring.constant_coeff(instance.values()).any())
@@ -821,7 +836,7 @@ class ExactAffineImageTest(absltest.TestCase):
         shifted = _Instance(
             62,
             image=lnp_fixture.rotation_image(
-                ring, 2 * (_M1 + ell), columns, None, offset
+                ring, SIGMA_ORDER * (_M1 + ell), columns, None, offset
             ),
             bound=wide,
         )
@@ -840,9 +855,7 @@ class ExactAffineImageTest(absltest.TestCase):
         wraparound premise be about the vector `I` is written for."""
         probe = _Instance(63)
         ring, ell = probe.ring, probe.protocol.ell
-        image = lnp_fixture.rotation_image(
-            ring, 2 * (_M1 + ell), lnp_fixture.identity_columns(_M1, ell), [1, 6, 2]
-        )
+        image = _probe_image(ring, ell)
         composed = ExactL2(probe.evaluation, _M1, ell, probe.bound, image).range_image()
         instance = _Instance(63, image=image, range_image=composed)
         proof, _ = instance.protocol.prove(
@@ -907,7 +920,7 @@ class ExactAffineImageTest(absltest.TestCase):
     def test_a_misshapen_image_is_refused(self) -> None:
         ring = lnp_fixture.ring()
         instance = _Instance(65)
-        width = 2 * (_M1 + instance.protocol.ell)
+        width = SIGMA_ORDER * (_M1 + instance.protocol.ell)
         for message, image in {
             "one ring column per position": AffineImage(
                 matrix=ring.zeros(2, width + 1), offset=ring.zeros(2)

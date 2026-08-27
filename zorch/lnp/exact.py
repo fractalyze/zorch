@@ -288,6 +288,18 @@ class ExactL2:
         # reachable through the permutation.
         self._pairing = lift_pairing(witness_cols, message_cols)
         self.image = require_image(image, ring, len(self._image_positions))
+        # The width, in ring elements, of the vector eq. 61 composes — what a
+        # leg carrying this statement has to bound. One derivation, read by
+        # `range_image` and by `require_no_wraparound`. It used to be two: the
+        # leg sized its challenge matrix off its image's rows while the
+        # wraparound check re-derived `(image.rows + _DIGITS)` on its own, and
+        # nothing made the two agree. At `E = I` it is `(s1‖x, m)`, the leg's
+        # own carve with the digits included.
+        self._composed_cols = (
+            self._s1_take + message_cols
+            if self.image is None
+            else self.image.rows + _DIGITS
+        )
         # `p⃗ = (1, 2, 4, …, 2^{digits-1}, 0, …)` — eq. 59's radix row, which
         # reads the digits back as the number they encode. Public, so it is
         # the half that carries the automorphism, exactly as `T`'s first
@@ -438,20 +450,6 @@ class ExactL2:
             constants(ring, [self.bound**2])[0],
         )
 
-    def composed_cols(self) -> int:
-        """The width, in ring elements, of the vector eq. 61 composes — what
-        a leg carrying this statement has to bound.
-
-        One derivation, read by `range_image` below and by
-        `require_no_wraparound` under it. It used to be two: the leg sized
-        its challenge matrix off its image's rows while the wraparound check
-        re-derived `(image.rows + _DIGITS)` on its own, and nothing made the
-        two agree."""
-        if self.image is None:
-            # `(s1‖x, m)` — the leg's own carve, digits included.
-            return self._s1_take + self.message_cols
-        return self.image.rows + _DIGITS
-
     def range_image(self) -> AffineImage | None:
         """Eq. 61's `e⃗^(e) = [E⃗s − ⃗v ; x⃗]` — the image the range leg
         carrying this statement must be built with, or `None` when the leg
@@ -484,21 +482,17 @@ class ExactL2:
         # one. Both halves carve from the head of each automorphism copy,
         # which is where a layer that *appends* leaves the caller's columns.
         columns = lift_positions(self.witness_cols, self._s1_take, ell, ell)
-        wide = lift_slots(self._s1_take, ell)
         rows = self.image.rows
-        # Through `composed_cols` rather than `rows + _DIGITS`: that number
+        # Through `_composed_cols` rather than `rows + _DIGITS`: that number
         # is what the wraparound check prices, and spelling it twice is how
         # the composition and its premise drifted apart before.
-        matrix = ring.zeros(self.composed_cols(), SIGMA_ORDER * (self._s1_take + ell))
+        matrix = ring.zeros(self._composed_cols, SIGMA_ORDER * (self._s1_take + ell))
         matrix[:rows, columns] = self.image.matrix
         # The digits enter as a selection, not through `E`: they are what
         # eq. 59's radix row reads, and the leg has to bound them because
         # `⟨p⃗, x⃗⟩ ≥ 0` is the half of §5.2 that makes the bound exact.
-        matrix[
-            rows + np.arange(_DIGITS),
-            wide.s1[self.witness_cols : self.witness_cols + _DIGITS],
-        ] = ring.one()
-        offset = ring.zeros(self.composed_cols())
+        matrix[rows + np.arange(_DIGITS), self._digit[:_DIGITS]] = ring.one()
+        offset = ring.zeros(self._composed_cols)
         offset[:rows] = self.image.offset
         return AffineImage(matrix=matrix, offset=offset)
 
@@ -569,7 +563,7 @@ class ExactL2:
         # Raises for Fig. 10's ℓ∞ leg, which proves no ℓ2 bound to price.
         projection_bound = leg.masking.proven_norm()
         width = leg.bounded_width()
-        expected = (self.composed_cols() + binary_cols) * self.ring.d
+        expected = (self._composed_cols + binary_cols) * self.ring.d
         if width != expected:
             raise ValueError(
                 f"exact: this leg bounds {width} integers, but eq. 61's "

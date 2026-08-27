@@ -383,7 +383,7 @@ class ProjectionLeg:
         because that is what it is: a `Z`-linear map on coefficient vectors,
         which only becomes ring-shaped once `T` reads it row by row."""
         rows = self.masking.projection
-        count = rows * self._chunks * self.scheme.ring.d
+        count = rows * self.bounded_width()
         t, raw = transcript.sample_scalar(-(-count * _BIN1_BITS // 8))
         bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8))
         pairs = bits[: count * _BIN1_BITS].reshape(count, _BIN1_BITS)
