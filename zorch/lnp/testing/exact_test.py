@@ -32,7 +32,7 @@ from lattice_frx.split_ring import HostSplitRing
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.eval import AbdlopQuadraticEval
-from zorch.lnp.exact import ExactL2
+from zorch.lnp.exact import ExactL2, binarity
 from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
@@ -193,6 +193,18 @@ class ExactDecompositionTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "past the ring degree"):
             ExactL2(instance.evaluation, _M1, instance.protocol.ell, 1 << 40)
 
+    def test_a_message_column_count_outside_the_statement_is_refused(self) -> None:
+        """`message_cols` is a count, and both bad directions are silent
+        rather than loud: a negative one slices `slots.message[:-1]`, which
+        proves a *prefix* while `c` under-counts the projected width by the
+        columns it dropped, and an over-count clamps in the slice while
+        inflating `c`. Neither raises on its own."""
+        instance = _Instance(5)
+        for bad in (-1, instance.evaluation.ell + 1):
+            with self.subTest(message_cols=bad):
+                with self.assertRaisesRegex(ValueError, "column message half"):
+                    ExactL2(instance.evaluation, _M1, bad, instance.exact.bound)
+
 
 class ExactStatementTest(absltest.TestCase):
     """`G` and `I` against the ring, not against a proof going through."""
@@ -255,15 +267,159 @@ class ExactStatementTest(absltest.TestCase):
         self.assertTrue(moved[1].any())
 
 
+class BinarityTest(absltest.TestCase):
+    """Eq. 54 on its own — `E_bin s − v_bin ∈ {0,1}` at `E_bin` a selection.
+
+    Lemma 5.2 is the whole content: `⟨v⃗, v⃗ − 1⃗⟩ = 0` forces binary, because
+    every term `v_t(v_t − 1)` is nonnegative over ℤ and vanishes only at 0
+    and 1. Pinned against the ring rather than a round-trip, for this file's
+    standing reason — both sides build the function from one object, so a
+    builder that named the wrong columns proves something else and verifies.
+    """
+
+    def _value(
+        self,
+        instance: _Instance,
+        family: tuple[np.ndarray, np.ndarray, np.ndarray],
+        s1_extra: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """The one evaluation's value on the lift, with the Ajtai half's
+        binary column overridable."""
+        ring = instance.ring
+        e2, e1, e0 = family
+        s = instance.lifted(digits=s1_extra)
+        return evaluate(ring, e2[0], e1[0], e0[0], s)
+
+    def test_it_vanishes_on_binary_columns(self) -> None:
+        """The digits are binary by construction, so a statement naming
+        their column vanishes in its constant coefficient — and not as a
+        ring element, or it would be a relation claiming something
+        stronger."""
+        instance = _Instance(20)
+        family = binarity(instance.evaluation, s1_columns=[_M1])
+        value = self._value(instance, family)
+        self.assertFalse(instance.ring.constant_coeff(value).any())
+        self.assertTrue(value.any())
+
+    def test_it_detects_a_non_binary_coefficient(self) -> None:
+        """`-1` is the half worth naming: it is the case a `v² = v`-shaped
+        check would miss, and the one Lemma 5.2's nonnegativity argument
+        exists to cover — `(-1)(-2) = 2 > 0`, so the sum cannot cancel it
+        against another term."""
+        instance = _Instance(21)
+        family = binarity(instance.evaluation, s1_columns=[_M1])
+        for planted in (2, -1):
+            with self.subTest(planted=planted):
+                crooked = instance.digits.copy()
+                crooked[0, 0] = planted
+                value = self._value(instance, family, s1_extra=crooked)
+                self.assertTrue(instance.ring.constant_coeff(value).any())
+
+    def test_it_covers_the_message_half_too(self) -> None:
+        """`message_columns` was the untested half of the signature: every
+        production caller names Ajtai columns, and the only test that passed
+        a message column was the out-of-range rejection — so the branch that
+        indexes `slots.message` had never built a family anyone evaluated.
+
+        Both verdicts on one lift, as above: the column is made binary and
+        the statement vanishes, then a `2` is planted in it and it does not.
+        The digits are untouched throughout, so a family that silently read
+        the Ajtai half instead would vanish in both halves of this test.
+        """
+        instance = _Instance(30)
+        instance.message = np.zeros_like(instance.message)
+        instance.message[0, :4] = 1
+        family = binarity(instance.evaluation, message_columns=[0])
+        self.assertFalse(
+            instance.ring.constant_coeff(self._value(instance, family)).any()
+        )
+        instance.message[0, 0] = 2
+        self.assertTrue(
+            instance.ring.constant_coeff(self._value(instance, family)).any()
+        )
+
+    def test_it_names_the_columns_it_is_about(self) -> None:
+        """A statement over the *witness* column does not vanish — the
+        witness is ternary, not binary. That the same builder gives opposite
+        verdicts on two columns of one lift is what says it reads the
+        column it was told rather than a fixed one."""
+        instance = _Instance(23)
+        digits = binarity(instance.evaluation, s1_columns=[_M1])
+        witness = binarity(instance.evaluation, s1_columns=[0])
+        self.assertFalse(
+            instance.ring.constant_coeff(self._value(instance, digits)).any()
+        )
+        self.assertTrue(
+            instance.ring.constant_coeff(self._value(instance, witness)).any()
+        )
+
+    def test_a_column_outside_the_statement_is_refused(self) -> None:
+        instance = _Instance(24)
+        with self.assertRaisesRegex(ValueError, "binary s1 column outside"):
+            binarity(instance.evaluation, s1_columns=[instance.evaluation.s1_take])
+        with self.assertRaisesRegex(ValueError, "binary message column outside"):
+            binarity(instance.evaluation, message_columns=[instance.evaluation.ell])
+
+    def test_an_empty_claim_is_refused(self) -> None:
+        """`⟨(), () − 1⃗⟩ = 0` holds for every witness, so it is an
+        evaluation that proves nothing while looking like a proof."""
+        instance = _Instance(25)
+        with self.assertRaisesRegex(ValueError, "needs a column"):
+            binarity(instance.evaluation)
+
+
 class ExactWraparoundTest(absltest.TestCase):
-    def test_a_projection_bound_that_could_wrap_is_refused(self) -> None:
+    def test_each_wraparound_condition_is_checked(self) -> None:
         """Both statements are proved mod q, and an integer identity that
         wrapped is not one. Thm 5.3's conditions are checked rather than
-        assumed because a violation reads exactly like a valid proof."""
+        assumed because a violation reads exactly like a valid proof.
+
+        Each is tripped on its own, which needs choosing `B` between the
+        thresholds: at this parameter point Lemma 2.9's precondition binds at
+        `q/(41·c) ≈ 4.1e5` and the binarity check at `≈ 6.6e4`, so a `B` in
+        between clears the first and fails the second. A single huge `B`
+        would violate both and only ever prove the earliest check runs."""
         instance = _Instance(9)
         instance.exact.require_no_wraparound(16)
         with self.assertRaisesRegex(ValueError, "the binarity check"):
-            instance.exact.require_no_wraparound(1 << 20)
+            instance.exact.require_no_wraparound(100_000)
+        with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
+            instance.exact.require_no_wraparound(500_000)
+
+    def test_binary_columns_widen_the_projection_lemma_29_bounds(self) -> None:
+        """`c` is the projected vector's width in *integers*, so eq. 54's
+        binary columns count in it — they are part of `x'` and therefore part
+        of what the range leg has to bound.
+
+        Leaving them out silently loosens Lemma 2.9's precondition, which is
+        the one condition whose failure means the projection establishes
+        nothing at all rather than merely establishing it modulo q."""
+        instance = _Instance(15)
+        # 60_000 clears every condition at `binary_cols = 0` (Lemma 2.9 binds
+        # at q/(41·256) ≈ 4.1e5 there). Enough binary columns pull `c` up
+        # until it does not — 30 is well past a realistic point, which is the
+        # point: the formula has to move with `c` at all.
+        instance.exact.require_no_wraparound(60_000)
+        with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
+            instance.exact.require_no_wraparound(60_000, binary_cols=30)
+
+    def test_negative_widths_are_refused_before_the_bounds_are_checked(self) -> None:
+        """Every way these two arguments can be wrong fails *open*.
+
+        A negative `binary_cols` shrinks `span` to zero and drops a ring
+        element from the projected width; a negative `projection_bound` walks
+        through `41·c·B < q` because the product is then negative. Both buy a
+        gate that passes, which is worse than one that raises — so they are
+        rejected before any bound is computed."""
+        instance = _Instance(16)
+        with self.assertRaisesRegex(ValueError, "cannot be negative"):
+            instance.exact.require_no_wraparound(-1)
+        with self.assertRaisesRegex(ValueError, "binary-column width"):
+            instance.exact.require_no_wraparound(16, binary_cols=-1)
+        # An over-large count needs no ceiling: it only inflates `c`, so the
+        # condition gets stricter and trips on its own.
+        with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
+            instance.exact.require_no_wraparound(60_000, binary_cols=10_000)
 
     def test_the_honest_parameter_point_has_room(self) -> None:
         """The conditions are not tight at any sane point — `q` is ~2^32 and
