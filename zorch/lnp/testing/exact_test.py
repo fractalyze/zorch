@@ -289,24 +289,19 @@ class BinarityTest(absltest.TestCase):
         self.assertFalse(instance.ring.constant_coeff(value).any())
         self.assertTrue(value.any())
 
-    def test_it_detects_a_two(self) -> None:
+    def test_it_detects_a_non_binary_coefficient(self) -> None:
+        """`-1` is the half worth naming: it is the case a `v² = v`-shaped
+        check would miss, and the one Lemma 5.2's nonnegativity argument
+        exists to cover — `(-1)(-2) = 2 > 0`, so the sum cannot cancel it
+        against another term."""
         instance = _Instance(21)
         family = binarity(instance.evaluation, s1_columns=[_M1])
-        crooked = instance.digits.copy()
-        crooked[0, 0] = 2
-        value = self._value(instance, family, s1_extra=crooked)
-        self.assertTrue(instance.ring.constant_coeff(value).any())
-
-    def test_it_detects_a_negative_one(self) -> None:
-        """`-1` is the case a naive `v(v-1)`-free check would miss, and the
-        one Lemma 5.2's nonnegativity argument exists to cover: `(-1)(-2) =
-        2 > 0`, so the sum cannot cancel it against another term."""
-        instance = _Instance(22)
-        family = binarity(instance.evaluation, s1_columns=[_M1])
-        crooked = instance.digits.copy()
-        crooked[0, 0] = -1
-        value = self._value(instance, family, s1_extra=crooked)
-        self.assertTrue(instance.ring.constant_coeff(value).any())
+        for planted in (2, -1):
+            with self.subTest(planted=planted):
+                crooked = instance.digits.copy()
+                crooked[0, 0] = planted
+                value = self._value(instance, family, s1_extra=crooked)
+                self.assertTrue(instance.ring.constant_coeff(value).any())
 
     def test_it_names_the_columns_it_is_about(self) -> None:
         """A statement over the *witness* column does not vanish — the

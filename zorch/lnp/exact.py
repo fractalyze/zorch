@@ -1,6 +1,8 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""The exact ℓ2 bound — `‖(s1, m)‖ ≤ β` with β *tight* (eprint 2022/284,
-§5.2, eq. 53).
+"""§5.2's two statements: the exact ℓ2 bound — `‖(s1, m)‖ ≤ β` with β
+*tight* (eprint 2022/284, eq. 53) — and eq. 54's binarity, which `ExactL2`
+builds its own digits through and a caller can ask for over any committed
+columns.
 
 Everything before this module proves an **approximate** bound: `range.py`
 reveals a 256-integer projection and concludes `‖⃗s‖ ≤ 2√(256/26)·t·γ·√337·β`,
@@ -95,13 +97,20 @@ def binarity(
     implements, that premise is inherited rather than re-proved — the
     columns are part of the witness the leg already projects.
 
-    Columns are named per half because the lift has two, and both
-    automorphism copies of each are read: `T(v⃗, ·)` puts `σ₋₁(v)` on one
-    side of the product, so a statement about `v` touches `σ(v)`'s slot too.
+    Columns are named per half because the two halves are separate 0-based
+    index spaces with different bounds (`s1_take` against `ell`); one flat
+    sequence would make the caller know the lift layout, which `lift_slots`
+    owns. Both automorphism copies of each column are read — `T(v⃗, ·)` puts
+    `σ₋₁(v)` on one side of the product, so a statement about `v` touches
+    `σ(v)`'s slot too — which is why the body builds `identity` and `sigma`
+    together.
 
-    The general `E_bin s − v_bin` of eq. 54 is an affine image and would
-    make this a dense quadratic form over the whole lift; see this module's
-    header for why that case is deferred.
+    **Two restrictions, not one.** `E_bin` is a *selection*, which the
+    `Sequence[int]` parameters make un-violable: a general affine image would
+    turn this into a dense quadratic form over the whole lift, and this
+    module's header says why that is deferred. `v_bin = 0` is the separate
+    one, pinned by the `ring.zeros(1, 1)` below and enforced by nothing —
+    a caller wanting `v⃗` in `{k, k+1}` for public `k` has no knob for it.
     """
     ring = evaluation.scheme.ring
     slots = lift_slots(evaluation.s1_take, evaluation.ell)
@@ -120,12 +129,8 @@ def binarity(
             "exact: binarity needs a column to be about — an empty claim is "
             "an evaluation that vanishes for every witness"
         )
-    identity = np.concatenate([slots.s1[s1_take], slots.message[message]]).astype(
-        np.int64
-    )
-    sigma = np.concatenate(
-        [slots.sigma_s1[s1_take], slots.sigma_message[message]]
-    ).astype(np.int64)
+    identity = np.concatenate([slots.s1[s1_take], slots.message[message]])
+    sigma = np.concatenate([slots.sigma_s1[s1_take], slots.sigma_message[message]])
 
     width = evaluation.width
     e2 = ring.zeros(1, width, width)
@@ -219,7 +224,6 @@ class ExactL2:
             [slots.sigma_s1[:witness_cols], slots.sigma_message[:message_cols]]
         )
         self._digit = slots.s1[witness_cols:]
-        self._sigma_digit = slots.sigma_s1[witness_cols:]
         # `p⃗ = (1, 2, 4, …, 2^{digits-1}, 0, …)` — eq. 59's radix row, which
         # reads the digits back as the number they encode. Public, so it is
         # the half that carries the automorphism, exactly as `T`'s first
@@ -229,18 +233,19 @@ class ExactL2:
         self._radix = ring.galois(
             ring.from_signed_stack(radix), sigma_exponent(ring.d)
         )[0]
-        # `1⃗` over one ring element: `Σ_t X^t`, the all-ones coefficient
-        # vector Lemma 5.2 subtracts.
         # The digits' own binarity, through the shared builder: `x⃗` is
-        # exactly the `x'` of eq. 63 when no `E_bin` columns join it.
-        self._binarity = binarity(
+        # exactly the `x'` of eq. 63 when no `E_bin` columns join it. A local,
+        # not a field: `_build` is the only reader and runs below, while
+        # keeping it would hold a second copy of a ~10 MB block for the
+        # object's lifetime.
+        digits_binarity = binarity(
             evaluation, s1_columns=range(witness_cols, evaluation.s1_take)
         )
         # Witness-independent and identical on both sides, so it is built
         # once — the same reason `ProjectionLeg` caches `_e1` and its sign
         # relation. At the paper's width this block is ~10 MB, and prove and
         # verify each ask for it.
-        self._evaluations = self._build()
+        self._evaluations = self._build(digits_binarity)
 
     def decompose(self, witness: np.ndarray) -> np.ndarray:
         """The digits `x⃗` of `β² − ‖(s1, m)‖²`, as a signed-integer stack the
@@ -262,7 +267,7 @@ class ExactL2:
         out[0, : self.digits] = gadget.decompose_unsigned(slack, 1, self.digits)
         return out
 
-    def evaluations(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def evaluations(self) -> Family:
         """`(G, I)` as the `(e2, e1, e0)` family `AbdlopQuadraticEval` takes.
 
         The same blocks every call: they depend on the public parameters
@@ -270,7 +275,7 @@ class ExactL2:
         into its own wider arrays."""
         return self._evaluations
 
-    def _build(self) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _build(self, digits_binarity: Family) -> Family:
         """The two functions, laid out over the eval layer's lift.
 
         Both are *evaluations* and not relations: what is claimed is that
@@ -289,7 +294,7 @@ class ExactL2:
         e1[0, self._digit] = self._radix
         e0[0, 0] = ring.neg(constants(ring, [self.bound**2])[0])
         # `G` first, matching eq. 69's order within what this builder owns.
-        return stack_families([self._binarity, (e2, e1, e0)])
+        return stack_families([digits_binarity, (e2, e1, e0)])
 
     def require_no_wraparound(
         self, projection_bound: int, binary_cols: int = 0
@@ -300,9 +305,10 @@ class ExactL2:
         `projection_bound` is `B`, the ℓ2 bound the approximate leg actually
         proves about `(s ‖ x⃗)` — **not** its projection dimension, which is a
         count. `binary_cols` is Thm 5.3's `k_bin`, the width of the `E_bin`
-        statement's own binary vector: zero here because eq. 54 is not
-        implemented, and a parameter rather than an assumption because it
-        belongs to the *composed* statement and not to this object.
+        statement's own binary vector: zero when no `binarity(...)` columns
+        ride along in the same statement, and a parameter rather than an
+        assumption because it belongs to the *composed* statement and not to
+        this object.
 
         The exact statements are proved mod q, and an integer identity that
         wrapped is not an integer identity — these are what rule that out:
@@ -322,15 +328,13 @@ class ExactL2:
         like a proof about integers."""
         modulus = math.prod(self.ring.q_moduli)
         span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
-        # `c` of Thm 5.3: the projected vector's width in *integers*, not in
-        # ring elements — the witness, the digits, and any binary columns.
-        challenge_width = (
+        projected_width = (
             self.witness_cols + self.message_cols + _DIGITS + binary_cols
         ) * self.ring.d
-        if 41 * challenge_width * projection_bound >= modulus:
+        if 41 * projected_width * projection_bound >= modulus:
             raise ValueError(
                 f"exact: Lemma 2.9 needs B = {projection_bound} < "
-                f"q/(41·c) = {modulus}/{41 * challenge_width}, or the "
+                f"q/(41·c) = {modulus}/{41 * projected_width}, or the "
                 f"projection bounds nothing at all — raise q, or shrink the "
                 f"projected vector"
             )

@@ -88,9 +88,10 @@ _LABEL_MANY = b"lnp/quad/aggregate"
 # with `ChallengeParams.k`.
 SIGMA_ORDER = 2
 
-# Three blocks over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`. Public
-# because every layer that builds a statement hands one of these down, and the
-# three blocks only mean anything together.
+# Three blocks over the lifted width — `(R2, r1, r0)` or `(e2, e1, e0)`. Owned
+# here because `AbdlopQuadratic.prove` is the first layer that takes a family
+# and `_require_families` is where its shape is enforced; the three blocks only
+# mean anything together, which is why they get one name rather than three.
 Family = tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
