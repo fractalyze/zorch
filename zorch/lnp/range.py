@@ -269,6 +269,23 @@ class ProjectionLeg:
         self._e1 = self._linear_block()
         self._sign_relation = self._relation()
 
+    def bounded_width(self) -> int:
+        """Theorem 5.3's `c` — the width, *in integers*, of the vector this
+        leg's projection bounds.
+
+        `_chunks` counts it in ring elements, and both units are genuinely
+        used: `_families` reshapes against the ring-element count, while `R`
+        is a `Z`-linear map on *coefficients*, so `challenge` squeezes this
+        one. That is the leg's own reader, and the method would exist with
+        nothing else in the tree.
+
+        Public *also* because it is the one number a consumer of the
+        approximate bound has to agree with the leg about:
+        `exact.ExactL2.require_no_wraparound` prices Lemma 2.9's precondition
+        against it, and pricing a width the leg does not actually bound would
+        gate a statement nobody proved."""
+        return self._chunks * self.scheme.ring.d
+
     # The prover's half. `randomness` is separate from `draw` so the
     # composing layer can hoist it out of its attempt loop: a rejected
     # attempt redraws `(b, y)` but not the witness-only matvecs, which is
@@ -371,7 +388,7 @@ class ProjectionLeg:
         because that is what it is: a `Z`-linear map on coefficient vectors,
         which only becomes ring-shaped once `T` reads it row by row."""
         rows = self.masking.projection
-        count = rows * self._chunks * self.scheme.ring.d
+        count = rows * self.bounded_width()
         t, raw = transcript.sample_scalar(-(-count * _BIN1_BITS // 8))
         bits = np.unpackbits(np.frombuffer(raw, dtype=np.uint8))
         pairs = bits[: count * _BIN1_BITS].reshape(count, _BIN1_BITS)
