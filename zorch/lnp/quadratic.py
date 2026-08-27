@@ -565,6 +565,34 @@ class AffineImage:
         what sizes the challenge matrix and the revealed projection."""
         return int(self.matrix.shape[0])
 
+    def apply(self, ring: HostSplitRing, lift: np.ndarray) -> np.ndarray:
+        """`E⃗s − ⃗v` (eq. 61) as balanced integer coefficients — the vector
+        this image's statement is actually about, over ℤ.
+
+        `lift` is `(s1, σ(s1), m, σ(m))` over the halves the image was
+        written against, in the order its columns are indexed. Prover-side
+        only: the verifier never needs it, since `(E, v)` are public and the
+        statement is rebuilt from them.
+
+        Both consumers want the same vector for different reasons — a range
+        leg contracts `R` against it, and `ExactL2.decompose` takes the norm
+        of it — so it lives with the image rather than in either.
+
+        **The premise it reads under.** Computed in `R_q` and read back on
+        `(−q/2, q/2]`, so it is the integer vector the statement is about
+        precisely while that vector fits one period. `‖E⃗s − ⃗v‖ ≤ β` is that
+        premise, and Lemma 2.9 needs `β` far below `q` anyway. A witness
+        violating it is not caught here, and the failure is quiet: what gets
+        proven is then a true bound on the balanced representative, which is
+        a different vector from the one the caller meant.
+
+        Row by row because the balanced read is a per-element op, and
+        through it rather than around it because reading limb 0 out of the
+        array by hand is the one thing the ring's contract tells consumers
+        not to do."""
+        image = ring.sub(ring.matvec(self.matrix, lift), self.offset)
+        return np.concatenate([ring.to_balanced_limb0(row) for row in image])
+
 
 def require_image(
     image: AffineImage | None, ring: HostSplitRing, width: int
@@ -632,6 +660,33 @@ def lift(
     layer appending `g` depends on.
     """
     return np.concatenate([_orbit(ring, s1_part), _orbit(ring, message_part)])
+
+
+def lift_pairing(s1_cols: int, message_cols: int) -> np.ndarray:
+    """`lift`'s σ involution as an index array: where `σ₋₁(s_c)` sits, for
+    every position `c` of `lift(s1_cols, message_cols)`.
+
+    Every inner product in this package is `Σ σ₋₁(a_i)·b_i`, so a statement
+    that names a position always names its partner too. At `E = I` that
+    pairing is spelled by taking `slots.s1` and `slots.sigma_s1` together;
+    once a general `E` mixes columns, the partner of a *combination* is only
+    recoverable through the permutation, which is this.
+
+    An involution, because `SIGMA_ORDER` is 2 — `pairing[pairing[c]] == c`
+    — which is what lets a caller apply it to either side of a product."""
+    if s1_cols < 0 or message_cols < 0:
+        raise ValueError(f"lift_pairing: negative widths ({s1_cols}, {message_cols})")
+    s1 = np.arange(s1_cols)
+    message = np.arange(message_cols)
+    span = SIGMA_ORDER * s1_cols
+    return np.concatenate(
+        [
+            s1_cols + s1,
+            s1,
+            span + message_cols + message,
+            span + message,
+        ]
+    )
 
 
 def lift_positions(

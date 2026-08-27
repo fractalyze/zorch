@@ -14,6 +14,7 @@ py_library(
         "//zorch/commit:ajtai",
         "//zorch/lnp:challenge",
         "//zorch/lnp:masking",
+        "//zorch/lnp:quadratic",
         requirement("hash_frx"),
         requirement("lattice_frx"),
         requirement("numpy"),

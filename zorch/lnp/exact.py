@@ -41,15 +41,30 @@ the range statement, which is what Fig. 10 does — its `Ψ` carries `G` and
 `I_i` next to the legs' own obligations. Nothing here absorbs a transcript
 or draws randomness.
 
-**`E = I`.** Fig. 10 states eq. 53 for arbitrary `‖E_i s − v_i‖ ≤ β_i`, an
-affine image of the lift. This module implements the case the paper leads
-with — the witness itself — because that is what a folding or
-verifiable-encryption consumer asks for first, and because a general `E`
-costs `256·k·width` ring multiplications on the host oracle, which is a
-pure-Python O(d²) schoolbook by design. Everything below is written so the
-general case is a widening rather than a rewrite: the bounded vector is
-named by *positions in the lift*, and `E = I` is the case where those
-positions are the witness's own.
+**`E` is general.** Fig. 10 states eq. 53 for arbitrary
+`‖E_i s − v_i‖ ≤ β_i`, an affine image of the lift, and `ExactL2` takes one:
+pass a `quadratic.AffineImage` and eq. 66's inner product is written about
+`E⃗s − ⃗v`. `None` keeps the case the paper leads with, the witness itself,
+which is what a folding or verifiable-encryption consumer asks for first.
+
+This was deferred once, on the grounds that a general `E` cost `256·k·width`
+ring multiplications against a pure-Python O(d²) schoolbook. That accounting
+was about the *range* leg — `T(⃗r_i, E⃗s)` for 256 rows — and it stopped being
+true when `lattice_frx` grew a batched `matmul`: the contraction became one
+`int64` sum over `(cols, d)` with the anticirculant built once and reused, a
+measured 112–116x over the `matvec`-per-column spelling it replaces. Here the
+cost is not per row at all. `T(E⃗s, E⃗s)` is a single `σ₋₁(E)ᵀ·E` contraction
+folded into a block that is built once per object and shared by prove and
+verify, so a general `E` costs the same per proof as `E = I` does.
+
+What the two cases do *not* share is density. At `E = I` the quadratic block
+is a diagonal scatter over the witness columns; a general `E` fills the whole
+`2(m1+ℓ)` square, because `σ₋₁` of a combination reaches the σ copy of
+everything the combination touched. That is inherent to the statement rather
+than to this implementation.
+
+Eq. 54's `E_bin` is still a selection — see `binarity`, which says why its
+`Sequence[int]` columns are the restriction and not an oversight.
 """
 
 from __future__ import annotations
@@ -70,9 +85,12 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.quadratic import (
+    AffineImage,
     Family,
     constants,
+    lift_pairing,
     lift_slots,
+    require_image,
     sigma_exponent,
     stack_families,
 )
@@ -107,10 +125,15 @@ def binarity(
 
     **Two restrictions, not one.** `E_bin` is a *selection*, which the
     `Sequence[int]` parameters make un-violable: a general affine image would
-    turn this into a dense quadratic form over the whole lift, and this
-    module's header says why that is deferred. `v_bin = 0` is the separate
-    one, pinned by the `ring.zeros(1, 1)` below and enforced by nothing —
-    a caller wanting `v⃗` in `{k, k+1}` for public `k` has no knob for it.
+    turn this into a dense quadratic form over the whole lift. `ExactL2`
+    takes one of those for eq. 53 and eq. 54 could follow the same way, but
+    nothing has asked for it — and the inherited-wraparound argument above is
+    a reason to keep the selection while a selection will do, since a general
+    image's columns are not columns the range leg already projects.
+
+    `v_bin = 0` is the separate one, pinned by the `ring.zeros(1, 1)` below
+    and enforced by nothing — a caller wanting `v⃗` in `{k, k+1}` for public
+    `k` has no knob for it.
     """
     ring = evaluation.scheme.ring
     slots = lift_slots(evaluation.s1_take, evaluation.ell)
@@ -151,7 +174,9 @@ class ExactL2:
     """The two evaluations that turn Fig. 9's approximate bound into
     `‖(s1, m)‖ ≤ β` exactly.
 
-    `witness_cols` and `message_cols` name the bounded vector `(s1, m)`:
+    `witness_cols` and `message_cols` name the lift this statement is
+    written over — `(s1, m)`, which is also the bounded vector when no
+    `image` is given and the columns `E` is indexed against when one is:
     how much of the Ajtai half is witness (the rest of `evaluation.s1_take`
     being the digits appended here), and how much of the message half is the
     caller's own `m` — the number `ApproximateRange.ell` reports, not the
@@ -180,6 +205,7 @@ class ExactL2:
         witness_cols: int,
         message_cols: int,
         bound: int,
+        image: AffineImage | None = None,
     ) -> None:
         ring = evaluation.scheme.ring
         if bound <= 0:
@@ -231,6 +257,24 @@ class ExactL2:
             [slots.sigma_s1[:witness_cols], slots.sigma_message[:message_cols]]
         )
         self._digit = slots.s1[witness_cols:]
+        # Where an image's columns live: the caller's own halves and both
+        # their σ copies, which is the paper's `2(m1+ℓ)` — the digits are
+        # *not* among them. Fig. 10 commits the Ajtai half as `(s1, x)` but
+        # writes `E_i` over `s` alone, and `x` reaches the statement through
+        # the radix row below instead.
+        self._image_positions = np.concatenate(
+            [
+                slots.s1[:witness_cols],
+                slots.sigma_s1[:witness_cols],
+                slots.message[:message_cols],
+                slots.sigma_message[:message_cols],
+            ]
+        )
+        # Every term of `T(·, ·)` reads a position and its σ partner, and
+        # once `E` mixes columns the partner of a combination is only
+        # reachable through the permutation.
+        self._pairing = lift_pairing(witness_cols, message_cols)
+        self.image = require_image(image, ring, len(self._image_positions))
         # `p⃗ = (1, 2, 4, …, 2^{digits-1}, 0, …)` — eq. 59's radix row, which
         # reads the digits back as the number they encode. Public, so it is
         # the half that carries the automorphism, exactly as `T`'s first
@@ -261,9 +305,11 @@ class ExactL2:
         """The digits `x⃗` of `β² − ‖(s1, m)‖²`, as a signed-integer stack the
         caller appends to its Ajtai half.
 
-        `witness` is `(s1, m)` over ℤ — the same balanced integers whose norm
-        is the statement, so the caller passes what it committed rather than
-        a reconstruction. Raises when the witness is over the bound, since
+        `witness` is the bounded vector over ℤ — `(s1, m)` itself with no
+        image, and `E⃗s − ⃗v` with one, which is what
+        `range.ProjectionLeg.project` computes. Either way the caller passes
+        the balanced integers whose norm is the statement rather than a
+        reconstruction of them. Raises when they are over the bound, since
         the slack has no binary representation then and a silently wrong
         proof is the alternative."""
         slack = self.bound**2 - norms.l2_squared(witness)
@@ -296,15 +342,86 @@ class ExactL2:
         them."""
         ring = self.ring
         width = self.width
-        # I(s, x⃗) = T(s, s) + T(p⃗, x⃗) − β²                      (eq. 66)
+        # I(s, x⃗) = T(E⃗s − ⃗v, E⃗s − ⃗v) + T(p⃗, x⃗) − β²          (eq. 66)
         e2 = ring.zeros(1, width, width)
         e1 = ring.zeros(1, width)
         e0 = ring.zeros(1, 1)
-        e2[0, self._sigma_witness, self._witness] = ring.one()
+        if self.image is None:
+            e2[0, self._sigma_witness, self._witness] = ring.one()
+            constant = ring.neg(constants(ring, [self.bound**2])[0])
+        else:
+            constant = self._image_terms(self.image, e2, e1)
         e1[0, self._digit] = self._radix
-        e0[0, 0] = ring.neg(constants(ring, [self.bound**2])[0])
+        e0[0, 0] = constant
         # `G` first, matching eq. 69's order within what this builder owns.
         return stack_families([digits_binarity, (e2, e1, e0)])
+
+    def _image_terms(
+        self, image: AffineImage, e2: np.ndarray, e1: np.ndarray
+    ) -> np.ndarray:
+        """`T(E⃗s − ⃗v, E⃗s − ⃗v)` written into the two blocks it spreads
+        across, and the public remainder it leaves behind.
+
+        The inner product is bilinear, so it splits four ways:
+
+            T(E⃗s − ⃗v, E⃗s − ⃗v)
+                = T(E⃗s, E⃗s) − T(E⃗s, ⃗v) − T(⃗v, E⃗s) + T(⃗v, ⃗v)
+
+        The first is quadratic in the lift, the middle two are linear in it,
+        and the last has no witness in it at all. `E = I, ⃗v = 0` collapses
+        every one of them back to `e2[σ(c), c] = 1` on the witness columns,
+        which is what the branch above spells directly.
+
+        **Why the pairing.** `T(⃗a, ⃗b) = Σ σ₋₁(a_i)·b_i`, so the left factor
+        of every term is read from the σ copy of wherever the right one
+        lives. At `E = I` that is `_sigma_witness` beside `_witness`; once
+        `E` mixes columns, `σ₋₁` of a *combination* spreads over the σ copies
+        of everything the combination touched, and the permutation is the
+        only thing that still says where.
+
+        Written into the caller's blocks rather than returned, because `e2`
+        is `width²` ring elements — ~10 MB at the paper's point — and a
+        second one to merge would double the peak for a block that is
+        already built once per object lifetime."""
+        ring = self.ring
+        matrix, offset = image.matrix, image.offset
+        exponent = sigma_exponent(ring.d)
+        sigma_matrix = ring.galois(matrix, exponent)
+        sigma_offset = ring.galois(offset, exponent)
+        positions = self._image_positions
+        # Where `σ₋₁` of each column's contents lives, in the same order.
+        partner = positions[self._pairing]
+
+        # T(E⃗s, E⃗s): the coefficient pairing `σ₋₁(s_c)` with `s_c'` is
+        # `Σ_k σ₋₁(E_kc)·E_kc'`, one contraction of `σ₋₁(E)ᵀ` against `E`.
+        # Both index arrays are permutations of the same column set, so this
+        # covers each `(c, c')` exactly once — no entry is written twice, and
+        # the form stays the plain bilinear sum the `E = I` branch builds
+        # rather than a symmetrised one.
+        e2[0, partner[:, None], positions[None, :]] = ring.matmul(
+            np.swapaxes(sigma_matrix, 0, 1), matrix
+        )
+
+        # −T(E⃗s, ⃗v) lands on the σ copies and −T(⃗v, E⃗s) on the identity
+        # ones, so they are summed in column space and scattered once — the
+        # two index sets are the same positions in a different order, and
+        # assigning them separately would have the second overwrite the
+        # first.
+        e1[0, positions] = ring.neg(
+            ring.add(
+                ring.matvec(np.swapaxes(matrix, 0, 1), sigma_offset),
+                ring.matvec(np.swapaxes(sigma_matrix, 0, 1), offset)[self._pairing],
+            )
+        )
+
+        # `T(⃗v, ⃗v) − β²`, both public. The whole ring element and not its
+        # constant coefficient: only `I`'s constant coefficient is claimed to
+        # vanish, and dropping the rest here would be claiming the others
+        # were zero to begin with.
+        return ring.sub(
+            ring.matvec(sigma_offset[None, :], offset)[0],
+            constants(ring, [self.bound**2])[0],
+        )
 
     def require_no_wraparound(
         self, projection_bound: int, binary_cols: int = 0
@@ -356,9 +473,16 @@ class ExactL2:
             )
         modulus = math.prod(self.ring.q_moduli)
         span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
-        projected_width = (
-            self.witness_cols + self.message_cols + _DIGITS + binary_cols
-        ) * self.ring.d
+        # What is actually projected: the bounded vector, the digits and any
+        # binary columns. At `E = I` the first is `(s1, m)` itself; with an
+        # image it is `E⃗s − ⃗v`, whose row count is its own and need not
+        # match either half's width.
+        bounded = (
+            self.witness_cols + self.message_cols
+            if self.image is None
+            else self.image.rows
+        )
+        projected_width = (bounded + _DIGITS + binary_cols) * self.ring.d
         if 41 * projected_width * projection_bound >= modulus:
             raise ValueError(
                 f"exact: Lemma 2.9 needs B = {projection_bound} < "

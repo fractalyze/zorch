@@ -12,6 +12,7 @@ starts being a divergence, so the point lives here.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import numpy as np
 from hash_frx.sha256 import HostSha256
@@ -21,6 +22,7 @@ from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.challenge import ChallengeParams
 from zorch.lnp.masking import BimodalMasking, Masking
+from zorch.lnp.quadratic import AffineImage
 
 # One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`)
 # and a small degree keep the schoolbook ring affordable; the challenge
@@ -162,3 +164,32 @@ def bimodal(
         fail_prob=FAIL_PROB,
     )
     return BimodalMasking(ring, **(params | overrides))  # type: ignore[arg-type]
+
+
+def rotation_image(
+    ring: HostSplitRing,
+    width: int,
+    columns: Sequence[int],
+    exponents: Sequence[int] | None = None,
+    offset: np.ndarray | None = None,
+) -> AffineImage:
+    """An `E` with one monomial per row: row `i` reads lift column
+    `columns[i]`, rotated by `X^{exponents[i]}`.
+
+    Norm-preserving by construction, which is what makes it usable as a
+    round-trip witness at all — multiplication by `X^k` is a negacyclic
+    rotation, so `‖E⃗s‖ = ‖⃗s‖` exactly and the leg's Gaussian stays sized
+    for the witness the bound was derived from. A *uniform* `E` would be a
+    perfectly correct statement about a vector no masking in this suite is
+    parameterised for, and would reject its way to `exhausted` rather than
+    tell anyone the image was the problem."""
+    rows = len(columns)
+    if exponents is None:
+        exponents = [0] * rows
+    matrix = ring.zeros(rows, width)
+    monomials = ring.from_signed_stack(np.eye(ring.d, dtype=np.int64))
+    for row, (column, exponent) in enumerate(zip(columns, exponents, strict=True)):
+        matrix[row, column] = monomials[exponent]
+    return AffineImage(
+        matrix=matrix, offset=ring.zeros(rows) if offset is None else offset
+    )

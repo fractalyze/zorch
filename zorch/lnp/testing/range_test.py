@@ -1291,35 +1291,6 @@ class BimodalMaskingTest(absltest.TestCase):
             raise instance.protocol._exhausted()
 
 
-def _rotation_image(
-    ring: HostSplitRing,
-    width: int,
-    columns: Sequence[int],
-    exponents: Sequence[int] | None = None,
-    offset: np.ndarray | None = None,
-) -> AffineImage:
-    """An `E` with one monomial per row: row `i` reads lift column
-    `columns[i]`, rotated by `X^{exponents[i]}`.
-
-    Norm-preserving by construction, which is what makes it usable as a
-    round-trip witness at all — multiplication by `X^k` is a negacyclic
-    rotation, so `‖E⃗s‖ = ‖⃗s‖` exactly and the leg's Gaussian stays sized
-    for the witness the bound was derived from. A *uniform* `E` would be a
-    perfectly correct statement about a vector no masking in this suite is
-    parameterised for, and would reject its way to `exhausted` rather than
-    tell anyone the image was the problem."""
-    rows = len(columns)
-    if exponents is None:
-        exponents = [0] * rows
-    matrix = ring.zeros(rows, width)
-    monomials = ring.from_signed_stack(np.eye(ring.d, dtype=np.int64))
-    for row, (column, exponent) in enumerate(zip(columns, exponents, strict=True)):
-        matrix[row, column] = monomials[exponent]
-    return AffineImage(
-        matrix=matrix, offset=ring.zeros(rows) if offset is None else offset
-    )
-
-
 def _identity_columns(s1_take: int, ell: int) -> list[int]:
     """Where `(s1, m)` sit in the narrow lift `(s1, σ(s1), m, σ(m))` an
     affine image is written over — the columns an imageless leg selects."""
@@ -1351,7 +1322,7 @@ class AffineImageTest(absltest.TestCase):
         take = plain.protocol.evaluation.s1_take
         ell = plain.protocol.ell
         width = len(plain.leg._image_positions)
-        identity = _rotation_image(ring, width, _identity_columns(take, ell))
+        identity = lnp_fixture.rotation_image(ring, width, _identity_columns(take, ell))
         spelled = _Instance(40, images=[identity])
 
         # Same leg, same draw, same challenge — only how `E` reaches the
@@ -1391,7 +1362,7 @@ class AffineImageTest(absltest.TestCase):
         # identity copies would be the narrow case wearing a general name.
         slots = lift_slots(take, ell)
         columns = [int(slots.sigma_s1[0]), int(slots.message[0])]
-        image = _rotation_image(ring, width, columns, [3, 0], offset)
+        image = lnp_fixture.rotation_image(ring, width, columns, [3, 0], offset)
         leg = _Instance(41, images=[image]).leg
 
         narrow = lift(
@@ -1422,7 +1393,9 @@ class AffineImageTest(absltest.TestCase):
                     int(slots.s1[0]),
                     int(slots.sigma_s1[0]),
                 ]
-                image = _rotation_image(ring, 2 * (take + ell), columns, [0, 5, 1])
+                image = lnp_fixture.rotation_image(
+                    ring, 2 * (take + ell), columns, [0, 5, 1]
+                )
                 instance = _Instance(seed, images=[image])
                 self.assertTrue(instance.verify(instance.prove()))
 
@@ -1442,14 +1415,16 @@ class AffineImageTest(absltest.TestCase):
             .integers(-1, 2, (len(columns), ring.d))
             .astype(np.int64)
         )
-        image = _rotation_image(ring, 2 * (take + ell), columns, None, offset)
+        image = lnp_fixture.rotation_image(
+            ring, 2 * (take + ell), columns, None, offset
+        )
         wide = 4 * _WITNESS_COLS
         instance = _Instance(45, images=[image], witness_cols=wide)
         proof = instance.prove()
         self.assertTrue(instance.verify(proof))
 
         # The same proof against the same `E` and a different `⃗v`.
-        other = _rotation_image(
+        other = lnp_fixture.rotation_image(
             ring, 2 * (take + ell), columns, None, ring.zeros(len(columns))
         )
         self.assertFalse(
@@ -1466,7 +1441,7 @@ class AffineImageTest(absltest.TestCase):
         ring = lnp_fixture.ring()
         take, ell = _M1, _ELL
         columns = _identity_columns(take, ell)[:1]
-        image = _rotation_image(ring, 2 * (take + ell), columns)
+        image = lnp_fixture.rotation_image(ring, 2 * (take + ell), columns)
         instance = _Instance(46, images=[image])
         self.assertEqual(instance.leg._chunks, 1)
         self.assertEqual(
@@ -1517,7 +1492,9 @@ class AffineImageTest(absltest.TestCase):
 
     def test_one_image_per_leg_or_none(self) -> None:
         ring = lnp_fixture.ring()
-        image = _rotation_image(ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL))
+        image = lnp_fixture.rotation_image(
+            ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL)
+        )
         with self.assertRaisesRegex(ValueError, "affine image"):
             _Instance(49, legs=2, images=[image])
 
@@ -1527,7 +1504,7 @@ class AffineImageTest(absltest.TestCase):
         """Fig. 10's own shape: `D` and `E` are different maps on the same
         commitment, and `None` is the leg that keeps Fig. 9's case."""
         ring = lnp_fixture.ring()
-        image = _rotation_image(
+        image = lnp_fixture.rotation_image(
             ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL), [2, 2, 2]
         )
         instance = _Instance(50, legs=2, images=[None, image])

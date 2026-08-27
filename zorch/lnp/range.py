@@ -310,15 +310,10 @@ class ProjectionLeg:
 
         `lift` is `(s1, σ(s1), m, σ(m))` over the caller's own halves —
         `quadratic.lift` of exactly what the image was written against, in
-        the order `_image_positions` reads it back.
-
-        **The premise it reads under.** The image is computed in `R_q` and
-        read back on `(−q/2, q/2]`, so it is the integer vector the statement
-        is about precisely while that vector fits one period. `‖E⃗s − ⃗v‖ ≤ β`
-        is that premise, and Lemma 2.9 needs `β` far below `q` anyway. A
-        witness violating it is not caught here, and the failure is quiet:
-        what gets proven is then a true bound on the balanced representative,
-        which is a different vector from the one the caller meant."""
+        the order `_image_positions` reads it back. The arithmetic and the
+        premise it reads under are `AffineImage.apply`'s; what this adds is
+        the refusal below, which belongs to the leg because only a leg has a
+        witness-bounding case to be confused with."""
         if self.image is None:
             raise ValueError(
                 "range: this leg bounds the witness itself, which reaches "
@@ -326,15 +321,7 @@ class ProjectionLeg:
                 "here to project, and returning the witness instead would "
                 "hide a caller that thought it had passed one"
             )
-        ring = self.scheme.ring
-        image = ring.sub(ring.matvec(self.image.matrix, lift), self.image.offset)
-        # Row by row because the balanced read is a per-element op, and
-        # through it rather than around it because reading limb 0 out of the
-        # array by hand is the one thing this ring's contract tells consumers
-        # not to do. The loop is `p` iterations once per proof — `_bounded`
-        # hoists this out of the attempt loop, so it costs nothing against
-        # the matvec above it.
-        return np.concatenate([ring.to_balanced_limb0(row) for row in image])
+        return self.image.apply(self.scheme.ring, lift)
 
     def respond(
         self,
