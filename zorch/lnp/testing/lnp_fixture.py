@@ -176,13 +176,21 @@ def rotation_image(
     """An `E` with one monomial per row: row `i` reads lift column
     `columns[i]`, rotated by `X^{exponents[i]}`.
 
-    Norm-preserving by construction, which is what makes it usable as a
-    round-trip witness at all — multiplication by `X^k` is a negacyclic
-    rotation, so `‖E⃗s‖ = ‖⃗s‖` exactly and the leg's Gaussian stays sized
-    for the witness the bound was derived from. A *uniform* `E` would be a
-    perfectly correct statement about a vector no masking in this suite is
-    parameterised for, and would reject its way to `exhausted` rather than
-    tell anyone the image was the problem."""
+    Multiplication by `X^k` is a negacyclic rotation, so each row's entry has
+    the same coefficients as the column it reads, permuted and sign-flipped.
+    That is what makes this usable as a round-trip witness: when `columns` is
+    a permutation of the lift positions being bounded, `‖E⃗s‖ = ‖⃗s‖` exactly
+    and the leg's Gaussian stays sized for the witness the bound was derived
+    from. A *uniform* `E` would be a perfectly correct statement about a
+    vector no masking in this suite is parameterised for, and would reject
+    its way to `exhausted` rather than say the image was the problem.
+
+    **The permutation is the caller's to arrange, not this helper's.**
+    Repeating a column or dropping one is allowed and changes the norm —
+    `exact_test` reads one column twice on purpose, precisely so the image's
+    slack differs from the witness's. A caller doing that owes its own bound
+    a second look; validating against it here would refuse the tests that
+    exist to exercise it."""
     rows = len(columns)
     if exponents is None:
         exponents = [0] * rows

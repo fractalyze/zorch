@@ -115,7 +115,12 @@ class _Instance:
             self.masking,
             images=[range_image] if range_image is not None else (),
         )
-        self.bound = bound or lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
+        # `is None`, not falsy: `bound=0` is a value a test may want to
+        # hand `ExactL2` to watch it refuse a non-positive bound, and `or`
+        # would quietly hand it the default instead.
+        self.bound = (
+            lnp_fixture.ternary_beta(ring, _WITNESS_COLS) if bound is None else bound
+        )
         self.image = image
         self.exact = ExactL2(self.evaluation, _M1, self.protocol.ell, self.bound, image)
 
