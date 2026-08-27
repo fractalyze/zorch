@@ -241,12 +241,15 @@ class ExactL2:
             ring.from_signed_stack(radix), sigma_exponent(ring.d)
         )[0]
         # The digits' own binarity, through the shared builder: `x⃗` is
-        # exactly the `x'` of eq. 63 when no `E_bin` columns join it. A local,
-        # not a field: `_build` is the only reader and runs below, while
-        # keeping it would hold a second copy of a ~10 MB block for the
-        # object's lifetime.
+        # exactly the `x'` of eq. 63 when no `E_bin` columns join it. Named as
+        # the digits rather than as "the columns after the witness" — the two
+        # coincide only while the digits are the *only* other contributor to
+        # the Ajtai half, which is precisely what this class's docstring says
+        # `E_bin` binarity retires. A local, not a field: `_build` is the only
+        # reader and runs below, while keeping it would hold a second copy of
+        # a ~10 MB block for the object's lifetime.
         digits_binarity = binarity(
-            evaluation, s1_columns=range(witness_cols, evaluation.s1_take)
+            evaluation, s1_columns=range(witness_cols, witness_cols + _DIGITS)
         )
         # Witness-independent and identical on both sides, so it is built
         # once — the same reason `ProjectionLeg` caches `_e1` and its sign

@@ -315,6 +315,29 @@ class BinarityTest(absltest.TestCase):
                 value = self._value(instance, family, s1_extra=crooked)
                 self.assertTrue(instance.ring.constant_coeff(value).any())
 
+    def test_it_covers_the_message_half_too(self) -> None:
+        """`message_columns` was the untested half of the signature: every
+        production caller names Ajtai columns, and the only test that passed
+        a message column was the out-of-range rejection — so the branch that
+        indexes `slots.message` had never built a family anyone evaluated.
+
+        Both verdicts on one lift, as above: the column is made binary and
+        the statement vanishes, then a `2` is planted in it and it does not.
+        The digits are untouched throughout, so a family that silently read
+        the Ajtai half instead would vanish in both halves of this test.
+        """
+        instance = _Instance(30)
+        instance.message = np.zeros_like(instance.message)
+        instance.message[0, :4] = 1
+        family = binarity(instance.evaluation, message_columns=[0])
+        self.assertFalse(
+            instance.ring.constant_coeff(self._value(instance, family)).any()
+        )
+        instance.message[0, 0] = 2
+        self.assertTrue(
+            instance.ring.constant_coeff(self._value(instance, family)).any()
+        )
+
     def test_it_names_the_columns_it_is_about(self) -> None:
         """A statement over the *witness* column does not vanish — the
         witness is ternary, not binary. That the same builder gives opposite
