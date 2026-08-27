@@ -71,6 +71,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 # `υe = 1`: §5.2 sizes the ring degree so `2·log(β) ≤ d`, one ring element
 # holds the decomposition, and the `digits > ring.d` gate below is what
@@ -96,6 +97,9 @@ from zorch.lnp.quadratic import (
     sigma_exponent,
     stack_families,
 )
+
+if TYPE_CHECKING:
+    from zorch.lnp.range import ProjectionLeg
 
 
 def binarity(
@@ -498,28 +502,39 @@ class ExactL2:
         offset[:rows] = self.image.offset
         return AffineImage(matrix=matrix, offset=offset)
 
-    def require_no_wraparound(
-        self, projection_bound: int, binary_cols: int = 0
-    ) -> None:
+    def require_no_wraparound(self, leg: ProjectionLeg, binary_cols: int = 0) -> None:
         """Theorem 5.3's conditions on the range leg that carries this proof
         from `Z_q` to `ℤ`.
 
-        `projection_bound` is `B`, the ℓ2 bound the approximate leg actually
-        proves about `(s ‖ x⃗)` — **not** its projection dimension, which is a
-        count. `binary_cols` is Thm 5.3's `k_bin`, the width of the `E_bin`
+        `leg` is that leg, and both numbers the conditions need are read off
+        it rather than passed in: `B = leg.masking.proven_norm()`, the ℓ2
+        bound Lemma 2.9 concludes about the projected vector, and
+        `c = leg.bounded_width()`, that vector's width in integers. Taking
+        the leg is what makes the check about the proof actually being
+        built. A `B` and a `c` supplied by the caller describe a leg that
+        may not exist, and every way of getting them wrong yields a gate
+        that passes.
+
+        `binary_cols` is Thm 5.3's `k_bin`, the width of the `E_bin`
         statement's own binary vector: zero when no `binarity(...)` columns
         ride along in the same statement, and a parameter rather than an
         assumption because it belongs to the *composed* statement and not to
-        this object.
+        this object. The leg is expected to bound those columns too, so they
+        count in the width agreement below.
+
+        **An ℓ∞ leg is refused here**, by `proven_norm` raising. Fig. 10
+        runs two legs and only the ℓ2 one, `(e)`, carries an exact
+        statement: Theorem 5.3 states all three conditions over `B^(e)`
+        alone, because they exist to keep an integer identity proved mod `q`
+        from wrapping, and the ℓ∞ leg's eq. 52 is not one. Deriving an ℓ2
+        bound from the ℓ∞ gate via `√n` would also cost `21.8×` against the
+        `9.7×` this parameter point has to spare — see `masking.LinfBound`.
 
         The exact statements are proved mod q, and an integer identity that
         wrapped is not an integer identity — these are what rule that out:
 
         - `B < q/(41·c)` is Lemma 2.9's own precondition (`b ≤ P/(41m)`),
-          without which the projection says nothing at all. `c` is the
-          challenge dimension `d·(k_bin + Σ(p_i + 1))` — the *integer* width
-          of the projected vector, which at `E = I` is the witness, the
-          digits and any binary columns.
+          without which the projection says nothing at all.
         - `B² + √((υe + k_bin)·d)·B < q` makes `⟨x', x' − 1⃗⟩ = 0 mod q` hold
           over ℤ, since both terms of the inner product are then bounded well
           inside one period.
@@ -529,39 +544,46 @@ class ExactL2:
         anywhere — it is a proof of a statement about residues that reads
         like a proof about integers.
 
-        Both arguments are rejected below zero. Neither is merely nonsense:
-        a negative `binary_cols` shrinks `span` and drops a ring element from
-        the projected width, and a negative `projection_bound` walks straight
-        through `41·c·B < q`. Every one of those failures is in the *loosening*
-        direction, so a bad argument buys a gate that passes rather than one
-        that raises. An over-large `binary_cols` needs no ceiling: it only
-        inflates `c`, which makes the condition stricter."""
-        if projection_bound < 0:
-            raise ValueError(
-                f"exact: the projection bound is a norm and cannot be "
-                f"negative, got {projection_bound!r}"
-            )
+        What the width agreement does *not* check is that the leg's image is
+        this statement's `range_image()` entry for entry — only that it
+        bounds a vector of the right width.
+
+        That is the reachable failure. Handing a leg this statement's own
+        `E` is already impossible: it is written over `2(m1+ℓ)` and the
+        leg's lift is `2(s1_take+ℓ)`, so `require_image` refuses it on
+        shape. What survives that is an image over the *right* lift with the
+        wrong row count — a caller writing the leg's `E` by hand and leaving
+        off the rows that select `x⃗`. An `E` of the right shape about the
+        wrong columns stays a statement the caller wrote down and this
+        object never sees."""
         if binary_cols < 0:
             raise ValueError(
                 f"exact: the binary-column width cannot be negative, got "
                 f"{binary_cols!r}"
             )
+        if leg.scheme.ring is not self.ring:
+            raise ValueError(
+                "exact: the leg and this statement must hold one ring — a "
+                "bound proved over a different modulus prices nothing here"
+            )
+        # Raises for Fig. 10's ℓ∞ leg, which proves no ℓ2 bound to price.
+        projection_bound = leg.masking.proven_norm()
+        width = leg.bounded_width()
+        expected = (self.composed_cols() + binary_cols) * self.ring.d
+        if width != expected:
+            raise ValueError(
+                f"exact: this leg bounds {width} integers, but eq. 61's "
+                f"composition over this statement is {expected} — the leg "
+                f"has to be built with `range_image()` (plus any "
+                f"`binary_cols`), or its bound is about a different vector "
+                f"than the one Theorem 5.3's conditions are priced for"
+            )
         modulus = math.prod(self.ring.q_moduli)
         span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
-        # What is actually projected: the bounded vector, the digits and any
-        # binary columns. At `E = I` the first is `(s1, m)` itself; with an
-        # image it is `E⃗s − ⃗v`, whose row count is its own and need not
-        # match either half's width.
-        bounded = (
-            self.witness_cols + self.message_cols
-            if self.image is None
-            else self.image.rows
-        )
-        projected_width = (bounded + _DIGITS + binary_cols) * self.ring.d
-        if 41 * projected_width * projection_bound >= modulus:
+        if 41 * width * projection_bound >= modulus:
             raise ValueError(
                 f"exact: Lemma 2.9 needs B = {projection_bound} < "
-                f"q/(41·c) = {modulus}/{41 * projected_width}, or the "
+                f"q/(41·c) = {modulus}/{41 * width}, or the "
                 f"projection bounds nothing at all — raise q, or shrink the "
                 f"projected vector"
             )

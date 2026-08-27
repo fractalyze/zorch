@@ -123,6 +123,7 @@ py_test(
         "//zorch/commit:ajtai",
         "//zorch/lnp:eval",
         "//zorch/lnp:exact",
+        "//zorch/lnp:masking",
         "//zorch/lnp:quadratic",
         "//zorch/lnp:range",
         "//zorch/lnp/testing:lnp_fixture",

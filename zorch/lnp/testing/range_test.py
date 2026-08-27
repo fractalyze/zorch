@@ -1107,10 +1107,16 @@ class NormGateTest(absltest.TestCase):
 
     def test_the_linf_leg_refuses_to_state_an_l2_bound(self) -> None:
         """§5.2 does draw a conclusion for the ℓ∞ leg — `‖e⃗‖_∞ ≤ 24·s` —
-        but in the other norm. Returning it where an ℓ2 bound is expected
-        would satisfy a wraparound condition nothing established."""
+        but in the other norm, and reached through Lemma 2.7, which carries
+        no precondition to price.
+
+        Theorem 5.3 states the wraparound conditions over the ℓ2 leg's
+        `B^(e)` alone: they keep an integer identity proved mod `q` from
+        wrapping, and the ℓ∞ leg's eq. 52 is not one. So the refusal is the
+        theorem's own scoping rather than a gap — `exact.ExactL2` is where
+        it surfaces, as a leg that cannot carry an exact statement."""
         masking = self._masking(bound=LinfBound())
-        with self.assertRaisesRegex(ValueError, "not the ℓ2 one"):
+        with self.assertRaisesRegex(ValueError, "ℓ∞ leg"):
             masking.proven_norm()
 
     def test_accept_t_is_gated_where_it_means_something(self) -> None:
@@ -1462,6 +1468,28 @@ class AffineImageTest(absltest.TestCase):
         self.assertEqual(
             instance.challenge().shape, (instance.masking.projection, ring.d)
         )
+        # Theorem 5.3's `c`, the same width in integers — what
+        # `exact.ExactL2.require_no_wraparound` prices Lemma 2.9 against.
+        self.assertEqual(instance.leg.bounded_width(), ring.d)
+
+    def test_the_bounded_width_is_the_projected_vector_in_integers(self) -> None:
+        """`c` is a width over `Z_q`, where each ring element is `d`
+        coefficients — so it is `_chunks·d` and not `_chunks`.
+
+        Public because a consumer of the approximate bound has to agree with
+        the leg about it: pricing a width the leg does not bound would gate
+        a statement nobody proved. Pinned at both cases, since an imageless
+        leg bounds the witness and an imaged one bounds `E`'s rows."""
+        ring = lnp_fixture.ring()
+        plain = _Instance(48)
+        self.assertEqual(plain.leg.bounded_width(), (_M1 + _ELL) * ring.d)
+
+        columns = lnp_fixture.identity_columns(_M1, _ELL)[:2]
+        imaged = _Instance(
+            49,
+            images=[lnp_fixture.rotation_image(ring, 2 * (_M1 + _ELL), columns)],
+        )
+        self.assertEqual(imaged.leg.bounded_width(), 2 * ring.d)
 
     def test_an_image_may_not_reach_the_mask_or_the_sign(self) -> None:
         """The columns an image is written over are the caller's own halves,

@@ -383,16 +383,34 @@ class LinfBound:
         return norms.linf, math.floor(_LINF_TAIL * mask_std)
 
     def proven_norm(self, projection: int, mask_std: float) -> int:
-        """Refused: this leg proves an ℓ∞ bound, and every consumer of
-        `proven_norm` so far wants an ℓ2 one.
+        """Refused, and the refusal is Theorem 5.3's own scoping rather than
+        a gap waiting to be filled.
 
-        §5.2's soundness does draw a conclusion here — `‖e⃗^(d)‖_∞ ≤ 24·s`
-        — but it is a bound in the *other* norm, and returning it where an
-        ℓ2 bound is expected would satisfy a wraparound condition that has
-        not actually been established."""
+        Fig. 10 runs two legs. This one is `(d)`: it establishes eq. 52's
+        approximate ℓ∞ statement and reaches `‖e⃗^(d)‖_∞ ≤ 24·s^(d)` through
+        **Lemma 2.7**, which carries no precondition. The wraparound
+        conditions — `B < q/(41·c)` and the two that keep the exact
+        identities from wrapping — are stated over `B^(e)` alone, the ℓ2
+        bound of the *other* leg, because they exist to stop an integer
+        identity proved mod `q` from wrapping and eq. 52 is not one. So
+        there is no condition here for an ℓ∞ bound to be converted for.
+
+        Converting anyway does not work numerically either, which is worth
+        recording because `√n` is the obvious move: `‖·‖₂ ≤ √n·‖·‖_∞` over
+        the 256-coordinate projection costs a factor `16·14 = 224` against
+        the ℓ2 leg's `2·√(256/26)·t`, some `21.8×` — while the suite's own
+        parameter point clears Lemma 2.9's precondition by only `9.7×`. It
+        would refuse honest configurations to check a condition they do not
+        owe.
+
+        An exact statement therefore has to be carried by an ℓ2 leg. That is
+        a composition error, and raising here is what makes it one rather
+        than a proof of a bound nobody established."""
         raise ValueError(
-            "masking: the ℓ∞ leg proves an ℓ∞ bound on the projected "
-            "vector, not the ℓ2 one this asks for"
+            "masking: this is Fig. 10's ℓ∞ leg, which proves eq. 52 via "
+            "Lemma 2.7 — Theorem 5.3 states the wraparound conditions over "
+            "the ℓ2 leg's bound alone, so an exact statement must ride a "
+            "leg carrying `L2Bound`"
         )
 
 

@@ -28,16 +28,19 @@ have to collapse, and no proof going through would show it if they did not.
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
 from absl.testing import absltest
+from lattice_frx import primes
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.exact import ExactL2, binarity
+from zorch.lnp.masking import PROJECTION, L2Bound, LinfBound
 from zorch.lnp.quadratic import (
     SIGMA_ORDER,
     AbdlopQuadratic,
@@ -47,7 +50,7 @@ from zorch.lnp.quadratic import (
     evaluate,
     lift,
 )
-from zorch.lnp.range import ApproximateRange, RangeProof
+from zorch.lnp.range import ApproximateRange, ProjectionLeg, RangeProof
 from zorch.lnp.testing import lnp_fixture
 
 _ROWS = 2
@@ -61,6 +64,16 @@ _DIGIT_COLS = 1
 _S1_COLS = _M1 + _DIGIT_COLS
 # The vector whose norm is the statement: `(s1, m)`, without the digits.
 _WITNESS_COLS = _M1 + _ELL
+# A second split prime at the fixture's width, so a test can build a leg over
+# a ring that is not this statement's. Any `q ≡ 5 (mod 8)` will do — what the
+# guard reads is object identity, not the value.
+_OTHER_Q = (
+    next(
+        q
+        for q in primes.find_nearest_split_primes(32.0, 2)
+        if q not in lnp_fixture.SPLIT_Q
+    ),
+)
 
 
 def _scheme(ring: HostSplitRing, mask_cols: int) -> AbdlopCommitment:
@@ -94,8 +107,9 @@ class _Instance:
         image: AffineImage | None = None,
         range_image: AffineImage | None = None,
         bound: int | None = None,
+        ring: HostSplitRing | None = None,
     ) -> None:
-        ring = lnp_fixture.ring()
+        ring = lnp_fixture.ring() if ring is None else ring
         self.ring = ring
         self.masking = lnp_fixture.bimodal(ring, _WITNESS_COLS + _DIGIT_COLS)
         scheme = _scheme(ring, self.masking.mask_cols)
@@ -405,6 +419,44 @@ class BinarityTest(absltest.TestCase):
             binarity(instance.evaluation)
 
 
+def _leg_at_bound(
+    instance: _Instance, target: int, image: AffineImage | None = None
+) -> ProjectionLeg:
+    """A range leg over `instance`'s evaluation whose `proven_norm()` is
+    `target`, so a test can put `B` where the condition it wants to trip
+    lives.
+
+    `B = ⌈2·√(256/26)·t·s⌉` is monotone in `s` and nothing else, so the
+    inversion is exact up to the ceiling. Going through a real leg rather
+    than passing a number is the point of the API under test: `B` and `c`
+    now describe a proof that exists."""
+    std = target / (2.0 * math.sqrt(PROJECTION / 26.0) * L2Bound().accept_t)
+    masking = lnp_fixture.bimodal(
+        instance.ring, _WITNESS_COLS + _DIGIT_COLS, mask_std=std
+    )
+    protocol = ApproximateRange(
+        instance.evaluation, masking, images=[image] if image is not None else ()
+    )
+    return protocol.legs[0]
+
+
+def _wide_leg_image(instance: _Instance, extra_cols: int) -> tuple[AffineImage, int]:
+    """A leg image bounding the honest composition plus `extra_cols` more
+    ring elements — what a statement carrying `E_bin` columns rides on.
+
+    Returns the image and the row count, since `c` is what the tests read."""
+    ring, ell = instance.ring, instance.protocol.ell
+    # The leg's lift, `(s1‖x, m)` — wider than the one `ExactL2`'s own `E`
+    # is written over, which is exactly what `range_image` composes across.
+    columns = lnp_fixture.identity_columns(_S1_COLS, ell)
+    columns = list(columns) + [columns[0]] * extra_cols
+    rows = len(columns)
+    image = lnp_fixture.rotation_image(
+        ring, SIGMA_ORDER * (_S1_COLS + ell), columns, [0] * rows
+    )
+    return image, rows
+
+
 class ExactRangeImageTest(absltest.TestCase):
     """Eq. 61's `e⃗^(e) = [E⃗s − ⃗v ; x⃗]` — the image the range leg has to
     carry.
@@ -519,17 +571,17 @@ class ExactWraparoundTest(absltest.TestCase):
         wrapped is not one. Thm 5.3's conditions are checked rather than
         assumed because a violation reads exactly like a valid proof.
 
-        Each is tripped on its own, which needs choosing `B` between the
+        Each is tripped on its own, which needs putting `B` between the
         thresholds: at this parameter point Lemma 2.9's precondition binds at
         `q/(41·c) ≈ 4.1e5` and the binarity check at `≈ 6.6e4`, so a `B` in
         between clears the first and fails the second. A single huge `B`
         would violate both and only ever prove the earliest check runs."""
         instance = _Instance(9)
-        instance.exact.require_no_wraparound(16)
+        instance.exact.require_no_wraparound(_leg_at_bound(instance, 16))
         with self.assertRaisesRegex(ValueError, "the binarity check"):
-            instance.exact.require_no_wraparound(100_000)
+            instance.exact.require_no_wraparound(_leg_at_bound(instance, 100_000))
         with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
-            instance.exact.require_no_wraparound(500_000)
+            instance.exact.require_no_wraparound(_leg_at_bound(instance, 500_000))
 
     def test_binary_columns_widen_the_projection_lemma_29_bounds(self) -> None:
         """`c` is the projected vector's width in *integers*, so eq. 54's
@@ -538,46 +590,106 @@ class ExactWraparoundTest(absltest.TestCase):
 
         Leaving them out silently loosens Lemma 2.9's precondition, which is
         the one condition whose failure means the projection establishes
-        nothing at all rather than merely establishing it modulo q."""
+        nothing at all rather than merely establishing it modulo q. Read off
+        the `41·c` the message reports, since the leg must genuinely bound
+        those columns for the call to get that far at all."""
         instance = _Instance(15)
-        # 60_000 clears every condition at `binary_cols = 0` (Lemma 2.9 binds
-        # at q/(41·256) ≈ 4.1e5 there). Enough binary columns pull `c` up
-        # until it does not — 30 is well past a realistic point, which is the
-        # point: the formula has to move with `c` at all.
-        instance.exact.require_no_wraparound(60_000)
-        with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
-            instance.exact.require_no_wraparound(60_000, binary_cols=30)
+        ring = instance.ring
+        for extra in (0, 30):
+            with self.subTest(binary_cols=extra):
+                image, rows = _wide_leg_image(instance, extra)
+                leg = _leg_at_bound(instance, 500_000, image)
+                with self.assertRaisesRegex(
+                    ValueError, rf"Lemma 2\.9.*/{41 * rows * ring.d}\b"
+                ):
+                    instance.exact.require_no_wraparound(leg, binary_cols=extra)
 
-    def test_negative_widths_are_refused_before_the_bounds_are_checked(self) -> None:
-        """Every way these two arguments can be wrong fails *open*.
+    def test_a_negative_binary_width_is_refused_before_the_bounds(self) -> None:
+        """The one argument still passed by hand, and every way it can be
+        wrong fails *open*: a negative count shrinks `span` and drops a ring
+        element from the expected width, buying a gate that passes rather
+        than one that raises. So it is rejected before any bound is computed.
 
-        A negative `binary_cols` shrinks `span` to zero and drops a ring
-        element from the projected width; a negative `projection_bound` walks
-        through `41·c·B < q` because the product is then negative. Both buy a
-        gate that passes, which is worse than one that raises — so they are
-        rejected before any bound is computed."""
+        `B` is no longer among the arguments — it is read off the leg — which
+        retires the matching negative-bound case: `proven_norm` is a ceiling
+        over positive quantities and has no negative value to return."""
         instance = _Instance(16)
-        with self.assertRaisesRegex(ValueError, "cannot be negative"):
-            instance.exact.require_no_wraparound(-1)
+        leg = _leg_at_bound(instance, 16)
         with self.assertRaisesRegex(ValueError, "binary-column width"):
-            instance.exact.require_no_wraparound(16, binary_cols=-1)
-        # An over-large count needs no ceiling: it only inflates `c`, so the
-        # condition gets stricter and trips on its own.
-        with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
-            instance.exact.require_no_wraparound(60_000, binary_cols=10_000)
+            instance.exact.require_no_wraparound(leg, binary_cols=-1)
+
+    def test_a_leg_bounding_a_different_vector_is_refused(self) -> None:
+        """The leg has to bound eq. 61's `(E⃗s − ⃗v ‖ x⃗)`, and a leg that
+        bounds anything else prices Theorem 5.3's conditions for a vector
+        the proof never covered — with both proofs verifying.
+
+        `ExactL2`'s own `E` cannot be handed to a leg at all: it is written
+        over `2(m1+ℓ)` and the leg's lift is `2(s1_take+ℓ)`, so
+        `require_image` refuses it on shape. What survives that is an image
+        over the *right* lift with the wrong rows — a caller writing the
+        leg's `E` by hand and leaving off the rows that select `x⃗`. Only
+        the width agreement sees it."""
+        probe = _Instance(66)
+        ring, ell = probe.ring, probe.protocol.ell
+        image = lnp_fixture.rotation_image(
+            ring,
+            SIGMA_ORDER * (_M1 + ell),
+            lnp_fixture.identity_columns(_M1, ell),
+            [1, 6, 2],
+        )
+        exact = ExactL2(probe.evaluation, _M1, ell, probe.bound, image)
+        composed = exact.range_image()
+        assert composed is not None
+        self.assertEqual(composed.rows, image.rows + _DIGIT_COLS)
+        exact.require_no_wraparound(_leg_at_bound(probe, 16, composed))
+
+        columns = lnp_fixture.identity_columns(_S1_COLS, ell)
+        short = lnp_fixture.rotation_image(
+            ring,
+            SIGMA_ORDER * (_S1_COLS + ell),
+            columns[: composed.rows - _DIGIT_COLS],
+        )
+        with self.assertRaisesRegex(ValueError, "eq. 61's composition"):
+            exact.require_no_wraparound(_leg_at_bound(probe, 16, short))
+
+    def test_an_ell_infinity_leg_cannot_carry_an_exact_statement(self) -> None:
+        """Fig. 10 runs two legs and only the ℓ2 one carries an exact
+        statement: Theorem 5.3 states all three conditions over `B^(e)`
+        alone, because they keep an integer identity proved mod `q` from
+        wrapping and the ℓ∞ leg's eq. 52 is not one.
+
+        Refused rather than converted. `‖·‖₂ ≤ √n·‖·‖_∞` over the 256-row
+        projection costs `16·14 = 224` against the ℓ2 leg's `2√(256/26)·t`,
+        some `21.8×`, while this parameter point clears Lemma 2.9 by `9.7×`
+        — so the conversion would refuse honest configurations to check a
+        condition they do not owe."""
+        instance = _Instance(67)
+        masking = lnp_fixture.bimodal(
+            instance.ring, _WITNESS_COLS + _DIGIT_COLS, bound=LinfBound()
+        )
+        leg = ApproximateRange(instance.evaluation, masking).legs[0]
+        with self.assertRaisesRegex(ValueError, "ℓ∞ leg"):
+            instance.exact.require_no_wraparound(leg)
+
+    def test_a_leg_over_a_different_ring_is_refused(self) -> None:
+        """A bound proved over another modulus prices nothing here, and the
+        conditions are all comparisons against *this* ring's `q`."""
+        instance = _Instance(68)
+        other = _Instance(69, ring=HostSplitRing(_OTHER_Q, lnp_fixture.D))
+        with self.assertRaisesRegex(ValueError, "one ring"):
+            instance.exact.require_no_wraparound(other.protocol.legs[0])
 
     def test_the_honest_parameter_point_has_room(self) -> None:
         """The conditions are not tight at any sane point — `q` is ~2^32 and
         the projection of a ternary witness is tiny — so the guard should
         never fire on the suite's own numbers.
 
-        `B` is the ℓ2 bound Prop. 5.1 actually proves about `(s ‖ x⃗)`, not
-        `masking.projection`, which is the projection *dimension*: 256 rows,
-        a count. Passing the count happens to satisfy the conditions too, so
-        the distinction is invisible here and worth spelling — the number
-        this gate reads is a norm."""
+        This is the production call shape: the leg the proof is actually
+        built on, and nothing passed by hand. `B` is the ℓ2 bound Lemma 2.9
+        concludes about `(s ‖ x⃗)` — 42323 here, against a `q/(41·c)` of
+        409200, so 9.7× of room."""
         instance = _Instance(10)
-        instance.exact.require_no_wraparound(instance.masking.proven_norm())
+        instance.exact.require_no_wraparound(instance.protocol.legs[0])
 
 
 class ExactRoundTripTest(absltest.TestCase):
@@ -754,14 +866,15 @@ class ExactAffineImageTest(absltest.TestCase):
 
     def test_the_wraparound_width_counts_the_image_rows(self) -> None:
         """Lemma 2.9's `c` is the width of what is *projected*. With an
-        image that is `E`'s own row count, which need not match either half
-        of the lift it was written over.
+        image that is `E`'s own row count plus the digit rows `range_image`
+        appends, which need not match either half of the lift `E` was
+        written over.
 
         Pinned through the reported `41·c` rather than by bracketing a bound
         between the two widths: at this point `B² < q` binds long before
         Lemma 2.9 does, so no `B` exists that Lemma 2.9 accepts for one
         width and refuses for the other. The number in the message is the
-        `c` actually used."""
+        `c` actually used, and it comes from the leg."""
         probe = _Instance(64)
         ring, ell = probe.ring, probe.protocol.ell
         columns = lnp_fixture.identity_columns(_M1, ell)
@@ -774,20 +887,22 @@ class ExactAffineImageTest(absltest.TestCase):
             _M1,
             ell,
             probe.bound,
-            lnp_fixture.rotation_image(ring, 2 * (_M1 + ell), columns * 3, [0] * rows),
+            lnp_fixture.rotation_image(
+                ring, SIGMA_ORDER * (_M1 + ell), columns * 3, [0] * rows
+            ),
         )
         # Past every condition, so Lemma 2.9 — checked first — is the one
         # that speaks.
-        past = ring.q_moduli[0]
         for exact, width in (
             (wide, rows + _DIGIT_COLS),
-            (probe.exact, _M1 + ell + _DIGIT_COLS),
+            (probe.exact, _S1_COLS + ell),
         ):
             with self.subTest(width=width):
+                leg = _leg_at_bound(probe, 500_000, exact.range_image())
                 with self.assertRaisesRegex(
                     ValueError, rf"Lemma 2\.9.*/{41 * width * ring.d}\b"
                 ):
-                    exact.require_no_wraparound(past)
+                    exact.require_no_wraparound(leg)
 
     def test_a_misshapen_image_is_refused(self) -> None:
         ring = lnp_fixture.ring()

@@ -94,9 +94,13 @@ py_library(
     name = "exact",
     srcs = ["exact.py"],
     visibility = ["//visibility:public"],
+    # `:range` is an annotation-only import — `require_no_wraparound` reads
+    # a leg it is handed and never builds one — but the arrow is real and
+    # `range.py` does not point back, so the graph stays acyclic.
     deps = [
         ":eval",
         ":quadratic",
+        ":range",
         requirement("lattice_frx"),
         requirement("numpy"),
     ],
