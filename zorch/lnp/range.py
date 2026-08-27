@@ -273,12 +273,17 @@ class ProjectionLeg:
         """Theorem 5.3's `c` — the width, *in integers*, of the vector this
         leg's projection bounds.
 
-        `_chunks` counts it in ring elements; the conditions of §5.2 are
-        stated over `Z_q`, where each of those is `d` coefficients. Public
-        because it is the one number a consumer of the approximate bound has
-        to agree with the leg about: `exact.ExactL2.require_no_wraparound`
-        prices Lemma 2.9's precondition against it, and pricing a width the
-        leg does not actually bound would gate a statement nobody proved."""
+        `_chunks` counts it in ring elements, and both units are genuinely
+        used: `_families` reshapes against the ring-element count, while `R`
+        is a `Z`-linear map on *coefficients*, so `challenge` squeezes this
+        one. That is the leg's own reader, and the method would exist with
+        nothing else in the tree.
+
+        Public *also* because it is the one number a consumer of the
+        approximate bound has to agree with the leg about:
+        `exact.ExactL2.require_no_wraparound` prices Lemma 2.9's precondition
+        against it, and pricing a width the leg does not actually bound would
+        gate a statement nobody proved."""
         return self._chunks * self.scheme.ring.d
 
     # The prover's half. `randomness` is separate from `draw` so the
