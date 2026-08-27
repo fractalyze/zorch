@@ -198,6 +198,13 @@ class ExactL2:
             )
         if witness_cols < 1:
             raise ValueError(f"exact: need a witness column, got {witness_cols!r}")
+        if not 0 <= message_cols <= evaluation.ell:
+            raise ValueError(
+                f"exact: a {message_cols}-column message half against the "
+                f"{evaluation.ell} the statement covers — this is a *count*, "
+                f"and a slice would silently prove a prefix while `c` under-"
+                f"counts the projected width by the columns it dropped"
+            )
         if witness_cols + _DIGITS >= evaluation.s1_take + 1:
             raise ValueError(
                 f"exact: a {witness_cols}-column witness plus the {_DIGITS} the "
@@ -325,7 +332,25 @@ class ExactL2:
 
         Checked rather than assumed because a violation is not an error
         anywhere — it is a proof of a statement about residues that reads
-        like a proof about integers."""
+        like a proof about integers.
+
+        Both arguments are rejected below zero. Neither is merely nonsense:
+        a negative `binary_cols` shrinks `span` and drops a ring element from
+        the projected width, and a negative `projection_bound` walks straight
+        through `41·c·B < q`. Every one of those failures is in the *loosening*
+        direction, so a bad argument buys a gate that passes rather than one
+        that raises. An over-large `binary_cols` needs no ceiling: it only
+        inflates `c`, which makes the condition stricter."""
+        if projection_bound < 0:
+            raise ValueError(
+                f"exact: the projection bound is a norm and cannot be "
+                f"negative, got {projection_bound!r}"
+            )
+        if binary_cols < 0:
+            raise ValueError(
+                f"exact: the binary-column width cannot be negative, got "
+                f"{binary_cols!r}"
+            )
         modulus = math.prod(self.ring.q_moduli)
         span = math.isqrt((_DIGITS + binary_cols) * self.ring.d)
         projected_width = (

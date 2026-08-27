@@ -193,6 +193,18 @@ class ExactDecompositionTest(absltest.TestCase):
         with self.assertRaisesRegex(ValueError, "past the ring degree"):
             ExactL2(instance.evaluation, _M1, instance.protocol.ell, 1 << 40)
 
+    def test_a_message_column_count_outside_the_statement_is_refused(self) -> None:
+        """`message_cols` is a count, and both bad directions are silent
+        rather than loud: a negative one slices `slots.message[:-1]`, which
+        proves a *prefix* while `c` under-counts the projected width by the
+        columns it dropped, and an over-count clamps in the slice while
+        inflating `c`. Neither raises on its own."""
+        instance = _Instance(5)
+        for bad in (-1, instance.evaluation.ell + 1):
+            with self.subTest(message_cols=bad):
+                with self.assertRaisesRegex(ValueError, "column message half"):
+                    ExactL2(instance.evaluation, _M1, bad, instance.exact.bound)
+
 
 class ExactStatementTest(absltest.TestCase):
     """`G` and `I` against the ring, not against a proof going through."""
@@ -367,6 +379,24 @@ class ExactWraparoundTest(absltest.TestCase):
         instance.exact.require_no_wraparound(60_000)
         with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
             instance.exact.require_no_wraparound(60_000, binary_cols=30)
+
+    def test_negative_widths_are_refused_before_the_bounds_are_checked(self) -> None:
+        """Every way these two arguments can be wrong fails *open*.
+
+        A negative `binary_cols` shrinks `span` to zero and drops a ring
+        element from the projected width; a negative `projection_bound` walks
+        through `41·c·B < q` because the product is then negative. Both buy a
+        gate that passes, which is worse than one that raises — so they are
+        rejected before any bound is computed."""
+        instance = _Instance(16)
+        with self.assertRaisesRegex(ValueError, "cannot be negative"):
+            instance.exact.require_no_wraparound(-1)
+        with self.assertRaisesRegex(ValueError, "binary-column width"):
+            instance.exact.require_no_wraparound(16, binary_cols=-1)
+        # An over-large count needs no ceiling: it only inflates `c`, so the
+        # condition gets stricter and trips on its own.
+        with self.assertRaisesRegex(ValueError, "Lemma 2.9"):
+            instance.exact.require_no_wraparound(60_000, binary_cols=10_000)
 
     def test_the_honest_parameter_point_has_room(self) -> None:
         """The conditions are not tight at any sane point — `q` is ~2^32 and
