@@ -1,6 +1,6 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""The exact ℓ2 bound (Fig. 10, eq. 53 at `E = I`) — the two evaluations it
-builds, and the end-to-end proof they buy.
+"""The exact ℓ2 bound (Fig. 10, eq. 53) — the two evaluations it builds, and
+the end-to-end proof they buy, at `E = I` and at a general affine image.
 
 The weight here is on the *algebra*, for the reason it is one layer down: a
 prove/verify round-trip cannot see a wrong statement. Both sides build `G`
@@ -19,6 +19,11 @@ to, over the ring, at witnesses chosen to make each failure visible:
 And one test exists because the two together are the point: binarity alone
 admits `⟨p⃗, x⃗⟩` reading back as anything, and the norm identity alone admits
 digits that are not digits. Dropping either leaves the other's proof green.
+
+`ExactAffineImageTest` carries the same weight for the general case. Its
+load-bearing test is that an explicitly spelled `E = I, ⃗v = 0` rebuilds the
+diagonal blocks the direct branch writes — the four terms of the expansion
+have to collapse, and no proof going through would show it if they did not.
 """
 
 from __future__ import annotations
@@ -36,9 +41,12 @@ from zorch.lnp.exact import ExactL2, binarity
 from zorch.lnp.quadratic import (
     AbdlopQuadratic,
     AbdlopQuadraticMany,
+    AffineImage,
     Publics,
     evaluate,
     lift,
+    lift_positions,
+    lift_slots,
 )
 from zorch.lnp.range import ApproximateRange, RangeProof
 from zorch.lnp.testing import lnp_fixture
@@ -81,7 +89,13 @@ class _Instance:
     is tight in the sense that matters here, that nothing below rounds it
     up by a factor of 189."""
 
-    def __init__(self, seed: int) -> None:
+    def __init__(
+        self,
+        seed: int,
+        image: AffineImage | None = None,
+        range_image: AffineImage | None = None,
+        bound: int | None = None,
+    ) -> None:
         ring = lnp_fixture.ring()
         self.ring = ring
         self.masking = lnp_fixture.bimodal(ring, _WITNESS_COLS + _DIGIT_COLS)
@@ -96,15 +110,39 @@ class _Instance:
             ),
             _LAM,
         )
-        self.protocol = ApproximateRange(self.evaluation, self.masking)
-        self.bound = lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
-        self.exact = ExactL2(self.evaluation, _M1, self.protocol.ell, self.bound)
+        self.protocol = ApproximateRange(
+            self.evaluation,
+            self.masking,
+            images=[range_image] if range_image is not None else (),
+        )
+        # `is None`, not falsy: `bound=0` is a value a test may want to
+        # hand `ExactL2` to watch it refuse a non-positive bound, and `or`
+        # would quietly hand it the default instead.
+        self.bound = (
+            lnp_fixture.ternary_beta(ring, _WITNESS_COLS) if bound is None else bound
+        )
+        self.image = image
+        self.exact = ExactL2(self.evaluation, _M1, self.protocol.ell, self.bound, image)
 
         rng = np.random.default_rng(seed)
         self.rng = rng
         self.witness = rng.integers(-1, 2, (_M1, ring.d)).astype(np.int64)
         self.message = rng.integers(-1, 2, (_ELL, ring.d)).astype(np.int64)
-        self.digits = self.exact.decompose(np.concatenate([self.witness, self.message]))
+        # What the bound is about: `(s1, m)` itself, or its affine image.
+        # `AffineImage.apply` is the same call `range.ProjectionLeg.project`
+        # makes, which is what keeps the two halves of Fig. 10's eq. 53 —
+        # the leg's projection and this norm identity — about one vector.
+        self.bounded = np.concatenate([self.witness, self.message])
+        if image is not None:
+            self.bounded = image.apply(
+                ring,
+                lift(
+                    ring,
+                    ring.from_signed_stack(self.witness),
+                    ring.from_signed_stack(self.message),
+                ),
+            ).reshape(image.rows, ring.d)
+        self.digits = self.exact.decompose(self.bounded)
         # The Ajtai half is `(s1, x)`: footnote 14 — the digits have to be
         # committed with `s1`, not appended later.
         self.s1 = np.concatenate([self.witness, self.digits])
@@ -490,6 +528,211 @@ class ExactRoundTripTest(absltest.TestCase):
             ring.matvec(instance.a1, s1_ring), ring.matvec(instance.a2, s2_ring)
         )
         self.assertFalse(self._verify(instance, self._prove(instance)))
+
+
+def _composed_range_image(
+    ring: HostSplitRing, image: AffineImage, ell: int
+) -> AffineImage:
+    """Eq. 61's `e^(e)` — `[E⃗s − ⃗v ; x⃗]`, which is what the range leg has
+    to bound when the exact statement is about an affine image.
+
+    The two images are written over different lifts and that is the whole
+    content of this helper: `ExactL2`'s `E` is indexed against `(s1, m)`
+    without the digits, per the paper's `2(m1+ℓ)`, while the leg's lift has
+    them — Fig. 10 commits the Ajtai half as `(s1, x)`. So every column
+    shifts, and one row is appended to select `x⃗` itself.
+
+    Without this the range leg would bound `(s1‖x, m)` while `I` is written
+    about `E⃗s − ⃗v`, and the wraparound premise Theorem 5.3 needs would be
+    about a different vector than the one it is claimed for — which nothing
+    downstream would notice, since both proofs verify."""
+    # Where each of `E`'s columns lands once the digits are in the lift —
+    # exactly "where a narrower statement's lift sits inside a wider one".
+    columns = lift_positions(_M1, _S1_COLS, ell, ell)
+    wide = lift_slots(_S1_COLS, ell)
+    rows = image.rows
+    matrix = ring.zeros(rows + _DIGIT_COLS, 2 * (_S1_COLS + ell))
+    matrix[:rows, columns] = image.matrix
+    matrix[rows, wide.s1[_M1]] = ring.one()
+    offset = ring.zeros(rows + _DIGIT_COLS)
+    offset[:rows] = image.offset
+    return AffineImage(matrix=matrix, offset=offset)
+
+
+class ExactAffineImageTest(absltest.TestCase):
+    """Eq. 53 at a general `E`: `I` is written about `E⃗s − ⃗v` rather than
+    about `(s1, m)`.
+
+    Same discipline as the rest of this suite — a round-trip cannot see a
+    wrong statement, so the expansion of `T(E⃗s − ⃗v, E⃗s − ⃗v)` is pinned
+    against the `E = I` blocks it must reproduce, and against what it is
+    supposed to evaluate to.
+    """
+
+    def test_an_identity_image_rebuilds_the_e_equals_i_statement(self) -> None:
+        """The four terms of the expansion collapse back to the diagonal
+        scatter when `E = I` and `⃗v = 0`, block for block.
+
+        The claim everything else here rests on: `σ₋₁(E)ᵀ·E` reduces to
+        `e2[σ(c), c] = 1` on the witness columns, and the two linear terms
+        and the constant all vanish. Nothing downstream can see a wrong
+        expansion — both sides build `I` from this one object."""
+        plain = _Instance(60)
+        ring = plain.ring
+        columns = lnp_fixture.identity_columns(_M1, plain.protocol.ell)
+        identity = lnp_fixture.rotation_image(
+            ring, 2 * (_M1 + plain.protocol.ell), columns
+        )
+        spelled = _Instance(60, image=identity)
+
+        for block, (want, got) in enumerate(
+            zip(plain.exact.evaluations(), spelled.exact.evaluations(), strict=True)
+        ):
+            with self.subTest(block=block):
+                np.testing.assert_array_equal(got, want)
+
+    def test_the_norm_identity_is_about_the_image(self) -> None:
+        """`I` vanishes for the digits of `β² − ‖E⃗s − ⃗v‖²` and not for the
+        digits of `β² − ‖(s1, m)‖²`.
+
+        A rotation that is *not* norm-preserving on the selected subset —
+        it drops a column and repeats another — so the two slacks genuinely
+        differ and a builder still reading the witness fails here."""
+        ring = lnp_fixture.ring()
+        probe = _Instance(61)
+        ell = probe.protocol.ell
+        columns = lnp_fixture.identity_columns(_M1, ell)
+        # Read the first witness column twice and the message not at all.
+        image = lnp_fixture.rotation_image(
+            ring, 2 * (_M1 + ell), [columns[0], columns[0], columns[1]], [0, 7, 3]
+        )
+        instance = _Instance(61, image=image)
+        self.assertFalse(ring.constant_coeff(instance.values()).any())
+
+        witness_digits = probe.digits
+        self.assertFalse(np.array_equal(witness_digits, instance.digits))
+        values = ring.constant_coeff(instance.values(witness_digits))
+        self.assertTrue(values[1].any())
+
+    def test_an_offset_moves_the_statement(self) -> None:
+        """`⃗v` is part of what is bounded, so the digits that satisfy `I`
+        under one offset do not satisfy it under another.
+
+        The bound is widened because a ternary offset against a ternary
+        image reaches coefficients of 2, so `‖E⃗s − ⃗v‖` genuinely exceeds
+        the witness bound and `decompose` would refuse an honest witness."""
+        ring = lnp_fixture.ring()
+        ell = _Instance(62).protocol.ell
+        columns = lnp_fixture.identity_columns(_M1, ell)
+        offset = ring.from_signed_stack(
+            np.random.default_rng(3).integers(-1, 2, (len(columns), ring.d))
+        )
+        wide = 2 * lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
+        shifted = _Instance(
+            62,
+            image=lnp_fixture.rotation_image(
+                ring, 2 * (_M1 + ell), columns, None, offset
+            ),
+            bound=wide,
+        )
+        self.assertFalse(ring.constant_coeff(shifted.values()).any())
+
+        plain = _Instance(62, bound=wide)
+        self.assertFalse(np.array_equal(plain.digits, shifted.digits))
+        values = ring.constant_coeff(shifted.values(plain.digits))
+        self.assertTrue(values[1].any())
+
+    def test_an_honest_image_proof_verifies(self) -> None:
+        """End to end: the range leg bounds eq. 61's `(E⃗s − ⃗v ‖ x⃗)` and the
+        two exact functions ride along in the same inner proof.
+
+        The leg carries the *composed* image, which is what makes the
+        wraparound premise be about the vector `I` is written for."""
+        ring = lnp_fixture.ring()
+        ell = _Instance(63).protocol.ell
+        image = lnp_fixture.rotation_image(
+            ring, 2 * (_M1 + ell), lnp_fixture.identity_columns(_M1, ell), [1, 6, 2]
+        )
+        instance = _Instance(
+            63, image=image, range_image=_composed_range_image(ring, image, ell)
+        )
+        proof, _ = instance.protocol.prove(
+            instance.publics,
+            s1=instance.s1,
+            s2=instance.s2,
+            message=instance.message,
+            rng=instance.rng,
+            transcript=_transcript(),
+            evaluations=instance.exact.evaluations(),
+        )
+        ok, _ = instance.protocol.verify(
+            instance.publics,
+            t_a=instance.t_a,
+            t_b=instance.t_b,
+            proof=proof,
+            transcript=_transcript(),
+            evaluations=instance.exact.evaluations(),
+        )
+        self.assertTrue(ok)
+
+    def test_the_wraparound_width_counts_the_image_rows(self) -> None:
+        """Lemma 2.9's `c` is the width of what is *projected*. With an
+        image that is `E`'s own row count, which need not match either half
+        of the lift it was written over.
+
+        Pinned through the reported `41·c` rather than by bracketing a bound
+        between the two widths: at this point `B² < q` binds long before
+        Lemma 2.9 does, so no `B` exists that Lemma 2.9 accepts for one
+        width and refuses for the other. The number in the message is the
+        `c` actually used."""
+        probe = _Instance(64)
+        ring, ell = probe.ring, probe.protocol.ell
+        columns = lnp_fixture.identity_columns(_M1, ell)
+        # Built directly rather than through the fixture: a three-times-wider
+        # image has three times the norm, which `decompose` would refuse
+        # before the gate is ever asked.
+        rows = 3 * len(columns)
+        wide = ExactL2(
+            probe.evaluation,
+            _M1,
+            ell,
+            probe.bound,
+            lnp_fixture.rotation_image(ring, 2 * (_M1 + ell), columns * 3, [0] * rows),
+        )
+        # Past every condition, so Lemma 2.9 — checked first — is the one
+        # that speaks.
+        past = ring.q_moduli[0]
+        for exact, width in (
+            (wide, rows + _DIGIT_COLS),
+            (probe.exact, _M1 + ell + _DIGIT_COLS),
+        ):
+            with self.subTest(width=width):
+                with self.assertRaisesRegex(
+                    ValueError, rf"Lemma 2\.9.*/{41 * width * ring.d}\b"
+                ):
+                    exact.require_no_wraparound(past)
+
+    def test_a_misshapen_image_is_refused(self) -> None:
+        ring = lnp_fixture.ring()
+        instance = _Instance(65)
+        width = 2 * (_M1 + instance.protocol.ell)
+        for message, image in {
+            "one ring column per position": AffineImage(
+                matrix=ring.zeros(2, width + 1), offset=ring.zeros(2)
+            ),
+            "one ring element per row": AffineImage(
+                matrix=ring.zeros(2, width), offset=ring.zeros(3)
+            ),
+        }.items():
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(ValueError, message):
+                    ExactL2(
+                        instance.evaluation,
+                        _M1,
+                        instance.protocol.ell,
+                        instance.bound,
+                        image,
+                    )
 
 
 if __name__ == "__main__":

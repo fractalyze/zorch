@@ -14,6 +14,7 @@ py_library(
         "//zorch/commit:ajtai",
         "//zorch/lnp:challenge",
         "//zorch/lnp:masking",
+        "//zorch/lnp:quadratic",
         requirement("hash_frx"),
         requirement("lattice_frx"),
         requirement("numpy"),
@@ -139,6 +140,7 @@ py_test(
     deps = [
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
+        "//zorch/lnp:challenge",
         "//zorch/lnp:eval",
         "//zorch/lnp:masking",
         "//zorch/lnp:quadratic",

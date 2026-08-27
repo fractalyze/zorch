@@ -93,10 +93,14 @@ from zorch.lnp.challenge import attempt_budget
 from zorch.lnp.eval import AbdlopQuadraticEval, QuadraticEvalProof
 from zorch.lnp.masking import BimodalMasking
 from zorch.lnp.quadratic import (
+    AffineImage,
     Family,
     Publics,
     constants,
+    lift,
+    lift_positions,
     lift_slots,
+    require_image,
     sigma_exponent,
     stack_families,
 )
@@ -199,6 +203,7 @@ class ProjectionLeg:
         ell: int,
         mask_slot: int,
         sign_slot: int,
+        image: AffineImage | None = None,
     ) -> None:
         scheme = evaluation.scheme
         ring = scheme.ring
@@ -234,7 +239,21 @@ class ProjectionLeg:
         self._witness_positions = np.concatenate([slots.s1, slots.message[:ell]])
         self._mask_positions = slots.message[mask_slot : mask_slot + masking.mask_cols]
         self._sign_position = int(slots.message[sign_slot])
-        self._chunks = s1_take + ell
+        # Where an affine image's columns live in the eval layer's lift:
+        # `(s1, σ(s1), m, σ(m))` and nothing else. That is the paper's own
+        # `2(m1+ℓ)` (§5.2), and carving it here rather than handing `E` the
+        # whole width is what makes "an image may not touch the mask or the
+        # sign columns" un-violable instead of merely checked — those hold
+        # values the prover redraws per attempt, so a function of them is
+        # not a statement anyone could have written down in advance.
+        self._image_positions = lift_positions(s1_take, s1_take, ell, evaluation.ell)
+        self.image = require_image(image, ring, len(self._image_positions))
+        # What the projection is *of*, in ring elements: the witness at
+        # `E = I`, and `E`'s own row count otherwise. It sizes the challenge
+        # matrix on both sides, so a leg that got this wrong would squeeze a
+        # different `R` than its verifier and fail to replay rather than
+        # prove the wrong thing.
+        self._chunks = (s1_take + ell) if image is None else image.rows
         # σ₋₁ applied to each monomial `X^j`, which is what `T(⃗δ_j, ·)`
         # contributes. Row `j` of the identity *is* `X^j`'s coefficient
         # vector, so the ring's own constructor builds the table — writing
@@ -283,6 +302,25 @@ class ProjectionLeg:
             t_mask=ring.add(mask_randomness, y_ring),
             t_sign=ring.add(sign_randomness, sign_ring),
         )
+
+    def project(self, lift: np.ndarray) -> np.ndarray:
+        """`E⃗s − ⃗v` (eq. 61) as the balanced integer coefficients `respond`
+        contracts `R` against.
+
+        `lift` is `(s1, σ(s1), m, σ(m))` over the caller's own halves —
+        `quadratic.lift` of exactly what the image was written against, in
+        the order `_image_positions` reads it back. The arithmetic and the
+        premise it reads under are `AffineImage.apply`'s; what this adds is
+        the refusal below, which belongs to the leg because only a leg has a
+        witness-bounding case to be confused with."""
+        if self.image is None:
+            raise ValueError(
+                "range: this leg bounds the witness itself, which reaches "
+                "`respond` as the caller's own integers — there is no image "
+                "here to project, and returning the witness instead would "
+                "hide a caller that thought it had passed one"
+            )
+        return self.image.apply(self.scheme.ring, lift)
 
     def respond(
         self,
@@ -395,7 +433,14 @@ class ProjectionLeg:
         at `(b, s_j)` in the quadratic form because `T` contracts `⃗r_i`'s
         `j`-th chunk against `⃗s`'s. `G_j = T(⃗δ_j, b)` is linear in `b`
         alone. Both are rebuilt identically by the verifier, which is what
-        binds `⃗z` to the proof."""
+        binds `⃗z` to the proof.
+
+        With an affine image the projected vector is `⃗e = E⃗s − ⃗v` (eq. 61)
+        rather than the witness, and `F_i` becomes eq. 64/65's `z_i −
+        b·T(⃗r_i, ⃗e) − y_i`. Only where the `b·T` term lands changes: `E`
+        contracts into the quadratic form and `⃗v` — public — falls out of it
+        onto the sign. Nothing else in the leg moves, which is why the two
+        cases share every other line here."""
         ring = self.scheme.ring
         d = ring.d
         count = self.masking.projection
@@ -415,12 +460,35 @@ class ProjectionLeg:
         sigma_rows = ring.galois(rows, sigma_exponent(d))
 
         e2 = ring.zeros(count + d - 1, self.width, self.width)
-        e2[np.arange(count)[:, None], self._sign_position, self._witness_positions] = (
-            sigma_rows
-        )
+        e1 = self._e1
+        if self.image is None:
+            e2[
+                np.arange(count)[:, None], self._sign_position, self._witness_positions
+            ] = sigma_rows
+        else:
+            # `T(⃗r_i, E⃗s)` reassociated onto the lift: the coefficient the
+            # statement puts on column `k` is `Σ_j σ₋₁(r_{i,j})·E_{j,k}`, so
+            # the public half contracts against `E` once and what reaches the
+            # quadratic form is a dense row rather than a scatter. `matmul`
+            # is the shape this contraction is: `(256, p) × (p, width)`, and
+            # its own docstring names a `Bin_1` matrix against a ~32-bit
+            # modulus as the case it keeps in `int64`.
+            e2[
+                np.arange(count)[:, None], self._sign_position, self._image_positions
+            ] = ring.matmul(sigma_rows, self.image.matrix)
+            # `−b·T(⃗r_i, E⃗s − ⃗v)` splits, and `+b·T(⃗r_i, ⃗v)` is the half
+            # with no witness in it: `⃗v` is public, so the offset leaves the
+            # quadratic form entirely and lands on the sign alone, linear in
+            # `b`. Copied rather than written into `_e1`, which is built once
+            # and shared across every attempt and both sides; the rows below
+            # `count` are the `G_j` half and are untouched here.
+            e1 = e1.copy()
+            e1[:count, self._sign_position] = ring.neg(
+                ring.matmul(sigma_rows, self.image.offset[:, None])[:, 0]
+            )
         e0 = ring.zeros(count + d - 1, 1)
         e0[:count, 0] = constants(ring, z.reshape(-1))
-        return e2, self._e1, e0
+        return e2, e1, e0
 
     def _linear_block(self) -> np.ndarray:
         """The linear half of both families, which depends on neither `R`
@@ -486,12 +554,22 @@ class ApproximateRange:
     """
 
     def __init__(
-        self, evaluation: AbdlopQuadraticEval, *maskings: BimodalMasking
+        self,
+        evaluation: AbdlopQuadraticEval,
+        *maskings: BimodalMasking,
+        images: Sequence[AffineImage | None] = (),
     ) -> None:
         if not maskings:
             raise ValueError(
                 "range: a range proof needs at least one projection leg, and "
                 "none was given"
+            )
+        if images and len(images) != len(maskings):
+            raise ValueError(
+                f"range: {len(images)} affine image(s) against "
+                f"{len(maskings)} leg(s) — Fig. 10 pairs each `(E_i, v_i)` "
+                f"with the leg that bounds it, so pass one per leg, `None` "
+                f"where a leg bounds the witness itself, or none at all"
             )
         masks = sum(masking.mask_cols for masking in maskings)
         rows = masks + len(maskings)
@@ -515,7 +593,9 @@ class ApproximateRange:
         # `BimodalMasking.for_attempts`.
         self.attempts = _joint_budget(maskings)
         legs = []
-        for masking in maskings:
+        for masking, image in zip(
+            maskings, images or [None] * len(maskings), strict=True
+        ):
             legs.append(
                 ProjectionLeg(
                     evaluation,
@@ -523,6 +603,7 @@ class ApproximateRange:
                     ell,
                     mask_slot,
                     sign_slot,
+                    image,
                 )
             )
             mask_slot += masking.mask_cols
@@ -567,15 +648,7 @@ class ApproximateRange:
         self._require_witness(s1, s2, message)
         s2_ring = ring.from_signed_stack(s2)
         message_ring = ring.from_signed_stack(message) if self.ell else ring.zeros(0)
-        # The projected witness, over ℤ: `⃗s` is the concatenated balanced
-        # coefficients of `(s1, m)`, which is the vector Lemma 2.9 bounds.
-        # `s1` is carved to what the eval layer's statement covers — the
-        # bound is about that prefix, and `R` is squeezed to its width.
-        flat = (
-            np.concatenate([s1[: self.evaluation.s1_take], message])
-            .astype(np.int64)
-            .reshape(-1)
-        )
+        bounded = self._bounded(s1, message, message_ring)
         randomness = [leg.randomness(publics, s2_ring) for leg in self.legs]
 
         for _ in range(self.attempts):
@@ -587,9 +660,9 @@ class ApproximateRange:
                 transcript, [(draw.t_mask, draw.t_sign) for draw in draws]
             )
             responses = [
-                leg.respond(draw, projection, flat, rng)
-                for leg, draw, projection in zip(
-                    self.legs, draws, projections, strict=True
+                leg.respond(draw, projection, vector, rng)
+                for leg, draw, projection, vector in zip(
+                    self.legs, draws, projections, bounded, strict=True
                 )
             ]
             # One gate over every leg, not one loop per leg: Fig. 10 abandons
@@ -697,6 +770,38 @@ class ApproximateRange:
             t, projection = leg.challenge(t)
             projections.append(projection)
         return t, projections
+
+    def _bounded(
+        self, s1: np.ndarray, message: np.ndarray, message_ring: np.ndarray
+    ) -> list[np.ndarray]:
+        """Each leg's own vector over ℤ — `E_i⃗s − ⃗v_i` (eq. 61) for a leg
+        carrying an affine image, and the witness itself for one without.
+
+        Hoisted out of the attempt loop for the same reason `randomness` is:
+        it is a function of the witness alone, and what an attempt redraws is
+        `⃗y` and `b`.
+
+        The imageless path stays the caller's own integers rather than a
+        round-trip through the ring. The values agree — `(s1, m)` are
+        canonical and short — but the bound is stated about *those*, and
+        reading them back out of `R_q` would put Fig. 9's own case one
+        wraparound premise deeper than it needs to be. `s1` is carved to what
+        the eval layer's statement covers: the bound is about that prefix,
+        and `R` is squeezed to its width."""
+        flat = (
+            np.concatenate([s1[: self.evaluation.s1_take], message])
+            .astype(np.int64)
+            .reshape(-1)
+        )
+        if all(leg.image is None for leg in self.legs):
+            return [flat] * len(self.legs)
+        ring = self.scheme.ring
+        witness = lift(
+            ring, ring.from_signed_stack(s1[: self.evaluation.s1_take]), message_ring
+        )
+        return [
+            flat if leg.image is None else leg.project(witness) for leg in self.legs
+        ]
 
     def _statement(
         self,

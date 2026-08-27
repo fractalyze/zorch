@@ -524,6 +524,154 @@ def lift_slots(s1_cols: int, message_cols: int) -> LiftSlots:
     )
 
 
+@dataclass(frozen=True)
+class AffineImage:
+    """Fig. 10's `(D_i, u_i)` and `(E_i, v_i)` — the affine image of the lift
+    a statement is written about, `‖E·s − v‖ ≤ β` (eq. 52 and 53).
+
+    `matrix` is `E`, `rows` ring rows over a lift `(s1, σ(s1), m, σ(m))`, and
+    `offset` is `v`, one ring element per row. Both are public parameters:
+    the verifier rebuilds the statement out of them, so neither may depend
+    on the witness.
+
+    Shared by the two layers that consume it, and deliberately not owned by
+    either: `range.py` bounds `E·s − v` approximately (eq. 52 and the `e^(e)`
+    half of eq. 53) while `exact.py` writes the inner product `T(E·s − v,
+    E·s − v)` of eq. 66 about the same image. The two are one statement in
+    Fig. 10, and a type per layer would let them drift apart silently.
+
+    **Over the lift, not over the witness.** The paper writes `E_i ∈ R_q^{p_i
+    × 2(m1+ℓ)}`, indexing `s = (s1, σ(s1), m, σ(m))` — a statement about
+    `σ(s1)` is as writable as one about `s1`, and the σ columns are where an
+    inner-product statement puts one of its two factors. Taking the columns
+    to be the witness alone would be the narrow case wearing a general name.
+
+    **Why `None` is not the identity spelled out.** No image means the
+    statement is about the witness itself, which is what Fig. 9 states and
+    all this package proved before. That path stays a *selection* — a scatter
+    to the witness columns — rather than a contraction against an identity
+    block, and the reasons are cost, not soundness:
+
+    - the identity block is `rows·width` ring elements the selection never
+      materialises, and contracting against it is a `(256, p) × (p, width)`
+      matmul per proof where the scatter is free;
+    - the imageless path reads the caller's own integers instead of lifting
+      `E⃗s − ⃗v` back out of `R_q`, so Fig. 9's own case carries one fewer
+      wraparound premise than it otherwise would.
+
+    It is *not* that the transcript would move. An identity image has
+    `rows = s1_take + ell`, which is exactly the imageless `_chunks`, and
+    `_chunks` is the only input to the challenge-matrix squeeze — the range
+    suite pins this directly, asserting the two spellings agree byte for byte.
+    Unifying the paths is a performance choice that stays available.
+    """
+
+    matrix: np.ndarray
+    offset: np.ndarray
+
+    @property
+    def rows(self) -> int:
+        """`p_i` — how many ring elements the bounded vector has, which is
+        what sizes the challenge matrix and the revealed projection."""
+        return int(self.matrix.shape[0])
+
+    def apply(self, ring: HostSplitRing, lift: np.ndarray) -> np.ndarray:
+        """`E⃗s − ⃗v` (eq. 61) as balanced integer coefficients — the vector
+        this image's statement is actually about, over ℤ.
+
+        `lift` is `(s1, σ(s1), m, σ(m))` over the halves the image was
+        written against, in the order its columns are indexed. Prover-side
+        only: the verifier never needs it, since `(E, v)` are public and the
+        statement is rebuilt from them.
+
+        Both consumers want the same vector for different reasons — a range
+        leg contracts `R` against it, and `ExactL2.decompose` takes the norm
+        of it — so it lives with the image rather than in either.
+
+        **The premise it reads under.** Computed in `R_q` and read back on
+        `(−q/2, q/2]`, so it is the integer vector the statement is about
+        precisely while that vector fits one period. `‖E⃗s − ⃗v‖ ≤ β` is that
+        premise, and Lemma 2.9 needs `β` far below `q` anyway. A witness
+        violating it is not caught here, and the failure is quiet: what gets
+        proven is then a true bound on the balanced representative, which is
+        a different vector from the one the caller meant.
+
+        Row by row because the balanced read is a per-element op, and
+        through it rather than around it because reading limb 0 out of the
+        array by hand is the one thing the ring's contract tells consumers
+        not to do.
+
+        **Single-prime only, and the check belongs here** rather than at any
+        constructor: reading the balanced range of limb 0 is the whole
+        integer only when there is one limb, and this is the operation that
+        does it. A shape validator up front would leave `apply` reachable on
+        a chained ring — it is a public method on a frozen dataclass — and
+        would refuse an `ExactL2` image that never calls this at all, since
+        eq. 66's arithmetic stays in `R_q` and is modulus-chain-agnostic."""
+        if len(ring.q_moduli) != 1:
+            raise ValueError(
+                f"quadratic: `E⃗s − ⃗v` over ℤ needs a single-prime ring, and "
+                f"this one chains {len(ring.q_moduli)} moduli — one limb's "
+                f"balanced range says nothing about a value only a "
+                f"reconstruction across limbs resolves"
+            )
+        image = ring.sub(ring.matmul(self.matrix, lift[:, None])[:, 0], self.offset)
+        return np.concatenate([ring.to_balanced_limb0(row) for row in image])
+
+
+def require_image(
+    image: AffineImage | None, ring: HostSplitRing, width: int
+) -> AffineImage | None:
+    """`(E, v)` checked against the lift it is written over, or `None`
+    passed through.
+
+    Shape only, and shape is the whole contract: both are public parameters,
+    so nothing this can catch is a witness bug, and the one non-shape premise
+    an image carries — that `apply` can read it back over ℤ — belongs to that
+    operation and is checked there. What this catches is an `E` whose columns
+    were counted over the identity copies alone, or over the eval layer's
+    full width rather than the caller's `2(m1+ℓ)` — mistakes otherwise
+    invisible until `matmul` raises inside the first proof, one round into a
+    transcript.
+
+    Messages name this module rather than either caller: both `range.py` and
+    `exact.py` write an image, and a shape bug in an `ExactL2` statement
+    reporting itself as a range error is the misdirection this sits one layer
+    above to avoid."""
+    if image is None:
+        return None
+    limbs_d = (len(ring.q_moduli), ring.d)
+    # Rank first, and only rank: it is what makes `.rows` meaningful, and the
+    # equality below cannot report a wrong *column* count against a matrix
+    # that has no columns axis.
+    if image.matrix.ndim != 4:
+        raise ValueError(
+            f"quadratic: an affine image of rank {image.matrix.ndim} — `E` is "
+            f"a `(rows, {width}, {limbs_d[0]}, {limbs_d[1]})` stack of ring "
+            f"elements"
+        )
+    if image.rows < 1:
+        raise ValueError(
+            "quadratic: an affine image with no rows bounds nothing — a "
+            "statement about an empty vector is one every witness satisfies"
+        )
+    expected = (image.rows, width, *limbs_d)
+    if image.matrix.shape != expected:
+        raise ValueError(
+            f"quadratic: an affine image of shape {image.matrix.shape} where "
+            f"the lift it is written over needs {expected} — `E` has one ring "
+            f"column per position of `(s1, σ(s1), m, σ(m))`, the caller's own "
+            f"halves and not the layer's mask and sign"
+        )
+    if image.offset.shape != (image.rows, *limbs_d):
+        raise ValueError(
+            f"quadratic: an offset of shape {image.offset.shape} against "
+            f"{image.rows} matrix row(s) — `v` is one ring element per row "
+            f"of `E`, and `ring.zeros({image.rows})` is the `v = 0` case"
+        )
+    return image
+
+
 def lift(
     ring: HostSplitRing, s1_part: np.ndarray, message_part: np.ndarray
 ) -> np.ndarray:
@@ -540,6 +688,30 @@ def lift(
     layer appending `g` depends on.
     """
     return np.concatenate([_orbit(ring, s1_part), _orbit(ring, message_part)])
+
+
+def lift_pairing(s1_cols: int, message_cols: int) -> np.ndarray:
+    """`lift`'s σ involution as an index array: where `σ₋₁(s_c)` sits, for
+    every position `c` of `lift(s1_cols, message_cols)`.
+
+    Every inner product in this package is `Σ σ₋₁(a_i)·b_i`, so a statement
+    that names a position always names its partner too. At `E = I` that
+    pairing is spelled by taking `slots.s1` and `slots.sigma_s1` together;
+    once a general `E` mixes columns, the partner of a *combination* is only
+    recoverable through the permutation, which is this.
+
+    An involution, because `SIGMA_ORDER` is 2 — `pairing[pairing[c]] == c`
+    — which is what lets a caller apply it to either side of a product.
+
+    Spelled through `lift_slots` for the reason `lift_positions` is: that
+    helper owns where each copy of each half starts, and swapping the two
+    copies of each half is the whole of this map. Re-deriving the `SIGMA_ORDER
+    * s1_cols` offset here would be a fourth statement of the layout in the
+    module that consolidated it."""
+    slots = lift_slots(s1_cols, message_cols)
+    return np.concatenate(
+        [slots.sigma_s1, slots.s1, slots.sigma_message, slots.message]
+    )
 
 
 def lift_positions(
