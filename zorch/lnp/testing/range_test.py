@@ -1291,6 +1291,30 @@ class BimodalMaskingTest(absltest.TestCase):
             raise instance.protocol._exhausted()
 
 
+def _negacyclic_rotate(coefficients: np.ndarray, exponent: int) -> np.ndarray:
+    """`X^k·a` over `Z[X]/(X^d + 1)`, on signed coefficients and in plain
+    numpy — a shift that negates whatever wraps, since `X^d = −1`.
+
+    Spelled out here rather than taken from the ring so the expectation a
+    test builds is not the implementation it is checking."""
+    d = len(coefficients)
+    out = np.zeros(d, dtype=np.int64)
+    for source, value in enumerate(coefficients):
+        target = source + exponent
+        out[target % d] += -value if (target // d) % 2 else value
+    return out
+
+
+def _sigma_of(coefficients: np.ndarray) -> np.ndarray:
+    """`σ₋₁(a) = a(X^{-1})`, on signed coefficients: `X^{-j} = −X^{d-j}`, so
+    every coefficient but the constant reflects and flips sign."""
+    d = len(coefficients)
+    out = np.zeros(d, dtype=np.int64)
+    out[0] = coefficients[0]
+    out[d - np.arange(1, d)] = -coefficients[1:]
+    return out
+
+
 def _identity_columns(s1_take: int, ell: int) -> list[int]:
     """Where `(s1, m)` sit in the narrow lift `(s1, σ(s1), m, σ(m))` an
     affine image is written over — the columns an imageless leg selects."""
@@ -1347,34 +1371,42 @@ class AffineImageTest(absltest.TestCase):
         """`project` is `E⃗s − ⃗v` read back on `(−q/2, q/2]`, and it is what
         `respond` contracts `R` against.
 
-        Pinned against the image computed directly rather than against a
-        proof: `respond` would happily bound any vector handed to it."""
+        Pinned against the rotation worked out in plain numpy, not against
+        the ring: `rotation_image` puts one monomial per row, so each row of
+        the answer is a documented negacyclic shift of one lift column, less
+        that row's offset. Rebuilding it out of `matvec`/`sub`/
+        `to_balanced_limb0` would be the implementation checking itself, and
+        would pass under any contraction at all."""
         instance = _Instance(41)
         ring = instance.ring
         take = instance.protocol.evaluation.s1_take
         ell = instance.protocol.ell
-        width = 2 * (take + ell)
-        offset = ring.from_signed_stack(
-            np.random.default_rng(5).integers(-1, 2, (2, ring.d)).astype(np.int64)
-        )
+        offset = np.random.default_rng(5).integers(-1, 2, (2, ring.d)).astype(np.int64)
         # Reads one σ column on purpose: a statement about `σ(s1)` is as
         # writable as one about `s1`, and an image that could only reach the
         # identity copies would be the narrow case wearing a general name.
         slots = lift_slots(take, ell)
         columns = [int(slots.sigma_s1[0]), int(slots.message[0])]
-        image = lnp_fixture.rotation_image(ring, width, columns, [3, 0], offset)
+        exponents = [3, 0]
+        image = lnp_fixture.rotation_image(
+            ring, 2 * (take + ell), columns, exponents, ring.from_signed_stack(offset)
+        )
         leg = _Instance(41, images=[image]).leg
 
+        # What those two columns hold, as signed coefficients.
+        sources = [_sigma_of(instance.s1[0]), instance.message[0]]
+        want = np.concatenate(
+            [
+                _negacyclic_rotate(source, exponent) - row
+                for source, exponent, row in zip(
+                    sources, exponents, offset, strict=True
+                )
+            ]
+        )
         narrow = lift(
             ring,
             ring.from_signed_stack(instance.s1[:take]),
             ring.from_signed_stack(instance.message),
-        )
-        want = np.concatenate(
-            [
-                ring.to_balanced_limb0(row)
-                for row in ring.sub(ring.matvec(image.matrix, narrow), offset)
-            ]
         )
         np.testing.assert_array_equal(leg.project(narrow), want)
 
