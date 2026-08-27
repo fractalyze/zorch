@@ -85,6 +85,7 @@ from lattice_frx.split_ring import HostSplitRing
 
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.quadratic import (
+    SIGMA_ORDER,
     AffineImage,
     Family,
     constants,
@@ -252,6 +253,13 @@ class ExactL2:
         # builder and must never reach the inner `prove`, the same invariant
         # `ProjectionLeg` keeps structurally rather than by convention.
         self.width = evaluation.width
+        # The Ajtai carve, kept because `range_image` needs it: the leg this
+        # statement rides writes its `E` over `(s1‖x, m)`, so composing the
+        # two images means knowing how wide that half is. `witness_cols +
+        # _DIGITS` is not the same number — the constructor only requires it
+        # to fit, and a caller may carve a wider half than this statement
+        # fills.
+        self._s1_take = evaluation.s1_take
 
         slots = lift_slots(evaluation.s1_take, evaluation.ell)
         # `(s1, m)`, and its σ image alongside: every inner product here is
@@ -425,6 +433,70 @@ class ExactL2:
             ring.matmul(sigma_offset[None, :], offset[:, None])[0, 0],
             constants(ring, [self.bound**2])[0],
         )
+
+    def composed_cols(self) -> int:
+        """The width, in ring elements, of the vector eq. 61 composes — what
+        a leg carrying this statement has to bound.
+
+        One derivation, read by `range_image` below and by
+        `require_no_wraparound` under it. It used to be two: the leg sized
+        its challenge matrix off its image's rows while the wraparound check
+        re-derived `(image.rows + _DIGITS)` on its own, and nothing made the
+        two agree."""
+        if self.image is None:
+            # `(s1‖x, m)` — the leg's own carve, digits included.
+            return self._s1_take + self.message_cols
+        return self.image.rows + _DIGITS
+
+    def range_image(self) -> AffineImage | None:
+        """Eq. 61's `e⃗^(e) = [E⃗s − ⃗v ; x⃗]` — the image the range leg
+        carrying this statement must be built with, or `None` when the leg
+        should bound the witness directly.
+
+        The two layers write their images over *different lifts*, and that
+        is the whole content of this method. `E` here is indexed against
+        `(s1, σ(s1), m, σ(m))` without the digits, the paper's `2(m1+ℓ)`,
+        while the leg's lift has them — Fig. 10 commits the Ajtai half as
+        `(s1, x)`. So every column shifts, and `_DIGITS` rows are appended
+        to select `x⃗` itself.
+
+        Without this the leg would bound `(s1‖x, m)` while eq. 66's inner
+        product is written about `E⃗s − ⃗v`, and Theorem 5.3's wraparound
+        premise would be about a different vector than the one it is claimed
+        for — which nothing downstream would notice, since both proofs
+        verify. That is why this is public API rather than something each
+        caller re-derives.
+
+        `None` at `E = I` is not an omission: the imageless leg bounds
+        `(s1‖x, m)`, whose coefficients are exactly the composed vector's in
+        a different order, so the norm the leg proves is the norm eq. 61
+        needs. Building an identity image here would cost a contraction to
+        say the same thing — the same trade `AffineImage` documents."""
+        if self.image is None:
+            return None
+        ring = self.ring
+        ell = self.message_cols
+        # Where this statement's narrow lift sits inside the leg's wider
+        # one. Both halves carve from the head of each automorphism copy,
+        # which is where a layer that *appends* leaves the caller's columns.
+        columns = lift_positions(self.witness_cols, self._s1_take, ell, ell)
+        wide = lift_slots(self._s1_take, ell)
+        rows = self.image.rows
+        # Through `composed_cols` rather than `rows + _DIGITS`: that number
+        # is what the wraparound check prices, and spelling it twice is how
+        # the composition and its premise drifted apart before.
+        matrix = ring.zeros(self.composed_cols(), SIGMA_ORDER * (self._s1_take + ell))
+        matrix[:rows, columns] = self.image.matrix
+        # The digits enter as a selection, not through `E`: they are what
+        # eq. 59's radix row reads, and the leg has to bound them because
+        # `⟨p⃗, x⃗⟩ ≥ 0` is the half of §5.2 that makes the bound exact.
+        matrix[
+            rows + np.arange(_DIGITS),
+            wide.s1[self.witness_cols : self.witness_cols + _DIGITS],
+        ] = ring.one()
+        offset = ring.zeros(self.composed_cols())
+        offset[:rows] = self.image.offset
+        return AffineImage(matrix=matrix, offset=offset)
 
     def require_no_wraparound(
         self, projection_bound: int, binary_cols: int = 0

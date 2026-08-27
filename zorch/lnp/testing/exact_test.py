@@ -39,14 +39,13 @@ from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.exact import ExactL2, binarity
 from zorch.lnp.quadratic import (
+    SIGMA_ORDER,
     AbdlopQuadratic,
     AbdlopQuadraticMany,
     AffineImage,
     Publics,
     evaluate,
     lift,
-    lift_positions,
-    lift_slots,
 )
 from zorch.lnp.range import ApproximateRange, RangeProof
 from zorch.lnp.testing import lnp_fixture
@@ -406,6 +405,114 @@ class BinarityTest(absltest.TestCase):
             binarity(instance.evaluation)
 
 
+class ExactRangeImageTest(absltest.TestCase):
+    """Eq. 61's `e⃗^(e) = [E⃗s − ⃗v ; x⃗]` — the image the range leg has to
+    carry.
+
+    A round-trip cannot see this wrong: a leg built from a mis-composed
+    image bounds some other vector perfectly well and its proof verifies.
+    So the composition is pinned against what it must evaluate to, over the
+    ring, on an honest witness."""
+
+    def _imaged(self, seed: int) -> tuple[_Instance, AffineImage]:
+        probe = _Instance(seed)
+        ring, ell = probe.ring, probe.protocol.ell
+        image = lnp_fixture.rotation_image(
+            ring,
+            SIGMA_ORDER * (_M1 + ell),
+            lnp_fixture.identity_columns(_M1, ell),
+            [1, 6, 2],
+        )
+        return _Instance(seed, image=image), image
+
+    def test_the_witness_case_needs_no_image(self) -> None:
+        """At `E = I` the imageless leg already bounds `(s1‖x, m)`, whose
+        coefficients are the composed vector's in a different order — so the
+        norm it proves is the one eq. 61 needs, and spelling an identity out
+        would cost a contraction to say the same thing."""
+        self.assertIsNone(_Instance(70).exact.range_image())
+
+    def test_the_composition_selects_the_image_then_the_digits(self) -> None:
+        """The load-bearing claim: applied to the leg's lift `(s1‖x, m)`,
+        the composed image evaluates to `E⃗s − ⃗v` on its first rows and to
+        `x⃗` on the rows appended after them.
+
+        `E` is written over `(s1, σ(s1), m, σ(m))` *without* the digits and
+        the leg's lift has them, so every column of `E` shifts. Reading the
+        digits out of the same object is what ties the two halves of eq. 53
+        to one vector."""
+        instance, image = self._imaged(71)
+        ring = instance.ring
+        composed = instance.exact.range_image()
+        assert composed is not None
+        self.assertEqual(composed.rows, image.rows + _DIGIT_COLS)
+
+        wide = lift(
+            ring,
+            ring.from_signed_stack(instance.s1),
+            ring.from_signed_stack(instance.message),
+        )
+        # `apply` hands back flat balanced coefficients, as `_Instance` and
+        # `ProjectionLeg.respond` both read them.
+        got = composed.apply(ring, wide).reshape(composed.rows, ring.d)
+        np.testing.assert_array_equal(got[: image.rows], instance.bounded)
+        np.testing.assert_array_equal(got[image.rows :], instance.digits)
+
+    def test_the_composition_carries_the_offset(self) -> None:
+        """`⃗v` is half of `E⃗s − ⃗v`, and the composition has to carry it —
+        onto the image's own rows and nowhere else.
+
+        Pinned with a non-zero offset because the fixture's default is zero,
+        and against zero a dropped `⃗v` is invisible: the leg would then
+        bound `E⃗s` while eq. 66's inner product is written about
+        `E⃗s − ⃗v`, and both proofs verify. The digit rows select `x⃗`
+        outright, so their offset must stay zero."""
+        ring = lnp_fixture.ring()
+        ell = _Instance(73).protocol.ell
+        columns = lnp_fixture.identity_columns(_M1, ell)
+        offset = ring.from_signed_stack(
+            np.random.default_rng(3).integers(-1, 2, (len(columns), ring.d))
+        )
+        image = lnp_fixture.rotation_image(
+            ring, SIGMA_ORDER * (_M1 + ell), columns, None, offset
+        )
+        # A ternary offset against a ternary image reaches coefficients of
+        # 2, so the bound is widened or `decompose` refuses the witness.
+        instance = _Instance(
+            73, image=image, bound=2 * lnp_fixture.ternary_beta(ring, _WITNESS_COLS)
+        )
+        composed = instance.exact.range_image()
+        assert composed is not None
+
+        np.testing.assert_array_equal(composed.offset[: image.rows], offset)
+        np.testing.assert_array_equal(
+            composed.offset[image.rows :], ring.zeros(_DIGIT_COLS)
+        )
+        wide = lift(
+            ring,
+            ring.from_signed_stack(instance.s1),
+            ring.from_signed_stack(instance.message),
+        )
+        got = composed.apply(ring, wide).reshape(composed.rows, ring.d)
+        np.testing.assert_array_equal(got[: image.rows], instance.bounded)
+        np.testing.assert_array_equal(got[image.rows :], instance.digits)
+
+    def test_the_composed_image_spans_the_legs_lift(self) -> None:
+        """`E` is written over `2(m1+ℓ)` and the leg's lift is
+        `2(s1_take+ℓ)`. The composition is what crosses that gap, and a leg
+        refuses an image of either other width — which is why passing
+        `ExactL2`'s own `E` to a leg is a shape error rather than a silent
+        proof of something else."""
+        instance, _ = self._imaged(72)
+        ell = instance.protocol.ell
+        composed = instance.exact.range_image()
+        assert composed is not None and instance.exact.image is not None
+        self.assertEqual(composed.matrix.shape[1], SIGMA_ORDER * (_S1_COLS + ell))
+        self.assertEqual(
+            instance.exact.image.matrix.shape[1], SIGMA_ORDER * (_M1 + ell)
+        )
+
+
 class ExactWraparoundTest(absltest.TestCase):
     def test_each_wraparound_condition_is_checked(self) -> None:
         """Both statements are proved mod q, and an integer identity that
@@ -530,35 +637,6 @@ class ExactRoundTripTest(absltest.TestCase):
         self.assertFalse(self._verify(instance, self._prove(instance)))
 
 
-def _composed_range_image(
-    ring: HostSplitRing, image: AffineImage, ell: int
-) -> AffineImage:
-    """Eq. 61's `e^(e)` — `[E⃗s − ⃗v ; x⃗]`, which is what the range leg has
-    to bound when the exact statement is about an affine image.
-
-    The two images are written over different lifts and that is the whole
-    content of this helper: `ExactL2`'s `E` is indexed against `(s1, m)`
-    without the digits, per the paper's `2(m1+ℓ)`, while the leg's lift has
-    them — Fig. 10 commits the Ajtai half as `(s1, x)`. So every column
-    shifts, and one row is appended to select `x⃗` itself.
-
-    Without this the range leg would bound `(s1‖x, m)` while `I` is written
-    about `E⃗s − ⃗v`, and the wraparound premise Theorem 5.3 needs would be
-    about a different vector than the one it is claimed for — which nothing
-    downstream would notice, since both proofs verify."""
-    # Where each of `E`'s columns lands once the digits are in the lift —
-    # exactly "where a narrower statement's lift sits inside a wider one".
-    columns = lift_positions(_M1, _S1_COLS, ell, ell)
-    wide = lift_slots(_S1_COLS, ell)
-    rows = image.rows
-    matrix = ring.zeros(rows + _DIGIT_COLS, 2 * (_S1_COLS + ell))
-    matrix[:rows, columns] = image.matrix
-    matrix[rows, wide.s1[_M1]] = ring.one()
-    offset = ring.zeros(rows + _DIGIT_COLS)
-    offset[:rows] = image.offset
-    return AffineImage(matrix=matrix, offset=offset)
-
-
 class ExactAffineImageTest(absltest.TestCase):
     """Eq. 53 at a general `E`: `I` is written about `E⃗s − ⃗v` rather than
     about `(s1, m)`.
@@ -648,14 +726,13 @@ class ExactAffineImageTest(absltest.TestCase):
 
         The leg carries the *composed* image, which is what makes the
         wraparound premise be about the vector `I` is written for."""
-        ring = lnp_fixture.ring()
-        ell = _Instance(63).protocol.ell
+        probe = _Instance(63)
+        ring, ell = probe.ring, probe.protocol.ell
         image = lnp_fixture.rotation_image(
             ring, 2 * (_M1 + ell), lnp_fixture.identity_columns(_M1, ell), [1, 6, 2]
         )
-        instance = _Instance(
-            63, image=image, range_image=_composed_range_image(ring, image, ell)
-        )
+        composed = ExactL2(probe.evaluation, _M1, ell, probe.bound, image).range_image()
+        instance = _Instance(63, image=image, range_image=composed)
         proof, _ = instance.protocol.prove(
             instance.publics,
             s1=instance.s1,
