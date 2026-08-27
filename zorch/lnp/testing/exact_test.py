@@ -45,7 +45,7 @@ from zorch.lnp.quadratic import (
     Publics,
     evaluate,
     lift,
-    lift_pairing,
+    lift_positions,
     lift_slots,
 )
 from zorch.lnp.range import ApproximateRange, RangeProof
@@ -525,13 +525,6 @@ class ExactRoundTripTest(absltest.TestCase):
         self.assertFalse(self._verify(instance, self._prove(instance)))
 
 
-def _identity_columns(witness_cols: int, message_cols: int) -> list[int]:
-    """Where `(s1, m)` sit in the narrow lift `(s1, σ(s1), m, σ(m))` an
-    image is written over — the columns `E = I` selects."""
-    slots = lift_slots(witness_cols, message_cols)
-    return list(np.concatenate([slots.s1, slots.message]))
-
-
 def _composed_range_image(
     ring: HostSplitRing, image: AffineImage, ell: int
 ) -> AffineImage:
@@ -548,22 +541,10 @@ def _composed_range_image(
     about `E⃗s − ⃗v`, and the wraparound premise Theorem 5.3 needs would be
     about a different vector than the one it is claimed for — which nothing
     downstream would notice, since both proofs verify."""
-    narrow = lift_slots(_M1, ell)
+    # Where each of `E`'s columns lands once the digits are in the lift —
+    # exactly "where a narrower statement's lift sits inside a wider one".
+    columns = lift_positions(_M1, _S1_COLS, ell, ell)
     wide = lift_slots(_S1_COLS, ell)
-    # Where each of `E`'s columns lands once the digits are in the lift.
-    columns = np.concatenate(
-        [
-            wide.s1[:_M1],
-            wide.sigma_s1[:_M1],
-            wide.message[:ell],
-            wide.sigma_message[:ell],
-        ]
-    )
-    assert len(columns) == len(
-        np.concatenate(
-            [narrow.s1, narrow.sigma_s1, narrow.message, narrow.sigma_message]
-        )
-    )
     rows = image.rows
     matrix = ring.zeros(rows + _DIGIT_COLS, 2 * (_S1_COLS + ell))
     matrix[:rows, columns] = image.matrix
@@ -593,7 +574,7 @@ class ExactAffineImageTest(absltest.TestCase):
         expansion — both sides build `I` from this one object."""
         plain = _Instance(60)
         ring = plain.ring
-        columns = _identity_columns(_M1, plain.protocol.ell)
+        columns = lnp_fixture.identity_columns(_M1, plain.protocol.ell)
         identity = lnp_fixture.rotation_image(
             ring, 2 * (_M1 + plain.protocol.ell), columns
         )
@@ -615,7 +596,7 @@ class ExactAffineImageTest(absltest.TestCase):
         ring = lnp_fixture.ring()
         probe = _Instance(61)
         ell = probe.protocol.ell
-        columns = _identity_columns(_M1, ell)
+        columns = lnp_fixture.identity_columns(_M1, ell)
         # Read the first witness column twice and the message not at all.
         image = lnp_fixture.rotation_image(
             ring, 2 * (_M1 + ell), [columns[0], columns[0], columns[1]], [0, 7, 3]
@@ -637,7 +618,7 @@ class ExactAffineImageTest(absltest.TestCase):
         the witness bound and `decompose` would refuse an honest witness."""
         ring = lnp_fixture.ring()
         ell = _Instance(62).protocol.ell
-        columns = _identity_columns(_M1, ell)
+        columns = lnp_fixture.identity_columns(_M1, ell)
         offset = ring.from_signed_stack(
             np.random.default_rng(3).integers(-1, 2, (len(columns), ring.d))
         )
@@ -665,7 +646,7 @@ class ExactAffineImageTest(absltest.TestCase):
         ring = lnp_fixture.ring()
         ell = _Instance(63).protocol.ell
         image = lnp_fixture.rotation_image(
-            ring, 2 * (_M1 + ell), _identity_columns(_M1, ell), [1, 6, 2]
+            ring, 2 * (_M1 + ell), lnp_fixture.identity_columns(_M1, ell), [1, 6, 2]
         )
         instance = _Instance(
             63, image=image, range_image=_composed_range_image(ring, image, ell)
@@ -701,7 +682,7 @@ class ExactAffineImageTest(absltest.TestCase):
         `c` actually used."""
         probe = _Instance(64)
         ring, ell = probe.ring, probe.protocol.ell
-        columns = _identity_columns(_M1, ell)
+        columns = lnp_fixture.identity_columns(_M1, ell)
         # Built directly rather than through the fixture: a three-times-wider
         # image has three times the norm, which `decompose` would refuse
         # before the gate is ever asked.
@@ -747,30 +728,6 @@ class ExactAffineImageTest(absltest.TestCase):
                         instance.bound,
                         image,
                     )
-
-
-class LiftPairingTest(absltest.TestCase):
-    """The σ involution the general expansion indexes through."""
-
-    def test_it_sends_each_copy_to_the_other(self) -> None:
-        slots = lift_slots(3, 2)
-        pairing = lift_pairing(3, 2)
-        np.testing.assert_array_equal(pairing[slots.s1], slots.sigma_s1)
-        np.testing.assert_array_equal(pairing[slots.sigma_s1], slots.s1)
-        np.testing.assert_array_equal(pairing[slots.message], slots.sigma_message)
-        np.testing.assert_array_equal(pairing[slots.sigma_message], slots.message)
-
-    def test_it_is_an_involution(self) -> None:
-        """Applied to either side of a product, which is what lets the
-        expansion scatter one linear block instead of two."""
-        for s1_cols, message_cols in ((1, 0), (3, 2), (4, 4)):
-            with self.subTest(shape=(s1_cols, message_cols)):
-                pairing = lift_pairing(s1_cols, message_cols)
-                np.testing.assert_array_equal(pairing[pairing], np.arange(len(pairing)))
-
-    def test_negative_widths_are_refused(self) -> None:
-        with self.assertRaisesRegex(ValueError, "negative widths"):
-            lift_pairing(-1, 2)
 
 
 if __name__ == "__main__":

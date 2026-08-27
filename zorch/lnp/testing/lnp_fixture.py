@@ -22,7 +22,7 @@ from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.challenge import ChallengeParams
 from zorch.lnp.masking import BimodalMasking, Masking
-from zorch.lnp.quadratic import AffineImage
+from zorch.lnp.quadratic import AffineImage, lift_slots
 
 # One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`)
 # and a small degree keep the schoolbook ring affordable; the challenge
@@ -193,3 +193,10 @@ def rotation_image(
     return AffineImage(
         matrix=matrix, offset=ring.zeros(rows) if offset is None else offset
     )
+
+
+def identity_columns(s1_take: int, ell: int) -> list[int]:
+    """Where `(s1, m)` sit in the narrow lift `(s1, σ(s1), m, σ(m))` an
+    affine image is written over — the columns an imageless leg selects."""
+    slots = lift_slots(s1_take, ell)
+    return list(np.concatenate([slots.s1, slots.message]))

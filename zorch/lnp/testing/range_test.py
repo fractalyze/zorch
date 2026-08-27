@@ -45,6 +45,7 @@ from lattice_frx.split_ring import HostSplitRing
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp import masking as masking_module
+from zorch.lnp.challenge import negacyclic_mul
 from zorch.lnp.eval import AbdlopQuadraticEval
 from zorch.lnp.masking import BimodalMasking, L2Bound, LinfBound
 from zorch.lnp.quadratic import (
@@ -1291,20 +1292,6 @@ class BimodalMaskingTest(absltest.TestCase):
             raise instance.protocol._exhausted()
 
 
-def _negacyclic_rotate(coefficients: np.ndarray, exponent: int) -> np.ndarray:
-    """`X^k·a` over `Z[X]/(X^d + 1)`, on signed coefficients and in plain
-    numpy — a shift that negates whatever wraps, since `X^d = −1`.
-
-    Spelled out here rather than taken from the ring so the expectation a
-    test builds is not the implementation it is checking."""
-    d = len(coefficients)
-    out = np.zeros(d, dtype=np.int64)
-    for source, value in enumerate(coefficients):
-        target = source + exponent
-        out[target % d] += -value if (target // d) % 2 else value
-    return out
-
-
 def _sigma_of(coefficients: np.ndarray) -> np.ndarray:
     """`σ₋₁(a) = a(X^{-1})`, on signed coefficients: `X^{-j} = −X^{d-j}`, so
     every coefficient but the constant reflects and flips sign."""
@@ -1313,13 +1300,6 @@ def _sigma_of(coefficients: np.ndarray) -> np.ndarray:
     out[0] = coefficients[0]
     out[d - np.arange(1, d)] = -coefficients[1:]
     return out
-
-
-def _identity_columns(s1_take: int, ell: int) -> list[int]:
-    """Where `(s1, m)` sit in the narrow lift `(s1, σ(s1), m, σ(m))` an
-    affine image is written over — the columns an imageless leg selects."""
-    slots = lift_slots(s1_take, ell)
-    return list(np.concatenate([slots.s1, slots.message]))
 
 
 class AffineImageTest(absltest.TestCase):
@@ -1346,7 +1326,9 @@ class AffineImageTest(absltest.TestCase):
         take = plain.protocol.evaluation.s1_take
         ell = plain.protocol.ell
         width = len(plain.leg._image_positions)
-        identity = lnp_fixture.rotation_image(ring, width, _identity_columns(take, ell))
+        identity = lnp_fixture.rotation_image(
+            ring, width, lnp_fixture.identity_columns(take, ell)
+        )
         spelled = _Instance(40, images=[identity])
 
         # Same leg, same draw, same challenge — only how `E` reaches the
@@ -1395,9 +1377,10 @@ class AffineImageTest(absltest.TestCase):
 
         # What those two columns hold, as signed coefficients.
         sources = [_sigma_of(instance.s1[0]), instance.message[0]]
+        monomials = np.eye(ring.d, dtype=np.int64)
         want = np.concatenate(
             [
-                _negacyclic_rotate(source, exponent) - row
+                negacyclic_mul(source, monomials[exponent]) - row
                 for source, exponent, row in zip(
                     sources, exponents, offset, strict=True
                 )
@@ -1441,7 +1424,7 @@ class AffineImageTest(absltest.TestCase):
         honest prover."""
         ring = lnp_fixture.ring()
         take, ell = _M1, _ELL
-        columns = _identity_columns(take, ell)
+        columns = lnp_fixture.identity_columns(take, ell)
         offset = ring.from_signed_stack(
             np.random.default_rng(11)
             .integers(-1, 2, (len(columns), ring.d))
@@ -1472,7 +1455,7 @@ class AffineImageTest(absltest.TestCase):
         width would draw a matrix its own verifier could not replay."""
         ring = lnp_fixture.ring()
         take, ell = _M1, _ELL
-        columns = _identity_columns(take, ell)[:1]
+        columns = lnp_fixture.identity_columns(take, ell)[:1]
         image = lnp_fixture.rotation_image(ring, 2 * (take + ell), columns)
         instance = _Instance(46, images=[image])
         self.assertEqual(instance.leg._chunks, 1)
@@ -1503,14 +1486,12 @@ class AffineImageTest(absltest.TestCase):
 
     def test_a_misshapen_image_is_refused(self) -> None:
         ring = lnp_fixture.ring()
-        take, ell = _M1, _ELL
-        width = 2 * (take + ell)
-        columns = _identity_columns(take, ell)
+        width = 2 * (_M1 + _ELL)
         cases = {
             "one ring column per position": AffineImage(
                 matrix=ring.zeros(2, width + 1), offset=ring.zeros(2)
             ),
-            "at least one": AffineImage(
+            "no rows bounds nothing": AffineImage(
                 matrix=ring.zeros(0, width), offset=ring.zeros(0)
             ),
             "one ring element per row": AffineImage(
@@ -1525,7 +1506,7 @@ class AffineImageTest(absltest.TestCase):
     def test_one_image_per_leg_or_none(self) -> None:
         ring = lnp_fixture.ring()
         image = lnp_fixture.rotation_image(
-            ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL)
+            ring, 2 * (_M1 + _ELL), lnp_fixture.identity_columns(_M1, _ELL)
         )
         with self.assertRaisesRegex(ValueError, "affine image"):
             _Instance(49, legs=2, images=[image])
@@ -1537,7 +1518,7 @@ class AffineImageTest(absltest.TestCase):
         commitment, and `None` is the leg that keeps Fig. 9's case."""
         ring = lnp_fixture.ring()
         image = lnp_fixture.rotation_image(
-            ring, 2 * (_M1 + _ELL), _identity_columns(_M1, _ELL), [2, 2, 2]
+            ring, 2 * (_M1 + _ELL), lnp_fixture.identity_columns(_M1, _ELL), [2, 2, 2]
         )
         instance = _Instance(50, legs=2, images=[None, image])
         self.assertIsNone(instance.protocol.legs[0].image)

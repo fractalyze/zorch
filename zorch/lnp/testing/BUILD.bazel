@@ -140,6 +140,7 @@ py_test(
     deps = [
         "//zorch:byte_transcript",
         "//zorch/commit:ajtai",
+        "//zorch/lnp:challenge",
         "//zorch/lnp:eval",
         "//zorch/lnp:masking",
         "//zorch/lnp:quadratic",

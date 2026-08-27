@@ -35,7 +35,9 @@ from zorch.lnp.quadratic import (
     QuadraticProof,
     evaluate,
     lift,
+    lift_pairing,
     lift_positions,
+    lift_slots,
     sigma_exponent,
 )
 from zorch.lnp.testing import lnp_fixture
@@ -448,6 +450,30 @@ class QuadraticManyTest(absltest.TestCase):
         proof, _ = instance.prove()
         with self.assertRaisesRegex(ValueError, "at least one"):
             instance.verify(proof, r2=instance.r2[:0])
+
+
+class LiftPairingTest(absltest.TestCase):
+    """The σ involution the general expansion indexes through."""
+
+    def test_it_sends_each_copy_to_the_other(self) -> None:
+        slots = lift_slots(3, 2)
+        pairing = lift_pairing(3, 2)
+        np.testing.assert_array_equal(pairing[slots.s1], slots.sigma_s1)
+        np.testing.assert_array_equal(pairing[slots.sigma_s1], slots.s1)
+        np.testing.assert_array_equal(pairing[slots.message], slots.sigma_message)
+        np.testing.assert_array_equal(pairing[slots.sigma_message], slots.message)
+
+    def test_it_is_an_involution(self) -> None:
+        """Applied to either side of a product, which is what lets the
+        expansion scatter one linear block instead of two."""
+        for s1_cols, message_cols in ((1, 0), (3, 2), (4, 4)):
+            with self.subTest(shape=(s1_cols, message_cols)):
+                pairing = lift_pairing(s1_cols, message_cols)
+                np.testing.assert_array_equal(pairing[pairing], np.arange(len(pairing)))
+
+    def test_negative_widths_are_refused(self) -> None:
+        with self.assertRaisesRegex(ValueError, "negative widths"):
+            lift_pairing(-1, 2)
 
 
 if __name__ == "__main__":

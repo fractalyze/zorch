@@ -89,6 +89,7 @@ from zorch.lnp.quadratic import (
     Family,
     constants,
     lift_pairing,
+    lift_positions,
     lift_slots,
     require_image,
     sigma_exponent,
@@ -126,10 +127,15 @@ def binarity(
     **Two restrictions, not one.** `E_bin` is a *selection*, which the
     `Sequence[int]` parameters make un-violable: a general affine image would
     turn this into a dense quadratic form over the whole lift. `ExactL2`
-    takes one of those for eq. 53 and eq. 54 could follow the same way, but
-    nothing has asked for it — and the inherited-wraparound argument above is
-    a reason to keep the selection while a selection will do, since a general
-    image's columns are not columns the range leg already projects.
+    takes one of those for eq. 53 and eq. 54 could follow the same way;
+    nothing has asked for it, so this is scope rather than a gap.
+
+    Note what that costs the paragraph above. The premise is inherited only
+    while the leg projects the witness columns these names select — true of
+    the `E = I` composition, and *not* true once `ExactL2` carries an image,
+    since the leg then bounds `(E⃗s − ⃗v ‖ x⃗)`, which need not contain them.
+    A caller pairing binary columns with an imaged exact proof owes the
+    premise itself, by appending selecting rows to the composed image.
 
     `v_bin = 0` is the separate one, pinned by the `ring.zeros(1, 1)` below
     and enforced by nothing — a caller wanting `v⃗` in `{k, k+1}` for public
@@ -262,13 +268,8 @@ class ExactL2:
         # *not* among them. Fig. 10 commits the Ajtai half as `(s1, x)` but
         # writes `E_i` over `s` alone, and `x` reaches the statement through
         # the radix row below instead.
-        self._image_positions = np.concatenate(
-            [
-                slots.s1[:witness_cols],
-                slots.sigma_s1[:witness_cols],
-                slots.message[:message_cols],
-                slots.sigma_message[:message_cols],
-            ]
+        self._image_positions = lift_positions(
+            witness_cols, evaluation.s1_take, message_cols, evaluation.ell
         )
         # Every term of `T(·, ·)` reads a position and its σ partner, and
         # once `E` mixes columns the partner of a combination is only
@@ -409,8 +410,10 @@ class ExactL2:
         # first.
         e1[0, positions] = ring.neg(
             ring.add(
-                ring.matvec(np.swapaxes(matrix, 0, 1), sigma_offset),
-                ring.matvec(np.swapaxes(sigma_matrix, 0, 1), offset)[self._pairing],
+                ring.matmul(np.swapaxes(matrix, 0, 1), sigma_offset[:, None])[:, 0],
+                ring.matmul(np.swapaxes(sigma_matrix, 0, 1), offset[:, None])[:, 0][
+                    self._pairing
+                ],
             )
         )
 
@@ -419,7 +422,7 @@ class ExactL2:
         # vanish, and dropping the rest here would be claiming the others
         # were zero to begin with.
         return ring.sub(
-            ring.matvec(sigma_offset[None, :], offset)[0],
+            ring.matmul(sigma_offset[None, :], offset[:, None])[0, 0],
             constants(ring, [self.bound**2])[0],
         )
 

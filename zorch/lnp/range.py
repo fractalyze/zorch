@@ -98,6 +98,7 @@ from zorch.lnp.quadratic import (
     Publics,
     constants,
     lift,
+    lift_positions,
     lift_slots,
     require_image,
     sigma_exponent,
@@ -245,9 +246,7 @@ class ProjectionLeg:
         # sign columns" un-violable instead of merely checked — those hold
         # values the prover redraws per attempt, so a function of them is
         # not a statement anyone could have written down in advance.
-        self._image_positions = np.concatenate(
-            [slots.s1, slots.sigma_s1, slots.message[:ell], slots.sigma_message[:ell]]
-        )
+        self._image_positions = lift_positions(s1_take, s1_take, ell, evaluation.ell)
         self.image = require_image(image, ring, len(self._image_positions))
         # What the projection is *of*, in ring elements: the witness at
         # `E = I`, and `E`'s own row count otherwise. It sizes the challenge
@@ -485,7 +484,7 @@ class ProjectionLeg:
             # `count` are the `G_j` half and are untouched here.
             e1 = e1.copy()
             e1[:count, self._sign_position] = ring.neg(
-                ring.matvec(sigma_rows, self.image.offset)
+                ring.matmul(sigma_rows, self.image.offset[:, None])[:, 0]
             )
         e0 = ring.zeros(count + d - 1, 1)
         e0[:count, 0] = constants(ring, z.reshape(-1))

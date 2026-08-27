@@ -550,10 +550,20 @@ class AffineImage:
     statement is about the witness itself, which is what Fig. 9 states and
     all this package proved before. That path stays a *selection* — a scatter
     to the witness columns — rather than a contraction against an identity
-    block, because the block is `rows·width` ring elements the selection
-    never materialises, and because a range leg squeezes bytes sized by
-    `rows`: routing the old case through the new one would move the
-    transcript Fig. 9's suite is pinned against.
+    block, and the reasons are cost, not soundness:
+
+    - the identity block is `rows·width` ring elements the selection never
+      materialises, and contracting against it is a `(256, p) × (p, width)`
+      matmul per proof where the scatter is free;
+    - the imageless path reads the caller's own integers instead of lifting
+      `E⃗s − ⃗v` back out of `R_q`, so Fig. 9's own case carries one fewer
+      wraparound premise than it otherwise would.
+
+    It is *not* that the transcript would move. An identity image has
+    `rows = s1_take + ell`, which is exactly the imageless `_chunks`, and
+    `_chunks` is the only input to the challenge-matrix squeeze — the range
+    suite pins this directly, asserting the two spellings agree byte for byte.
+    Unifying the paths is a performance choice that stays available.
     """
 
     matrix: np.ndarray
@@ -589,8 +599,23 @@ class AffineImage:
         Row by row because the balanced read is a per-element op, and
         through it rather than around it because reading limb 0 out of the
         array by hand is the one thing the ring's contract tells consumers
-        not to do."""
-        image = ring.sub(ring.matvec(self.matrix, lift), self.offset)
+        not to do.
+
+        **Single-prime only, and the check belongs here** rather than at any
+        constructor: reading the balanced range of limb 0 is the whole
+        integer only when there is one limb, and this is the operation that
+        does it. A shape validator up front would leave `apply` reachable on
+        a chained ring — it is a public method on a frozen dataclass — and
+        would refuse an `ExactL2` image that never calls this at all, since
+        eq. 66's arithmetic stays in `R_q` and is modulus-chain-agnostic."""
+        if len(ring.q_moduli) != 1:
+            raise ValueError(
+                f"quadratic: `E⃗s − ⃗v` over ℤ needs a single-prime ring, and "
+                f"this one chains {len(ring.q_moduli)} moduli — one limb's "
+                f"balanced range says nothing about a value only a "
+                f"reconstruction across limbs resolves"
+            )
+        image = ring.sub(ring.matmul(self.matrix, lift[:, None])[:, 0], self.offset)
         return np.concatenate([ring.to_balanced_limb0(row) for row in image])
 
 
@@ -600,44 +625,47 @@ def require_image(
     """`(E, v)` checked against the lift it is written over, or `None`
     passed through.
 
-    Shape only, and shape is the whole contract here: both are public
-    parameters, so nothing this can catch is a witness bug. What it does
-    catch is an `E` whose columns were counted over the identity copies
-    alone, or over the eval layer's full width rather than the caller's
-    `2(m1+ℓ)` — mistakes otherwise invisible until `matmul` raises inside
-    the first proof, one round into a transcript."""
+    Shape only, and shape is the whole contract: both are public parameters,
+    so nothing this can catch is a witness bug, and the one non-shape premise
+    an image carries — that `apply` can read it back over ℤ — belongs to that
+    operation and is checked there. What this catches is an `E` whose columns
+    were counted over the identity copies alone, or over the eval layer's
+    full width rather than the caller's `2(m1+ℓ)` — mistakes otherwise
+    invisible until `matmul` raises inside the first proof, one round into a
+    transcript.
+
+    Messages name this module rather than either caller: both `range.py` and
+    `exact.py` write an image, and a shape bug in an `ExactL2` statement
+    reporting itself as a range error is the misdirection this sits one layer
+    above to avoid."""
     if image is None:
         return None
-    # `project` recovers `E⃗s − ⃗v` over ℤ by reading one limb's balanced
-    # range, which is the whole integer only when there is one limb. A chain
-    # needs a CRT reconstruction, and silently bounding limb 0 instead would
-    # be a proof about a different vector.
-    if len(ring.q_moduli) != 1:
-        raise ValueError(
-            f"range: an affine image needs a single-prime ring, and this one "
-            f"chains {len(ring.q_moduli)} moduli — recovering `E·s − v` over "
-            f"ℤ from one limb's balanced range says nothing about a value "
-            f"only a reconstruction across limbs resolves"
-        )
     limbs_d = (len(ring.q_moduli), ring.d)
-    if image.matrix.ndim != 4 or image.matrix.shape[0] < 1:
+    # Rank first, and only rank: it is what makes `.rows` meaningful, and the
+    # equality below cannot report a wrong *column* count against a matrix
+    # that has no columns axis.
+    if image.matrix.ndim != 4:
         raise ValueError(
-            f"range: an affine image of shape {image.matrix.shape} — `E` is "
-            f"`(rows, {width}, {limbs_d[0]}, {limbs_d[1]})` with at least one "
-            f"row, and a leg bounding an empty vector proves a statement "
-            f"every witness satisfies"
+            f"quadratic: an affine image of rank {image.matrix.ndim} — `E` is "
+            f"a `(rows, {width}, {limbs_d[0]}, {limbs_d[1]})` stack of ring "
+            f"elements"
+        )
+    if image.rows < 1:
+        raise ValueError(
+            "quadratic: an affine image with no rows bounds nothing — a "
+            "statement about an empty vector is one every witness satisfies"
         )
     expected = (image.rows, width, *limbs_d)
     if image.matrix.shape != expected:
         raise ValueError(
-            f"range: an affine image of shape {image.matrix.shape} where the "
-            f"lift this leg's statement is written over needs {expected} — "
-            f"`E` has one ring column per position of `(s1, σ(s1), m, σ(m))`, "
-            f"the caller's own halves and not the layer's mask and sign"
+            f"quadratic: an affine image of shape {image.matrix.shape} where "
+            f"the lift it is written over needs {expected} — `E` has one ring "
+            f"column per position of `(s1, σ(s1), m, σ(m))`, the caller's own "
+            f"halves and not the layer's mask and sign"
         )
     if image.offset.shape != (image.rows, *limbs_d):
         raise ValueError(
-            f"range: an offset of shape {image.offset.shape} against "
+            f"quadratic: an offset of shape {image.offset.shape} against "
             f"{image.rows} matrix row(s) — `v` is one ring element per row "
             f"of `E`, and `ring.zeros({image.rows})` is the `v = 0` case"
         )
@@ -673,19 +701,16 @@ def lift_pairing(s1_cols: int, message_cols: int) -> np.ndarray:
     recoverable through the permutation, which is this.
 
     An involution, because `SIGMA_ORDER` is 2 — `pairing[pairing[c]] == c`
-    — which is what lets a caller apply it to either side of a product."""
-    if s1_cols < 0 or message_cols < 0:
-        raise ValueError(f"lift_pairing: negative widths ({s1_cols}, {message_cols})")
-    s1 = np.arange(s1_cols)
-    message = np.arange(message_cols)
-    span = SIGMA_ORDER * s1_cols
+    — which is what lets a caller apply it to either side of a product.
+
+    Spelled through `lift_slots` for the reason `lift_positions` is: that
+    helper owns where each copy of each half starts, and swapping the two
+    copies of each half is the whole of this map. Re-deriving the `SIGMA_ORDER
+    * s1_cols` offset here would be a fourth statement of the layout in the
+    module that consolidated it."""
+    slots = lift_slots(s1_cols, message_cols)
     return np.concatenate(
-        [
-            s1_cols + s1,
-            s1,
-            span + message_cols + message,
-            span + message,
-        ]
+        [slots.sigma_s1, slots.s1, slots.sigma_message, slots.message]
     )
 
 
