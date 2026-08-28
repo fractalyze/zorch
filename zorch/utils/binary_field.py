@@ -17,6 +17,7 @@ limbs, so a `uint64` limb would reject the 32-bit tower level (`binary_field_t5`
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import partial
 from typing import Any, Literal
 
@@ -333,6 +334,52 @@ def _bit_select_unpacked_bits_pallas(
     return out[:n]
 
 
+def _bit_select_packed_bytes_stacked_pallas(
+    selectors: Sequence[Array], values: Array, limbs: int
+) -> Array:
+    """Pallas lowering for `N x (n, B/8)` selectors and `(N, B)` values `-> (n, L)`.
+
+    The claims arrive as separate operands rather than one `(N, n, B/8)` array
+    because concatenating them is the cost this kernel exists to avoid: each is
+    `n * B/8` bytes, so stacking would spend the output traffic the fused pass
+    saves. Only the tables are stacked — `(B/8, 256, L)` is 64 KiB at `B = 128`
+    over four limbs, so `N` of them sit together for free.
+
+    The claim axis unrolls into the same program the single-claim kernel runs:
+    one selector-row pass per claim, one accumulator, one output write.
+    """
+    n, n_bytes = selectors[0].shape
+    block_rows = 64
+    padded_n = ((n + block_rows - 1) // block_rows) * block_rows
+    # A padded row selects byte 0 in every position, and `_byte_xor_table` maps
+    # byte 0 to the empty XOR, so the pad contributes zero rather than garbage.
+    padded = [fnp.pad(s, ((0, padded_n - n), (0, 0))) for s in selectors]
+
+    tables = fnp.stack(
+        [_byte_xor_table(values[claim], n_bytes, limbs) for claim in range(len(padded))]
+    )
+
+    def kernel(*refs: Any) -> None:
+        *selector_refs, table_ref, out_ref = refs
+        block = pl.program_id(0)
+        rows = block * block_rows + fnp.arange(block_rows, dtype=fnp.int32)
+        acc = fnp.zeros((block_rows, limbs), dtype=_LIMB)
+        for claim, selector_ref in enumerate(selector_refs):
+            for byte_index in range(n_bytes):
+                value = selector_ref[rows, byte_index].astype(fnp.int32)
+                acc ^= table_ref[claim, byte_index, value, :]
+        out_ref[rows, :] = acc
+
+    out = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
+        grid=(padded_n // block_rows,),
+        compiler_params=plgpu.CompilerParams(num_warps=2),
+        name="bit_select_xor_reduce_stacked_packed_bytes",
+    )(*padded, tables)
+    return out[:n]
+
+
 def _bit_select_packed_bytes_pallas(
     selectors: Array, values: Array, limbs: int
 ) -> Array:
@@ -619,6 +666,85 @@ def bit_select_xor_reduce(
     raise ValueError(
         f'unknown reduction axis {reduce!r}; expected "bits" or "elements"'
     )
+
+
+def bit_select_xor_reduce_stacked(
+    selectors: Sequence[Array], values: Sequence[Array]
+) -> Array:
+    """XOR-sum of `N` independent `reduce="bits"` reductions, in one pass.
+
+    `N x (n,)` selectors and `N x (W,)` values `-> (n,)`, computing
+    `out[i] = Σ_k Σ_b bit_b(selectors[k][i]) · values[k][b]`.
+
+    Distinct from the batched `reduce="elements"` form, which shares ONE selector
+    set across the stack: here every claim brings its own selectors *and* its own
+    values, and only their sum is ever read. That is why this is a separate entry
+    point rather than another `reduce=` mode — and 2D selectors already mean an
+    unpacked 0/1 matrix under `reduce="bits"`.
+
+    The claims stay separate arrays on purpose. Reducing each one and summing
+    afterwards costs `N` full-length writes plus a read of each, which is what
+    this removes; taking a pre-stacked `(N, n)` would put that same traffic back
+    as the concatenation. At `N = 2` and `n = 2^25` over GF(2^128) the one-pass
+    form moves 1.5 GiB against 3.5 GiB.
+
+    Callers that need the individual reductions must not use this — the summands
+    never exist.
+    """
+    if len(selectors) != len(values):
+        raise ValueError(
+            "selectors and values must stack the same number of claims: "
+            f"{len(selectors)} vs {len(values)}"
+        )
+    if not selectors:
+        raise ValueError("stacked bit-select XOR reduction requires at least one claim")
+    values_dtype = fnp.dtype(values[0].dtype)
+    if not values_dtype.name.startswith("binary_field"):
+        raise ValueError("bit-select XOR reduction values must use a binary field")
+    width = field_bit_width(values[0].dtype)
+    for claim, (s, v) in enumerate(zip(selectors, values)):
+        if s.ndim != 1 or s.shape[0] == 0:
+            raise ValueError(
+                f"claim {claim}: selectors must be a non-empty 1D vector, got {s.shape}"
+            )
+        if s.shape != selectors[0].shape:
+            raise ValueError(
+                f"claim {claim}: every claim reduces the same number of selectors, "
+                f"got {s.shape} against {selectors[0].shape}"
+            )
+        if fnp.dtype(s.dtype) != values_dtype or fnp.dtype(v.dtype) != values_dtype:
+            raise ValueError(
+                "bit-select XOR reduction requires selectors and values of the "
+                "same binary-field dtype"
+            )
+        if v.shape != (width,):
+            raise ValueError(
+                f"claim {claim}: values must have shape ({width},), got {v.shape}"
+            )
+
+    if frx.default_backend() == _CUDA:
+        values_l = fnp.stack([_to_limbs(v) for v in values])  # (N, W, L), 2 KiB a claim
+        selector_bytes = [
+            lax.bitcast_convert_type(_to_limbs(s), fnp.uint8).reshape(
+                s.shape[0], width // 8
+            )
+            for s in selectors
+        ]
+        out_l = _bit_select_packed_bytes_stacked_pallas(
+            selector_bytes, values_l, width // _LIMB_BITS
+        )
+    else:
+
+        def one_claim(s: Array, v: Array) -> Array:
+            return lax.reduce_xor(_bits(s)[:, :, None] * _to_limbs(v)[None, :, :], (1,))
+
+        # Literally the single-claim `reduce="bits"` expression, XOR-summed —
+        # so the oracle the kernel is validated against is the reduction this
+        # module already trusts, not a second derivation of it.
+        out_l = one_claim(selectors[0], values[0])
+        for s, v in zip(selectors[1:], values[1:]):
+            out_l = out_l ^ one_claim(s, v)
+    return _from_limbs(out_l, values_dtype)
 
 
 def unpack(x: Array) -> Array:

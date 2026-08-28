@@ -15,6 +15,7 @@ from zorch.utils.binary_field import (
     _ELEMENTS_TARGET_PROGRAMS,
     _to_limbs,
     bit_select_xor_reduce,
+    bit_select_xor_reduce_stacked,
     byte_select_xor_reduce,
     field_bit_width,
     pack,
@@ -141,6 +142,63 @@ class BinaryFieldReprTest(parameterized.TestCase):
             np.testing.assert_array_equal(
                 np.asarray(_to_limbs(batched[k])), np.asarray(_to_limbs(one))
             )
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_stacked_equals_summing_the_claims(
+        self, dtype: Any
+    ) -> None:
+        """The stacked form equals XOR-summing `N` separate `reduce="bits"`
+        reductions — the identity the one-pass kernel exists to preserve. Unlike
+        the batched `elements` form above, each claim brings its OWN selectors,
+        so this cannot be expressed by sharing one selector set."""
+        width = field_bit_width(dtype)
+        n, claims = 11, 3
+        selectors = [_rand_field(dtype, n, 30 + k) for k in range(claims)]
+        values = [_rand_field(dtype, width, 40 + k) for k in range(claims)]
+
+        got = bit_select_xor_reduce_stacked(selectors, values)
+        self.assertEqual(got.shape, (n,))
+
+        want = _to_limbs(bit_select_xor_reduce(selectors[0], values[0], reduce="bits"))
+        for k in range(1, claims):
+            want = want ^ _to_limbs(
+                bit_select_xor_reduce(selectors[k], values[k], reduce="bits")
+            )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), np.asarray(want))
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_stacked_spans_and_pads_the_row_tile(
+        self, dtype: Any
+    ) -> None:
+        """The stacked kernel tiles `n` in 64-row blocks and zero-pads the tail.
+        The 11-row case above fits one block with padding; this crosses a block
+        boundary AND leaves a partial tail, so a pad that contributed garbage
+        rather than zero would show up here."""
+        width = field_bit_width(dtype)
+        n, claims = 141, 2
+        selectors = [_rand_field(dtype, n, 50 + k) for k in range(claims)]
+        values = [_rand_field(dtype, width, 60 + k) for k in range(claims)]
+
+        got = bit_select_xor_reduce_stacked(selectors, values)
+        self.assertEqual(got.shape, (n,))
+
+        want = _to_limbs(bit_select_xor_reduce(selectors[0], values[0], reduce="bits"))
+        for k in range(1, claims):
+            want = want ^ _to_limbs(
+                bit_select_xor_reduce(selectors[k], values[k], reduce="bits")
+            )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), np.asarray(want))
+
+    def test_bit_select_xor_reduce_stacked_rejects_mismatched_stacks(self) -> None:
+        """Selectors and values must stack the same number of claims. Silently
+        zipping to the shorter one would drop a claim from the sum and still
+        return a well-shaped result."""
+        dtype = _DTYPES[0]
+        width = field_bit_width(dtype)
+        selectors = [_rand_field(dtype, 11, 70 + k) for k in range(3)]
+        values = [_rand_field(dtype, width, 80 + k) for k in range(2)]
+        with self.assertRaisesRegex(ValueError, "same number of claims"):
+            bit_select_xor_reduce_stacked(selectors, values)
 
     @parameterized.parameters(*_DTYPES)
     def test_bit_select_xor_reduce_elements_spans_multiple_tiles(
