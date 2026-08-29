@@ -87,6 +87,45 @@ pip install --force-reinstall --no-deps \
 A stale plugin surfaces as `custom op 'stablehlo.composite' is unknown` on any
 fresh compile.
 
+### `frx` and `frxlib` move together
+
+The **CPU** runtime — every host FFI handler an XLA PR registers — ships in
+`frxlib`, not `frx`. `pip install --upgrade frx` leaves an already-satisfied
+`frxlib` alone, so a CPU custom call added upstream still fails with
+`NOT_FOUND: No FFI handler registered for <target> on a platform Host` even
+though `frx` reports the new version. Upgrade both to the same dev stamp:
+
+```sh
+pip install --upgrade --extra-index-url https://fractalyze.github.io/pypi/simple/ \
+  frx==0.10.2.devYYYYMMDDHHMMSS frxlib==0.10.2.devYYYYMMDDHHMMSS
+```
+
+An XLA merge does not publish a wheel by itself, either: fractalyze/jax has to
+bump its pinned XLA revision, its CI has to pass, and only then does the Dev
+Release workflow build. Budget on the order of an hour from merge to wheel,
+and confirm the pin actually contains the commit rather than the timestamp
+merely being newer.
+
+## Benchmarking a backend-dispatched function
+
+Functions that pick a lowering by `frx.default_backend()` — the bit-select
+reductions, the NTT paths — do that **inside their own `jit`**, so the chosen
+arm is baked into the traced jaxpr, not re-decided per call. Two consequences
+for anyone measuring or forcing an arm:
+
+- Patching `default_backend` does nothing on its own. A same-shape call from
+  anywhere earlier in the process already cached its arm, and a cache hit never
+  re-runs the dispatch. Call `<fn>.clear_cache()` before, **and after**, or the
+  forced trace leaks into whatever runs next.
+- Clearing per repetition to keep two arms honest means every timing includes a
+  compile. That constant dominates and reads out as a flat ~1.2-1.9x whatever
+  the kernels actually do. Warm each arm once under its patch, then time with no
+  patch and no clear — the cache hit is the executable alone. On the bit-select
+  handlers the two methods reported 1.2-1.9x and 2.0-8.0x for the same code.
+
+Absolute times are the tell: tens of milliseconds for a reduction that takes
+hundreds of microseconds means the compile is in the measurement.
+
 ## FRX compile-cache rule
 
 A persistent `JAX_COMPILATION_CACHE_DIR` skips recompiles of the heavy
