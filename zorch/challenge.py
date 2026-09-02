@@ -80,6 +80,11 @@ class ChallengePolicy:
     def observe_and_sample(
         self, transcript: TranscriptT, values: Array
     ) -> tuple[TranscriptT, Array]:
+        """Absorb `values` and squeeze one challenge of this policy's dtype — the
+        FS entry point whenever the caller wants a *typed field* challenge. The
+        limbs<->dtype packing lives here and nowhere else, so a prover and its
+        verifier cannot disagree about it; a caller that wants raw squeezes in the
+        transcript's own field calls `transcript.observe_and_sample` directly."""
         # The absorb and the squeeze stay one hop: splitting them into `observe`
         # then `sample` bypasses the duplex-FS fusion marker and scatters ~9
         # kernels per round, which `zorch`'s fusion rule does not allow.

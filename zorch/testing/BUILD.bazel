@@ -189,6 +189,11 @@ py_test(
     tags = ["needs_cpu_backend"],
     deps = [
         "//zorch:transcript",
+        # FsEntryPointTest watches the FS *call sites*, so it needs them present:
+        # the jagged round hop it drives, and (for the import guard, which scans
+        # the runfiles tree) the prover packages that reach the transcript.
+        "//zorch/logup_gkr",
+        "//zorch/sumcheck/jagged",
         "//zorch/testkit:koalabear16",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
