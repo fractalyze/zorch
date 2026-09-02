@@ -162,15 +162,20 @@ def element_ladder_for(
 
     Derived from the class (`caps.elements`, `num_batches`) and never from an
     input's row counts, so the ladder a prover compiles against is the same
-    for every shard of the class. A transition folds each segment to
-    `ceil(c / 2)`, so a layer of total width `W` over `B` segments folds to at
-    most `(W + B) / 2`; iterating that bound gives a width every admissible
-    input fits under, while staying close to the natural halving rather than
-    holding every layer at the round-0 cap.
+    for every shard of the class.
+
+    Pairs with `jagged_fold_schedules` specifically, and cannot be more
+    general than that: a schedule only has to DOMINATE `ceil(c / 2)`
+    pointwise, with no upper bound, so no class-derived formula covers an
+    arbitrary consumer policy. Under this one a segment folds to `ceil(c / 2)`
+    and is then rounded up to even -- at most 1 extra per segment -- so a
+    width `W` over `B` segments folds to at most `ceil((W + B) / 2) + B`.
+    Omitting the trailing `+ B` under-counts whenever that rounding fires,
+    which is ~15% of random layouts.
     """
     ladder = [caps.elements]
     for _ in range(depth - 1):
-        nxt = -(-(ladder[-1] + num_batches) // 2)
+        nxt = -(-(ladder[-1] + num_batches) // 2) + num_batches
         ladder.append(min(ladder[-1], nxt + (-nxt % 4)))
     return tuple(ladder)
 

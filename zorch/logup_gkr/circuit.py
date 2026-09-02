@@ -437,6 +437,15 @@ def jagged_layer_transition(
         num_out = len(host)
         if out_width is None:
             out_width = sum(host)
+        elif out_width < sum(host):
+            # Truncation is the consumer's obligation only where the counts are
+            # traced; a host schedule states its own live size, so the one case
+            # a guard CAN see is worth catching -- a too-narrow capacity
+            # otherwise lands as a dead-region read much later.
+            raise ValueError(
+                f"out_width {out_width} cannot hold the schedule's live size "
+                f"({sum(host)}); widen the capacity for this transition"
+            )
     if num_out != layer.num_batches:
         raise ValueError(
             f"schedule must cover all {layer.num_batches} batches, got "

@@ -10,6 +10,8 @@ class stays shard-invariant, which is what these pin.
 
 from __future__ import annotations
 
+import random
+
 import frx
 import numpy as np
 import zk_dtypes
@@ -17,7 +19,10 @@ from absl.testing import absltest
 
 from zorch import transcript as T
 from zorch.challenge import ChallengePolicy
-from zorch.logup_gkr.circuit import extract_jagged_outputs
+from zorch.logup_gkr.circuit import (
+    extract_jagged_outputs,
+    jagged_layer_transition,
+)
 from zorch.logup_gkr.jagged_prover import _jagged_round_zone
 from zorch.logup_gkr.jagged_stage import JaggedGkrWitness, JaggedLogUpGkrProver
 from zorch.logup_gkr.stage import LogUpOutputClaim
@@ -56,6 +61,18 @@ def _leaves(root):
 
     walk(root)
     return found
+
+
+def _host_schedules(counts):
+    """Host mirror of `jagged_fold_schedules`, so the domination check sweeps
+    layouts without building a layer per candidate."""
+    out = []
+    cur = tuple(counts)
+    while max(cur) > 1:
+        folded = tuple((rc + 1) // 2 for rc in cur)
+        cur = tuple(fc if fc == 1 else fc + fc % 2 for fc in folded)
+        out.append(cur)
+    return out
 
 
 class ElementLadderTest(absltest.TestCase):
@@ -146,6 +163,34 @@ class ElementLadderTest(absltest.TestCase):
         )
 
         self.assertEqual(_jagged_round_zone._cache_size(), after_first)
+
+    def test_ladder_dominates_the_widths_its_schedule_policy_produces(self) -> None:
+        """Across many layouts, not just this suite's.
+
+        `jagged_fold_schedules` rounds each folded count up to even, so a
+        bound that only halves under-counts whenever that rounding fires. It
+        does not fire for `_RC` -- every halving there is already even -- so a
+        single hand-picked layout cannot see the gap; ~15% of random ones can.
+        """
+        rng = random.Random(0)
+        for _ in range(200):
+            counts = tuple(
+                rng.randint(1, 2000) for _ in range(rng.choice([2, 4, 8]))
+            )
+            scheds = _host_schedules(counts)
+            caps = caps_for(counts, len(scheds))
+            ladder = element_ladder_for(caps, len(counts), len(scheds))
+            widths = [caps.elements] + [sum(s) for s in scheds]
+            for k, cap in enumerate(ladder):
+                self.assertLessEqual(
+                    widths[k], cap, f"layout {counts}, layer {k} exceeds its cap"
+                )
+
+    def test_a_too_narrow_capacity_is_rejected_host_side(self) -> None:
+        """The guard that would have caught the bug above at its source."""
+        layer = random_jagged_layer(3, (8, 6))
+        with self.assertRaisesRegex(ValueError, "cannot hold the schedule"):
+            jagged_layer_transition(layer, (4, 3), 4)
 
     def test_ladder_length_is_checked_against_the_depth(self) -> None:
         prover = JaggedLogUpGkrProver(self.caps, _CH, element_ladder=self.ladder[:-1])
