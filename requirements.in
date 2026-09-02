@@ -15,10 +15,10 @@ absl-py
 numpy
 # PEP 696 TypeVar defaults, which `typing` gains only in 3.13.
 typing-extensions
-frx==0.10.2.dev20260826215637
-frxlib==0.10.2.dev20260826215637
-frx-cuda12-pjrt==0.10.2.dev20260826215637
-frx-cuda12-plugin==0.10.2.dev20260826215637
+frx==0.10.2.dev20260902055928
+frxlib==0.10.2.dev20260902055928
+frx-cuda12-pjrt==0.10.2.dev20260902055928
+frx-cuda12-plugin==0.10.2.dev20260902055928
 # 0.0.17 is the frx floor: this frx build registers the ed25519 twisted-Edwards
 # G1 point dtypes, so it resolves `zk_dtypes.ed25519_g1_affine`, which does not
 # exist before 0.0.17. An older pin still resolves — the failure lands at import
