@@ -1021,33 +1021,21 @@ def set_host_fs_ffi_target(name: str | None) -> None:
     _host_fs_ffi_target = name
 
 
-def _wire_state(state: DuplexState) -> Array:
-    """The whole sponge state as ONE `uint32` buffer — buffers, in order:
-    `in_buf(8) ‖ out_buf(8) ‖ sponge(16) ‖ in_pos ‖ out_pos`.
+def _wire_leaves(state: DuplexState) -> tuple[Array, ...]:
+    """The five state leaves as `uint32`, shaped as the FFI contract wants (the
+    positions as 1-element buffers, not scalars).
 
-    Packing is not cosmetic. Operand COUNT is what a custom call costs inside a
-    fused prover zone: passing the five leaves separately makes the hop 6-in
-    /6-out and costs ~30us/hop there, while a 1-in/1-out call in the same serial
-    position is free. Packed, the hop moves 4 buffers instead of 12."""
-    return fnp.concatenate(
-        (
-            _to_wire(state.input_buffer),
-            _to_wire(state.output_buffer),
-            _to_wire(state.sponge_state),
-            state.in_pos.reshape(1).view(fnp.uint32),
-            state.out_pos.reshape(1).view(fnp.uint32),
-        )
-    )
-
-
-def _unwire_state(words: Array, rate: int, width: int, field: Any) -> DuplexState:
-    """Inverse of `_wire_state`."""
-    return DuplexState(
-        input_buffer=_from_wire(words[:rate], field),
-        output_buffer=_from_wire(words[rate : 2 * rate], field),
-        sponge_state=_from_wire(words[2 * rate : 2 * rate + width], field),
-        in_pos=words[2 * rate + width].view(fnp.int32),
-        out_pos=words[2 * rate + width + 1].view(fnp.int32),
+    Deliberately NOT packed into one buffer. Packing looks cheaper -- 4 operands
+    instead of 12 -- but a `concatenate` in and five `slice`s out are real data
+    ops the surrounding fusion cannot absorb, and they measured as ~7 extra
+    kernels per hop in the layer's compiled module. Views are bitcasts and cost
+    nothing; the leaves are already the shapes the handler wants."""
+    return (
+        _to_wire(state.input_buffer),
+        _to_wire(state.output_buffer),
+        _to_wire(state.sponge_state),
+        state.in_pos.reshape(1).view(fnp.uint32),
+        state.out_pos.reshape(1).view(fnp.uint32),
     )
 
 
@@ -1062,10 +1050,14 @@ def _host_hop_ffi(
     the handshake even though the dataflow allows it."""
     field = transcript.field
     rate, width = transcript.rate, transcript.permutation.width
-    words = _wire_state(transcript.state)
+    u32 = fnp.uint32
     out_types = (
-        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
-        frx.ShapeDtypeStruct((n,), fnp.uint32),
+        frx.ShapeDtypeStruct((rate,), u32),
+        frx.ShapeDtypeStruct((rate,), u32),
+        frx.ShapeDtypeStruct((width,), u32),
+        frx.ShapeDtypeStruct((1,), u32),
+        frx.ShapeDtypeStruct((1,), u32),
+        frx.ShapeDtypeStruct((n,), u32),
     )
     # A bare `sample` is this hop with nothing to absorb, and a bare `observe` is
     # it with nothing to squeeze. Expressing all three through the one target
@@ -1075,13 +1067,43 @@ def _host_hop_ffi(
     wire_values = (
         fnp.zeros(0, fnp.uint32) if values is None else _to_wire(values)
     )
-    new_words, chal = frx.ffi.ffi_call(
+    # Aliasing the state buffers is SAFE here (the handler finishes every read
+    # before it writes) but measured slower -- 8.4 -> 9.3 ms min -- so the hop
+    # takes the extra buffers rather than constraining XLA's assignment.
+    ib, ob, sp, ip, op, chal = frx.ffi.ffi_call(
         _host_fs_ffi_target, out_types, has_side_effect=True
-    )(words, wire_values)
+    )(*_wire_leaves(transcript.state), wire_values)
     return (
-        transcript._with_state(_unwire_state(new_words, rate, width, field)),
+        transcript._with_state(
+            DuplexState(
+                input_buffer=_from_wire(ib, field),
+                output_buffer=_from_wire(ob, field),
+                sponge_state=_from_wire(sp, field),
+                in_pos=ip.view(fnp.int32).reshape(()),
+                out_pos=op.view(fnp.int32).reshape(()),
+            )
+        ),
         _from_wire(chal, field),
     )
+
+
+@cache
+def _host_hop_ffi_eager(n: int, absorbs: bool) -> Any:
+    """An eager hop that still crosses via the FFI, by wrapping it in `jit`.
+
+    An eager host hop is otherwise the most expensive thing in a host-FS prove:
+    `_state_on_host` ships five leaves to the CPU, the sponge runs, and
+    `_state_on_device` ships them back, so a hop costs ~713us of `device_put`
+    round trips against 0.43us of hashing. Only three of them run per jagged
+    prove -- FS at the stage boundaries, outside any zone -- but at that price
+    those three WERE the whole host-vs-device gap, while the ~98 hops inside the
+    zones are free.
+
+    Wrapping the FFI hop in `jit` makes it traced, so the handler does the
+    crossing and the sponge state never leaves the device."""
+    if absorbs:
+        return jit(lambda t, v: _host_hop_ffi(t, v, n))
+    return jit(lambda t: _host_hop_ffi(t, None, n))
 
 
 def _is_traced(*xs: Any) -> bool:
@@ -1249,13 +1271,11 @@ def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscri
         if _host_fs_ffi_target is not None:
             return _host_hop_ffi(transcript, values, 0)[0]
         return _host_observe_traced(transcript, values)
+    if _host_fs_ffi_target is not None:
+        return _host_hop_ffi_eager(0, True)(transcript, values)[0]
     s = _state_on_host(transcript.state)
     f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
-    return transcript._with_state(
-        _state_on_device(
-            f(s, frx.device_put(values, _host_cpu())), next(iter(values.devices()))
-        )
-    )
+    return transcript._with_state(f(s, frx.device_put(values, _host_cpu())))
 
 
 def _sample_host(
@@ -1267,13 +1287,14 @@ def _sample_host(
         if _host_fs_ffi_target is not None:
             return _host_hop_ffi(transcript, None, n)
         return _host_sample_traced(transcript, n)
+    if _host_fs_ffi_target is not None:
+        return _host_hop_ffi_eager(n, False)(transcript)
     s = _state_on_host(transcript.state)
     f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s)
-    device = _host_compute_device()
     return (
-        transcript._with_state(_state_on_device(state, device)),
-        frx.device_put(out, device),
+        transcript._with_state(state),
+        frx.device_put(out, _host_compute_device()),
     )
 
 
@@ -1289,12 +1310,14 @@ def _observe_and_sample_host(
         if _host_fs_ffi_target is not None:
             return _host_hop_ffi(transcript, values, n)
         return _host_hop_traced(transcript, values, n)
+    if _host_fs_ffi_target is not None:
+        return _host_hop_ffi_eager(n, True)(transcript, values)
     compute_device = next(iter(values.devices()))
     s = _state_on_host(transcript.state)
     f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s, frx.device_put(values, _host_cpu()))
     return (
-        transcript._with_state(_state_on_device(state, compute_device)),
+        transcript._with_state(state),
         frx.device_put(out, compute_device),
     )
 
