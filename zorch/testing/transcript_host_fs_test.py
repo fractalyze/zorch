@@ -339,5 +339,70 @@ class FsEntryPointTest(parameterized.TestCase):
         )
 
 
+class HostFsFfiTargetTest(parameterized.TestCase):
+    """`set_host_fs_ffi_target` moves EVERY host hop onto the FFI, eager included.
+
+    The eager hops are the ones that matter. A jagged prove runs ~101 hops, ~98 of
+    them inside jitted layer zones where they cost nothing at the margin; the
+    three at stage boundaries run eagerly, and on the resident path each one ships
+    five state leaves to the CPU and back for 0.43us of hashing. Those three were
+    the whole host-vs-device gap, so a regression that quietly leaves them on the
+    resident path is a ~2ms regression that no correctness test would catch.
+
+    Dispatch only, so this runs on any backend -- the handler itself is the
+    consumer's and needs a GPU.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.addCleanup(transcript_mod.set_host_fs_ffi_target, None)
+        transcript_mod.set_host_fs_ffi_target(None)
+
+    def _transcript(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8, fs_on_host=True)
+
+    def _spy_on_ffi(self) -> list[tuple[int, bool]]:
+        """Replace the eager FFI wrapper with a recorder that returns the
+        transcript untouched, so no handler is needed."""
+        seen: list[tuple[int, bool]] = []
+
+        def fake(n: int, absorbs: bool) -> Any:
+            seen.append((n, absorbs))
+
+            def run(t: Any, *rest: Any) -> Any:
+                out = fnp.zeros(max(n, 1), t.field)
+                return (t, out)
+
+            return run
+
+        self.enter_context(mock.patch.object(transcript_mod, "_host_hop_ffi_eager", fake))
+        return seen
+
+    def test_no_target_keeps_the_resident_eager_path(self) -> None:
+        """Without a target the eager hop stays on the resident sponge, which is
+        the faster path when nothing traced is involved."""
+        seen = self._spy_on_ffi()
+        t, _ = self._transcript().observe_and_sample(rand_field(9, (4,), F), 1)
+        self.assertEqual(seen, [])
+        self.assertTrue(transcript_mod._on_host(t.state.sponge_state))
+
+    @parameterized.named_parameters(
+        ("observe_and_sample", "observe_and_sample"),
+        ("sample", "sample"),
+        ("observe", "observe"),
+    )
+    def test_target_routes_every_eager_entry_point(self, method: str) -> None:
+        seen = self._spy_on_ffi()
+        transcript_mod.set_host_fs_ffi_target("a_consumers_target")
+        t = self._transcript()
+        if method == "sample":
+            t.sample(1)
+        elif method == "observe":
+            t.observe(rand_field(9, (4,), F))
+        else:
+            t.observe_and_sample(rand_field(9, (4,), F), 1)
+        self.assertLen(seen, 1, f"{method} did not reach the FFI target")
+
+
 if __name__ == "__main__":
     absltest.main()
