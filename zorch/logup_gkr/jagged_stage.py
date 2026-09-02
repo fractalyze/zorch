@@ -10,7 +10,7 @@ the witness and the layer proofs differ.
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from frx import Array
@@ -64,9 +64,38 @@ class JaggedLogUpGkrProver(
         self,
         caps: RoundWidthCaps,
         challenges: ChallengePolicy,
+        *,
+        element_ladder: Sequence[int] | None = None,
     ) -> None:
         self.caps = caps
         self.challenges = challenges
+        self.element_ladder = None if element_ladder is None else tuple(element_ladder)
+
+    def _layer_caps(self, depth: int) -> tuple[int, ...] | None:
+        """This class's per-layer element caps, `None` for the flat-cap path.
+
+        A ladder makes each proved layer arrive at the width its own round
+        zone runs, which removes the per-layer lay-in dispatch. It has to be
+        checked against the class rather than the input: `caps.elements`
+        bounds layer 0, and every entry must not exceed it, or a layer would
+        claim more round-buffer width than the class admits.
+        """
+        ladder = self.element_ladder
+        if ladder is None:
+            return None
+        if len(ladder) != depth:
+            raise ValueError(
+                f"element_ladder must carry one cap per proved layer "
+                f"({depth}), got {len(ladder)}"
+            )
+        if ladder[0] != self.caps.elements:
+            raise ValueError(
+                f"element_ladder[0] ({ladder[0]}) must be the class's own "
+                f"element cap ({self.caps.elements}) -- layer 0 is unfolded"
+            )
+        if any(a < b for a, b in zip(ladder, ladder[1:], strict=False)):
+            raise ValueError(f"element_ladder must be non-increasing, got {ladder}")
+        return ladder
 
     def prove(
         self,
@@ -79,22 +108,37 @@ class JaggedLogUpGkrProver(
                 f"claim expects {claim.layers} GKR layers, "
                 f"witness folds through {len(witness.schedules)}"
             )
-        pyramid = build_jagged_pyramid(witness.input_layer, witness.schedules)
+        ladder = self._layer_caps(len(witness.schedules))
+        pyramid = build_jagged_pyramid(
+            witness.input_layer,
+            witness.schedules,
+            # The floor is not proved and `extract_jagged_outputs` demands it
+            # at exactly `num_batches`, so the last transition keeps its own
+            # width whatever the ladder says.
+            None if ladder is None else [*(c for c in ladder[1:]), None],
+        )
         # The floor holds the public output; the chain proves the rest.
         pyramid.pop()
         carry, transcript = bind_output(claim.output, transcript, self.challenges)
         # One `LayerBuffers` per chain: the cap-wide planes are ~GiB per class,
         # so the holder must die with the prove. Layers leave the list as the
         # chain consumes them, keeping one intermediate layer resident instead
-        # of the whole pyramid.
+        # of the whole pyramid. Under a ladder every layer already arrives at
+        # its own cap, so the pool's lay-in degenerates to a passthrough.
         buffers = LayerBuffers()
 
         def rounds() -> Iterator[ProverLayerRound]:
             while pyramid:
+                index = len(pyramid) - 1
+                layer = pyramid.pop()
                 yield ProverLayerRound(
-                    pyramid.pop(),
+                    layer,
                     self.challenges,
-                    caps=self.caps,
+                    caps=(
+                        self.caps
+                        if ladder is None
+                        else replace(self.caps, elements=ladder[index])
+                    ),
                     layer_bufs=buffers,
                 )
 

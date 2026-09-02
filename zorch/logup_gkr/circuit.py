@@ -463,6 +463,7 @@ def jagged_layer_transition(
 def build_jagged_pyramid(
     first: JaggedGkrLayer,
     schedules: Sequence[tuple[Array, int] | Sequence[int]],
+    out_widths: Sequence[int | None] | None = None,
 ) -> list[JaggedGkrLayer]:
     """Build the jagged pyramid `[first, ..., floor]`, folding one row
     variable per transition. `schedules[k]` is transition `k`'s policy —
@@ -475,18 +476,36 @@ def build_jagged_pyramid(
     seat individually; a single contiguous 2*H alloc exceeds what BFC can
     place on wide shards (#468). One compile per distinct
     (in_width, out_width) pair, shared by every input of the capacity class.
+
+    `out_widths[k]` overrides transition `k`'s output capacity (`None` keeps
+    the schedule's own). A prover passes its capacity class's per-layer
+    element ladder here so each layer is BORN at the width its round zone
+    takes, instead of being laid into a cap-width buffer by a separate
+    dispatch per layer. The ladder must be a property of the class, never of
+    the input's row counts -- the zone takes it as a static arg, so a
+    count-derived width would recompile per shard.
     """
+    if out_widths is not None and len(out_widths) != len(schedules):
+        raise ValueError(
+            f"out_widths must cover all {len(schedules)} transitions, got "
+            f"{len(out_widths)}"
+        )
     layers = [first]
     layer = first
-    for schedule in schedules:
+    for k, schedule in enumerate(schedules):
+        override = None if out_widths is None else out_widths[k]
         if (
             isinstance(schedule, tuple)
             and len(schedule) == 2
             and isinstance(schedule[0], Array)
         ):
-            layer = jagged_layer_transition(layer, schedule[0], schedule[1])
-        else:
+            layer = jagged_layer_transition(
+                layer, schedule[0], schedule[1] if override is None else override
+            )
+        elif override is None:
             layer = jagged_layer_transition(layer, schedule)
+        else:
+            layer = jagged_layer_transition(layer, schedule, override)
         layers.append(layer)
     return layers
 
