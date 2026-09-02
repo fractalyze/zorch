@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self
 
 import frx
 import frx.numpy as fnp
+import numpy as np
 from frx import Array, jit, lax, vmap
 from frx.tree_util import register_dataclass, tree_map
 from hash_frx.fusion import fused_region
@@ -959,11 +960,302 @@ def _state_on_device(state: DuplexState, device: frx.Device) -> DuplexState:
     return DuplexState(*(frx.device_put(leaf, device) for leaf in _state_leaves(state)))
 
 
+# ---------------------------------------------------------------------------
+# Host FS from inside a compiled graph.
+#
+# The resident-state path above is eager by construction: it reads `.devices()`
+# and calls `device_put`, and a tracer has neither, so a traced caller raises
+# `ConcretizationTypeError`. That rules out every prover that traces its round
+# loop — `logup_gkr.jagged_prover` runs its rounds inside `_jagged_round_zone`,
+# so `fs_on_host=True` could not be selected there at all.
+#
+# `pure_callback` crosses to the host from inside the graph. The hop is genuinely
+# pure once the sponge state is an explicit argument AND result, so it needs no
+# ordering token: the data dependency through the threaded state is what forbids
+# reordering, exactly as it does on the device path.
+#
+# What made the earlier callback attempt cost ~6x (see the section header) was
+# crossing all five state leaves each way; the boundary is charged per array, not
+# per byte. Packing the state into two arrays is what makes this affordable, so
+# the hop crosses three each way (state, positions, values) instead of six.
+# ---------------------------------------------------------------------------
+
+
+def _to_wire(x: Array) -> Array:
+    """Bitcast a field array to `uint32` for the callback boundary.
+
+    `pure_callback` materializes its operands as numpy, and the runtime cannot
+    build a numpy dtype for a parametric algebraic width ("ALGEBRAIC32 is a
+    parametric width class..."), so a field-typed array cannot cross it. The field
+    is 32-bit backed, so the bitcast is free and exact; `_from_wire` undoes it on
+    the far side. (The FFI ABI carries field dtypes directly -- that is a different
+    path from this one.)"""
+    return x.view(fnp.uint32)
+
+
+def _from_wire(x: Array, dtype: Any) -> Array:
+    return x.view(dtype)
+
+
+_host_fs_ffi_target: str | None = None
+
+
+def set_host_fs_ffi_target(name: str | None) -> None:
+    """Point traced host FS at an XLA FFI target instead of the `pure_callback`
+    transport, or `None` to go back to the callback.
+
+    A callback crossing costs ~101us/hop of pure transport before the sponge runs
+    at all, which is ~18x a fused device hop -- it makes host FS correct but never
+    competitive. An FFI custom call stays inside the graph and lands in the same
+    range as the device hop, so it is the only transport worth running in
+    production.
+
+    zorch ships no such target and names no vendor: the consumer registers its own
+    handler (`frx.ffi.register_ffi_target`) and passes the name here. The contract
+    is six `uint32` operands -- `in_buf(8)`, `out_buf(8)`, `sponge(16)`,
+    `in_pos(1)`, `out_pos(1)`, `values(m)` -- returning those five advanced plus an
+    `n`-word challenge. State crosses in, and back out, on every call: the handler
+    must hold no sponge of its own, or a replayed or reordered region silently
+    forks the transcript."""
+    global _host_fs_ffi_target
+    _host_fs_ffi_target = name
+
+
+def _wire_state(state: DuplexState) -> Array:
+    """The whole sponge state as ONE `uint32` buffer — buffers, in order:
+    `in_buf(8) ‖ out_buf(8) ‖ sponge(16) ‖ in_pos ‖ out_pos`.
+
+    Packing is not cosmetic. Operand COUNT is what a custom call costs inside a
+    fused prover zone: passing the five leaves separately makes the hop 6-in
+    /6-out and costs ~30us/hop there, while a 1-in/1-out call in the same serial
+    position is free. Packed, the hop moves 4 buffers instead of 12."""
+    return fnp.concatenate(
+        (
+            _to_wire(state.input_buffer),
+            _to_wire(state.output_buffer),
+            _to_wire(state.sponge_state),
+            state.in_pos.reshape(1).view(fnp.uint32),
+            state.out_pos.reshape(1).view(fnp.uint32),
+        )
+    )
+
+
+def _unwire_state(words: Array, rate: int, width: int, field: Any) -> DuplexState:
+    """Inverse of `_wire_state`."""
+    return DuplexState(
+        input_buffer=_from_wire(words[:rate], field),
+        output_buffer=_from_wire(words[rate : 2 * rate], field),
+        sponge_state=_from_wire(words[2 * rate : 2 * rate + width], field),
+        in_pos=words[2 * rate + width].view(fnp.int32),
+        out_pos=words[2 * rate + width + 1].view(fnp.int32),
+    )
+
+
+def _host_hop_ffi(
+    transcript: DuplexTranscript, values: Array | None, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """`observe_and_sample` on the host through the registered FFI target.
+
+    `has_side_effect` is set not because the call is impure -- threading the state
+    makes it pure -- but because the handler answers a single-slot request block in
+    sequence order, so letting XLA clone or reorder the call would desynchronize
+    the handshake even though the dataflow allows it."""
+    field = transcript.field
+    rate, width = transcript.rate, transcript.permutation.width
+    words = _wire_state(transcript.state)
+    out_types = (
+        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
+        frx.ShapeDtypeStruct((n,), fnp.uint32),
+    )
+    # A bare `sample` is this hop with nothing to absorb, and a bare `observe` is
+    # it with nothing to squeeze. Expressing all three through the one target
+    # matters more than it looks: leaving either on the `pure_callback` fallback
+    # puts ~518us hops back in the stream, and a stage's dozen of them cost more
+    # than all 88 fused hops put together.
+    wire_values = (
+        fnp.zeros(0, fnp.uint32) if values is None else _to_wire(values)
+    )
+    new_words, chal = frx.ffi.ffi_call(
+        _host_fs_ffi_target, out_types, has_side_effect=True
+    )(words, wire_values)
+    return (
+        transcript._with_state(_unwire_state(new_words, rate, width, field)),
+        _from_wire(chal, field),
+    )
+
+
+def _is_traced(*xs: Any) -> bool:
+    """Whether we are inside a compiled graph, which is what decides between the
+    eager resident-state hop and the `pure_callback` one. Both run the same CPU
+    sponge jit, so only the transport differs -- the math cannot drift."""
+    return any(isinstance(x, frx.core.Tracer) for x in xs)
+
+
+def _pack_state(state: DuplexState) -> tuple[Array, Array]:
+    """The five state leaves as two arrays — the field-typed buffers run together,
+    the two positions apart because they are `int32`. Halving the array count
+    halves the per-hop boundary cost, which is what the five-leaf version paid."""
+    return (
+        fnp.concatenate(
+            (state.input_buffer, state.output_buffer, state.sponge_state)
+        ),
+        fnp.stack((state.in_pos, state.out_pos)),
+    )
+
+
+def _unpack_state(words: Array, pos: Array, rate: int, width: int) -> DuplexState:
+    """Inverse of `_pack_state`; the slice bounds are the one place the packed
+    layout is written down, so a producer and consumer cannot disagree about it."""
+    return DuplexState(
+        input_buffer=words[:rate],
+        output_buffer=words[rate : 2 * rate],
+        sponge_state=words[2 * rate : 2 * rate + width],
+        in_pos=pos[0],
+        out_pos=pos[1],
+    )
+
+
+def _host_hop_traced(
+    transcript: DuplexTranscript, values: Array, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """`observe_and_sample` on the host sponge from inside a traced region.
+
+    The callback runs the SAME `_host_obs_sample_jit` the eager path runs, on
+    CPU-committed inputs, so the two transports stay byte-identical by sharing the
+    sponge rather than by agreeing to. Committing to the CPU inside the callback is
+    also what keeps it safe to call: the surrounding graph is waiting on the
+    accelerator, and re-entering XLA on the *same* device from a callback is what
+    deadlocks."""
+    perm = _host_raw(transcript.permutation)
+    rate, width = transcript.rate, transcript.permutation.width
+    field = transcript.field
+    words, pos = _pack_state(transcript.state)
+    sponge = _host_obs_sample_jit(perm, rate, n)  # type: ignore[arg-type]
+
+    def run(words_h: Any, pos_h: Any, values_h: Any) -> tuple[Any, Any, Any]:
+        cpu = _host_cpu()
+        state = _unpack_state(
+            _from_wire(frx.device_put(words_h, cpu), field),
+            frx.device_put(pos_h, cpu),
+            rate,
+            width,
+        )
+        advanced, out = sponge(
+            state, _from_wire(frx.device_put(values_h, cpu), field)
+        )
+        new_words, new_pos = _pack_state(advanced)
+        return (
+            np.asarray(_to_wire(new_words)),
+            np.asarray(new_pos),
+            np.asarray(_to_wire(out)),
+        )
+
+    shapes = (
+        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
+        frx.ShapeDtypeStruct(pos.shape, pos.dtype),
+        frx.ShapeDtypeStruct((n,), fnp.uint32),
+    )
+    new_words, new_pos, out = frx.pure_callback(
+        run, shapes, _to_wire(words), pos, _to_wire(values)
+    )
+    return (
+        transcript._with_state(
+            _unpack_state(_from_wire(new_words, field), new_pos, rate, width)
+        ),
+        _from_wire(out, field),
+    )
+
+
+def _host_observe_traced(
+    transcript: DuplexTranscript, values: Array
+) -> DuplexTranscript:
+    """`observe` on the host sponge from inside a traced region — `_host_hop_traced`
+    without the squeeze, so it returns state alone."""
+    perm = _host_raw(transcript.permutation)
+    rate, width = transcript.rate, transcript.permutation.width
+    field = transcript.field
+    words, pos = _pack_state(transcript.state)
+    sponge = _host_observe_jit(perm, rate)
+
+    def run(words_h: Any, pos_h: Any, values_h: Any) -> tuple[Any, Any]:
+        cpu = _host_cpu()
+        state = _unpack_state(
+            _from_wire(frx.device_put(words_h, cpu), field),
+            frx.device_put(pos_h, cpu),
+            rate,
+            width,
+        )
+        new_words, new_pos = _pack_state(
+            sponge(state, _from_wire(frx.device_put(values_h, cpu), field))
+        )
+        return np.asarray(_to_wire(new_words)), np.asarray(new_pos)
+
+    shapes = (
+        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
+        frx.ShapeDtypeStruct(pos.shape, pos.dtype),
+    )
+    new_words, new_pos = frx.pure_callback(
+        run, shapes, _to_wire(words), pos, _to_wire(values)
+    )
+    return transcript._with_state(
+        _unpack_state(_from_wire(new_words, field), new_pos, rate, width)
+    )
+
+
+def _host_sample_traced(
+    transcript: DuplexTranscript, n: int
+) -> tuple[DuplexTranscript, Array]:
+    """`sample` on the host sponge from inside a traced region — `_host_hop_traced`
+    without the absorb, so it takes no `values`."""
+    perm = _host_raw(transcript.permutation)
+    rate, width = transcript.rate, transcript.permutation.width
+    field = transcript.field
+    words, pos = _pack_state(transcript.state)
+    sponge = _host_sample_jit(perm, rate, n)
+
+    def run(words_h: Any, pos_h: Any) -> tuple[Any, Any, Any]:
+        cpu = _host_cpu()
+        state = _unpack_state(
+            _from_wire(frx.device_put(words_h, cpu), field),
+            frx.device_put(pos_h, cpu),
+            rate,
+            width,
+        )
+        advanced, out = sponge(state)
+        new_words, new_pos = _pack_state(advanced)
+        return (
+            np.asarray(_to_wire(new_words)),
+            np.asarray(new_pos),
+            np.asarray(_to_wire(out)),
+        )
+
+    shapes = (
+        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
+        frx.ShapeDtypeStruct(pos.shape, pos.dtype),
+        frx.ShapeDtypeStruct((n,), fnp.uint32),
+    )
+    new_words, new_pos, out = frx.pure_callback(run, shapes, _to_wire(words), pos)
+    return (
+        transcript._with_state(
+            _unpack_state(_from_wire(new_words, field), new_pos, rate, width)
+        ),
+        _from_wire(out, field),
+    )
+
+
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
     """`observe` on the host sponge; the state stays host-resident."""
+    if _is_traced(values, *_state_leaves(transcript.state)):
+        if _host_fs_ffi_target is not None:
+            return _host_hop_ffi(transcript, values, 0)[0]
+        return _host_observe_traced(transcript, values)
     s = _state_on_host(transcript.state)
     f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
-    return transcript._with_state(f(s, frx.device_put(values, _host_cpu())))
+    return transcript._with_state(
+        _state_on_device(
+            f(s, frx.device_put(values, _host_cpu())), next(iter(values.devices()))
+        )
+    )
 
 
 def _sample_host(
@@ -971,12 +1263,17 @@ def _sample_host(
 ) -> tuple[DuplexTranscript, Array]:
     """`sample` n raw squeezes on the host sponge; the state stays host-resident,
     the challenge returns to the compute device."""
+    if _is_traced(*_state_leaves(transcript.state)):
+        if _host_fs_ffi_target is not None:
+            return _host_hop_ffi(transcript, None, n)
+        return _host_sample_traced(transcript, n)
     s = _state_on_host(transcript.state)
     f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s)
+    device = _host_compute_device()
     return (
-        transcript._with_state(state),
-        frx.device_put(out, _host_compute_device()),
+        transcript._with_state(_state_on_device(state, device)),
+        frx.device_put(out, device),
     )
 
 
@@ -988,12 +1285,16 @@ def _observe_and_sample_host(
     came from -- the accelerator the round polys are produced on -- so a
     multi-device prove gets it back where its kernels consume it (the sponge state
     is CPU-resident in steady state, so its device can't name the compute one)."""
+    if _is_traced(values, *_state_leaves(transcript.state)):
+        if _host_fs_ffi_target is not None:
+            return _host_hop_ffi(transcript, values, n)
+        return _host_hop_traced(transcript, values, n)
     compute_device = next(iter(values.devices()))
     s = _state_on_host(transcript.state)
     f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s, frx.device_put(values, _host_cpu()))
     return (
-        transcript._with_state(state),
+        transcript._with_state(_state_on_device(state, compute_device)),
         frx.device_put(out, compute_device),
     )
 
