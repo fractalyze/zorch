@@ -15,6 +15,7 @@ instance, so the expected permute output stays there.
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import lru_cache
 
 import frx.numpy as fnp
 import numpy as np
@@ -236,6 +237,7 @@ _INTERNAL_DIAG = [
 ]
 
 
+@lru_cache(maxsize=None)
 def koalabear16_params() -> Poseidon2Params:
     internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
     internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
@@ -252,8 +254,24 @@ def koalabear16_params() -> Poseidon2Params:
     )
 
 
+@lru_cache(maxsize=None)
 def koalabear16_perm() -> Poseidon2:
-    """The golden koalabear-16 Poseidon2 permutation instance (width 16)."""
+    """The golden koalabear-16 Poseidon2 permutation instance (width 16).
+
+    Cached because a fresh instance is not free and not distinguishable: the
+    params are frozen and compare by value, so a rebuild buys nothing while
+    paying six host->device constant transfers (four here, plus the default
+    external matrix and unit j-scale `__post_init__` fills in), a
+    `__post_init__` lane check that reads `internal_constants` back to host,
+    and a cold per-instance `_value_key`/`_hash` memo -- which
+    `Poseidon2Params` builds by pulling all six constant arrays to host via
+    `.tobytes()`.
+
+    So a caller building a transcript per iteration pays those syncs per
+    iteration: ~1.1 ms, which was ~30% of the measured wall in the LogUp-GKR
+    dispatch benchmarks and had been misread as prover dispatch cost
+    (fractalyze/zorch#327).
+    """
     return Poseidon2(koalabear16_params())
 
 
