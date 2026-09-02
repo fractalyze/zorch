@@ -109,6 +109,36 @@ single-dispatching the whole loop is the real win, and that is
 `Sha256FieldTranscript`'s job. The *data-parallel* use of the same hash
 (`Sha256().digest` over a batch of Merkle leaves or a PoW window) fuses regardless.
 
+## Calling Fiat-Shamir: two entry points, and why only two
+
+There are exactly two ways to take a Fiat-Shamir hop, split by what the caller
+wants back:
+
+- **A typed field challenge** — `ChallengePolicy.observe_and_sample`
+  (`zorch/challenge.py`). It owns the limbs↔dtype packing, so a prover and its
+  verifier cannot disagree about how many squeezes make an extension element.
+- **Raw squeezes in the transcript's own field** — the transcript's own
+  `observe_and_sample` / `observe` / `sample`.
+
+Everything else in `transcript.py` that looks callable is a *backend body*, one
+per placement: `_observe_and_sample_body` (plain device decomposition),
+`_observe_and_sample_marked` (the same hop under the `zorch.duplex_fs` marker),
+`_observe_and_sample_host` (the CPU sponge). `DuplexTranscript` picks between them
+through its `fs` backend (`_DeviceFs` / `_HostFs`, chosen by
+`new(..., fs_on_host=)`), which is why the bodies are private.
+
+The rule earns its keep because breaking it fails *silently*. A call site that
+names a body directly still computes the right challenge — the transcript stream
+stays byte-identical — but it is pinned to that body's placement, so turning on
+`fs_on_host=True` leaves that hop on the device and nothing complains. That is not
+hypothetical: the jagged sumcheck's per-round hop called
+`_observe_and_sample_marked` directly, which is ~78% of the Fiat-Shamir hops in a
+jagged LogUp-GKR prove, so host FS would have moved barely a fifth of them.
+`FsEntryPointTest` (`zorch/testing/transcript_host_fs_test.py`) now holds the line
+two ways: it drives the round hop through a recording backend, and it statically
+forbids any module outside `transcript.py` from importing a private name out of
+it.
+
 ## Status / ratification
 
 The byte-hash family is **device-first**: the field transcripts are the prover

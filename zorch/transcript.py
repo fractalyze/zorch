@@ -200,7 +200,7 @@ class _DeviceFs:
     def observe_and_sample(
         self, t: DuplexTranscript, values: Array, n: int
     ) -> tuple[DuplexTranscript, Array]:
-        return observe_and_sample_marked(t, values, n)
+        return _observe_and_sample_marked(t, values, n)
 
     def check_witness(
         self, t: DuplexTranscript, witness: Array, *, pow_bits: int
@@ -393,10 +393,22 @@ class DuplexTranscript:
     def observe_and_sample(
         self, values: Array, n: int = 1
     ) -> tuple[DuplexTranscript, Array]:
-        """Absorb `values`, then squeeze `n` challenges — the per-round
+        """Absorb `values`, then squeeze `n` raw challenge words — the per-round
         Fiat-Shamir primitive (commit -> challenge). One method so the absorb and
         squeeze fuse into a single kernel under `@jit` by construction, never by a
-        per-primitive pattern-match (the repo's fusion contract)."""
+        per-primitive pattern-match (the repo's fusion contract).
+
+        This method is an FS entry point, and there are exactly two:
+
+        - a **typed field challenge** -> `ChallengePolicy.observe_and_sample`,
+          which owns the limbs<->dtype packing (and calls this underneath).
+          Spelling `observe_and_sample(v, limbs)` + `reinterpret_challenge(raw,
+          dtype)` by hand re-implements that policy's body -- reach for the policy.
+        - **raw squeezes** in the transcript's own field -> this method.
+
+        Never a backend body (`_observe_and_sample_marked` and its siblings): a
+        body is one placement's implementation, and only going through the
+        transcript honours `fs_on_host`."""
         return self.fs.observe_and_sample(self, values, n)
 
     def check_witness(
@@ -806,13 +818,20 @@ def _duplex_fs_zone(
     return t._with_state(DuplexState(ib, ob, sp, ip, op)), r
 
 
-def observe_and_sample_marked(
+def _observe_and_sample_marked(
     t: DuplexTranscript, values: Array, n: int
 ) -> tuple[DuplexTranscript, Array]:
-    """`observe_and_sample` under a `zorch.duplex_fs` fusion marker so a vendor
-    fuses the ~9-kernel hop (two permutes + duplex glue) into one register-resident
-    kernel. Only a dedicated-fusion permutation is marked, so a test
-    `CheapPermutation` keeps the plain path."""
+    """`_DeviceFs.observe_and_sample`'s body: the hop under a `zorch.duplex_fs`
+    fusion marker, so a vendor fuses the ~9-kernel hop (two permutes + duplex glue)
+    into one register-resident kernel. Only a dedicated-fusion permutation is
+    marked, so a test `CheapPermutation` keeps the plain path.
+
+    Private, and deliberately so: it is a *backend body*, the peer of
+    `_observe_and_sample_body` and `_observe_and_sample_host` -- not an entry point.
+    Callers say `transcript.observe_and_sample(...)` and get this one only when the
+    transcript's backend is `_DeviceFs`. Calling it directly pins the hop to the
+    device and silently ignores `fs_on_host=True`, which is exactly the
+    "one method missed" failure `_FsBackend` exists to make impossible."""
     if not t.has_dedicated_fusion:
         return _observe_and_sample_body(t, values, n)
     return _duplex_fs_zone(t, values, n)

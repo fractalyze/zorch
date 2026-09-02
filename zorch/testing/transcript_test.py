@@ -29,9 +29,9 @@ from zorch.transcript import (
     _absorb_permute,
     _check_witness_body,
     _observe_and_sample_body,
+    _observe_and_sample_marked,
     _observe_body,
     _sample_body,
-    observe_and_sample_marked,
     sample_challenge,
 )
 
@@ -109,7 +109,7 @@ class DuplexTranscriptTest(absltest.TestCase):
             for _ in range(advance):
                 t, _ = _observe_and_sample_body(t, rand_field(2, (5,), F), 3)
             t_ref, ref = _observe_and_sample_body(t, v, 4)
-            t_mk, mk = observe_and_sample_marked(t, v, 4)
+            t_mk, mk = _observe_and_sample_marked(t, v, 4)
             self.assertTrue(bool(fnp.all(ref == mk)))
             for a, b in zip(
                 tree_util.tree_leaves(t_ref),
@@ -124,7 +124,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         # also appears by construction in the lowered HLO for a vendor to fuse.
         self._assert_marked_matches_plain(self._new())
         hlo = (
-            frx.jit(lambda t, x: observe_and_sample_marked(t, x, 4))
+            frx.jit(lambda t, x: _observe_and_sample_marked(t, x, 4))
             .lower(self._new(), rand_field(9, (5,), F))
             .as_text()
         )
@@ -156,7 +156,7 @@ class DuplexTranscriptTest(absltest.TestCase):
         v = rand_field(11, (5,), F)
 
         def consume(t: DuplexTranscript, x: Array) -> tuple[DuplexTranscript, Array]:
-            t2, s = observe_and_sample_marked(t, x, 4)
+            t2, s = _observe_and_sample_marked(t, x, 4)
             return t2, s * s  # give the squeeze an in-graph consumer, then discard
 
         t_ref, _ = _observe_and_sample_body(self._new(), v, 4)
