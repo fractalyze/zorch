@@ -139,6 +139,47 @@ two ways: it drives the round hop through a recording backend, and it statically
 forbids any module outside `transcript.py` from importing a private name out of
 it.
 
+## Host Fiat-Shamir: where it pays, and what it costs
+
+`DuplexTranscript.new(..., fs_on_host=True)` runs the sponge on the CPU. The
+motivation is that a duplex sponge is a serial hash chain, which a GPU is bad at:
+one Poseidon2 permutation costs **0.43 µs** with AVX-512 on the host against
+**5.3 µs** on the device. The catch is everything around it.
+
+A hop can reach the host two ways. `pure_callback` needs no vendor code and costs
+~101 µs of transport per hop before the sponge runs — correct, and never
+competitive. An **XLA FFI custom call** stays in the graph and lands at 6.7 µs per
+call, level with the device hop's 6.0 µs. zorch ships no handler and names no
+vendor: a consumer registers its own and passes the name to
+`transcript.set_host_fs_ffi_target`. The contract is six `uint32` operands —
+`in_buf(8)`, `out_buf(8)`, `sponge(16)`, `in_pos(1)`, `out_pos(1)`, `values(m)` —
+returning those five advanced plus an `n`-word challenge. State crosses on every
+call, so the handler must hold no sponge of its own; a replayed or reordered
+region would otherwise fork the transcript silently. (State crosses as `uint32`
+because a field dtype cannot be materialized to numpy — "ALGEBRAIC32 is a
+parametric width class".)
+
+**Where the cost actually is.** In a jagged LogUp-GKR prove of ~101 hops, ~98 run
+inside the per-layer jitted zones and are free at the margin: adding 264 more
+changes the wall clock by nothing measurable. The other three are the FS at stage
+boundaries, outside any zone, and they were the entire cost — on the eager
+resident path each ships five state leaves to the CPU and back for 0.43 µs of
+hashing. Routing those through the same FFI target (the hop wrapped in `jit`, so
+it is traced and the state never leaves the device) took them from 2.14 ms to
+0.76 ms per prove.
+
+Two consequences worth stating plainly, because both cost real time to learn:
+
+- **Optimizing the hop is optimizing ~1%.** The permutation, the operand packing
+  and the handshake are all marginal-free in a prove. Only hops outside a traced
+  zone cost anything, and only because of what surrounds them.
+- **Host FS does not beat device FS in a prover that fuses its layers**, and
+  cannot: a kernel that hands off to a host thread mid-execution cannot be
+  captured into a CUDA graph (`STREAM_CAPTURE_INVALIDATED`), so the layer loses
+  command-buffer capture that the device path keeps. Host FS pays off in the
+  per-round-kernel regime this section's neighbour describes, where the kernel
+  boundary already exists.
+
 ## Status / ratification
 
 The byte-hash family is **device-first**: the field transcripts are the prover
