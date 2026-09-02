@@ -1050,10 +1050,18 @@ def _host_hop_ffi(
 ) -> tuple[DuplexTranscript, Array]:
     """`observe_and_sample` on the host through the registered FFI target.
 
-    `has_side_effect` is set not because the call is impure -- threading the state
-    makes it pure -- but because the handler answers a single-slot request block in
-    sequence order, so letting XLA clone or reorder the call would desynchronize
-    the handshake even though the dataflow allows it."""
+    Declared PURE (`has_side_effect=False`), which is worth ~0.8-1.5ms a prove
+    because the effect token orders every hop against every other one and costs
+    more than the crossing it guards. The hop earns it: the sponge state is an
+    explicit operand AND result, so the state chain already forbids reordering;
+    consecutive hops differ in that state, so CSE cannot merge them; the challenge
+    is consumed, so DCE cannot drop a hop anyone uses; and the handler carries its
+    whole sponge in and out, so even a rematerialized duplicate call recomputes the
+    same answer from the same state. A hop whose results are all discarded IS
+    dead, and dropping it is correct -- no Fiat-Shamir was observed.
+
+    This reasoning is specific to the marker-shaped handler. A handler keeping a
+    resident sponge would be genuinely effectful and must not be called here."""
     field = transcript.field
     rate, width = transcript.rate, transcript.permutation.width
     u32 = fnp.uint32
@@ -1077,7 +1085,7 @@ def _host_hop_ffi(
     # before it writes) but measured slower -- 8.4 -> 9.3 ms min -- so the hop
     # takes the extra buffers rather than constraining XLA's assignment.
     ib, ob, sp, ip, op, chal = frx.ffi.ffi_call(
-        _host_fs_ffi_target, out_types, has_side_effect=True
+        _host_fs_ffi_target, out_types, has_side_effect=False
     )(*_wire_leaves(transcript.state), wire_values)
     return (
         transcript._with_state(

@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 import frx
 import frx.numpy as fnp
-from frx import Array
+from frx import Array, jit
 
 from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr.circuit import GkrLayer, LogUpGkrOutput
@@ -48,7 +48,7 @@ from zorch.prove import fold_rounds
 from zorch.round import ProverRound
 from zorch.sumcheck.domain import fold, natural_domain, split_pairs, summand_evals
 from zorch.sumcheck.prover import RoundMsg
-from zorch.transcript import Transcript
+from zorch.transcript import Transcript, TranscriptT
 from zorch.utils.bits import log2_strict_usize
 
 if TYPE_CHECKING:
@@ -286,13 +286,41 @@ def bind_output(
     sample a point over their variables, and evaluate. Returns the initial carry
     `(num_eval, den_eval, eval_point)` and the advanced transcript.
     """
-    num_vars = log2_strict_usize(output.numerator.shape[0])
-    transcript = transcript.observe(output.numerator)
-    transcript = transcript.observe(output.denominator)
-    transcript, eval_point = challenges.sample_many(transcript, num_vars)
-    num_eval = eval_mle(output.numerator, eval_point)
-    den_eval = eval_mle(output.denominator, eval_point)
-    return (num_eval, den_eval, eval_point), transcript
+    return _bind_output_body(
+        output.numerator,
+        output.denominator,
+        transcript,
+        challenges,
+        log2_strict_usize(output.numerator.shape[0]),
+    )
+
+
+@partial(jit, static_argnums=(3, 4), inline=True)
+def _bind_output_body(
+    numerator: Array,
+    denominator: Array,
+    transcript: TranscriptT,
+    challenges: ChallengePolicy,
+    num_vars: int,
+) -> tuple[LayerClaim, TranscriptT]:
+    """The head as ONE traced region, and ONE Fiat-Shamir hop.
+
+    Two costs, both paid per prove and neither obvious. A hop OUTSIDE a traced
+    region runs ~75us against 0.43us of hashing, nearly all of it eager dispatch,
+    so the head is worth tracing whatever it contains. And spelling one FS step as
+    observe, observe, sample paid that price three times over: absorbing a
+    concatenation is byte-identical to absorbing the parts in order (the sponge
+    appends to its rate buffer) and observe-then-sample is exactly
+    `observe_and_sample`, so the three collapse into one hop with the same
+    transcript stream -- which `golden_vector_test` pins."""
+    transcript, eval_point = challenges.observe_and_sample_many(
+        transcript, fnp.concatenate((numerator, denominator)), num_vars
+    )
+    return (
+        eval_mle(numerator, eval_point),
+        eval_mle(denominator, eval_point),
+        eval_point,
+    ), transcript
 
 
 class GkrLayerRound(ProverRound):
