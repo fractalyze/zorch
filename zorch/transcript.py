@@ -1016,7 +1016,13 @@ def set_host_fs_ffi_target(name: str | None) -> None:
     `in_pos(1)`, `out_pos(1)`, `values(m)` -- returning those five advanced plus an
     `n`-word challenge. State crosses in, and back out, on every call: the handler
     must hold no sponge of its own, or a replayed or reordered region silently
-    forks the transcript."""
+    forks the transcript.
+
+    Set it once, at startup, before anything traces. It is read while tracing, so
+    a zone compiled earlier keeps whichever transport was set then -- change it
+    afterwards and the old one stays live with nothing to say so. Process-wide
+    rather than per-transcript for the same reason a handler is: one vendor
+    registers one handler for the process."""
     global _host_fs_ffi_target
     _host_fs_ffi_target = name
 
