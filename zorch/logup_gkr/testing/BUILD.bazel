@@ -175,3 +175,21 @@ py_test(
         requirement("numpy"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "element_ladder_test",
+    size = "medium",
+    srcs = ["element_ladder_test.py"],
+    deps = [
+        ":testing",
+        "//zorch:challenge",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/sumcheck",
+        "//zorch/testkit:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)

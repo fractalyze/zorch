@@ -155,6 +155,26 @@ def caps_for(row_counts: tuple[int, ...], num_row_variables: int) -> RoundWidthC
     )
 
 
+def element_ladder_for(
+    caps: RoundWidthCaps, num_batches: int, depth: int
+) -> tuple[int, ...]:
+    """Per-layer element caps for a capacity class, floor excluded.
+
+    Derived from the class (`caps.elements`, `num_batches`) and never from an
+    input's row counts, so the ladder a prover compiles against is the same
+    for every shard of the class. A transition folds each segment to
+    `ceil(c / 2)`, so a layer of total width `W` over `B` segments folds to at
+    most `(W + B) / 2`; iterating that bound gives a width every admissible
+    input fits under, while staying close to the natural halving rather than
+    holding every layer at the round-0 cap.
+    """
+    ladder = [caps.elements]
+    for _ in range(depth - 1):
+        nxt = -(-(ladder[-1] + num_batches) // 2)
+        ladder.append(min(ladder[-1], nxt + (-nxt % 4)))
+    return tuple(ladder)
+
+
 def random_first_layer(
     seed: int, num_batch_variables: int, num_row_variables: int
 ) -> GkrLayer:
