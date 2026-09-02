@@ -77,6 +77,23 @@ class ChallengePolicy:
         transcript, raw = transcript.sample(count * limbs)
         return transcript, self._regroup(raw, count, limbs)
 
+    def observe_and_sample_many(
+        self, transcript: TranscriptT, values: Array, count: int
+    ) -> tuple[TranscriptT, Array]:
+        """Absorb `values` and squeeze `count` challenges in ONE transcript hop.
+
+        The many-challenge form of `observe_and_sample`, for the same reason
+        `sample_many` exists and for one more: a hop is the unit that costs. An
+        eager hop -- one outside any traced region, as at a stage boundary -- runs
+        ~75us against 0.43us of hashing, nearly all of it dispatch, so a head that
+        spells this as observe, observe, sample pays three of them for one
+        Fiat-Shamir step. Absorbing a concatenation is byte-identical to absorbing
+        the parts in order (the sponge appends to its rate buffer), so a caller
+        with several messages should join them rather than absorb each."""
+        limbs = self.limbs_over(transcript.field)
+        transcript, raw = transcript.observe_and_sample(values, count * limbs)
+        return transcript, self._regroup(raw, count, limbs)
+
     def observe_and_sample(
         self, transcript: TranscriptT, values: Array
     ) -> tuple[TranscriptT, Array]:
