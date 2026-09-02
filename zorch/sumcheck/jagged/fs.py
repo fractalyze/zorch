@@ -16,11 +16,7 @@ from typing import Any
 from frx import Array
 
 from zorch.sumcheck import gruen
-from zorch.transcript import (
-    DuplexTranscript,
-    observe_and_sample_marked,
-    reinterpret_challenge,
-)
+from zorch.transcript import DuplexTranscript, reinterpret_challenge
 
 
 def _reduce_body(
@@ -54,10 +50,14 @@ def _fs_reduce(
     `_reduce_body`. Returns the advanced transcript and `(r, claim, pad_adj)`. No
     jit of its own -- it fuses into the round's compute under the whole-layer jit.
 
-    The device FS hop rides the `zorch.duplex_fs` composite
-    (`observe_and_sample_marked`) so the whole absorb+squeeze lowers to ONE
-    register-resident kernel. The reduce that consumes its challenge stays plain
-    device ops -- optimization-agnostic, left for the consumer's xla layer."""
-    transcript, raw = observe_and_sample_marked(transcript, poly, n)
+    The hop goes through `transcript.observe_and_sample` -- an FS entry point, not
+    a backend body -- so it lands on whichever backend the transcript carries. On the
+    default device backend that IS the `zorch.duplex_fs` composite, so the whole
+    absorb+squeeze still lowers to ONE register-resident kernel; under
+    `fs_on_host=True` the same call runs the host sponge instead. Naming the device
+    body here directly would pin every round to the device and quietly drop a
+    host-FS prove's hottest hops. The reduce that consumes the challenge stays
+    plain device ops -- optimization-agnostic, left for the consumer's xla layer."""
+    transcript, raw = transcript.observe_and_sample(poly, n)
     r, claim, pad_adj = _reduce_body(raw, poly, pad_adj, z_cur, dtype)
     return transcript, r, claim, pad_adj

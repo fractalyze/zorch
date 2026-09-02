@@ -404,7 +404,7 @@ def _run_jagged_rounds(
             poly, planes, eq_int = fix_int(
                 planes, eq_int, prev_r, scalars, consts, live
             )
-        # Device FS hop + reduce -- traced into the whole-layer jit (one fused
+        # FS hop + reduce -- traced into the whole-layer jit (one fused
         # region per round). z_cur was sliced statically at the loop top, so no
         # gather rides here.
         transcript, r, claim, pad_adj = _fs_reduce(
