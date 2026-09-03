@@ -15,7 +15,7 @@ import numpy as np
 import zk_dtypes
 from absl.testing import absltest
 
-from zorch.logup_gkr.circuit import jagged_layer_transition
+from zorch.logup_gkr.circuit import JaggedGkrLayer, jagged_layer_transition
 from zorch.logup_gkr.testing import (
     host_counts,
     jagged_fold_schedules,
@@ -26,7 +26,7 @@ _KB = zk_dtypes.koalabear_mont
 _RC = (12, 7, 20, 9)
 
 
-def _planes(layer):
+def _planes(layer: JaggedGkrLayer) -> tuple[bytes, ...]:
     return tuple(
         np.asarray(a).tobytes()
         for a in (
@@ -81,9 +81,7 @@ class TracedScheduleTest(absltest.TestCase):
         """Traced counts are unreadable host-side, so there is nothing to
         default the width to."""
         with self.assertRaisesRegex(ValueError, "explicit out_width"):
-            jagged_layer_transition(
-                self.layer, fnp.asarray(self.schedule, fnp.int32)
-            )
+            jagged_layer_transition(self.layer, fnp.asarray(self.schedule, fnp.int32))
 
     def test_a_capacity_too_narrow_for_a_host_schedule_is_rejected(self) -> None:
         """The one truncation a host guard can see. Where the counts are traced
@@ -95,9 +93,7 @@ class TracedScheduleTest(absltest.TestCase):
             jagged_layer_transition(self.layer, self.schedule, sum(self.schedule) - 1)
 
     def test_an_exact_capacity_is_accepted(self) -> None:
-        exact = jagged_layer_transition(
-            self.layer, self.schedule, sum(self.schedule)
-        )
+        exact = jagged_layer_transition(self.layer, self.schedule, sum(self.schedule))
         self.assertEqual(exact.width, sum(self.schedule))
 
 
