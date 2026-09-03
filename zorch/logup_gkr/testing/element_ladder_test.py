@@ -13,6 +13,7 @@ from __future__ import annotations
 import random
 
 import frx
+import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
@@ -24,7 +25,11 @@ from zorch.logup_gkr.circuit import (
     jagged_layer_transition,
 )
 from zorch.logup_gkr.jagged_prover import _jagged_round_zone
-from zorch.logup_gkr.jagged_stage import JaggedGkrWitness, JaggedLogUpGkrProver
+from zorch.logup_gkr.jagged_stage import (
+    JaggedGkrWitness,
+    JaggedLogUpGkrProver,
+    _caps_from_widths,
+)
 from zorch.logup_gkr.stage import LogUpOutputClaim
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
@@ -191,6 +196,50 @@ class ElementLadderTest(absltest.TestCase):
         layer = random_jagged_layer(3, (8, 6))
         with self.assertRaisesRegex(ValueError, "cannot hold the schedule"):
             jagged_layer_transition(layer, (4, 3), 4)
+
+    def test_a_traced_schedule_declaring_its_widths_needs_no_ladder(self) -> None:
+        """The production shape: counts ride as a device array and the
+        consumer declares each capacity itself. Those declared widths are
+        already the ladder, so a plain prover must pick them up -- passing
+        `element_ladder=` on top would be restating them.
+        """
+        traced = [
+            (fnp.asarray(counts, fnp.int32), width)
+            for counts, width in zip(
+                self.scheds, [*self.ladder[1:], sum(self.scheds[-1])], strict=True
+            )
+        ]
+        witness = JaggedGkrWitness(self.first, traced)
+
+        calls = []
+        original = BUF._lay_prefix_many
+        BUF._lay_prefix_many = lambda d, s: (calls.append(1), original(d, s))[1]
+        try:
+            transcript = T.DuplexTranscript.new(koalabear16_perm(), rate=8)
+            out = JaggedLogUpGkrProver(self.caps, _CH).prove(
+                self.claim, witness, transcript
+            )
+            arrays = _leaves(out)
+            frx.block_until_ready(arrays)
+            proof = [np.asarray(a).tobytes() for a in arrays]
+        finally:
+            BUF._lay_prefix_many = original
+
+        self.assertEqual(calls, [])
+        self.assertEqual(proof, self._prove(JaggedLogUpGkrProver(self.caps, _CH)))
+
+    def test_default_declines_widths_the_rounds_cannot_take(self) -> None:
+        """The natural fold widths land on 5, 10, 18 near the floor. Rounding
+        those up would set the cap above the width the layer was built at,
+        which hands the lay-in straight back -- so the default must decline,
+        not round.
+        """
+        self.assertIsNone(_caps_from_widths([4124, 2062, 5], 4124))
+        self.assertIsNone(_caps_from_widths([8192, 4096], 4124))
+        self.assertIsNone(_caps_from_widths([1024, 2048], 4124))
+        self.assertEqual(
+            _caps_from_widths([4124, 2064, 1036], 4124), (4124, 2064, 1036)
+        )
 
     def test_ladder_length_is_checked_against_the_depth(self) -> None:
         prover = JaggedLogUpGkrProver(self.caps, _CH, element_ladder=self.ladder[:-1])

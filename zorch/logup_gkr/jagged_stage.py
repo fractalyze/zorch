@@ -50,6 +50,33 @@ class JaggedGkrWitness:
     schedules: Sequence[tuple[Array, int] | Sequence[int]]
 
 
+def _caps_from_widths(widths: list[int], flat: int) -> tuple[int, ...] | None:
+    """Each layer's own width as its round-buffer cap, or `None` to keep the
+    flat cap.
+
+    Free where it applies: a layer already sized to a width the rounds accept
+    needs no lay-in, so the only question is whether that width is admissible.
+    It must be a multiple of 4 (the boundary handoff pairs the row-width state
+    through two stride-2 halvings) and within the class's own cap. A layer's
+    natural fold width is routinely neither -- the floor-adjacent layers land
+    on 5, 10, 18 -- so this declines rather than rounds: rounding up would put
+    the cap above the width the layer was built at and hand the lay-in right
+    back.
+
+    Whether this holds is the consumer's capacity decision, not an input
+    property: widths that track an input's row counts key the round zone per
+    shard. `element_ladder=` is how a consumer states class-fixed widths and
+    has the pyramid built at them.
+    """
+    if not widths or widths[0] > flat:
+        return None
+    if any(w % 4 for w in widths):
+        return None
+    if any(a < b for a, b in zip(widths, widths[1:], strict=False)):
+        return None
+    return tuple(widths)
+
+
 class JaggedLogUpGkrProver(
     ProverStage[
         LogUpOutputClaim,
@@ -119,6 +146,10 @@ class JaggedLogUpGkrProver(
         )
         # The floor holds the public output; the chain proves the rest.
         pyramid.pop()
+        if ladder is None:
+            ladder = _caps_from_widths(
+                [layer.width for layer in pyramid], self.caps.elements
+            )
         carry, transcript = bind_output(claim.output, transcript, self.challenges)
         # One `LayerBuffers` per chain: the cap-wide planes are ~GiB per class,
         # so the holder must die with the prove. Layers leave the list as the
