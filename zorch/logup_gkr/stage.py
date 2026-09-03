@@ -1,9 +1,9 @@
 # Copyright 2026 The Zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Dense LogUp-GKR role implementations.
 
-The claim types and the proof envelope are layout-independent, so the jagged
-roles (`jagged_stage`) reduce the same `LogUpOutputClaim` to the same
-`InputLayerClaim` and a consumer can swap one layout for the other.
+The claim types and the proof envelope are layout-independent: the jagged layer
+rounds in `jagged_prover` reduce the same `LogUpOutputClaim` to the same
+`InputLayerClaim`.
 """
 
 from __future__ import annotations
