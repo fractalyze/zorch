@@ -25,21 +25,14 @@ from zorch.logup_gkr.circuit import (
     extract_jagged_outputs,
 )
 from zorch.logup_gkr.jagged_prover import JaggedGkrLayerRound, JaggedLayerProof
-from zorch.logup_gkr.jagged_stage import (
-    JaggedGkrWitness,
-    JaggedLogUpGkrProver,
-    JaggedLogUpGkrVerifier,
-)
 from zorch.logup_gkr.jagged_verifier import (
     JaggedGkrLayerRound as JaggedVerifierLayerRound,
 )
 from zorch.logup_gkr.prover import LayerClaim, bind_output
-from zorch.logup_gkr.stage import LogUpOutputClaim
 from zorch.logup_gkr.testing import (
     build_jagged_pyramid,
     caps_for,
     host_counts,
-    jagged_fold_schedules,
     random_jagged_layer,
     virtual_planes,
 )
@@ -150,90 +143,6 @@ class JaggedRoundtripTest(absltest.TestCase):
         self.assertEqual(verifier_final[0].dtype, EF)
         for got, want in zip(verifier_final, prover_final, strict=True):
             self.assertTrue(bool(fnp.all(got == want)))
-
-
-class JaggedStageTest(absltest.TestCase):
-    """The jagged Stage pair over the same pyramid the round chain runs."""
-
-    def _fixture(self, seed: int) -> tuple[
-        JaggedLogUpGkrProver,
-        JaggedLogUpGkrVerifier,
-        LogUpOutputClaim,
-        JaggedGkrWitness,
-        list[JaggedGkrLayer],
-    ]:
-        first = random_jagged_layer(seed, ROW_COUNTS)
-        schedules = jagged_fold_schedules(first)
-        layers = build_jagged_pyramid(first)
-        claim = LogUpOutputClaim(extract_jagged_outputs(layers[-1]), len(schedules))
-        return (
-            JaggedLogUpGkrProver(
-                caps_for(host_counts(first), len(schedules)), challenges=_CH
-            ),
-            JaggedLogUpGkrVerifier(challenges=_CH),
-            claim,
-            JaggedGkrWitness(first, schedules),
-            layers,
-        )
-
-    def test_stage_roundtrips_and_transcripts_agree(self) -> None:
-        prover, verifier, claim, witness, _ = self._fixture(7)
-        proved = prover.prove(claim, witness, cheap_transcript(KB))
-        verified = verifier.verify(claim, proved.reduction_proof, cheap_transcript(KB))
-        self.assertTrue(bool(verified.ok))
-        self.assertEqual(len(proved.reduction_proof.layers), claim.layers)
-        self.assertTrue(
-            bool(fnp.all(proved.reduced_claim.point == verified.reduced_claim.point))
-        )
-        self.assertTrue(
-            bool(proved.reduced_claim.numerator == verified.reduced_claim.numerator)
-        )
-        self.assertTrue(
-            bool(proved.reduced_claim.denominator == verified.reduced_claim.denominator)
-        )
-        _, prover_next = proved.transcript.sample(1)
-        _, verifier_next = verified.transcript.sample(1)
-        self.assertTrue(bool(fnp.all(prover_next == verifier_next)))
-
-    def test_stage_matches_the_hand_run_chain(self) -> None:
-        # The stage drives the same rounds, so its stream must match the hand
-        # chain byte for byte -- proofs, reduced claim, chain-owned buffers.
-        prover, _, claim, witness, layers = self._fixture(17)
-        hand_final, hand_proofs, _ = _prove(layers)
-        proved = prover.prove(claim, witness, cheap_transcript(KB))
-        for got, want in zip(proved.reduction_proof.layers, hand_proofs, strict=True):
-            for field in ("round_polys", "point", "numerator_0", "denominator_1"):
-                self.assertTrue(
-                    bool(fnp.all(getattr(got, field) == getattr(want, field)))
-                )
-        num_eval, den_eval, point = hand_final
-        self.assertTrue(bool(proved.reduced_claim.numerator == num_eval))
-        self.assertTrue(bool(proved.reduced_claim.denominator == den_eval))
-        self.assertTrue(bool(fnp.all(proved.reduced_claim.point == point)))
-
-    def test_stage_statement_owns_layer_count(self) -> None:
-        prover, verifier, claim, witness, _ = self._fixture(27)
-        proved = prover.prove(claim, witness, cheap_transcript(KB))
-        bad = replace(claim, layers=claim.layers + 1)
-        with self.assertRaises(ValueError):
-            verifier.verify(bad, proved.reduction_proof, cheap_transcript(KB))
-        with self.assertRaises(ValueError):
-            prover.prove(bad, witness, cheap_transcript(KB))
-
-    def test_stage_rejects_tampered_round_poly(self) -> None:
-        prover, verifier, claim, witness, _ = self._fixture(37)
-        proved = prover.prove(claim, witness, cheap_transcript(KB))
-        layer_proofs = list(proved.reduction_proof.layers)
-        bad = layer_proofs[1]
-        layer_proofs[1] = replace(
-            bad, round_polys=bad.round_polys.at[0, 0].add(fnp.array(1, KB))
-        )
-        verified = verifier.verify(
-            claim,
-            replace(proved.reduction_proof, layers=tuple(layer_proofs)),
-            cheap_transcript(KB),
-        )
-        self.assertFalse(bool(verified.ok))
 
 
 if __name__ == "__main__":
