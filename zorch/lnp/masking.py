@@ -270,7 +270,7 @@ def _challenge_times(c: np.ndarray, signed: np.ndarray) -> np.ndarray:
 
 def _coin(rng: np.random.Generator) -> float:
     """One Rej1 coin, floored off zero so its `log` stays finite."""
-    return max(float(rng.random()), np.finfo(np.float64).tiny)
+    return max(float(rng.random()), float(np.finfo(np.float64).tiny))
 
 
 def _rej1(coin: float, z: np.ndarray, v: np.ndarray, std: float, rep: float) -> bool:
