@@ -102,9 +102,5 @@ class ChallengePolicy:
         limbs<->dtype packing lives here and nowhere else, so a prover and its
         verifier cannot disagree about it; a caller that wants raw squeezes in the
         transcript's own field calls `transcript.observe_and_sample` directly."""
-        # The absorb and the squeeze stay one hop: splitting them into `observe`
-        # then `sample` bypasses the duplex-FS fusion marker and scatters ~9
-        # kernels per round, which `zorch`'s fusion rule does not allow.
-        limbs = self.limbs_over(transcript.field)
-        transcript, raw = transcript.observe_and_sample(values, limbs)
-        return transcript, self._regroup(raw, 1, limbs)[0]
+        transcript, challenges = self.observe_and_sample_many(transcript, values, 1)
+        return transcript, challenges[0]
