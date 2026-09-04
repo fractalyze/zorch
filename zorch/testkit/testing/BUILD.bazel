@@ -3,6 +3,18 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
+    name = "koalabear16_test",
+    size = "small",
+    srcs = ["koalabear16_test.py"],
+    deps = [
+        "//zorch/testkit:koalabear16",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
     name = "random_field_test",
     size = "small",
     srcs = ["random_field_test.py"],
