@@ -277,7 +277,9 @@ class FsEntryPointTest(parameterized.TestCase):
         return replace(t, fs=spy), spy
 
     @parameterized.named_parameters(("device", False), ("host", True))
-    def test_jagged_round_hop_routes_through_the_backend(self, fs_on_host: bool):
+    def test_jagged_round_hop_routes_through_the_backend(
+        self, fs_on_host: bool
+    ) -> None:
         """The sumcheck per-round hop -- the hottest FS call site in a jagged
         LogUp-GKR prove, ~78% of its hops -- must reach the backend. It once called
         the device body `_observe_and_sample_marked` directly, so `fs_on_host=True`
@@ -294,7 +296,7 @@ class FsEntryPointTest(parameterized.TestCase):
         self.assertEqual(spy.calls, ["observe_and_sample"])
         self.assertIs(t_out.fs, spy)
 
-    def test_no_module_imports_a_private_fs_body(self):
+    def test_no_module_imports_a_private_fs_body(self) -> None:
         """Nothing outside `transcript.py` may import a private name from it.
 
         The private FS bodies (`_observe_and_sample_marked`, `_observe_and_sample_body`,
@@ -375,7 +377,9 @@ class HostFsFfiTargetTest(parameterized.TestCase):
 
             return run
 
-        self.enter_context(mock.patch.object(transcript_mod, "_host_hop_ffi_eager", fake))
+        self.enter_context(
+            mock.patch.object(transcript_mod, "_host_hop_ffi_eager", fake)
+        )
         return seen
 
     def test_no_target_keeps_the_resident_eager_path(self) -> None:
