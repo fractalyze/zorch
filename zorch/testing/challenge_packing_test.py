@@ -23,7 +23,16 @@ import zorch
 
 _PACKING = "reinterpret_challenge"
 # `sample_challenge` is transcript.py's own typed one-squeeze helper and packs
-# through the same routine, so it is an entry point rather than a bypass.
+# through the same routine, so it is an entry point rather than a bypass. It does
+# still take the limb count and the field as SEPARATE arguments, so it is the one
+# place the two halves can be chosen apart; the PCS call sites that use it derive
+# their limb count as `efinfo(dtype).degree` rather than over the transcript's
+# field, which this rule does not (yet) reach.
+#
+# Owners match by PATH, not by basename: `zorch/lnp/challenge.py`,
+# `zorch/lnp/transcript.py` and `zorch/testkit/transcript.py` are ordinary call
+# sites, and a `rel.name` test would exempt them for sharing a filename with the
+# two modules that actually own the packing.
 _OWNERS = {"challenge.py", "transcript.py"}
 
 
@@ -33,7 +42,7 @@ class ChallengePackingTest(absltest.TestCase):
         offenders, scanned = [], 0
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(root)
-            if rel.name in _OWNERS or "testing" in rel.parts:
+            if rel.as_posix() in _OWNERS or "testing" in rel.parts:
                 continue
             scanned += 1
             for node in ast.walk(ast.parse(path.read_text())):

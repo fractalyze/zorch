@@ -64,6 +64,7 @@ py_test(
     srcs = ["jagged_round_runner_test.py"],
     deps = [
         ":testing",
+        "//zorch:challenge",
         "//zorch:transcript",
         "//zorch/logup_gkr",
         "//zorch/poly",

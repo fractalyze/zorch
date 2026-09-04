@@ -188,6 +188,7 @@ py_test(
     # needs the cuda,cpu invocation.
     tags = ["needs_cpu_backend"],
     deps = [
+        "//zorch:challenge",
         "//zorch:transcript",
         # FsEntryPointTest watches the FS *call sites*, so it needs them present:
         # the jagged round hop it drives, and (for the import guard, which scans

@@ -15,7 +15,7 @@ import frx
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from frx import tree_util
+from frx import Array, tree_util
 
 import zorch
 from zorch import transcript as transcript_mod
@@ -232,7 +232,11 @@ class ScopedHostAbsorbTest(parameterized.TestCase):
 class _RecordingFs:
     """A `_FsBackend` that records which entry points it was asked for and
     delegates. Installed on a transcript so a test can assert a *call site*
-    reaches the backend, rather than naming one backend's body directly."""
+    reaches the backend, rather than naming one backend's body directly.
+
+    Every method forwards to `inner`, never back through the transcript: a
+    delegate that re-entered `t.observe_and_sample(...)` would recurse through
+    this same spy."""
 
     def __init__(self, inner: Any) -> None:
         self.inner = inner
@@ -240,21 +244,25 @@ class _RecordingFs:
 
     @property
     def on_host(self) -> bool:
-        return self.inner.on_host
+        return bool(self.inner.on_host)
 
-    def observe(self, t: Any, values: Any) -> Any:
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript:
         self.calls.append("observe")
         return self.inner.observe(t, values)
 
-    def sample(self, t: Any, n: int) -> Any:
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
         self.calls.append("sample")
         return self.inner.sample(t, n)
 
-    def observe_and_sample(self, t: Any, values: Any, n: int) -> Any:
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]:
         self.calls.append("observe_and_sample")
         return self.inner.observe_and_sample(t, values, n)
 
-    def check_witness(self, t: Any, witness: Any, *, pow_bits: int) -> Any:
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, *, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]:
         self.calls.append("check_witness")
         return self.inner.check_witness(t, witness, pow_bits=pow_bits)
 
@@ -310,7 +318,10 @@ class FsEntryPointTest(parameterized.TestCase):
         offenders, scanned = [], set()
         for path in sorted(root.rglob("*.py")):
             rel = path.relative_to(root)
-            if rel.name == "transcript.py" or "testing" in rel.parts:
+            # By PATH, not by basename: `zorch/lnp/transcript.py` and
+            # `zorch/testkit/transcript.py` are ordinary call sites that a
+            # `rel.name` test would silently wave through.
+            if rel.as_posix() == "transcript.py" or "testing" in rel.parts:
                 continue
             scanned.add(rel.as_posix())
             for node in ast.walk(ast.parse(path.read_text())):
@@ -363,13 +374,15 @@ class HostFsFfiTargetTest(parameterized.TestCase):
     def _transcript(self) -> DuplexTranscript:
         return DuplexTranscript.new(koalabear16_perm(), rate=8, fs_on_host=True)
 
-    def _spy_on_ffi(self) -> list[tuple[int, bool]]:
+    def _spy_on_ffi(self) -> list[tuple[int, bool, str]]:
         """Replace the eager FFI wrapper with a recorder that returns the
-        transcript untouched, so no handler is needed."""
-        seen: list[tuple[int, bool]] = []
+        transcript untouched, so no handler is needed. It records the target as
+        well as the shape: the wrapper caches a compiled hop, so which target a
+        call is keyed to is part of what has to be right."""
+        seen: list[tuple[int, bool, str]] = []
 
-        def fake(n: int, absorbs: bool) -> Any:
-            seen.append((n, absorbs))
+        def fake(n: int, absorbs: bool, target: str) -> Any:
+            seen.append((n, absorbs, target))
 
             def run(t: Any, *rest: Any) -> Any:
                 out = fnp.zeros(max(n, 1), t.field)

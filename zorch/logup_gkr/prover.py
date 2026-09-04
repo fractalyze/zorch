@@ -312,7 +312,14 @@ def _bind_output_body(
     concatenation is byte-identical to absorbing the parts in order (the sponge
     appends to its rate buffer) and observe-then-sample is exactly
     `observe_and_sample`, so the three collapse into one hop with the same
-    transcript stream -- which `golden_vector_test` pins."""
+    transcript stream. Nothing in-tree pins that stream: `golden_vector_test`
+    hashes the circuit's output MLEs, never a transcript, and the GKR tests use
+    this head on both sides, so prover and verifier would agree through a change
+    to it. The equality holds by the absorb's own definition -- `_observe_body`
+    appends to the rate buffer and permutes per full block -- which is why the
+    concatenation must be an ordinary same-dtype join: a `numerator` and
+    `denominator` of DIFFERENT dtypes would be promoted here and absorb a
+    different (zero-padded) word sequence than two observes would."""
     transcript, eval_point = challenges.observe_and_sample_many(
         transcript, fnp.concatenate((numerator, denominator)), num_vars
     )

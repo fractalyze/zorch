@@ -23,16 +23,15 @@ def _reduce_body(
     poly: Array,
     pad_adj: Array,
     z_cur: Array,
-) -> tuple[Array, Array, Array]:
-    """Fold the round scalars by the round challenge. The round's
+) -> tuple[Array, Array]:
+    """Fold the round scalars by the round challenge `r`. The round's
     `eval_point` coordinate `z_cur` is sliced statically by the caller (the loop
     index is a compile-time constant), so no per-round gather rides here -- a
     device-resident index would cost a ~22us `fnp.take` dispatch every round.
-    Returns the round challenge `r`, the next `claim`, and `pad_adj`. Plain
-    (un-jitted) so it fuses into whichever kernel owns it -- the round loop's
-    `_fs_reduce`."""
-    claim, pad_adj = gruen.fold_round_scalars(poly, r, pad_adj, z_cur)
-    return r, claim, pad_adj
+    Returns the next `claim` and `pad_adj`; `r` stays the caller's, since the
+    squeeze that produced it is now the caller's too. Plain (un-jitted) so it
+    fuses into whichever kernel owns it -- the round loop's `_fs_reduce`."""
+    return gruen.fold_round_scalars(poly, r, pad_adj, z_cur)
 
 
 def _fs_reduce(
@@ -55,5 +54,5 @@ def _fs_reduce(
     The reduce that consumes the challenge stays plain device ops --
     optimization-agnostic, left for the consumer's xla layer."""
     transcript, r = challenges.observe_and_sample(transcript, poly)
-    r, claim, pad_adj = _reduce_body(r, poly, pad_adj, z_cur)
+    claim, pad_adj = _reduce_body(r, poly, pad_adj, z_cur)
     return transcript, r, claim, pad_adj

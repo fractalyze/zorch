@@ -360,9 +360,11 @@ class DuplexTranscript:
         device = next(iter(self.state.sponge_state.devices()))
         t = self
         for m in messages:
-            # `_observe_host` commits the state to the CPU on the first hop and
+            # The resident body commits the state to the CPU on the first hop and
             # returns host leaves, so the rest of the sequence finds it resident.
-            t = _observe_host(t, m)
+            # NOT `_observe_host`: this is a device-FS transcript taking a scoped
+            # detour, so it must not pick up the host-FS backend's FFI transport.
+            t = _observe_host_resident(t, m)
         return t._with_state(_state_on_device(t.state, device))
 
     def _sample_one(self) -> tuple[DuplexTranscript, Array]:
@@ -1019,10 +1021,16 @@ def set_host_fs_ffi_target(name: str | None) -> None:
     forks the transcript.
 
     Set it once, at startup, before anything traces. It is read while tracing, so
-    a zone compiled earlier keeps whichever transport was set then -- change it
-    afterwards and the old one stays live with nothing to say so. Process-wide
-    rather than per-transcript for the same reason a handler is: one vendor
-    registers one handler for the process."""
+    a consumer's zone compiled earlier keeps whichever transport was set then --
+    change it afterwards and the old one stays live with nothing to say so. (The
+    hops zorch compiles itself do NOT have that hazard: `_host_hop_ffi_eager`
+    keys its cache on the target, so a re-set name gets a fresh trace.)
+    Process-wide rather than per-transcript for the same reason a handler is: one
+    vendor registers one handler for the process.
+
+    Only the host-FS backend reads it. `absorb_on_host` is a scoped relocation on
+    a DEVICE-FS transcript and deliberately stays on the resident CPU sponge, so
+    naming a target here never pulls a device-FS prove onto a vendor handler."""
     global _host_fs_ffi_target
     _host_fs_ffi_target = name
 
@@ -1046,9 +1054,14 @@ def _wire_leaves(state: DuplexState) -> tuple[Array, ...]:
 
 
 def _host_hop_ffi(
-    transcript: DuplexTranscript, values: Array | None, n: int
+    transcript: DuplexTranscript, values: Array | None, n: int, target: str
 ) -> tuple[DuplexTranscript, Array]:
-    """`observe_and_sample` on the host through the registered FFI target.
+    """`observe_and_sample` on the host through the FFI target `target`.
+
+    The target is an explicit argument, never read off the module global here:
+    the eager wrapper caches a compiled hop, so a target baked in at trace time
+    has to be part of that cache's key or a later `set_host_fs_ffi_target` calls
+    the old handler with nothing to say so.
 
     Declared PURE (`has_side_effect=False`), which is worth ~0.8-1.5ms a prove
     because the effect token orders every hop against every other one and costs
@@ -1083,7 +1096,7 @@ def _host_hop_ffi(
     # before it writes) but measured slower -- 8.4 -> 9.3 ms min -- so the hop
     # takes the extra buffers rather than constraining XLA's assignment.
     ib, ob, sp, ip, op, chal = frx.ffi.ffi_call(
-        _host_fs_ffi_target, out_types, has_side_effect=False
+        target, out_types, has_side_effect=False
     )(*_wire_leaves(transcript.state), wire_values)
     return (
         transcript._with_state(
@@ -1100,8 +1113,12 @@ def _host_hop_ffi(
 
 
 @cache
-def _host_hop_ffi_eager(n: int, absorbs: bool) -> Any:
+def _host_hop_ffi_eager(n: int, absorbs: bool, target: str) -> Any:
     """An eager hop that still crosses via the FFI, by wrapping it in `jit`.
+
+    `target` is part of the cache key, not just an operand: the returned `jit`
+    bakes the target in when it traces, so keying on `(n, absorbs)` alone would
+    keep calling the first handler a process ever named.
 
     An eager host hop is otherwise the most expensive thing in a host-FS prove:
     `_state_on_host` ships five leaves to the CPU, the sponge runs, and
@@ -1114,14 +1131,16 @@ def _host_hop_ffi_eager(n: int, absorbs: bool) -> Any:
     Wrapping the FFI hop in `jit` makes it traced, so the handler does the
     crossing and the sponge state never leaves the device."""
     if absorbs:
-        return jit(lambda t, v: _host_hop_ffi(t, v, n))
-    return jit(lambda t: _host_hop_ffi(t, None, n))
+        return jit(lambda t, v: _host_hop_ffi(t, v, n, target))
+    return jit(lambda t: _host_hop_ffi(t, None, n, target))
 
 
 def _is_traced(*xs: Any) -> bool:
     """Whether we are inside a compiled graph, which is what decides between the
-    eager resident-state hop and the `pure_callback` one. Both run the same CPU
-    sponge jit, so only the transport differs -- the math cannot drift."""
+    eager resident-state hop and the in-graph one. The resident and `pure_callback`
+    transports run the same CPU sponge jit, so between those two the math cannot
+    drift; the FFI transport runs the consumer's handler instead, and only its
+    state-in/state-out contract keeps it on the same stream."""
     return any(isinstance(x, frx.core.Tracer) for x in xs)
 
 
@@ -1147,24 +1166,41 @@ def _unpack_state(words: Array, pos: Array, rate: int, width: int) -> DuplexStat
     )
 
 
-def _host_hop_traced(
-    transcript: DuplexTranscript, values: Array, n: int
+def _host_hop_callback(
+    transcript: DuplexTranscript, values: Array | None, n: int
 ) -> tuple[DuplexTranscript, Array]:
-    """`observe_and_sample` on the host sponge from inside a traced region.
+    """One host sponge hop from inside a traced region, over `pure_callback`.
 
-    The callback runs the SAME `_host_obs_sample_jit` the eager path runs, on
-    CPU-committed inputs, so the two transports stay byte-identical by sharing the
-    sponge rather than by agreeing to. Committing to the CPU inside the callback is
-    also what keeps it safe to call: the surrounding graph is waiting on the
-    accelerator, and re-entering XLA on the *same* device from a callback is what
-    deadlocks."""
+    The single traced-callback body for all three entry points: `values is None`
+    is a bare `sample`, `n == 0` a bare `observe`, and both together the fused
+    `observe_and_sample`. One body rather than three near-copies, so a fix to the
+    packing, the CPU commit or the vmap contract cannot land on only one of them.
+
+    The callback runs the SAME `_host_*_jit` the eager path runs, on CPU-committed
+    inputs, so the two transports stay byte-identical by sharing the sponge rather
+    than by agreeing to. Committing to the CPU inside the callback is also what
+    keeps it safe to call: the surrounding graph is waiting on the accelerator, and
+    re-entering XLA on the *same* device from a callback is what deadlocks.
+
+    `vmap_method="sequential"` is stated, not left to the default: every lane of a
+    `vmap` carries its OWN sponge state, so the only correct batching is one
+    callback per lane. The default currently happens to be `sequential` and is
+    documented to become a `NotImplementedError`, so leaving it off would turn a
+    working grind into a hard failure on a library bump -- and any other method
+    would hand the callback a batched buffer against an unbatched declared shape.
+    """
     perm = _host_raw(transcript.permutation)
     rate, width = transcript.rate, transcript.permutation.width
     field = transcript.field
     words, pos = _pack_state(transcript.state)
-    sponge = _host_obs_sample_jit(perm, rate, n)
+    if values is None:
+        sponge = _host_sample_jit(perm, rate, n)
+    elif n:
+        sponge = _host_obs_sample_jit(perm, rate, n)
+    else:
+        sponge = _host_observe_jit(perm, rate)
 
-    def run(words_h: Any, pos_h: Any, values_h: Any) -> tuple[Any, Any, Any]:
+    def run(words_h: Any, pos_h: Any, *values_h: Any) -> tuple[Any, ...]:
         cpu = _host_cpu()
         state = _unpack_state(
             _from_wire(frx.device_put(words_h, cpu), field),
@@ -1172,118 +1208,58 @@ def _host_hop_traced(
             rate,
             width,
         )
-        advanced, out = sponge(state, _from_wire(frx.device_put(values_h, cpu), field))
+        args = tuple(_from_wire(frx.device_put(v, cpu), field) for v in values_h)
+        advanced = sponge(state, *args)
+        out: Array | None = None
+        if n:
+            advanced, out = advanced
         new_words, new_pos = _pack_state(advanced)
-        return (
-            np.asarray(_to_wire(new_words)),
-            np.asarray(new_pos),
-            np.asarray(_to_wire(out)),
-        )
+        packed = (np.asarray(_to_wire(new_words)), np.asarray(new_pos))
+        return packed if out is None else (*packed, np.asarray(_to_wire(out)))
 
-    shapes = (
-        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
-        frx.ShapeDtypeStruct(pos.shape, pos.dtype),
-        frx.ShapeDtypeStruct((n,), fnp.uint32),
-    )
-    new_words, new_pos, out = frx.pure_callback(
-        run, shapes, _to_wire(words), pos, _to_wire(values)
-    )
-    return (
-        transcript._with_state(
-            _unpack_state(_from_wire(new_words, field), new_pos, rate, width)
-        ),
-        _from_wire(out, field),
-    )
-
-
-def _host_observe_traced(
-    transcript: DuplexTranscript, values: Array
-) -> DuplexTranscript:
-    """`observe` on the host sponge from inside a traced region — `_host_hop_traced`
-    without the squeeze, so it returns state alone."""
-    perm = _host_raw(transcript.permutation)
-    rate, width = transcript.rate, transcript.permutation.width
-    field = transcript.field
-    words, pos = _pack_state(transcript.state)
-    sponge = _host_observe_jit(perm, rate)
-
-    def run(words_h: Any, pos_h: Any, values_h: Any) -> tuple[Any, Any]:
-        cpu = _host_cpu()
-        state = _unpack_state(
-            _from_wire(frx.device_put(words_h, cpu), field),
-            frx.device_put(pos_h, cpu),
-            rate,
-            width,
-        )
-        new_words, new_pos = _pack_state(
-            sponge(state, _from_wire(frx.device_put(values_h, cpu), field))
-        )
-        return np.asarray(_to_wire(new_words)), np.asarray(new_pos)
-
-    shapes = (
+    shapes: tuple[Any, ...] = (
         frx.ShapeDtypeStruct(words.shape, fnp.uint32),
         frx.ShapeDtypeStruct(pos.shape, pos.dtype),
     )
-    new_words, new_pos = frx.pure_callback(
-        run, shapes, _to_wire(words), pos, _to_wire(values)
-    )
-    return transcript._with_state(
+    if n:
+        shapes += (frx.ShapeDtypeStruct((n,), fnp.uint32),)
+    operands: tuple[Any, ...] = (_to_wire(words), pos)
+    if values is not None:
+        operands += (_to_wire(values),)
+    result = frx.pure_callback(run, shapes, *operands, vmap_method="sequential")
+    new_words, new_pos = result[0], result[1]
+    advanced = transcript._with_state(
         _unpack_state(_from_wire(new_words, field), new_pos, rate, width)
     )
+    if not n:
+        return advanced, fnp.zeros(0, field)
+    return advanced, _from_wire(result[2], field)
 
 
-def _host_sample_traced(
-    transcript: DuplexTranscript, n: int
-) -> tuple[DuplexTranscript, Array]:
-    """`sample` on the host sponge from inside a traced region — `_host_hop_traced`
-    without the absorb, so it takes no `values`."""
-    perm = _host_raw(transcript.permutation)
-    rate, width = transcript.rate, transcript.permutation.width
-    field = transcript.field
-    words, pos = _pack_state(transcript.state)
-    sponge = _host_sample_jit(perm, rate, n)
+def _observe_host_resident(
+    transcript: DuplexTranscript, values: Array
+) -> DuplexTranscript:
+    """`observe` on the CPU sponge with the state left host-resident — the eager,
+    transport-free body.
 
-    def run(words_h: Any, pos_h: Any) -> tuple[Any, Any, Any]:
-        cpu = _host_cpu()
-        state = _unpack_state(
-            _from_wire(frx.device_put(words_h, cpu), field),
-            frx.device_put(pos_h, cpu),
-            rate,
-            width,
-        )
-        advanced, out = sponge(state)
-        new_words, new_pos = _pack_state(advanced)
-        return (
-            np.asarray(_to_wire(new_words)),
-            np.asarray(new_pos),
-            np.asarray(_to_wire(out)),
-        )
-
-    shapes = (
-        frx.ShapeDtypeStruct(words.shape, fnp.uint32),
-        frx.ShapeDtypeStruct(pos.shape, pos.dtype),
-        frx.ShapeDtypeStruct((n,), fnp.uint32),
-    )
-    new_words, new_pos, out = frx.pure_callback(run, shapes, _to_wire(words), pos)
-    return (
-        transcript._with_state(
-            _unpack_state(_from_wire(new_words, field), new_pos, rate, width)
-        ),
-        _from_wire(out, field),
-    )
+    Split out from `_observe_host` because `absorb_on_host` wants exactly THIS and
+    nothing else: it is a scoped relocation on a *device*-FS transcript, so routing
+    it through the placement dispatch below would make a device-FS prove start
+    calling a consumer's FFI handler the moment anyone set one."""
+    s = _state_on_host(transcript.state)
+    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
+    return transcript._with_state(f(s, frx.device_put(values, _host_cpu())))
 
 
 def _observe_host(transcript: DuplexTranscript, values: Array) -> DuplexTranscript:
     """`observe` on the host sponge; the state stays host-resident."""
     if _is_traced(values, *_state_leaves(transcript.state)):
         if _host_fs_ffi_target is not None:
-            return _host_hop_ffi(transcript, values, 0)[0]
-        return _host_observe_traced(transcript, values)
+            return _host_hop_ffi(transcript, values, 0, _host_fs_ffi_target)[0]
+        return _host_hop_callback(transcript, values, 0)[0]
     if _host_fs_ffi_target is not None:
-        return _host_hop_ffi_eager(0, True)(transcript, values)[0]
-    s = _state_on_host(transcript.state)
-    f = _host_observe_jit(_host_raw(transcript.permutation), transcript.rate)
-    return transcript._with_state(f(s, frx.device_put(values, _host_cpu())))
+        return _host_hop_ffi_eager(0, True, _host_fs_ffi_target)(transcript, values)[0]
+    return _observe_host_resident(transcript, values)
 
 
 def _sample_host(
@@ -1293,10 +1269,10 @@ def _sample_host(
     the challenge returns to the compute device."""
     if _is_traced(*_state_leaves(transcript.state)):
         if _host_fs_ffi_target is not None:
-            return _host_hop_ffi(transcript, None, n)
-        return _host_sample_traced(transcript, n)
+            return _host_hop_ffi(transcript, None, n, _host_fs_ffi_target)
+        return _host_hop_callback(transcript, None, n)
     if _host_fs_ffi_target is not None:
-        return _host_hop_ffi_eager(n, False)(transcript)
+        return _host_hop_ffi_eager(n, False, _host_fs_ffi_target)(transcript)
     s = _state_on_host(transcript.state)
     f = _host_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
     state, out = f(s)
@@ -1316,10 +1292,10 @@ def _observe_and_sample_host(
     is CPU-resident in steady state, so its device can't name the compute one)."""
     if _is_traced(values, *_state_leaves(transcript.state)):
         if _host_fs_ffi_target is not None:
-            return _host_hop_ffi(transcript, values, n)
-        return _host_hop_traced(transcript, values, n)
+            return _host_hop_ffi(transcript, values, n, _host_fs_ffi_target)
+        return _host_hop_callback(transcript, values, n)
     if _host_fs_ffi_target is not None:
-        return _host_hop_ffi_eager(n, True)(transcript, values)
+        return _host_hop_ffi_eager(n, True, _host_fs_ffi_target)(transcript, values)
     compute_device = next(iter(values.devices()))
     s = _state_on_host(transcript.state)
     f = _host_obs_sample_jit(_host_raw(transcript.permutation), transcript.rate, n)
