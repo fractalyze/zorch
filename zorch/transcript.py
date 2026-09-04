@@ -1078,9 +1078,7 @@ def _host_hop_ffi(
     # matters more than it looks: leaving either on the `pure_callback` fallback
     # puts ~518us hops back in the stream, and a stage's dozen of them cost more
     # than all 88 fused hops put together.
-    wire_values = (
-        fnp.zeros(0, fnp.uint32) if values is None else _to_wire(values)
-    )
+    wire_values = fnp.zeros(0, fnp.uint32) if values is None else _to_wire(values)
     # Aliasing the state buffers is SAFE here (the handler finishes every read
     # before it writes) but measured slower -- 8.4 -> 9.3 ms min -- so the hop
     # takes the extra buffers rather than constraining XLA's assignment.
@@ -1132,9 +1130,7 @@ def _pack_state(state: DuplexState) -> tuple[Array, Array]:
     the two positions apart because they are `int32`. Halving the array count
     halves the per-hop boundary cost, which is what the five-leaf version paid."""
     return (
-        fnp.concatenate(
-            (state.input_buffer, state.output_buffer, state.sponge_state)
-        ),
+        fnp.concatenate((state.input_buffer, state.output_buffer, state.sponge_state)),
         fnp.stack((state.in_pos, state.out_pos)),
     )
 
@@ -1176,9 +1172,7 @@ def _host_hop_traced(
             rate,
             width,
         )
-        advanced, out = sponge(
-            state, _from_wire(frx.device_put(values_h, cpu), field)
-        )
+        advanced, out = sponge(state, _from_wire(frx.device_put(values_h, cpu), field))
         new_words, new_pos = _pack_state(advanced)
         return (
             np.asarray(_to_wire(new_words)),

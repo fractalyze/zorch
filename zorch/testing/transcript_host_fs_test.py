@@ -375,7 +375,9 @@ class HostFsFfiTargetTest(parameterized.TestCase):
 
             return run
 
-        self.enter_context(mock.patch.object(transcript_mod, "_host_hop_ffi_eager", fake))
+        self.enter_context(
+            mock.patch.object(transcript_mod, "_host_hop_ffi_eager", fake)
+        )
         return seen
 
     def test_no_target_keeps_the_resident_eager_path(self) -> None:
