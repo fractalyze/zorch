@@ -201,3 +201,20 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "challenge_packing_test",
+    size = "small",
+    srcs = ["challenge_packing_test.py"],
+    # The sweep scans the runfiles tree, so the packages that draw challenges
+    # have to be present or it passes by finding nothing.
+    deps = [
+        "//zorch:challenge",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/pcs/jagged:prover",
+        "//zorch/pcs/whir",
+        "//zorch/sumcheck/jagged",
+        requirement("absl_py"),
+    ] + GPU_PLUGIN_DEPS,
+)

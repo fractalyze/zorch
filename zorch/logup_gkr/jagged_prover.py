@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import frx
 import frx.numpy as fnp
@@ -73,11 +73,7 @@ from zorch.sumcheck.jagged.types import (
     _InterpConsts,
     _JaggedSchedule,
 )
-from zorch.transcript import (
-    DuplexTranscript,
-    Transcript,
-    reinterpret_challenge,
-)
+from zorch.transcript import DuplexTranscript, Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
@@ -279,7 +275,6 @@ def _run_jagged_rounds(
     )
     nrv, niv = sched.nrv, sched.niv
     row_counts = sched.row_counts
-    challenge_limbs = sched.challenge_limbs
     one = fnp.ones((), eval_point.dtype)
     eq_adj = one
     pad_adj = one
@@ -408,7 +403,7 @@ def _run_jagged_rounds(
         # region per round). z_cur was sliced statically at the loop top, so no
         # gather rides here.
         transcript, r, claim, pad_adj = _fs_reduce(
-            poly, transcript, pad_adj, z_cur, challenge_limbs, dtype
+            poly, transcript, pad_adj, z_cur, ChallengePolicy(dtype)
         )
         # Serialize the rounds' buffer assignment: unfenced, the scheduler
         # overlaps rounds and co-resides their cap-width plane intermediates, so
@@ -450,14 +445,15 @@ def _sample_lam_and_claim(
     transcript: DuplexTranscript,
     num_eval: Array,
     den_eval: Array,
-    n: int,
-    dtype: Any,
+    challenges: ChallengePolicy,
 ) -> tuple[DuplexTranscript, Array, Array]:
-    """The layer pre-carry: squeeze the batching `lam`, reinterpret it, and form the
-    claim `lam*num_eval + den_eval`. All device math, traced into the whole-layer
-    zone."""
-    transcript, raw = transcript.sample(n)
-    lam = reinterpret_challenge(raw, dtype)
+    """The layer pre-carry: squeeze the batching `lam` and form the claim
+    `lam*num_eval + den_eval`. All device math, traced into the whole-layer zone.
+
+    The policy owns both halves of a challenge -- how many transcript words to
+    squeeze and what field to read them as. Sampling through it is what keeps
+    those two from being chosen independently."""
+    transcript, lam = challenges.sample(transcript)
     return transcript, lam, lam * num_eval + den_eval
 
 
@@ -468,17 +464,19 @@ def _observe_openings_and_fold(
     d0: Array,
     d1: Array,
     point: Array,
-    n: int,
-    dtype: Any,
+    challenges: ChallengePolicy,
 ) -> tuple[DuplexTranscript, Array, Array, Array]:
     """Device-FS layer post-carry: absorb the four openings, squeeze the child
-    selector `r`, and fold the carry. The openings stack, `observe`, `sample`,
-    reinterpret, and `fold_carry` are all device math that trace into the whole-layer
-    zone -- the layer-boundary sibling of the per-round FS hop. `observe_and_sample`
-    fuses the absorb + squeeze exactly as the round FS does, so the transcript stream
-    is byte-identical to the split form."""
-    transcript, raw = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), n)
-    r = reinterpret_challenge(raw, dtype)
+    selector `r`, and fold the carry. The openings stack, the hop, and
+    `fold_carry` are all device math that trace into the whole-layer zone -- the
+    layer-boundary sibling of the per-round FS hop.
+
+    Absorb and squeeze must stay ONE hop: the `zorch.duplex_fs` marker wraps a
+    whole hop, and an absorb followed by a separate squeeze falls outside it and
+    scatters ~9 kernels."""
+    transcript, r = challenges.observe_and_sample(
+        transcript, fnp.stack([n0, n1, d0, d1])
+    )
     return transcript, *fold_carry(n0, n1, d0, d1, point, r)
 
 
@@ -503,13 +501,15 @@ def _prove_jagged_layer_round(
     the moment it builds the next (the one-live-layer release
     `ChainedJaggedProveTest` pins)."""
     num_eval, den_eval, eval_point = claim
-    dtype = num_eval.dtype
+    # The claim's field is the challenge field: `bind_output` draws the head's
+    # point from the policy, so every carry downstream is policy-typed.
+    challenges = ChallengePolicy(num_eval.dtype)
     transcript = cast(DuplexTranscript, transcript)
     # The per-layer carry brackets the round loop: sample lam + the batched claim
     # before, absorb the openings + sample + fold the child selector after. All
     # device math, traced into the whole-layer jit.
     transcript, lam, claim = _sample_lam_and_claim(
-        transcript, num_eval, den_eval, challenge_limbs, dtype
+        transcript, num_eval, den_eval, challenges
     )
     point, transcript, proof = _prove_jagged_layer_from_ops(
         planes,
@@ -533,8 +533,7 @@ def _prove_jagged_layer_round(
         d0,
         d1,
         point,
-        challenge_limbs,
-        dtype,
+        challenges,
     )
     return (num_eval, den_eval, eval_point), transcript, proof
 

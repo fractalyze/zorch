@@ -40,6 +40,7 @@ import numpy as np
 from frx import Array
 from zk_dtypes import efinfo
 
+from zorch.challenge import ChallengePolicy
 from zorch.pcs.jagged.branching_program import _TRANSITION_ROWS, bp_eval_core
 from zorch.pcs.jagged.poly import (
     _offset_bit_tensor,
@@ -50,7 +51,7 @@ from zorch.pcs.jagged.poly import (
 )
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.univariate import eval_coeffs
-from zorch.transcript import Transcript, reinterpret_challenge, sample_challenge
+from zorch.transcript import Transcript, sample_challenge
 from zorch.utils.bits import log2_ceil_usize
 
 
@@ -206,7 +207,7 @@ def outer_sumcheck(
     state_b = indicator
     n_rounds = (state_a.shape[0] - 1).bit_length()
     ef = claim.dtype
-    ef_limbs = efinfo(ef).degree
+    ef_challenges = ChallengePolicy(ef)
     two = fnp.array(2, ef)
 
     cur = claim
@@ -221,8 +222,7 @@ def outer_sumcheck(
 
         # One extension challenge per variable; fused absorb+squeeze, so byte
         # for byte the same as observe + sample_challenge.
-        transcript, raw = transcript.observe_and_sample(coef, ef_limbs)
-        alpha = reinterpret_challenge(raw, ef)
+        transcript, alpha = ef_challenges.observe_and_sample(transcript, coef)
         state_a = p0a + alpha * (p1a - p0a)
         state_b = p0b + alpha * (p1b - p0b)
         cur = eval_coeffs(coef, alpha)
@@ -276,7 +276,7 @@ def inner_sumcheck_core(
     t_matrix = fnp.asarray(_TRANSITION_ROWS, dtype=dtype)
     one = fnp.ones((), dtype)
     two = fnp.array(2, dtype)
-    ef_limbs = efinfo(dtype).degree
+    ef_challenges = ChallengePolicy(dtype)
 
     def bp_all(buf: Array) -> Array:
         return _bp_all(buf, z_row, z_trace, t_matrix, num_bits)
@@ -307,8 +307,7 @@ def inner_sumcheck_core(
 
         # One extension challenge per variable; fused absorb+squeeze, so byte
         # for byte the same as observe + sample_challenge.
-        transcript, raw = transcript.observe_and_sample(coef, ef_limbs)
-        alpha = reinterpret_challenge(raw, dtype)
+        transcript, alpha = ef_challenges.observe_and_sample(transcript, coef)
         buf = buf.at[:, round_idx].set(alpha)
         weights_c = weights_c * (alpha * bits_i + (one - alpha) * eq0)
         claim = eval_coeffs(coef, alpha)

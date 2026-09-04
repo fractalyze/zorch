@@ -19,6 +19,7 @@ from frx import tree_util
 
 import zorch
 from zorch import transcript as transcript_mod
+from zorch.challenge import ChallengePolicy
 from zorch.sumcheck.jagged.fs import _fs_reduce
 from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_ext_field, rand_field
@@ -290,8 +291,7 @@ class FsEntryPointTest(parameterized.TestCase):
             t,
             rand_ext_field(2, (), F, EF),  # pad_adj
             rand_ext_field(3, (), F, EF),  # z_cur
-            4,  # challenge limbs for EF
-            EF,
+            ChallengePolicy(EF),
         )
         self.assertEqual(spy.calls, ["observe_and_sample"])
         self.assertIs(t_out.fs, spy)

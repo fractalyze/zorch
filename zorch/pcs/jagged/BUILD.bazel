@@ -54,6 +54,7 @@ py_library(
     srcs = ["prover.py"],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:challenge",
         "//zorch:round",
         "//zorch:transcript",
         "//zorch/pcs/jagged:poly",
