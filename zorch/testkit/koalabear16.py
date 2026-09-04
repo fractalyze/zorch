@@ -15,6 +15,7 @@ instance, so the expected permute output stays there.
 from __future__ import annotations
 
 from dataclasses import replace
+from functools import cache
 
 import frx.numpy as fnp
 import numpy as np
@@ -236,7 +237,17 @@ _INTERNAL_DIAG = [
 ]
 
 
+@cache
 def koalabear16_params() -> Poseidon2Params:
+    """The golden koalabear-16 parameterization (width 16).
+
+    Shared rather than rebuilt: the params are frozen and compare by value, so
+    two builds are indistinguishable to a caller while each one pays six
+    host->device constant transfers, a `__post_init__` lane check that reads
+    `internal_constants` back to host, and a cold `_value_key`/`_hash` memo
+    that pulls every constant array back via `.tobytes()`. A caller building a
+    transcript per iteration pays all of that per iteration.
+    """
     internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
     internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
     return Poseidon2Params(
@@ -252,11 +263,13 @@ def koalabear16_params() -> Poseidon2Params:
     )
 
 
+@cache
 def koalabear16_perm() -> Poseidon2:
     """The golden koalabear-16 Poseidon2 permutation instance (width 16)."""
     return Poseidon2(koalabear16_params())
 
 
+@cache
 def koalabear16_scaled_perm() -> Poseidon2:
     """The golden instance with a non-identity `internal_j_scale`.
 
