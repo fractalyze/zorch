@@ -1,0 +1,6301 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="FRX-native building blocks for proof systems">
+      
+      
+      
+      
+        <link rel="prev" href="../ajtai/">
+      
+      
+        <link rel="next" href="../smcs/">
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.50">
+    
+    
+      
+        <title>merkle - zorch</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.a40c8224.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#zorchcommitmerkle" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="zorch" class="md-header__button md-logo" aria-label="zorch" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16.5c0 .38-.21.71-.53.88l-7.9 4.44c-.16.12-.36.18-.57.18s-.41-.06-.57-.18l-7.9-4.44A.99.99 0 0 1 3 16.5v-9c0-.38.21-.71.53-.88l7.9-4.44c.16-.12.36-.18.57-.18s.41.06.57.18l7.9 4.44c.32.17.53.5.53.88zM12 4.15 6.04 7.5 12 10.85l5.96-3.35zM5 15.91l6 3.38v-6.71L5 9.21zm14 0v-6.7l-6 3.37v6.71z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            zorch
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              merkle
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label=""  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label=""  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/fractalyze/zorch" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    fractalyze/zorch
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="zorch" class="md-nav__button md-logo" aria-label="zorch" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16.5c0 .38-.21.71-.53.88l-7.9 4.44c-.16.12-.36.18-.57.18s-.41-.06-.57-.18l-7.9-4.44A.99.99 0 0 1 3 16.5v-9c0-.38.21-.71.53-.88l7.9-4.44c.16-.12.36-.18.57-.18s.41.06.57.18l7.9 4.44c.32.17.53.5.53.88zM12 4.15 6.04 7.5 12 10.85l5.96-3.35zM5 15.91l6 3.38v-6.71L5 9.21zm14 0v-6.7l-6 3.37v6.71z"/></svg>
+
+    </a>
+    zorch
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/fractalyze/zorch" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    fractalyze/zorch
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Get started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/building-on-zorch/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Assembling a prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/frx-and-fusion/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Keeping code fused
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Setup & troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/blocks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Blocks & imports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/field-dtypes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Field-dtype sharp bits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../design/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Design digest
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1" checked>
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../" class="md-nav__link ">
+              
+  
+  <span class="md-ellipsis">
+    zorch
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6_1" id="__nav_6_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_1">
+            <span class="md-nav__icon md-icon"></span>
+            zorch
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../blake3_field_transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    blake3_field_transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../byte_transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    byte_transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../challenge/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    challenge
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_5" id="__nav_6_1_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    coding
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_5">
+            <span class="md-nav__icon md-icon"></span>
+            coding
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.coding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coding/additive_reed_solomon/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    additive_reed_solomon
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coding/foldable_code/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    foldable_code
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coding/linear_code/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    linear_code
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coding/reed_solomon/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    reed_solomon
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../coding/tensor_code/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    tensor_code
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_6" id="__nav_6_1_6_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    commit
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_1_6">
+            <span class="md-nav__icon md-icon"></span>
+            commit
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.commit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ajtai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ajtai
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    merkle
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    merkle
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.commit.merkle" class="md-nav__link">
+    <span class="md-ellipsis">
+      merkle
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.Opening" class="md-nav__link">
+    <span class="md-ellipsis">
+      Opening
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree" class="md-nav__link">
+    <span class="md-ellipsis">
+      MerkleTree
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MerkleTree">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.commit" class="md-nav__link">
+    <span class="md-ellipsis">
+      commit
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.hash_leaves" class="md-nav__link">
+    <span class="md-ellipsis">
+      hash_leaves
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.fold_digests" class="md-nav__link">
+    <span class="md-ellipsis">
+      fold_digests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.open" class="md-nav__link">
+    <span class="md-ellipsis">
+      open
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.reconstruct_root" class="md-nav__link">
+    <span class="md-ellipsis">
+      reconstruct_root
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.reconstruct_roots" class="md-nav__link">
+    <span class="md-ellipsis">
+      reconstruct_roots
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      verify
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../smcs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    smcs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../strided_merkle/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    strided_merkle
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../constraint_eval/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    constraint_eval
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../grind/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    grind
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_9" id="__nav_6_1_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    lnp
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_9">
+            <span class="md-nav__icon md-icon"></span>
+            lnp
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.lnp
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/challenge/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    challenge
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/eval/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    eval
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/exact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    exact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/masking/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    masking
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/opening/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    opening
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/quadratic/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    quadratic
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/range/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    range
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../lnp/wire/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    wire
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_10" id="__nav_6_1_10_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    logup_gkr
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_10">
+            <span class="md-nav__icon md-icon"></span>
+            logup_gkr
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.logup_gkr
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/circuit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    circuit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/jagged_prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    jagged_prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/jagged_verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    jagged_verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../logup_gkr/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11" id="__nav_6_1_11_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    pcs
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_11_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11">
+            <span class="md-nav__icon md-icon"></span>
+            pcs
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_2" id="__nav_6_1_11_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    basefold
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_2">
+            <span class="md-nav__icon md-icon"></span>
+            basefold
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.basefold
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/batching/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    batching
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/choreography/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    choreography
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/kernel/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    kernel
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/basefold/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/deep/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    deep
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/fold/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    fold
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_5" id="__nav_6_1_11_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    fri
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_5">
+            <span class="md-nav__icon md-icon"></span>
+            fri
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/fri/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.fri
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/fri/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/fri/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/fri/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_6" id="__nav_6_1_11_6_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    ipa
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_6">
+            <span class="md-nav__icon md-icon"></span>
+            ipa
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.ipa
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/challenger/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    challenger
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/math/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    math
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ipa/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_7" id="__nav_6_1_11_7_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    jagged
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_7">
+            <span class="md-nav__icon md-icon"></span>
+            jagged
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.jagged
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/branching_program/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    branching_program
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/commit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    commit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/dense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    dense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/open/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    open
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/poly/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    poly
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/region/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    region
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/shard_open_bench/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    shard_open_bench
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/jagged/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_8" id="__nav_6_1_11_8_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    kzg
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_8">
+            <span class="md-nav__icon md-icon"></span>
+            kzg
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/kzg/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.kzg
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/kzg/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/kzg/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/kzg/setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/kzg/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_9" id="__nav_6_1_11_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    ligerito
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_9">
+            <span class="md-nav__icon md-icon"></span>
+            ligerito
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligerito/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.ligerito
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligerito/basis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    basis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligerito/choreography/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    choreography
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligerito/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligerito/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligerito/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_10" id="__nav_6_1_11_10_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    ligero
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_10">
+            <span class="md-nav__icon md-icon"></span>
+            ligero
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligero/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.ligero
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligero/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligero/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ligero/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/matrix_commit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    matrix_commit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/ring_switch/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ring_switch
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_14" id="__nav_6_1_11_14_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    whir
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_14">
+            <span class="md-nav__icon md-icon"></span>
+            whir
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/whir/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.whir
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/whir/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/whir/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/whir/scheme/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    scheme
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../pcs/whir/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_12" id="__nav_6_1_12_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    poly
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_12">
+            <span class="md-nav__icon md-icon"></span>
+            poly
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../poly/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.poly
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../poly/eq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    eq
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../poly/geq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    geq
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../poly/multilinear/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    multilinear
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../poly/univariate/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    univariate
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prove/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prove
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../round/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    round
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../scan_body/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    scan_body
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sha256_field_transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    sha256_field_transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_17" id="__nav_6_1_17_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    spartan
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_17">
+            <span class="md-nav__icon md-icon"></span>
+            spartan
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.spartan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/lincheck/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    lincheck
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/pcs_glue/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    pcs_glue
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/r1cs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    r1cs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/spartan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    spartan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/summand/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    summand
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../spartan/zerocheck/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zerocheck
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_19" id="__nav_6_1_19_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    sumcheck
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_19">
+            <span class="md-nav__icon md-icon"></span>
+            sumcheck
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.sumcheck
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/domain/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    domain
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_19_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_19_3" id="__nav_6_1_19_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    eq
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_19_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_19_3">
+            <span class="md-nav__icon md-icon"></span>
+            eq
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/eq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.sumcheck.eq
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/eq/accumulators/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    accumulators
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/eq/eq_poly/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    eq_poly
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/eq/small_value/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    small_value
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/eq/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/gruen/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    gruen
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_19_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_19_5" id="__nav_6_1_19_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    jagged
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_19_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_19_5">
+            <span class="md-nav__icon md-icon"></span>
+            jagged
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.sumcheck.jagged
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/buffers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    buffers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/fs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    fs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/rounds/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    rounds
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/schedule/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    schedule
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/jagged/types/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    types
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/reduce/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    reduce
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/sqrt_space/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    sqrt_space
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/univariate_skip/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    univariate_skip
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../sumcheck/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_20" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_20" id="__nav_6_1_20_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    testkit
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_20_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_20">
+            <span class="md-nav__icon md-icon"></span>
+            testkit
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.testkit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testkit/fusion/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    fusion
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testkit/jit_cache/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    jit_cache
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testkit/koalabear16/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    koalabear16
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testkit/random_field/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    random_field
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testkit/transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_22" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_22" id="__nav_6_1_22_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    utils
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_22_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_22">
+            <span class="md-nav__icon md-icon"></span>
+            utils
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.utils
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../utils/binary_field/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    binary_field
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../utils/bits/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    bits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../utils/field/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    field
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../verify/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verify
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.commit.merkle" class="md-nav__link">
+    <span class="md-ellipsis">
+      merkle
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.Opening" class="md-nav__link">
+    <span class="md-ellipsis">
+      Opening
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree" class="md-nav__link">
+    <span class="md-ellipsis">
+      MerkleTree
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MerkleTree">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.commit" class="md-nav__link">
+    <span class="md-ellipsis">
+      commit
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.hash_leaves" class="md-nav__link">
+    <span class="md-ellipsis">
+      hash_leaves
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.fold_digests" class="md-nav__link">
+    <span class="md-ellipsis">
+      fold_digests
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.open" class="md-nav__link">
+    <span class="md-ellipsis">
+      open
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.reconstruct_root" class="md-nav__link">
+    <span class="md-ellipsis">
+      reconstruct_root
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.reconstruct_roots" class="md-nav__link">
+    <span class="md-ellipsis">
+      reconstruct_roots
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#zorch.commit.merkle.MerkleTree.verify" class="md-nav__link">
+    <span class="md-ellipsis">
+      verify
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+<h1 id="zorchcommitmerkle"><code>zorch.commit.merkle</code><a class="headerlink" href="#zorchcommitmerkle" title="Permanent link">&para;</a></h1>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="zorch.commit.merkle"></a>
+    <div class="doc doc-contents first">
+
+        <p>Layer-by-layer k-ary Merkle commitment — scheme-agnostic, on Sponge + Compression.</p>
+<p><code>commit</code> hashes each matrix row to a leaf digest (Sponge), then folds sibling
+groups per layer (Compression, whose <code>arity</code> sets the tree's) down to a single
+root, returning <code>(raw_root, digest_layers)</code> (leaf digests first, root last).
+It adds NO domain separator — that, the proof layout, and the verify error codes
+are scheme-specific and live in the consumer (its commitment scheme).</p>
+<p>A level whose node count is not a multiple of the arity is completed with
+zero digests — the only convention that keeps a k-ary tree well-defined on
+power-of-two heights (e.g. 2^k leaves under arity 4 leave a 2-node top level),
+and the one the k-ary schemes this seam serves use. The padded form is what
+<code>digest_layers</code> stores, so an opening near the boundary can read its zero
+siblings like any others. A binary tree on a power-of-two height never pads,
+so the arity-2 layout is exactly the historical one.</p>
+<p>Each layer is one <code>vmap</code> over its nodes: an internal layer batches one
+<code>compress</code> = one permute; the leaf layer batches one <code>hash</code>, which lowers as one
+<code>hash_frx.sponge_hash</code> region per leaf (the whole rate-block absorb fused
+into a single register-resident kernel, not a per-block permute chain). Those
+collapse to one GPU kernel per node-batch once the permutation is captured to a
+kernel (the poseidon2 fusion path, #25). The tree folds the layers one
+right-sized level at a time (<code>_fold_to_root</code>) — see <code>_build</code> for why this beats a
+full-width <code>scan</code>.</p>
+<p><code>commit</code> lowers each leaf hash to a <code>hash_frx.sponge_hash</code> marker and each
+fold layer's <code>compress</code> to a <code>hash_frx.poseidon2</code> permute marker, which the vendor
+lowers to kernels directly. Committing by this plain vmap/fold body keeps the fast
+per-permute kernels and lowers under symbolic dims for recompile-free export.</p>
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="zorch.commit.merkle.Opening" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">Opening</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#zorch.commit.merkle.Opening" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>A single leaf's authentication path: the committed matrix <code>row</code> plus the
+sibling digest at each level (leaf-first, excluding the root).</p>
+<p>A pytree (leaves: <code>row</code> and each path sibling) so <code>open</code> / <code>reconstruct_root</code>
+batch under <code>frx.vmap</code> and trace under <code>jit</code>.</p>
+
+
+
+
+
+
+              <details class="quote">
+                <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">46</span>
+<span class="normal">47</span>
+<span class="normal">48</span>
+<span class="normal">49</span>
+<span class="normal">50</span>
+<span class="normal">51</span>
+<span class="normal">52</span>
+<span class="normal">53</span>
+<span class="normal">54</span>
+<span class="normal">55</span>
+<span class="normal">56</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@partial</span><span class="p">(</span><span class="n">frx</span><span class="o">.</span><span class="n">tree_util</span><span class="o">.</span><span class="n">register_dataclass</span><span class="p">,</span> <span class="n">data_fields</span><span class="o">=</span><span class="p">[</span><span class="s2">"row"</span><span class="p">,</span> <span class="s2">"path"</span><span class="p">],</span> <span class="n">meta_fields</span><span class="o">=</span><span class="p">[])</span>
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Opening</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""A single leaf's authentication path: the committed matrix `row` plus the</span>
+<span class="sd">    sibling digest at each level (leaf-first, excluding the root).</span>
+
+<span class="sd">    A pytree (leaves: `row` and each path sibling) so `open` / `reconstruct_root`</span>
+<span class="sd">    batch under `frx.vmap` and trace under `jit`."""</span>
+
+    <span class="n">row</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">path</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span>  <span class="c1"># each (digest_elems,) for arity 2, (arity-1, digest_elems) above</span>
+</code></pre></div></td></tr></table></div>
+              </details>
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="zorch.commit.merkle.MerkleTree" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">MerkleTree</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>A k-ary Merkle commitment over a single matrix.</p>
+<p><code>leaf_hasher</code> squeezes each row to a <code>digest_elems</code>-element leaf; <code>compressor</code>
+folds <code>compressor.arity</code> digests into one — the tree's arity follows it.
+They must agree on digest size (<code>leaf_hasher.out == compressor.chunk</code>).</p>
+<p>Arity 2 keeps the historical path layout (each path entry one sibling,
+shape <code>(digest_elems,)</code>); a wider arity carries the whole sibling group per
+level, shape <code>(arity-1, digest_elems)</code>. The batched <code>reconstruct_roots</code>
+fast path stays binary-only — its sole consumer is the binary fold-PCS
+query machinery.</p>
+<p><code>column_major</code> (keyword-only, default False) selects the COMMIT-side leaf
+layout: False reads a leaf as a matrix row (<code>commit</code> takes
+<code>[num_leaves, leaf_width]</code>), True as a matrix column (<code>[leaf_width,
+num_leaves]</code>), so a producer whose data is already column-per-leaf commits
+it without transposing to leaf-major. It changes only the commit leaf
+gather — <code>open</code>/<code>verify</code>/<code>reconstruct</code> are always leaf-major (one leaf per
+row), so a column-major consumer hands those the leaf-major matrix (the
+<code>commit</code> input's transpose).</p>
+
+
+
+
+
+
+              <details class="quote">
+                <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 59</span>
+<span class="normal"> 60</span>
+<span class="normal"> 61</span>
+<span class="normal"> 62</span>
+<span class="normal"> 63</span>
+<span class="normal"> 64</span>
+<span class="normal"> 65</span>
+<span class="normal"> 66</span>
+<span class="normal"> 67</span>
+<span class="normal"> 68</span>
+<span class="normal"> 69</span>
+<span class="normal"> 70</span>
+<span class="normal"> 71</span>
+<span class="normal"> 72</span>
+<span class="normal"> 73</span>
+<span class="normal"> 74</span>
+<span class="normal"> 75</span>
+<span class="normal"> 76</span>
+<span class="normal"> 77</span>
+<span class="normal"> 78</span>
+<span class="normal"> 79</span>
+<span class="normal"> 80</span>
+<span class="normal"> 81</span>
+<span class="normal"> 82</span>
+<span class="normal"> 83</span>
+<span class="normal"> 84</span>
+<span class="normal"> 85</span>
+<span class="normal"> 86</span>
+<span class="normal"> 87</span>
+<span class="normal"> 88</span>
+<span class="normal"> 89</span>
+<span class="normal"> 90</span>
+<span class="normal"> 91</span>
+<span class="normal"> 92</span>
+<span class="normal"> 93</span>
+<span class="normal"> 94</span>
+<span class="normal"> 95</span>
+<span class="normal"> 96</span>
+<span class="normal"> 97</span>
+<span class="normal"> 98</span>
+<span class="normal"> 99</span>
+<span class="normal">100</span>
+<span class="normal">101</span>
+<span class="normal">102</span>
+<span class="normal">103</span>
+<span class="normal">104</span>
+<span class="normal">105</span>
+<span class="normal">106</span>
+<span class="normal">107</span>
+<span class="normal">108</span>
+<span class="normal">109</span>
+<span class="normal">110</span>
+<span class="normal">111</span>
+<span class="normal">112</span>
+<span class="normal">113</span>
+<span class="normal">114</span>
+<span class="normal">115</span>
+<span class="normal">116</span>
+<span class="normal">117</span>
+<span class="normal">118</span>
+<span class="normal">119</span>
+<span class="normal">120</span>
+<span class="normal">121</span>
+<span class="normal">122</span>
+<span class="normal">123</span>
+<span class="normal">124</span>
+<span class="normal">125</span>
+<span class="normal">126</span>
+<span class="normal">127</span>
+<span class="normal">128</span>
+<span class="normal">129</span>
+<span class="normal">130</span>
+<span class="normal">131</span>
+<span class="normal">132</span>
+<span class="normal">133</span>
+<span class="normal">134</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span>
+<span class="normal">142</span>
+<span class="normal">143</span>
+<span class="normal">144</span>
+<span class="normal">145</span>
+<span class="normal">146</span>
+<span class="normal">147</span>
+<span class="normal">148</span>
+<span class="normal">149</span>
+<span class="normal">150</span>
+<span class="normal">151</span>
+<span class="normal">152</span>
+<span class="normal">153</span>
+<span class="normal">154</span>
+<span class="normal">155</span>
+<span class="normal">156</span>
+<span class="normal">157</span>
+<span class="normal">158</span>
+<span class="normal">159</span>
+<span class="normal">160</span>
+<span class="normal">161</span>
+<span class="normal">162</span>
+<span class="normal">163</span>
+<span class="normal">164</span>
+<span class="normal">165</span>
+<span class="normal">166</span>
+<span class="normal">167</span>
+<span class="normal">168</span>
+<span class="normal">169</span>
+<span class="normal">170</span>
+<span class="normal">171</span>
+<span class="normal">172</span>
+<span class="normal">173</span>
+<span class="normal">174</span>
+<span class="normal">175</span>
+<span class="normal">176</span>
+<span class="normal">177</span>
+<span class="normal">178</span>
+<span class="normal">179</span>
+<span class="normal">180</span>
+<span class="normal">181</span>
+<span class="normal">182</span>
+<span class="normal">183</span>
+<span class="normal">184</span>
+<span class="normal">185</span>
+<span class="normal">186</span>
+<span class="normal">187</span>
+<span class="normal">188</span>
+<span class="normal">189</span>
+<span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span>
+<span class="normal">193</span>
+<span class="normal">194</span>
+<span class="normal">195</span>
+<span class="normal">196</span>
+<span class="normal">197</span>
+<span class="normal">198</span>
+<span class="normal">199</span>
+<span class="normal">200</span>
+<span class="normal">201</span>
+<span class="normal">202</span>
+<span class="normal">203</span>
+<span class="normal">204</span>
+<span class="normal">205</span>
+<span class="normal">206</span>
+<span class="normal">207</span>
+<span class="normal">208</span>
+<span class="normal">209</span>
+<span class="normal">210</span>
+<span class="normal">211</span>
+<span class="normal">212</span>
+<span class="normal">213</span>
+<span class="normal">214</span>
+<span class="normal">215</span>
+<span class="normal">216</span>
+<span class="normal">217</span>
+<span class="normal">218</span>
+<span class="normal">219</span>
+<span class="normal">220</span>
+<span class="normal">221</span>
+<span class="normal">222</span>
+<span class="normal">223</span>
+<span class="normal">224</span>
+<span class="normal">225</span>
+<span class="normal">226</span>
+<span class="normal">227</span>
+<span class="normal">228</span>
+<span class="normal">229</span>
+<span class="normal">230</span>
+<span class="normal">231</span>
+<span class="normal">232</span>
+<span class="normal">233</span>
+<span class="normal">234</span>
+<span class="normal">235</span>
+<span class="normal">236</span>
+<span class="normal">237</span>
+<span class="normal">238</span>
+<span class="normal">239</span>
+<span class="normal">240</span>
+<span class="normal">241</span>
+<span class="normal">242</span>
+<span class="normal">243</span>
+<span class="normal">244</span>
+<span class="normal">245</span>
+<span class="normal">246</span>
+<span class="normal">247</span>
+<span class="normal">248</span>
+<span class="normal">249</span>
+<span class="normal">250</span>
+<span class="normal">251</span>
+<span class="normal">252</span>
+<span class="normal">253</span>
+<span class="normal">254</span>
+<span class="normal">255</span>
+<span class="normal">256</span>
+<span class="normal">257</span>
+<span class="normal">258</span>
+<span class="normal">259</span>
+<span class="normal">260</span>
+<span class="normal">261</span>
+<span class="normal">262</span>
+<span class="normal">263</span>
+<span class="normal">264</span>
+<span class="normal">265</span>
+<span class="normal">266</span>
+<span class="normal">267</span>
+<span class="normal">268</span>
+<span class="normal">269</span>
+<span class="normal">270</span>
+<span class="normal">271</span>
+<span class="normal">272</span>
+<span class="normal">273</span>
+<span class="normal">274</span>
+<span class="normal">275</span>
+<span class="normal">276</span>
+<span class="normal">277</span>
+<span class="normal">278</span>
+<span class="normal">279</span>
+<span class="normal">280</span>
+<span class="normal">281</span>
+<span class="normal">282</span>
+<span class="normal">283</span>
+<span class="normal">284</span>
+<span class="normal">285</span>
+<span class="normal">286</span>
+<span class="normal">287</span>
+<span class="normal">288</span>
+<span class="normal">289</span>
+<span class="normal">290</span>
+<span class="normal">291</span>
+<span class="normal">292</span>
+<span class="normal">293</span>
+<span class="normal">294</span>
+<span class="normal">295</span>
+<span class="normal">296</span>
+<span class="normal">297</span>
+<span class="normal">298</span>
+<span class="normal">299</span>
+<span class="normal">300</span>
+<span class="normal">301</span>
+<span class="normal">302</span>
+<span class="normal">303</span>
+<span class="normal">304</span>
+<span class="normal">305</span>
+<span class="normal">306</span>
+<span class="normal">307</span>
+<span class="normal">308</span>
+<span class="normal">309</span>
+<span class="normal">310</span>
+<span class="normal">311</span>
+<span class="normal">312</span>
+<span class="normal">313</span>
+<span class="normal">314</span>
+<span class="normal">315</span>
+<span class="normal">316</span>
+<span class="normal">317</span>
+<span class="normal">318</span>
+<span class="normal">319</span>
+<span class="normal">320</span>
+<span class="normal">321</span>
+<span class="normal">322</span>
+<span class="normal">323</span>
+<span class="normal">324</span>
+<span class="normal">325</span>
+<span class="normal">326</span>
+<span class="normal">327</span>
+<span class="normal">328</span>
+<span class="normal">329</span>
+<span class="normal">330</span>
+<span class="normal">331</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">MerkleTree</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""A k-ary Merkle commitment over a single matrix.</span>
+
+<span class="sd">    `leaf_hasher` squeezes each row to a `digest_elems`-element leaf; `compressor`</span>
+<span class="sd">    folds `compressor.arity` digests into one — the tree's arity follows it.</span>
+<span class="sd">    They must agree on digest size (`leaf_hasher.out == compressor.chunk`).</span>
+
+<span class="sd">    Arity 2 keeps the historical path layout (each path entry one sibling,</span>
+<span class="sd">    shape `(digest_elems,)`); a wider arity carries the whole sibling group per</span>
+<span class="sd">    level, shape `(arity-1, digest_elems)`. The batched `reconstruct_roots`</span>
+<span class="sd">    fast path stays binary-only — its sole consumer is the binary fold-PCS</span>
+<span class="sd">    query machinery.</span>
+
+<span class="sd">    `column_major` (keyword-only, default False) selects the COMMIT-side leaf</span>
+<span class="sd">    layout: False reads a leaf as a matrix row (`commit` takes</span>
+<span class="sd">    `[num_leaves, leaf_width]`), True as a matrix column (`[leaf_width,</span>
+<span class="sd">    num_leaves]`), so a producer whose data is already column-per-leaf commits</span>
+<span class="sd">    it without transposing to leaf-major. It changes only the commit leaf</span>
+<span class="sd">    gather — `open`/`verify`/`reconstruct` are always leaf-major (one leaf per</span>
+<span class="sd">    row), so a column-major consumer hands those the leaf-major matrix (the</span>
+<span class="sd">    `commit` input's transpose).</span>
+<span class="sd">    """</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__init__</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span>
+        <span class="n">leaf_hasher</span><span class="p">:</span> <span class="n">Sponge</span><span class="p">,</span>
+        <span class="n">compressor</span><span class="p">:</span> <span class="n">Compression</span><span class="p">,</span>
+        <span class="o">*</span><span class="p">,</span>
+        <span class="n">column_major</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">leaf_hasher</span><span class="o">.</span><span class="n">out</span> <span class="o">!=</span> <span class="n">compressor</span><span class="o">.</span><span class="n">chunk</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"leaf digest size (</span><span class="si">{</span><span class="n">leaf_hasher</span><span class="o">.</span><span class="n">out</span><span class="si">}</span><span class="s2">) must equal compressor "</span>
+                <span class="sa">f</span><span class="s2">"chunk (</span><span class="si">{</span><span class="n">compressor</span><span class="o">.</span><span class="n">chunk</span><span class="si">}</span><span class="s2">)"</span>
+            <span class="p">)</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span> <span class="o">=</span> <span class="n">leaf_hasher</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_compressor</span> <span class="o">=</span> <span class="n">compressor</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">=</span> <span class="n">compressor</span><span class="o">.</span><span class="n">arity</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span> <span class="o">=</span> <span class="n">compressor</span><span class="o">.</span><span class="n">chunk</span>
+        <span class="c1"># Commit-side leaf layout (contract in the class docstring): when True</span>
+        <span class="c1"># the leaf hash vmaps over axis 1 (a leaf is a column). Touches commit only.</span>
+        <span class="bp">self</span><span class="o">.</span><span class="n">_column_major</span> <span class="o">=</span> <span class="n">column_major</span>
+
+    <span class="c1"># Value equality/hash for static jit-zone keys (#214) — identity equality</span>
+    <span class="c1"># re-traces per instance. Both blocks compare by value themselves; the leaf</span>
+    <span class="c1"># layout is part of the identity (a column-major tree traces a different</span>
+    <span class="c1"># body), so it joins the key.</span>
+    <span class="k">def</span><span class="w"> </span><span class="fm">__eq__</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">other</span><span class="p">:</span> <span class="nb">object</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">other</span><span class="p">,</span> <span class="n">MerkleTree</span><span class="p">):</span>
+            <span class="k">return</span> <span class="bp">NotImplemented</span>
+        <span class="k">return</span> <span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compressor</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_column_major</span><span class="p">)</span> <span class="o">==</span> <span class="p">(</span>
+            <span class="n">other</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="p">,</span>
+            <span class="n">other</span><span class="o">.</span><span class="n">_compressor</span><span class="p">,</span>
+            <span class="n">other</span><span class="o">.</span><span class="n">_column_major</span><span class="p">,</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="fm">__hash__</span><span class="p">(</span><span class="bp">self</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+        <span class="k">return</span> <span class="nb">hash</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compressor</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">_column_major</span><span class="p">))</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">commit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]:</span>
+<span class="w">        </span><span class="sd">"""Commit a matrix: leaf-major `(num_leaves, leaf_width)`, or</span>
+<span class="sd">        `(leaf_width, num_leaves)` when `column_major` (a leaf is a column).</span>
+
+<span class="sd">        Returns `(raw_root (digest_elems,), digest_layers)`, where digest_layers</span>
+<span class="sd">        runs leaf digests -&gt; ... -&gt; root, each (nodes_at_level, digest_elems)</span>
+<span class="sd">        in the zero-padded form (see the module docstring).</span>
+
+<span class="sd">        A binary tree keeps its historical power-of-two-height contract — its</span>
+<span class="sd">        pad-free layout is what the fold-PCS query machinery indexes; k-ary</span>
+<span class="sd">        consumers commit any height via the per-level padding.</span>
+
+<span class="sd">        `hash_leaves` + `fold_digests` are this commit as two halves, for a</span>
+<span class="sd">        consumer that cuts a jit-zone boundary between them (only the leaf</span>
+<span class="sd">        hash's shapes carry the leaf width; see `zorch.pcs.jagged.commit`).</span>
+<span class="sd">        """</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fold_digests</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hash_leaves</span><span class="p">(</span><span class="n">matrix</span><span class="p">))</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">hash_leaves</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Hash each leaf of `matrix` (layout per `column_major`, see `commit`)</span>
+<span class="sd">        to its digest — the `(num_leaves, digest_elems)` leaf layer of</span>
+<span class="sd">        `digest_layers`. Validation lives here, where the bad shape enters."""</span>
+        <span class="k">if</span> <span class="n">matrix</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"matrix must be 2-D, got ndim=</span><span class="si">{</span><span class="n">matrix</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+        <span class="c1"># Leaves are columns when column-major, else rows.</span>
+        <span class="n">num_leaves</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_column_major</span> <span class="k">else</span> <span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="c1"># An empty layer folds to nothing: the arity&gt;2 path skips the pow2 gate,</span>
+        <span class="c1"># then _fold_to_root reads its [0] leaf and raises deep inside the fold.</span>
+        <span class="k">if</span> <span class="n">num_leaves</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"matrix must contain at least one leaf"</span><span class="p">)</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_power_of_two</span><span class="p">(</span><span class="n">num_leaves</span><span class="p">):</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"leaf count (</span><span class="si">{</span><span class="n">num_leaves</span><span class="si">}</span><span class="s2">) must be a power of two"</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hash_leaves</span><span class="p">(</span><span class="n">matrix</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">fold_digests</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">leaf_digests</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]:</span>
+<span class="w">        </span><span class="sd">"""Fold a `(num_leaves, digest_elems)` leaf-digest layer (from</span>
+<span class="sd">        `hash_leaves`) to `(raw_root, digest_layers)` — `commit`'s second half.</span>
+
+<span class="sd">        Compresses only each level's live nodes, one right-sized level at a</span>
+<span class="sd">        time — a single `scan` would carry a full-width buffer and recompress</span>
+<span class="sd">        the zero padding every level (~height× the work, the dominant commit</span>
+<span class="sd">        runtime). The cost is an O(depth) compile: the per-level compresses are</span>
+<span class="sd">        distinct shapes, so they don't share a cubin (#163 traded the other</span>
+<span class="sd">        way); amortized once under the polymorphic compile-many-shards path.</span>
+<span class="sd">        Leaf-layout-independent: `column_major` affects only the leaf hash."""</span>
+        <span class="c1"># A jit-zone seam (the zoned commit folds in a separate zone from the</span>
+        <span class="c1"># leaf hash): fail loud on a drifted leaf-digest shape here, not with a</span>
+        <span class="c1"># cryptic reshape error inside _fold_to_root.</span>
+        <span class="k">if</span> <span class="n">leaf_digests</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">leaf_digests</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"leaf_digests must be (num_leaves, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span><span class="si">}</span><span class="s2">), got "</span>
+                <span class="sa">f</span><span class="s2">"shape </span><span class="si">{</span><span class="n">leaf_digests</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span>
+            <span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_to_root</span><span class="p">(</span><span class="n">leaf_digests</span><span class="p">)</span>
+
+    <span class="c1"># Batch the single-element leaf hash / compress with `vmap`: each op's</span>
+    <span class="c1"># dedicated marker lowers identically batched (one shared decomposition), so</span>
+    <span class="c1"># `vmap(single)` IS the batched kernel — a hand-written batched twin would</span>
+    <span class="c1"># buy nothing.</span>
+    <span class="nd">@partial</span><span class="p">(</span><span class="n">frx</span><span class="o">.</span><span class="n">jit</span><span class="p">,</span> <span class="n">static_argnums</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_hash_leaves</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">frx</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="o">.</span><span class="n">hash</span><span class="p">,</span> <span class="n">in_axes</span><span class="o">=</span><span class="mi">1</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_column_major</span> <span class="k">else</span> <span class="mi">0</span><span class="p">)(</span>
+            <span class="n">matrix</span>
+        <span class="p">)</span>
+
+    <span class="nd">@partial</span><span class="p">(</span><span class="n">frx</span><span class="o">.</span><span class="n">jit</span><span class="p">,</span> <span class="n">static_argnums</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">_compress_groups</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">groups</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">frx</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">_compressor</span><span class="o">.</span><span class="n">compress</span><span class="p">)(</span><span class="n">groups</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_fold_to_root</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">layer</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]:</span>
+<span class="w">        </span><span class="sd">"""Fold the leaf layer to the root one level at a time, completing a</span>
+<span class="sd">        short top level with zero digests (a binary power-of-two tree never pads;</span>
+<span class="sd">        a k-ary tree may). The padded form is stored, so an opening adjacent to a</span>
+<span class="sd">        boundary reads its zero siblings from the layer like any others."""</span>
+        <span class="n">digest_layers</span> <span class="o">=</span> <span class="p">[</span><span class="n">layer</span><span class="p">]</span>
+        <span class="k">while</span> <span class="n">layer</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+            <span class="n">rem</span> <span class="o">=</span> <span class="n">layer</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+            <span class="k">if</span> <span class="n">rem</span><span class="p">:</span>
+                <span class="n">pad</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">-</span> <span class="n">rem</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span><span class="p">),</span> <span class="n">layer</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+                <span class="n">layer</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">layer</span><span class="p">,</span> <span class="n">pad</span><span class="p">])</span>
+                <span class="n">digest_layers</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">=</span> <span class="n">layer</span>
+            <span class="n">groups</span> <span class="o">=</span> <span class="n">layer</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span><span class="p">)</span>
+            <span class="n">layer</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compress_groups</span><span class="p">(</span><span class="n">groups</span><span class="p">)</span>
+            <span class="n">digest_layers</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">layer</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">digest_layers</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">],</span> <span class="n">digest_layers</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">open</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">digest_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">],</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Array</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Opening</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Authentication path for leaf `index`: its row plus each level's sibling.</span>
+
+<span class="sd">        `matrix` is always leaf-major (`[num_leaves, leaf_width]`, one leaf per</span>
+<span class="sd">        row), even when `column_major` (a commit-side-only flag): a column-major</span>
+<span class="sd">        consumer passes the leaf-major transpose of its commit input here.</span>
+
+<span class="sd">        Single-index by construction; batch by `frx.vmap`-ing over `index` (the</span>
+<span class="sd">        sibling gather is orchestration outside the fused permute, like `commit`).</span>
+<span class="sd">        Index validity is a prover-side precondition — enforced eagerly for any</span>
+<span class="sd">        concrete index (Python int or 0-d Array), skipped only under tracing,</span>
+<span class="sd">        where the value is unknown and JAX would silently clamp an out-of-range</span>
+<span class="sd">        gather; there `verify` owns out-of-range rejection.</span>
+<span class="sd">        """</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">frx</span><span class="o">.</span><span class="n">core</span><span class="o">.</span><span class="n">Tracer</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">index</span> <span class="o">&lt;</span> <span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
+            <span class="k">raise</span> <span class="ne">IndexError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"leaf index </span><span class="si">{</span><span class="n">index</span><span class="si">}</span><span class="s2"> out of range [0, </span><span class="si">{</span><span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+        <span class="n">path</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">index</span>
+        <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">digest_layers</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>  <span class="c1"># leaf layer up to below root</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">digest_layers</span><span class="p">[</span><span class="n">level</span><span class="p">][</span><span class="n">idx</span> <span class="o">^</span> <span class="mi">1</span><span class="p">])</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="c1"># The whole sibling group except the node itself, in level</span>
+                <span class="c1"># order: slot j of the entry is group position j + (j &gt;= pos).</span>
+                <span class="n">pos</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+                <span class="n">group_start</span> <span class="o">=</span> <span class="p">(</span><span class="n">idx</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span><span class="p">)</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+                <span class="n">j</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+                <span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">digest_layers</span><span class="p">[</span><span class="n">level</span><span class="p">][</span><span class="n">group_start</span> <span class="o">+</span> <span class="n">j</span> <span class="o">+</span> <span class="p">(</span><span class="n">j</span> <span class="o">&gt;=</span> <span class="n">pos</span><span class="p">)])</span>
+            <span class="n">idx</span> <span class="o">//=</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+        <span class="k">return</span> <span class="n">Opening</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">matrix</span><span class="p">[</span><span class="n">index</span><span class="p">],</span> <span class="n">path</span><span class="o">=</span><span class="n">path</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_fold_with_sibling</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">sibling</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""Compress `node` with its `sibling` into the parent digest, ordering</span>
+<span class="sd">        the pair by the running leaf-index parity `idx` (data-select, not a</span>
+<span class="sd">        Python branch, so the fold traces under `vmap`); return the parent and</span>
+<span class="sd">        `idx` halved for the level above."""</span>
+        <span class="n">is_left</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">%</span> <span class="mi">2</span> <span class="o">==</span> <span class="mi">0</span>
+        <span class="n">left</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_left</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="n">sibling</span><span class="p">)</span>
+        <span class="n">right</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">is_left</span><span class="p">,</span> <span class="n">sibling</span><span class="p">,</span> <span class="n">node</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compressor</span><span class="o">.</span><span class="n">compress</span><span class="p">(</span><span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">left</span><span class="p">,</span> <span class="n">right</span><span class="p">])),</span> <span class="n">idx</span> <span class="o">//</span> <span class="mi">2</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">_fold_with_siblings</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">idx</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">siblings</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]:</span>
+<span class="w">        </span><span class="sd">"""k-ary dual of `_fold_with_sibling`: re-insert `node` at its group</span>
+<span class="sd">        position among `siblings` `(arity-1, digest_elems)` by data-select (no</span>
+<span class="sd">        Python branch, so the fold traces under `vmap`), compress the group,</span>
+<span class="sd">        and return the parent with `idx` divided for the level above."""</span>
+        <span class="n">pos</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+        <span class="n">i</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">arity</span><span class="p">)</span>
+        <span class="c1"># Slot i holds the sibling that `open` packed for it (skipping the</span>
+        <span class="c1"># node's own slot), except slot pos, which holds the node.</span>
+        <span class="n">gathered</span> <span class="o">=</span> <span class="n">siblings</span><span class="p">[</span><span class="n">fnp</span><span class="o">.</span><span class="n">clip</span><span class="p">(</span><span class="n">i</span> <span class="o">-</span> <span class="p">(</span><span class="n">i</span> <span class="o">&gt;</span> <span class="n">pos</span><span class="p">),</span> <span class="mi">0</span><span class="p">,</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">-</span> <span class="mi">2</span><span class="p">)]</span>
+        <span class="n">group</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">where</span><span class="p">((</span><span class="n">i</span> <span class="o">==</span> <span class="n">pos</span><span class="p">)[:,</span> <span class="kc">None</span><span class="p">],</span> <span class="n">node</span><span class="p">[</span><span class="kc">None</span><span class="p">,</span> <span class="p">:],</span> <span class="n">gathered</span><span class="p">)</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_compressor</span><span class="o">.</span><span class="n">compress</span><span class="p">(</span><span class="n">group</span><span class="p">),</span> <span class="n">idx</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">reconstruct_root</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Array</span><span class="p">,</span> <span class="n">opening</span><span class="p">:</span> <span class="n">Opening</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Rebuild the raw root from an `opening`'s row + path (leaf-first).</span>
+
+<span class="sd">        Returns the root Array, not a verdict — a separator-binding consumer</span>
+<span class="sd">        (e.g. SP1's SMCS) rebinds the raw root before comparing, which</span>
+<span class="sd">        `verify`'s plain equality can't express. Single-index; batch by</span>
+<span class="sd">        `frx.vmap`-ing over `(index, opening)`."""</span>
+        <span class="n">node</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="o">.</span><span class="n">hash</span><span class="p">(</span><span class="n">opening</span><span class="o">.</span><span class="n">row</span><span class="p">)</span>
+        <span class="c1"># Unroll the leaf-&gt;root fold over the static-depth path instead of a</span>
+        <span class="c1"># `scan`: a scan lowers to a `while` whose custom poseidon2 fusion body</span>
+        <span class="c1"># miscompiles the s32 index carry under @jit on the sponge plugin (wrong</span>
+        <span class="c1"># parity -&gt; wrong pair order -&gt; wrong root; eager is correct), while each</span>
+        <span class="c1"># level's compress is one same-shape pair, so the reuse_key dedups them to</span>
+        <span class="c1"># one cubin and the trace stays small. Knowledge:</span>
+        <span class="c1"># zorch-jagged-verify-jit-miscompiles-merkle-fold.</span>
+        <span class="n">idx</span> <span class="o">=</span> <span class="n">index</span>
+        <span class="k">for</span> <span class="n">siblings</span> <span class="ow">in</span> <span class="n">opening</span><span class="o">.</span><span class="n">path</span><span class="p">:</span>
+            <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+                <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_with_sibling</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">siblings</span><span class="p">)</span>
+            <span class="k">else</span><span class="p">:</span>
+                <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_with_siblings</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">siblings</span><span class="p">)</span>
+        <span class="k">return</span> <span class="n">node</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">reconstruct_roots</span><span class="p">(</span>
+        <span class="bp">self</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">paths</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">valid</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Rebuild a whole batch of roots in one `vmap` + one `scan`.</span>
+
+<span class="sd">        `rows` `(B, row_width)`, `indices` `(B,)`, `paths` `(B, depth, digest)`</span>
+<span class="sd">        leaf-first, `valid` `(B, depth)` true for the real levels of each path</span>
+<span class="sd">        and false for trailing don't-care padding. Paths shorter than `depth`</span>
+<span class="sd">        are zero-padded and masked, so a batch can mix Merkle trees of different</span>
+<span class="sd">        height: a masked step keeps the running node, so element `b` rebuilds the</span>
+<span class="sd">        same root `reconstruct_root` would on its first `valid[b].sum()` levels.</span>
+
+<span class="sd">        Tracing the compress body once for the whole batch — instead of once per</span>
+<span class="sd">        `reconstruct_root` call — is the point: the folding verifiers reconstruct</span>
+<span class="sd">        one pair per fold layer, and that per-layer loop dominated their</span>
+<span class="sd">        trace+lower (#163)."""</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+                <span class="s2">"reconstruct_roots is binary-only: its consumer is the binary "</span>
+                <span class="s2">"fold-PCS query machinery; use vmap(reconstruct_root) for k-ary"</span>
+            <span class="p">)</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">one</span><span class="p">(</span><span class="n">row</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+            <span class="n">node</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="o">.</span><span class="n">hash</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+
+            <span class="k">def</span><span class="w"> </span><span class="nf">fold</span><span class="p">(</span>
+                <span class="n">carry</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">],</span> <span class="n">step</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]</span>
+            <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">],</span> <span class="kc">None</span><span class="p">]:</span>
+                <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="n">carry</span>
+                <span class="n">sibling</span><span class="p">,</span> <span class="n">active</span> <span class="o">=</span> <span class="n">step</span>
+                <span class="n">folded</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_with_sibling</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">sibling</span><span class="p">)</span>
+                <span class="c1"># Padding past the real depth is a no-op: keep the rebuilt root.</span>
+                <span class="n">node</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">active</span><span class="p">,</span> <span class="n">folded</span><span class="p">,</span> <span class="n">node</span><span class="p">)</span>
+                <span class="k">return</span> <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">),</span> <span class="kc">None</span>
+
+            <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">_</span><span class="p">),</span> <span class="n">_</span> <span class="o">=</span> <span class="n">frx</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">fold</span><span class="p">,</span> <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">index</span><span class="p">),</span> <span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">mask</span><span class="p">))</span>
+            <span class="k">return</span> <span class="n">node</span>
+
+        <span class="k">return</span> <span class="n">frx</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">one</span><span class="p">)(</span><span class="n">rows</span><span class="p">,</span> <span class="n">indices</span><span class="p">,</span> <span class="n">paths</span><span class="p">,</span> <span class="n">valid</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">root</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">opening</span><span class="p">:</span> <span class="n">Opening</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">        </span><span class="sd">"""Rebuild the root from the row + path; compare to the committed root."""</span>
+        <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">index</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">**</span> <span class="nb">len</span><span class="p">(</span><span class="n">opening</span><span class="o">.</span><span class="n">path</span><span class="p">):</span>
+            <span class="k">return</span> <span class="kc">False</span>
+        <span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="n">fnp</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reconstruct_root</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">opening</span><span class="p">),</span> <span class="n">root</span><span class="p">))</span>
+</code></pre></div></td></tr></table></div>
+              </details>
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.commit" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">commit</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.commit" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">commit</span><span class="p">(</span><span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Commit a matrix: leaf-major <code>(num_leaves, leaf_width)</code>, or
+<code>(leaf_width, num_leaves)</code> when <code>column_major</code> (a leaf is a column).</p>
+<p>Returns <code>(raw_root (digest_elems,), digest_layers)</code>, where digest_layers
+runs leaf digests -&gt; ... -&gt; root, each (nodes_at_level, digest_elems)
+in the zero-padded form (see the module docstring).</p>
+<p>A binary tree keeps its historical power-of-two-height contract — its
+pad-free layout is what the fold-PCS query machinery indexes; k-ary
+consumers commit any height via the per-level padding.</p>
+<p><code>hash_leaves</code> + <code>fold_digests</code> are this commit as two halves, for a
+consumer that cuts a jit-zone boundary between them (only the leaf
+hash's shapes carry the leaf width; see <code>zorch.pcs.jagged.commit</code>).</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">118</span>
+<span class="normal">119</span>
+<span class="normal">120</span>
+<span class="normal">121</span>
+<span class="normal">122</span>
+<span class="normal">123</span>
+<span class="normal">124</span>
+<span class="normal">125</span>
+<span class="normal">126</span>
+<span class="normal">127</span>
+<span class="normal">128</span>
+<span class="normal">129</span>
+<span class="normal">130</span>
+<span class="normal">131</span>
+<span class="normal">132</span>
+<span class="normal">133</span>
+<span class="normal">134</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">commit</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">"""Commit a matrix: leaf-major `(num_leaves, leaf_width)`, or</span>
+<span class="sd">    `(leaf_width, num_leaves)` when `column_major` (a leaf is a column).</span>
+
+<span class="sd">    Returns `(raw_root (digest_elems,), digest_layers)`, where digest_layers</span>
+<span class="sd">    runs leaf digests -&gt; ... -&gt; root, each (nodes_at_level, digest_elems)</span>
+<span class="sd">    in the zero-padded form (see the module docstring).</span>
+
+<span class="sd">    A binary tree keeps its historical power-of-two-height contract — its</span>
+<span class="sd">    pad-free layout is what the fold-PCS query machinery indexes; k-ary</span>
+<span class="sd">    consumers commit any height via the per-level padding.</span>
+
+<span class="sd">    `hash_leaves` + `fold_digests` are this commit as two halves, for a</span>
+<span class="sd">    consumer that cuts a jit-zone boundary between them (only the leaf</span>
+<span class="sd">    hash's shapes carry the leaf width; see `zorch.pcs.jagged.commit`).</span>
+<span class="sd">    """</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">fold_digests</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">hash_leaves</span><span class="p">(</span><span class="n">matrix</span><span class="p">))</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.hash_leaves" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">hash_leaves</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.hash_leaves" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">hash_leaves</span><span class="p">(</span><span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Hash each leaf of <code>matrix</code> (layout per <code>column_major</code>, see <code>commit</code>)
+to its digest — the <code>(num_leaves, digest_elems)</code> leaf layer of
+<code>digest_layers</code>. Validation lives here, where the bad shape enters.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span>
+<span class="normal">142</span>
+<span class="normal">143</span>
+<span class="normal">144</span>
+<span class="normal">145</span>
+<span class="normal">146</span>
+<span class="normal">147</span>
+<span class="normal">148</span>
+<span class="normal">149</span>
+<span class="normal">150</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">hash_leaves</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Hash each leaf of `matrix` (layout per `column_major`, see `commit`)</span>
+<span class="sd">    to its digest — the `(num_leaves, digest_elems)` leaf layer of</span>
+<span class="sd">    `digest_layers`. Validation lives here, where the bad shape enters."""</span>
+    <span class="k">if</span> <span class="n">matrix</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"matrix must be 2-D, got ndim=</span><span class="si">{</span><span class="n">matrix</span><span class="o">.</span><span class="n">ndim</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+    <span class="c1"># Leaves are columns when column-major, else rows.</span>
+    <span class="n">num_leaves</span> <span class="o">=</span> <span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">_column_major</span> <span class="k">else</span> <span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="c1"># An empty layer folds to nothing: the arity&gt;2 path skips the pow2 gate,</span>
+    <span class="c1"># then _fold_to_root reads its [0] leaf and raises deep inside the fold.</span>
+    <span class="k">if</span> <span class="n">num_leaves</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="s2">"matrix must contain at least one leaf"</span><span class="p">)</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">==</span> <span class="mi">2</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">is_power_of_two</span><span class="p">(</span><span class="n">num_leaves</span><span class="p">):</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"leaf count (</span><span class="si">{</span><span class="n">num_leaves</span><span class="si">}</span><span class="s2">) must be a power of two"</span><span class="p">)</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_hash_leaves</span><span class="p">(</span><span class="n">matrix</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.fold_digests" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">fold_digests</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.fold_digests" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">fold_digests</span><span class="p">(</span>
+    <span class="n">leaf_digests</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Fold a <code>(num_leaves, digest_elems)</code> leaf-digest layer (from
+<code>hash_leaves</code>) to <code>(raw_root, digest_layers)</code> — <code>commit</code>'s second half.</p>
+<p>Compresses only each level's live nodes, one right-sized level at a
+time — a single <code>scan</code> would carry a full-width buffer and recompress
+the zero padding every level (~height× the work, the dominant commit
+runtime). The cost is an O(depth) compile: the per-level compresses are
+distinct shapes, so they don't share a cubin (#163 traded the other
+way); amortized once under the polymorphic compile-many-shards path.
+Leaf-layout-independent: <code>column_major</code> affects only the leaf hash.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">152</span>
+<span class="normal">153</span>
+<span class="normal">154</span>
+<span class="normal">155</span>
+<span class="normal">156</span>
+<span class="normal">157</span>
+<span class="normal">158</span>
+<span class="normal">159</span>
+<span class="normal">160</span>
+<span class="normal">161</span>
+<span class="normal">162</span>
+<span class="normal">163</span>
+<span class="normal">164</span>
+<span class="normal">165</span>
+<span class="normal">166</span>
+<span class="normal">167</span>
+<span class="normal">168</span>
+<span class="normal">169</span>
+<span class="normal">170</span>
+<span class="normal">171</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">fold_digests</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">leaf_digests</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]]:</span>
+<span class="w">    </span><span class="sd">"""Fold a `(num_leaves, digest_elems)` leaf-digest layer (from</span>
+<span class="sd">    `hash_leaves`) to `(raw_root, digest_layers)` — `commit`'s second half.</span>
+
+<span class="sd">    Compresses only each level's live nodes, one right-sized level at a</span>
+<span class="sd">    time — a single `scan` would carry a full-width buffer and recompress</span>
+<span class="sd">    the zero padding every level (~height× the work, the dominant commit</span>
+<span class="sd">    runtime). The cost is an O(depth) compile: the per-level compresses are</span>
+<span class="sd">    distinct shapes, so they don't share a cubin (#163 traded the other</span>
+<span class="sd">    way); amortized once under the polymorphic compile-many-shards path.</span>
+<span class="sd">    Leaf-layout-independent: `column_major` affects only the leaf hash."""</span>
+    <span class="c1"># A jit-zone seam (the zoned commit folds in a separate zone from the</span>
+    <span class="c1"># leaf hash): fail loud on a drifted leaf-digest shape here, not with a</span>
+    <span class="c1"># cryptic reshape error inside _fold_to_root.</span>
+    <span class="k">if</span> <span class="n">leaf_digests</span><span class="o">.</span><span class="n">ndim</span> <span class="o">!=</span> <span class="mi">2</span> <span class="ow">or</span> <span class="n">leaf_digests</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span> <span class="o">!=</span> <span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+            <span class="sa">f</span><span class="s2">"leaf_digests must be (num_leaves, </span><span class="si">{</span><span class="bp">self</span><span class="o">.</span><span class="n">digest_elems</span><span class="si">}</span><span class="s2">), got "</span>
+            <span class="sa">f</span><span class="s2">"shape </span><span class="si">{</span><span class="n">leaf_digests</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span>
+        <span class="p">)</span>
+    <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_to_root</span><span class="p">(</span><span class="n">leaf_digests</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.open" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">open</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.open" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nb">open</span><span class="p">(</span>
+    <span class="nf">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">digest_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">],</span>
+    <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Array</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Opening</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Authentication path for leaf <code>index</code>: its row plus each level's sibling.</p>
+<p><code>matrix</code> is always leaf-major (<code>[num_leaves, leaf_width]</code>, one leaf per
+row), even when <code>column_major</code> (a commit-side-only flag): a column-major
+consumer passes the leaf-major transpose of its commit input here.</p>
+<p>Single-index by construction; batch by <code>frx.vmap</code>-ing over <code>index</code> (the
+sibling gather is orchestration outside the fused permute, like <code>commit</code>).
+Index validity is a prover-side precondition — enforced eagerly for any
+concrete index (Python int or 0-d Array), skipped only under tracing,
+where the value is unknown and JAX would silently clamp an out-of-range
+gather; there <code>verify</code> owns out-of-range rejection.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">204</span>
+<span class="normal">205</span>
+<span class="normal">206</span>
+<span class="normal">207</span>
+<span class="normal">208</span>
+<span class="normal">209</span>
+<span class="normal">210</span>
+<span class="normal">211</span>
+<span class="normal">212</span>
+<span class="normal">213</span>
+<span class="normal">214</span>
+<span class="normal">215</span>
+<span class="normal">216</span>
+<span class="normal">217</span>
+<span class="normal">218</span>
+<span class="normal">219</span>
+<span class="normal">220</span>
+<span class="normal">221</span>
+<span class="normal">222</span>
+<span class="normal">223</span>
+<span class="normal">224</span>
+<span class="normal">225</span>
+<span class="normal">226</span>
+<span class="normal">227</span>
+<span class="normal">228</span>
+<span class="normal">229</span>
+<span class="normal">230</span>
+<span class="normal">231</span>
+<span class="normal">232</span>
+<span class="normal">233</span>
+<span class="normal">234</span>
+<span class="normal">235</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">open</span><span class="p">(</span>
+    <span class="bp">self</span><span class="p">,</span> <span class="n">matrix</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">digest_layers</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">],</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Array</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Opening</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Authentication path for leaf `index`: its row plus each level's sibling.</span>
+
+<span class="sd">    `matrix` is always leaf-major (`[num_leaves, leaf_width]`, one leaf per</span>
+<span class="sd">    row), even when `column_major` (a commit-side-only flag): a column-major</span>
+<span class="sd">    consumer passes the leaf-major transpose of its commit input here.</span>
+
+<span class="sd">    Single-index by construction; batch by `frx.vmap`-ing over `index` (the</span>
+<span class="sd">    sibling gather is orchestration outside the fused permute, like `commit`).</span>
+<span class="sd">    Index validity is a prover-side precondition — enforced eagerly for any</span>
+<span class="sd">    concrete index (Python int or 0-d Array), skipped only under tracing,</span>
+<span class="sd">    where the value is unknown and JAX would silently clamp an out-of-range</span>
+<span class="sd">    gather; there `verify` owns out-of-range rejection.</span>
+<span class="sd">    """</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="nb">isinstance</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">frx</span><span class="o">.</span><span class="n">core</span><span class="o">.</span><span class="n">Tracer</span><span class="p">)</span> <span class="ow">and</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">index</span> <span class="o">&lt;</span> <span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]:</span>
+        <span class="k">raise</span> <span class="ne">IndexError</span><span class="p">(</span><span class="sa">f</span><span class="s2">"leaf index </span><span class="si">{</span><span class="n">index</span><span class="si">}</span><span class="s2"> out of range [0, </span><span class="si">{</span><span class="n">matrix</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="si">}</span><span class="s2">)"</span><span class="p">)</span>
+    <span class="n">path</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">idx</span> <span class="o">=</span> <span class="n">index</span>
+    <span class="k">for</span> <span class="n">level</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">digest_layers</span><span class="p">)</span> <span class="o">-</span> <span class="mi">1</span><span class="p">):</span>  <span class="c1"># leaf layer up to below root</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">digest_layers</span><span class="p">[</span><span class="n">level</span><span class="p">][</span><span class="n">idx</span> <span class="o">^</span> <span class="mi">1</span><span class="p">])</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="c1"># The whole sibling group except the node itself, in level</span>
+            <span class="c1"># order: slot j of the entry is group position j + (j &gt;= pos).</span>
+            <span class="n">pos</span> <span class="o">=</span> <span class="n">idx</span> <span class="o">%</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+            <span class="n">group_start</span> <span class="o">=</span> <span class="p">(</span><span class="n">idx</span> <span class="o">//</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span><span class="p">)</span> <span class="o">*</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+            <span class="n">j</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span>
+            <span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">digest_layers</span><span class="p">[</span><span class="n">level</span><span class="p">][</span><span class="n">group_start</span> <span class="o">+</span> <span class="n">j</span> <span class="o">+</span> <span class="p">(</span><span class="n">j</span> <span class="o">&gt;=</span> <span class="n">pos</span><span class="p">)])</span>
+        <span class="n">idx</span> <span class="o">//=</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span>
+    <span class="k">return</span> <span class="n">Opening</span><span class="p">(</span><span class="n">row</span><span class="o">=</span><span class="n">matrix</span><span class="p">[</span><span class="n">index</span><span class="p">],</span> <span class="n">path</span><span class="o">=</span><span class="n">path</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.reconstruct_root" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">reconstruct_root</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.reconstruct_root" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">reconstruct_root</span><span class="p">(</span>
+    <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Array</span><span class="p">,</span> <span class="n">opening</span><span class="p">:</span> <span class="n">Opening</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Rebuild the raw root from an <code>opening</code>'s row + path (leaf-first).</p>
+<p>Returns the root Array, not a verdict — a separator-binding consumer
+(e.g. SP1's SMCS) rebinds the raw root before comparing, which
+<code>verify</code>'s plain equality can't express. Single-index; batch by
+<code>frx.vmap</code>-ing over <code>(index, opening)</code>.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">264</span>
+<span class="normal">265</span>
+<span class="normal">266</span>
+<span class="normal">267</span>
+<span class="normal">268</span>
+<span class="normal">269</span>
+<span class="normal">270</span>
+<span class="normal">271</span>
+<span class="normal">272</span>
+<span class="normal">273</span>
+<span class="normal">274</span>
+<span class="normal">275</span>
+<span class="normal">276</span>
+<span class="normal">277</span>
+<span class="normal">278</span>
+<span class="normal">279</span>
+<span class="normal">280</span>
+<span class="normal">281</span>
+<span class="normal">282</span>
+<span class="normal">283</span>
+<span class="normal">284</span>
+<span class="normal">285</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">reconstruct_root</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="n">Array</span><span class="p">,</span> <span class="n">opening</span><span class="p">:</span> <span class="n">Opening</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Rebuild the raw root from an `opening`'s row + path (leaf-first).</span>
+
+<span class="sd">    Returns the root Array, not a verdict — a separator-binding consumer</span>
+<span class="sd">    (e.g. SP1's SMCS) rebinds the raw root before comparing, which</span>
+<span class="sd">    `verify`'s plain equality can't express. Single-index; batch by</span>
+<span class="sd">    `frx.vmap`-ing over `(index, opening)`."""</span>
+    <span class="n">node</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="o">.</span><span class="n">hash</span><span class="p">(</span><span class="n">opening</span><span class="o">.</span><span class="n">row</span><span class="p">)</span>
+    <span class="c1"># Unroll the leaf-&gt;root fold over the static-depth path instead of a</span>
+    <span class="c1"># `scan`: a scan lowers to a `while` whose custom poseidon2 fusion body</span>
+    <span class="c1"># miscompiles the s32 index carry under @jit on the sponge plugin (wrong</span>
+    <span class="c1"># parity -&gt; wrong pair order -&gt; wrong root; eager is correct), while each</span>
+    <span class="c1"># level's compress is one same-shape pair, so the reuse_key dedups them to</span>
+    <span class="c1"># one cubin and the trace stays small. Knowledge:</span>
+    <span class="c1"># zorch-jagged-verify-jit-miscompiles-merkle-fold.</span>
+    <span class="n">idx</span> <span class="o">=</span> <span class="n">index</span>
+    <span class="k">for</span> <span class="n">siblings</span> <span class="ow">in</span> <span class="n">opening</span><span class="o">.</span><span class="n">path</span><span class="p">:</span>
+        <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_with_sibling</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">siblings</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_with_siblings</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">siblings</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">node</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.reconstruct_roots" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">reconstruct_roots</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.reconstruct_roots" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">reconstruct_roots</span><span class="p">(</span>
+    <span class="n">rows</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">paths</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">valid</span><span class="p">:</span> <span class="n">Array</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Rebuild a whole batch of roots in one <code>vmap</code> + one <code>scan</code>.</p>
+<p><code>rows</code> <code>(B, row_width)</code>, <code>indices</code> <code>(B,)</code>, <code>paths</code> <code>(B, depth, digest)</code>
+leaf-first, <code>valid</code> <code>(B, depth)</code> true for the real levels of each path
+and false for trailing don't-care padding. Paths shorter than <code>depth</code>
+are zero-padded and masked, so a batch can mix Merkle trees of different
+height: a masked step keeps the running node, so element <code>b</code> rebuilds the
+same root <code>reconstruct_root</code> would on its first <code>valid[b].sum()</code> levels.</p>
+<p>Tracing the compress body once for the whole batch — instead of once per
+<code>reconstruct_root</code> call — is the point: the folding verifiers reconstruct
+one pair per fold layer, and that per-layer loop dominated their
+trace+lower (#163).</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">287</span>
+<span class="normal">288</span>
+<span class="normal">289</span>
+<span class="normal">290</span>
+<span class="normal">291</span>
+<span class="normal">292</span>
+<span class="normal">293</span>
+<span class="normal">294</span>
+<span class="normal">295</span>
+<span class="normal">296</span>
+<span class="normal">297</span>
+<span class="normal">298</span>
+<span class="normal">299</span>
+<span class="normal">300</span>
+<span class="normal">301</span>
+<span class="normal">302</span>
+<span class="normal">303</span>
+<span class="normal">304</span>
+<span class="normal">305</span>
+<span class="normal">306</span>
+<span class="normal">307</span>
+<span class="normal">308</span>
+<span class="normal">309</span>
+<span class="normal">310</span>
+<span class="normal">311</span>
+<span class="normal">312</span>
+<span class="normal">313</span>
+<span class="normal">314</span>
+<span class="normal">315</span>
+<span class="normal">316</span>
+<span class="normal">317</span>
+<span class="normal">318</span>
+<span class="normal">319</span>
+<span class="normal">320</span>
+<span class="normal">321</span>
+<span class="normal">322</span>
+<span class="normal">323</span>
+<span class="normal">324</span>
+<span class="normal">325</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">reconstruct_roots</span><span class="p">(</span>
+    <span class="bp">self</span><span class="p">,</span> <span class="n">rows</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">indices</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">paths</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">valid</span><span class="p">:</span> <span class="n">Array</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Rebuild a whole batch of roots in one `vmap` + one `scan`.</span>
+
+<span class="sd">    `rows` `(B, row_width)`, `indices` `(B,)`, `paths` `(B, depth, digest)`</span>
+<span class="sd">    leaf-first, `valid` `(B, depth)` true for the real levels of each path</span>
+<span class="sd">    and false for trailing don't-care padding. Paths shorter than `depth`</span>
+<span class="sd">    are zero-padded and masked, so a batch can mix Merkle trees of different</span>
+<span class="sd">    height: a masked step keeps the running node, so element `b` rebuilds the</span>
+<span class="sd">    same root `reconstruct_root` would on its first `valid[b].sum()` levels.</span>
+
+<span class="sd">    Tracing the compress body once for the whole batch — instead of once per</span>
+<span class="sd">    `reconstruct_root` call — is the point: the folding verifiers reconstruct</span>
+<span class="sd">    one pair per fold layer, and that per-layer loop dominated their</span>
+<span class="sd">    trace+lower (#163)."""</span>
+    <span class="k">if</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">!=</span> <span class="mi">2</span><span class="p">:</span>
+        <span class="k">raise</span> <span class="ne">NotImplementedError</span><span class="p">(</span>
+            <span class="s2">"reconstruct_roots is binary-only: its consumer is the binary "</span>
+            <span class="s2">"fold-PCS query machinery; use vmap(reconstruct_root) for k-ary"</span>
+        <span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">one</span><span class="p">(</span><span class="n">row</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">path</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">mask</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+        <span class="n">node</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_leaf_hasher</span><span class="o">.</span><span class="n">hash</span><span class="p">(</span><span class="n">row</span><span class="p">)</span>
+
+        <span class="k">def</span><span class="w"> </span><span class="nf">fold</span><span class="p">(</span>
+            <span class="n">carry</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">],</span> <span class="n">step</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]</span>
+        <span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">],</span> <span class="kc">None</span><span class="p">]:</span>
+            <span class="n">node</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="n">carry</span>
+            <span class="n">sibling</span><span class="p">,</span> <span class="n">active</span> <span class="o">=</span> <span class="n">step</span>
+            <span class="n">folded</span><span class="p">,</span> <span class="n">idx</span> <span class="o">=</span> <span class="bp">self</span><span class="o">.</span><span class="n">_fold_with_sibling</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">,</span> <span class="n">sibling</span><span class="p">)</span>
+            <span class="c1"># Padding past the real depth is a no-op: keep the rebuilt root.</span>
+            <span class="n">node</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">active</span><span class="p">,</span> <span class="n">folded</span><span class="p">,</span> <span class="n">node</span><span class="p">)</span>
+            <span class="k">return</span> <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">idx</span><span class="p">),</span> <span class="kc">None</span>
+
+        <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">_</span><span class="p">),</span> <span class="n">_</span> <span class="o">=</span> <span class="n">frx</span><span class="o">.</span><span class="n">lax</span><span class="o">.</span><span class="n">scan</span><span class="p">(</span><span class="n">fold</span><span class="p">,</span> <span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">index</span><span class="p">),</span> <span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">mask</span><span class="p">))</span>
+        <span class="k">return</span> <span class="n">node</span>
+
+    <span class="k">return</span> <span class="n">frx</span><span class="o">.</span><span class="n">vmap</span><span class="p">(</span><span class="n">one</span><span class="p">)(</span><span class="n">rows</span><span class="p">,</span> <span class="n">indices</span><span class="p">,</span> <span class="n">paths</span><span class="p">,</span> <span class="n">valid</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="zorch.commit.merkle.MerkleTree.verify" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">verify</span>
+
+
+<a href="#zorch.commit.merkle.MerkleTree.verify" class="headerlink" title="Permanent link">&para;</a></h3>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">verify</span><span class="p">(</span><span class="n">root</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">opening</span><span class="p">:</span> <span class="n">Opening</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Rebuild the root from the row + path; compare to the committed root.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/commit/merkle.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">327</span>
+<span class="normal">328</span>
+<span class="normal">329</span>
+<span class="normal">330</span>
+<span class="normal">331</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">verify</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">root</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">index</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">opening</span><span class="p">:</span> <span class="n">Opening</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Rebuild the root from the row + path; compare to the committed root."""</span>
+    <span class="k">if</span> <span class="ow">not</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">index</span> <span class="o">&lt;</span> <span class="bp">self</span><span class="o">.</span><span class="n">arity</span> <span class="o">**</span> <span class="nb">len</span><span class="p">(</span><span class="n">opening</span><span class="o">.</span><span class="n">path</span><span class="p">):</span>
+        <span class="k">return</span> <span class="kc">False</span>
+    <span class="k">return</span> <span class="nb">bool</span><span class="p">(</span><span class="n">fnp</span><span class="o">.</span><span class="n">array_equal</span><span class="p">(</span><span class="bp">self</span><span class="o">.</span><span class="n">reconstruct_root</span><span class="p">(</span><span class="n">index</span><span class="p">,</span> <span class="n">opening</span><span class="p">),</span> <span class="n">root</span><span class="p">))</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "search.suggest"], "search": "../../../assets/javascripts/workers/search.f8cc74c7.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.60a45f97.min.js"></script>
+      
+    
+  </body>
+</html>

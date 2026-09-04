@@ -1,0 +1,6210 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="FRX-native building blocks for proof systems">
+      
+      
+      
+      
+        <link rel="prev" href="../poly/">
+      
+      
+        <link rel="next" href="../region/">
+      
+      
+      <link rel="icon" href="../../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.5.50">
+    
+    
+      
+        <title>prover - zorch</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/stylesheets/main.a40c8224.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../../assets/stylesheets/palette.06af60db.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#zorchpcsjaggedprover" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../../.." title="zorch" class="md-header__button md-logo" aria-label="zorch" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16.5c0 .38-.21.71-.53.88l-7.9 4.44c-.16.12-.36.18-.57.18s-.41-.06-.57-.18l-7.9-4.44A.99.99 0 0 1 3 16.5v-9c0-.38.21-.71.53-.88l7.9-4.44c.16-.12.36-.18.57-.18s.41.06.57.18l7.9 4.44c.32.17.53.5.53.88zM12 4.15 6.04 7.5 12 10.85l5.96-3.35zM5 15.91l6 3.38v-6.71L5 9.21zm14 0v-6.7l-6 3.37v6.71z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            zorch
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              prover
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label=""  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label=""  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      <label class="md-header__button md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+      </label>
+      <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/fractalyze/zorch" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    fractalyze/zorch
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../../.." title="zorch" class="md-nav__button md-logo" aria-label="zorch" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16.5c0 .38-.21.71-.53.88l-7.9 4.44c-.16.12-.36.18-.57.18s-.41-.06-.57-.18l-7.9-4.44A.99.99 0 0 1 3 16.5v-9c0-.38.21-.71.53-.88l7.9-4.44c.16-.12.36-.18.57-.18s.41.06.57.18l7.9 4.44c.32.17.53.5.53.88zM12 4.15 6.04 7.5 12 10.85l5.96-3.35zM5 15.91l6 3.38v-6.71L5 9.21zm14 0v-6.7l-6 3.37v6.71z"/></svg>
+
+    </a>
+    zorch
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/fractalyze/zorch" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.7.2 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2024 Fonticons, Inc.--><path d="M439.55 236.05 244 40.45a28.87 28.87 0 0 0-40.81 0l-40.66 40.63 51.52 51.52c27.06-9.14 52.68 16.77 43.39 43.68l49.66 49.66c34.23-11.8 61.18 31 35.47 56.69-26.49 26.49-70.21-2.87-56-37.34L240.22 199v121.85c25.3 12.54 22.26 41.85 9.08 55a34.34 34.34 0 0 1-48.55 0c-17.57-17.6-11.07-46.91 11.25-56v-123c-20.8-8.51-24.6-30.74-18.64-45L142.57 101 8.45 235.14a28.86 28.86 0 0 0 0 40.81l195.61 195.6a28.86 28.86 0 0 0 40.8 0l194.69-194.69a28.86 28.86 0 0 0 0-40.81"/></svg>
+  </div>
+  <div class="md-source__repository">
+    fractalyze/zorch
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../.." class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Home
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../getting-started/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Get started
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Guides
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            Guides
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../guide/building-on-zorch/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Assembling a prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../guide/frx-and-fusion/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Keeping code fused
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../guide/setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Setup & troubleshooting
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    Reference
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            Reference
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../guide/blocks/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Blocks & imports
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../guide/field-dtypes/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Field-dtype sharp bits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../../design/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    Design digest
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    API
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            API
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1" checked>
+        
+          
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../../../" class="md-nav__link ">
+              
+  
+  <span class="md-ellipsis">
+    zorch
+  </span>
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6_1" id="__nav_6_1_label" tabindex="0">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_6_1_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_1">
+            <span class="md-nav__icon md-icon"></span>
+            zorch
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../blake3_field_transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    blake3_field_transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../byte_transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    byte_transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../challenge/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    challenge
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_5" id="__nav_6_1_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    coding
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_5">
+            <span class="md-nav__icon md-icon"></span>
+            coding
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../coding/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.coding
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../coding/additive_reed_solomon/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    additive_reed_solomon
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../coding/foldable_code/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    foldable_code
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../coding/linear_code/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    linear_code
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../coding/reed_solomon/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    reed_solomon
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../coding/tensor_code/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    tensor_code
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_6" id="__nav_6_1_6_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    commit
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_6">
+            <span class="md-nav__icon md-icon"></span>
+            commit
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../commit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.commit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../commit/ajtai/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ajtai
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../commit/merkle/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    merkle
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../commit/smcs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    smcs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../commit/strided_merkle/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    strided_merkle
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../constraint_eval/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    constraint_eval
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../grind/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    grind
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_9" id="__nav_6_1_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    lnp
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_9">
+            <span class="md-nav__icon md-icon"></span>
+            lnp
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.lnp
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/challenge/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    challenge
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/eval/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    eval
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/exact/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    exact
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/masking/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    masking
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/opening/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    opening
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/quadratic/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    quadratic
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/range/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    range
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../lnp/wire/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    wire
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_10" id="__nav_6_1_10_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    logup_gkr
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_10">
+            <span class="md-nav__icon md-icon"></span>
+            logup_gkr
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.logup_gkr
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/circuit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    circuit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/jagged_prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    jagged_prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/jagged_verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    jagged_verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../logup_gkr/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11" id="__nav_6_1_11_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    pcs
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_11_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_1_11">
+            <span class="md-nav__icon md-icon"></span>
+            pcs
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_2" id="__nav_6_1_11_2_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    basefold
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_2">
+            <span class="md-nav__icon md-icon"></span>
+            basefold
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.basefold
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/batching/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    batching
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/choreography/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    choreography
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/kernel/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    kernel
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../basefold/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deep/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    deep
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fold/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    fold
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_5" id="__nav_6_1_11_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    fri
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_5">
+            <span class="md-nav__icon md-icon"></span>
+            fri
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fri/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.fri
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fri/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fri/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../fri/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_6" id="__nav_6_1_11_6_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    ipa
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_6">
+            <span class="md-nav__icon md-icon"></span>
+            ipa
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.ipa
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/challenger/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    challenger
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/math/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    math
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ipa/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_7" id="__nav_6_1_11_7_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    jagged
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6_1_11_7">
+            <span class="md-nav__icon md-icon"></span>
+            jagged
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.jagged
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../branching_program/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    branching_program
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../commit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    commit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../dense/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    dense
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../open/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    open
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../poly/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    poly
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover" class="md-nav__link">
+    <span class="md-ellipsis">
+      prover
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.JaggedEvalInputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      JaggedEvalInputs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.JaggedEvalMsg" class="md-nav__link">
+    <span class="md-ellipsis">
+      JaggedEvalMsg
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.assemble_columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      assemble_columns
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.assemble_col_heights" class="md-nav__link">
+    <span class="md-ellipsis">
+      assemble_col_heights
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.sample_z_col" class="md-nav__link">
+    <span class="md-ellipsis">
+      sample_z_col
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.merged_prefix_bits" class="md-nav__link">
+    <span class="md-ellipsis">
+      merged_prefix_bits
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.outer_sumcheck_claim" class="md-nav__link">
+    <span class="md-ellipsis">
+      outer_sumcheck_claim
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.outer_sumcheck" class="md-nav__link">
+    <span class="md-ellipsis">
+      outer_sumcheck
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.inner_sumcheck_core" class="md-nav__link">
+    <span class="md-ellipsis">
+      inner_sumcheck_core
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.eval_round_core" class="md-nav__link">
+    <span class="md-ellipsis">
+      eval_round_core
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.eval_column_arrays" class="md-nav__link">
+    <span class="md-ellipsis">
+      eval_column_arrays
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.prove_jagged_eval" class="md-nav__link">
+    <span class="md-ellipsis">
+      prove_jagged_eval
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../region/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    region
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../shard_open_bench/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    shard_open_bench
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_8" id="__nav_6_1_11_8_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    kzg
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_8">
+            <span class="md-nav__icon md-icon"></span>
+            kzg
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kzg/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.kzg
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kzg/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kzg/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kzg/setup/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    setup
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../kzg/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_9" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_9" id="__nav_6_1_11_9_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    ligerito
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_9_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_9">
+            <span class="md-nav__icon md-icon"></span>
+            ligerito
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligerito/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.ligerito
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligerito/basis/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    basis
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligerito/choreography/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    choreography
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligerito/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligerito/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligerito/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_10" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_10" id="__nav_6_1_11_10_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    ligero
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_10_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_10">
+            <span class="md-nav__icon md-icon"></span>
+            ligero
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligero/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.ligero
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligero/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligero/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ligero/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../matrix_commit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    matrix_commit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../ring_switch/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    ring_switch
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_11_14" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_11_14" id="__nav_6_1_11_14_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    whir
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_11_14_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_11_14">
+            <span class="md-nav__icon md-icon"></span>
+            whir
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whir/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.pcs.whir
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whir/config/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    config
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whir/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whir/scheme/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    scheme
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../whir/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_12" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_12" id="__nav_6_1_12_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    poly
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_12_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_12">
+            <span class="md-nav__icon md-icon"></span>
+            poly
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../poly/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.poly
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../poly/eq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    eq
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../poly/geq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    geq
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../poly/multilinear/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    multilinear
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../poly/univariate/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    univariate
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../prove/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prove
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../round/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    round
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../scan_body/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    scan_body
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sha256_field_transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    sha256_field_transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_17" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_17" id="__nav_6_1_17_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    spartan
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_17_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_17">
+            <span class="md-nav__icon md-icon"></span>
+            spartan
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.spartan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/lincheck/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    lincheck
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/pcs_glue/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    pcs_glue
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/r1cs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    r1cs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/spartan/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    spartan
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/summand/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    summand
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../spartan/zerocheck/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zerocheck
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_19" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_19" id="__nav_6_1_19_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    sumcheck
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_19_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_19">
+            <span class="md-nav__icon md-icon"></span>
+            sumcheck
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.sumcheck
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/domain/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    domain
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_19_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_19_3" id="__nav_6_1_19_3_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    eq
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_19_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_19_3">
+            <span class="md-nav__icon md-icon"></span>
+            eq
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/eq/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.sumcheck.eq
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/eq/accumulators/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    accumulators
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/eq/eq_poly/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    eq_poly
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/eq/small_value/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    small_value
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/eq/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/gruen/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    gruen
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_19_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_19_5" id="__nav_6_1_19_5_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    jagged
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="4" aria-labelledby="__nav_6_1_19_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_19_5">
+            <span class="md-nav__icon md-icon"></span>
+            jagged
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.sumcheck.jagged
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/buffers/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    buffers
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/fs/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    fs
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/layout/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    layout
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/rounds/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    rounds
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/schedule/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    schedule
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/jagged/types/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    types
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/prover/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    prover
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/reduce/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    reduce
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/sqrt_space/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    sqrt_space
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/stage/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    stage
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/univariate_skip/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    univariate_skip
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../sumcheck/verifier/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verifier
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_20" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_20" id="__nav_6_1_20_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    testkit
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_20_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_20">
+            <span class="md-nav__icon md-icon"></span>
+            testkit
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testkit/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.testkit
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testkit/fusion/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    fusion
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testkit/jit_cache/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    jit_cache
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testkit/koalabear16/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    koalabear16
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testkit/random_field/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    random_field
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../testkit/transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../transcript/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    transcript
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6_1_22" >
+        
+          
+          <label class="md-nav__link" for="__nav_6_1_22" id="__nav_6_1_22_label" tabindex="0">
+            
+  
+  <span class="md-ellipsis">
+    utils
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="3" aria-labelledby="__nav_6_1_22_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6_1_22">
+            <span class="md-nav__icon md-icon"></span>
+            utils
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../utils/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    zorch.utils
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../utils/binary_field/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    binary_field
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../utils/bits/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    bits
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../utils/field/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    field
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../verify/" class="md-nav__link">
+        
+  
+  <span class="md-ellipsis">
+    verify
+  </span>
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover" class="md-nav__link">
+    <span class="md-ellipsis">
+      prover
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.JaggedEvalInputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      JaggedEvalInputs
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.JaggedEvalMsg" class="md-nav__link">
+    <span class="md-ellipsis">
+      JaggedEvalMsg
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.assemble_columns" class="md-nav__link">
+    <span class="md-ellipsis">
+      assemble_columns
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.assemble_col_heights" class="md-nav__link">
+    <span class="md-ellipsis">
+      assemble_col_heights
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.sample_z_col" class="md-nav__link">
+    <span class="md-ellipsis">
+      sample_z_col
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.merged_prefix_bits" class="md-nav__link">
+    <span class="md-ellipsis">
+      merged_prefix_bits
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.outer_sumcheck_claim" class="md-nav__link">
+    <span class="md-ellipsis">
+      outer_sumcheck_claim
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.outer_sumcheck" class="md-nav__link">
+    <span class="md-ellipsis">
+      outer_sumcheck
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.inner_sumcheck_core" class="md-nav__link">
+    <span class="md-ellipsis">
+      inner_sumcheck_core
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.eval_round_core" class="md-nav__link">
+    <span class="md-ellipsis">
+      eval_round_core
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.eval_column_arrays" class="md-nav__link">
+    <span class="md-ellipsis">
+      eval_column_arrays
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#zorch.pcs.jagged.prover.prove_jagged_eval" class="md-nav__link">
+    <span class="md-ellipsis">
+      prove_jagged_eval
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+  
+  
+
+
+<h1 id="zorchpcsjaggedprover"><code>zorch.pcs.jagged.prover</code><a class="headerlink" href="#zorchpcsjaggedprover" title="Permanent link">&para;</a></h1>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="zorch.pcs.jagged.prover"></a>
+    <div class="doc doc-contents first">
+
+        <p>SP1-schedule jagged evaluation-proof sumcheck as one recurrence step.</p>
+<p><code>prove_jagged_eval</code> is the sumcheck half of SP1's jagged evaluation phase;
+a PCS stage drives it alongside its verifier dual and the remaining opening
+work. It reproves SP1's jagged PCS
+opening sumchecks byte-identically: the OUTER Hadamard sumcheck
+<code>Σ_i D(i)·J̃(i)</code> over the committed dense buffer (round polys + <code>dense_eval</code>)
+whose folded point feeds the INNER branching-program sumcheck reproving
+<code>J̃(z_row, z_col, z_final)</code>. The stacked BaseFold open of <code>D</code> at <code>z_final</code>
+is the remaining half of stage 5.</p>
+<p>SP1 folds <strong>LSB-first</strong> (even/odd pairing <code>[0::2]</code>/<code>[1::2]</code>), round polys
+travel in <strong>coefficient</strong> form <code>[c0, c1, c2]</code>, and the proof point is the
+challenge list reversed (insert-at-front). zorch's <code>SumcheckRound</code> / <code>prove</code>
+fold MSB-first over a fixed dense shape — they can't byte-match SP1's LSB-first
+jagged schedule, so this <code>Round</code> runs its own loop over zorch's order-free leaf
+blocks (<code>build_jagged_layout</code> / <code>bp_eval_core</code> / <code>eval_coeffs</code>), same as
+<code>zerocheck/jagged.py</code>.</p>
+<p>The inner challenges are sampled from the threaded transcript; <code>z_col</code> /
+<code>z_trace</code> arrive on the carry (fixed upstream — <code>z_col</code> at commitment,
+<code>z_trace</code> by the outer sumcheck).</p>
+<p>References (same SP1 commit as <code>zerocheck/jagged.py</code>):
+- coefficient-form deg-2 round poly — <code>process_univariate_polynomial</code>.
+- LSB-first elimination — <code>fix_last_variable_kernel</code> (<code>dim-1-round</code>).</p>
+
+
+
+
+
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="zorch.pcs.jagged.prover.JaggedEvalInputs" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">JaggedEvalInputs</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#zorch.pcs.jagged.prover.JaggedEvalInputs" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Input to <code>prove_jagged_eval</code>: the committed columns' jagged layout plus
+the points the upstream rounds fixed.</p>
+<p><code>col_heights</code> is the per-unit-column height list and <code>all_claims</code> the
+matching <code>(L,)</code> per-column GKR openings (see <code>assemble_columns</code>).
+<code>dense</code> is the combined committed dense buffer <code>D</code> (both rounds' raw
+packed columns concatenated, padded to <code>2^n</code>) over which the outer
+Hadamard sumcheck runs; the outer point <code>z_final</code> it produces feeds the
+inner sumcheck, so it is not carried in.</p>
+
+
+
+
+
+
+              <details class="quote">
+                <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">58</span>
+<span class="normal">59</span>
+<span class="normal">60</span>
+<span class="normal">61</span>
+<span class="normal">62</span>
+<span class="normal">63</span>
+<span class="normal">64</span>
+<span class="normal">65</span>
+<span class="normal">66</span>
+<span class="normal">67</span>
+<span class="normal">68</span>
+<span class="normal">69</span>
+<span class="normal">70</span>
+<span class="normal">71</span>
+<span class="normal">72</span>
+<span class="normal">73</span>
+<span class="normal">74</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">JaggedEvalInputs</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Input to ``prove_jagged_eval``: the committed columns' jagged layout plus</span>
+<span class="sd">    the points the upstream rounds fixed.</span>
+
+<span class="sd">    ``col_heights`` is the per-unit-column height list and ``all_claims`` the</span>
+<span class="sd">    matching ``(L,)`` per-column GKR openings (see ``assemble_columns``).</span>
+<span class="sd">    ``dense`` is the combined committed dense buffer ``D`` (both rounds' raw</span>
+<span class="sd">    packed columns concatenated, padded to ``2^n``) over which the outer</span>
+<span class="sd">    Hadamard sumcheck runs; the outer point ``z_final`` it produces feeds the</span>
+<span class="sd">    inner sumcheck, so it is not carried in."""</span>
+
+    <span class="n">col_heights</span><span class="p">:</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">int</span><span class="p">,</span> <span class="o">...</span><span class="p">]</span>
+    <span class="n">all_claims</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">z_row</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">z_col</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">dense</span><span class="p">:</span> <span class="n">Array</span>
+</code></pre></div></td></tr></table></div>
+              </details>
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="zorch.pcs.jagged.prover.JaggedEvalMsg" class="doc doc-heading">
+            <span class="doc doc-object-name doc-class-name">JaggedEvalMsg</span>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#zorch.pcs.jagged.prover.JaggedEvalMsg" class="headerlink" title="Permanent link">&para;</a></h2>
+
+
+    <div class="doc doc-contents ">
+
+
+        <p>Proof message: the outer Hadamard sumcheck (initial column claim, its
+coefficient-form round polys, the folded point <code>z_final</code>, and
+<code>dense_eval = D(z_final)</code>) and the inner branching-program sumcheck
+transcript (coefficient-form round polys, the folded point, the reproved
+claim).</p>
+<p>A registered pytree so it crosses the <code>eval_round_core</code> <code>@frx.jit</code> /
+<code>frx.export</code> boundary (mirrors <code>open.py</code>'s <code>StackedOpenProof</code>).</p>
+
+
+
+
+
+
+              <details class="quote">
+                <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+                <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal"> 77</span>
+<span class="normal"> 78</span>
+<span class="normal"> 79</span>
+<span class="normal"> 80</span>
+<span class="normal"> 81</span>
+<span class="normal"> 82</span>
+<span class="normal"> 83</span>
+<span class="normal"> 84</span>
+<span class="normal"> 85</span>
+<span class="normal"> 86</span>
+<span class="normal"> 87</span>
+<span class="normal"> 88</span>
+<span class="normal"> 89</span>
+<span class="normal"> 90</span>
+<span class="normal"> 91</span>
+<span class="normal"> 92</span>
+<span class="normal"> 93</span>
+<span class="normal"> 94</span>
+<span class="normal"> 95</span>
+<span class="normal"> 96</span>
+<span class="normal"> 97</span>
+<span class="normal"> 98</span>
+<span class="normal"> 99</span>
+<span class="normal">100</span>
+<span class="normal">101</span>
+<span class="normal">102</span>
+<span class="normal">103</span>
+<span class="normal">104</span>
+<span class="normal">105</span>
+<span class="normal">106</span>
+<span class="normal">107</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="nd">@partial</span><span class="p">(</span>
+    <span class="n">frx</span><span class="o">.</span><span class="n">tree_util</span><span class="o">.</span><span class="n">register_dataclass</span><span class="p">,</span>
+    <span class="n">data_fields</span><span class="o">=</span><span class="p">[</span>
+        <span class="s2">"outer_sumcheck_claim"</span><span class="p">,</span>
+        <span class="s2">"outer_sumcheck_polys"</span><span class="p">,</span>
+        <span class="s2">"outer_sumcheck_point"</span><span class="p">,</span>
+        <span class="s2">"dense_eval"</span><span class="p">,</span>
+        <span class="s2">"inner_sumcheck_polys"</span><span class="p">,</span>
+        <span class="s2">"inner_point"</span><span class="p">,</span>
+        <span class="s2">"inner_claimed_sum"</span><span class="p">,</span>
+    <span class="p">],</span>
+    <span class="n">meta_fields</span><span class="o">=</span><span class="p">[],</span>
+<span class="p">)</span>
+<span class="nd">@dataclass</span><span class="p">(</span><span class="n">frozen</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">JaggedEvalMsg</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""Proof message: the outer Hadamard sumcheck (initial column claim, its</span>
+<span class="sd">    coefficient-form round polys, the folded point ``z_final``, and</span>
+<span class="sd">    ``dense_eval = D(z_final)``) and the inner branching-program sumcheck</span>
+<span class="sd">    transcript (coefficient-form round polys, the folded point, the reproved</span>
+<span class="sd">    claim).</span>
+
+<span class="sd">    A registered pytree so it crosses the ``eval_round_core`` ``@frx.jit`` /</span>
+<span class="sd">    ``frx.export`` boundary (mirrors ``open.py``'s ``StackedOpenProof``)."""</span>
+
+    <span class="n">outer_sumcheck_claim</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">outer_sumcheck_polys</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">outer_sumcheck_point</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">dense_eval</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">inner_sumcheck_polys</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">inner_point</span><span class="p">:</span> <span class="n">Array</span>
+    <span class="n">inner_claimed_sum</span><span class="p">:</span> <span class="n">Array</span>
+</code></pre></div></td></tr></table></div>
+              </details>
+
+
+
+  <div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.assemble_columns" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">assemble_columns</span>
+
+
+<a href="#zorch.pcs.jagged.prover.assemble_columns" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">assemble_columns</span><span class="p">(</span>
+    <span class="n">row_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+    <span class="n">column_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+    <span class="n">column_claims_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Array</span><span class="p">],</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">Array</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Flatten the per-round (row_counts, column_counts, real claims) into the
+per-unit-column height list and the full column-claim buffer.</p>
+<p>Each chip contributes <code>column_count</code> unit columns of height <code>row_count</code>;
+the last two <code>column_counts</code> per round are SP1's stacking dummies, so the
+claim buffer appends <code>cc[-2]+cc[-1]</code> zero claims after each round's real
+ones (matching SP1's <code>prove_trusted_evaluations</code> layout).</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">110</span>
+<span class="normal">111</span>
+<span class="normal">112</span>
+<span class="normal">113</span>
+<span class="normal">114</span>
+<span class="normal">115</span>
+<span class="normal">116</span>
+<span class="normal">117</span>
+<span class="normal">118</span>
+<span class="normal">119</span>
+<span class="normal">120</span>
+<span class="normal">121</span>
+<span class="normal">122</span>
+<span class="normal">123</span>
+<span class="normal">124</span>
+<span class="normal">125</span>
+<span class="normal">126</span>
+<span class="normal">127</span>
+<span class="normal">128</span>
+<span class="normal">129</span>
+<span class="normal">130</span>
+<span class="normal">131</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">assemble_columns</span><span class="p">(</span>
+    <span class="n">row_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+    <span class="n">column_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+    <span class="n">column_claims_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Array</span><span class="p">],</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">Array</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Flatten the per-round (row_counts, column_counts, real claims) into the</span>
+<span class="sd">    per-unit-column height list and the full column-claim buffer.</span>
+
+<span class="sd">    Each chip contributes ``column_count`` unit columns of height ``row_count``;</span>
+<span class="sd">    the last two ``column_counts`` per round are SP1's stacking dummies, so the</span>
+<span class="sd">    claim buffer appends ``cc[-2]+cc[-1]`` zero claims after each round's real</span>
+<span class="sd">    ones (matching SP1's ``prove_trusted_evaluations`` layout)."""</span>
+    <span class="n">col_heights</span> <span class="o">=</span> <span class="n">assemble_col_heights</span><span class="p">(</span><span class="n">row_counts_rounds</span><span class="p">,</span> <span class="n">column_counts_rounds</span><span class="p">)</span>
+    <span class="n">claim_blocks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">ccs</span><span class="p">,</span> <span class="n">claims_r</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">column_counts_rounds</span><span class="p">,</span> <span class="n">column_claims_rounds</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="n">n_pad</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">ccs</span><span class="p">[</span><span class="o">-</span><span class="mi">2</span><span class="p">])</span> <span class="o">+</span> <span class="nb">int</span><span class="p">(</span><span class="n">ccs</span><span class="p">[</span><span class="o">-</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">claim_blocks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">fnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">claims_r</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">))</span>
+        <span class="k">if</span> <span class="n">n_pad</span><span class="p">:</span>
+            <span class="n">claim_blocks</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">fnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="n">n_pad</span><span class="p">,),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">col_heights</span><span class="p">,</span> <span class="n">fnp</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">claim_blocks</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.assemble_col_heights" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">assemble_col_heights</span>
+
+
+<a href="#zorch.pcs.jagged.prover.assemble_col_heights" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">assemble_col_heights</span><span class="p">(</span>
+    <span class="n">row_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+    <span class="n">column_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The per-unit-column height list alone — host ints, no claim arrays, so a
+consumer can derive the layout eagerly and defer the claim assembly to a
+jitted body (<code>assemble_columns</code> delegates here).</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">134</span>
+<span class="normal">135</span>
+<span class="normal">136</span>
+<span class="normal">137</span>
+<span class="normal">138</span>
+<span class="normal">139</span>
+<span class="normal">140</span>
+<span class="normal">141</span>
+<span class="normal">142</span>
+<span class="normal">143</span>
+<span class="normal">144</span>
+<span class="normal">145</span>
+<span class="normal">146</span>
+<span class="normal">147</span>
+<span class="normal">148</span>
+<span class="normal">149</span>
+<span class="normal">150</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">assemble_col_heights</span><span class="p">(</span>
+    <span class="n">row_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+    <span class="n">column_counts_rounds</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""The per-unit-column height list alone — host ints, no claim arrays, so a</span>
+<span class="sd">    consumer can derive the layout eagerly and defer the claim assembly to a</span>
+<span class="sd">    jitted body (``assemble_columns`` delegates here)."""</span>
+    <span class="n">col_heights</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">rcs</span><span class="p">,</span> <span class="n">ccs</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">row_counts_rounds</span><span class="p">,</span> <span class="n">column_counts_rounds</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+        <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">ccs</span><span class="p">)</span> <span class="o">&lt;</span> <span class="mi">2</span><span class="p">:</span>
+            <span class="k">raise</span> <span class="ne">ValueError</span><span class="p">(</span>
+                <span class="sa">f</span><span class="s2">"each round needs the trailing (stacking-dummy, leftover) "</span>
+                <span class="sa">f</span><span class="s2">"column-count pair; got </span><span class="si">{</span><span class="nb">len</span><span class="p">(</span><span class="n">ccs</span><span class="p">)</span><span class="si">}</span><span class="s2"> counts"</span>
+            <span class="p">)</span>
+        <span class="k">for</span> <span class="n">rc</span><span class="p">,</span> <span class="n">cc</span> <span class="ow">in</span> <span class="nb">zip</span><span class="p">(</span><span class="n">rcs</span><span class="p">,</span> <span class="n">ccs</span><span class="p">,</span> <span class="n">strict</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+            <span class="n">col_heights</span><span class="o">.</span><span class="n">extend</span><span class="p">([</span><span class="nb">int</span><span class="p">(</span><span class="n">rc</span><span class="p">)]</span> <span class="o">*</span> <span class="nb">int</span><span class="p">(</span><span class="n">cc</span><span class="p">))</span>
+    <span class="k">return</span> <span class="n">col_heights</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.sample_z_col" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">sample_z_col</span>
+
+
+<a href="#zorch.pcs.jagged.prover.sample_z_col" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">sample_z_col</span><span class="p">(</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span> <span class="n">num_columns</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Transcript</span><span class="p">,</span> <span class="n">Array</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>One extension challenge per column variable — SP1 samples <code>z_col</code> as
+extension elements, not stacked base squeezes. One definition driven by
+the prover stage and its verifier dual.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">153</span>
+<span class="normal">154</span>
+<span class="normal">155</span>
+<span class="normal">156</span>
+<span class="normal">157</span>
+<span class="normal">158</span>
+<span class="normal">159</span>
+<span class="normal">160</span>
+<span class="normal">161</span>
+<span class="normal">162</span>
+<span class="normal">163</span>
+<span class="normal">164</span>
+<span class="normal">165</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">sample_z_col</span><span class="p">(</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span> <span class="n">num_columns</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Transcript</span><span class="p">,</span> <span class="n">Array</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""One extension challenge per column variable — SP1 samples ``z_col`` as</span>
+<span class="sd">    extension elements, not stacked base squeezes. One definition driven by</span>
+<span class="sd">    the prover stage and its verifier dual."""</span>
+    <span class="n">limbs</span> <span class="o">=</span> <span class="n">efinfo</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span><span class="o">.</span><span class="n">degree</span>
+    <span class="n">parts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">log2_ceil_usize</span><span class="p">(</span><span class="n">num_columns</span><span class="p">)):</span>
+        <span class="n">transcript</span><span class="p">,</span> <span class="n">challenge</span> <span class="o">=</span> <span class="n">sample_challenge</span><span class="p">(</span><span class="n">transcript</span><span class="p">,</span> <span class="n">dtype</span><span class="p">,</span> <span class="n">limbs</span><span class="p">)</span>
+        <span class="n">parts</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">challenge</span><span class="p">)</span>
+    <span class="n">z_col</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">parts</span><span class="p">)</span> <span class="k">if</span> <span class="n">parts</span> <span class="k">else</span> <span class="n">fnp</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">0</span><span class="p">,),</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">transcript</span><span class="p">,</span> <span class="n">z_col</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.merged_prefix_bits" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">merged_prefix_bits</span>
+
+
+<a href="#zorch.pcs.jagged.prover.merged_prefix_bits" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">merged_prefix_bits</span><span class="p">(</span>
+    <span class="n">col_heights</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">num_bits</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The <code>(L, 2·num_bits)</code> merged prefix-bit buffer <code>bits(t_c) ‖
+bits(t_{c+1})</code> — the branching-program input both the inner sumcheck and
+its verifier leaf check read.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">168</span>
+<span class="normal">169</span>
+<span class="normal">170</span>
+<span class="normal">171</span>
+<span class="normal">172</span>
+<span class="normal">173</span>
+<span class="normal">174</span>
+<span class="normal">175</span>
+<span class="normal">176</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">merged_prefix_bits</span><span class="p">(</span>
+    <span class="n">col_heights</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="n">num_bits</span><span class="p">:</span> <span class="nb">int</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""The ``(L, 2·num_bits)`` merged prefix-bit buffer ``bits(t_c) ‖</span>
+<span class="sd">    bits(t_{c+1})`` — the branching-program input both the inner sumcheck and</span>
+<span class="sd">    its verifier leaf check read."""</span>
+    <span class="n">prefix_int</span> <span class="o">=</span> <span class="n">build_prefix_sums</span><span class="p">(</span><span class="nb">list</span><span class="p">(</span><span class="n">col_heights</span><span class="p">))</span>
+    <span class="n">bits</span> <span class="o">=</span> <span class="n">msb_first_bits</span><span class="p">(</span><span class="n">prefix_int</span><span class="p">,</span> <span class="n">num_bits</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">fnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">([</span><span class="n">bits</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">bits</span><span class="p">[</span><span class="mi">1</span><span class="p">:]],</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.outer_sumcheck_claim" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">outer_sumcheck_claim</span>
+
+
+<a href="#zorch.pcs.jagged.prover.outer_sumcheck_claim" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">outer_sumcheck_claim</span><span class="p">(</span>
+    <span class="n">all_claims</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">z_col</span><span class="p">:</span> <span class="n">Array</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p><code>Σ_c eq(z_col, c)·claim[c]</code> over the real columns of the 2^⌈log L⌉ hypercube.</p>
+<p>The eq tail past <code>L</code> would multiply zero-padded claims, so summing only the
+real columns (<code>col_eq[:L]</code>) is identical and shape-polymorphic in <code>L</code> — a
+symbolic-length pad-and-concatenate does not lower to a static width.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">179</span>
+<span class="normal">180</span>
+<span class="normal">181</span>
+<span class="normal">182</span>
+<span class="normal">183</span>
+<span class="normal">184</span>
+<span class="normal">185</span>
+<span class="normal">186</span>
+<span class="normal">187</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">outer_sumcheck_claim</span><span class="p">(</span><span class="n">all_claims</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span> <span class="n">z_col</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">"""``Σ_c eq(z_col, c)·claim[c]`` over the real columns of the 2^⌈log L⌉ hypercube.</span>
+
+<span class="sd">    The eq tail past ``L`` would multiply zero-padded claims, so summing only the</span>
+<span class="sd">    real columns (``col_eq[:L]``) is identical and shape-polymorphic in ``L`` — a</span>
+<span class="sd">    symbolic-length pad-and-concatenate does not lower to a static width."""</span>
+    <span class="n">dtype</span> <span class="o">=</span> <span class="n">z_col</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">col_eq</span> <span class="o">=</span> <span class="n">expand_eq_to_hypercube</span><span class="p">(</span><span class="n">z_col</span><span class="p">,</span> <span class="n">fnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((),</span> <span class="n">dtype</span><span class="p">))</span>  <span class="c1"># (2ⁿᶜ,)</span>
+    <span class="k">return</span> <span class="n">fnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">col_eq</span><span class="p">[:</span> <span class="n">all_claims</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]]</span> <span class="o">*</span> <span class="n">all_claims</span><span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.outer_sumcheck" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">outer_sumcheck</span>
+
+
+<a href="#zorch.pcs.jagged.prover.outer_sumcheck" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">outer_sumcheck</span><span class="p">(</span>
+    <span class="n">dense</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">indicator</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">claim</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Outer Hadamard sumcheck <code>Σ_i D(i)·J̃(i) = claim</code>, LSB-first.</p>
+<p>Returns <code>(round_polys (n,3), z_final (n,), dense_eval, transcript)</code> where
+<code>n = log2(len(dense))</code>. Folds even/odd pairs (<code>[0::2]</code>/<code>[1::2]</code>) one
+variable per round, observing each coefficient-form degree-2 round poly
+<code>[s(0), claim-2·s(0)-s(∞), s(∞)]</code> and sampling the next challenge; the
+point is the challenge list reversed (SP1's insert-at-front). <code>dense_eval</code>
+is <code>D(z_final)</code> — the indicator factor is reproved by the inner sumcheck,
+not folded into the eval. Mirrors <code>inner_sumcheck</code>'s LSB-first idiom over a
+flat Hadamard product (no branching program).</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">190</span>
+<span class="normal">191</span>
+<span class="normal">192</span>
+<span class="normal">193</span>
+<span class="normal">194</span>
+<span class="normal">195</span>
+<span class="normal">196</span>
+<span class="normal">197</span>
+<span class="normal">198</span>
+<span class="normal">199</span>
+<span class="normal">200</span>
+<span class="normal">201</span>
+<span class="normal">202</span>
+<span class="normal">203</span>
+<span class="normal">204</span>
+<span class="normal">205</span>
+<span class="normal">206</span>
+<span class="normal">207</span>
+<span class="normal">208</span>
+<span class="normal">209</span>
+<span class="normal">210</span>
+<span class="normal">211</span>
+<span class="normal">212</span>
+<span class="normal">213</span>
+<span class="normal">214</span>
+<span class="normal">215</span>
+<span class="normal">216</span>
+<span class="normal">217</span>
+<span class="normal">218</span>
+<span class="normal">219</span>
+<span class="normal">220</span>
+<span class="normal">221</span>
+<span class="normal">222</span>
+<span class="normal">223</span>
+<span class="normal">224</span>
+<span class="normal">225</span>
+<span class="normal">226</span>
+<span class="normal">227</span>
+<span class="normal">228</span>
+<span class="normal">229</span>
+<span class="normal">230</span>
+<span class="normal">231</span>
+<span class="normal">232</span>
+<span class="normal">233</span>
+<span class="normal">234</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">outer_sumcheck</span><span class="p">(</span>
+    <span class="n">dense</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">indicator</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">claim</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Outer Hadamard sumcheck ``Σ_i D(i)·J̃(i) = claim``, LSB-first.</span>
+
+<span class="sd">    Returns ``(round_polys (n,3), z_final (n,), dense_eval, transcript)`` where</span>
+<span class="sd">    ``n = log2(len(dense))``. Folds even/odd pairs (``[0::2]``/``[1::2]``) one</span>
+<span class="sd">    variable per round, observing each coefficient-form degree-2 round poly</span>
+<span class="sd">    ``[s(0), claim-2·s(0)-s(∞), s(∞)]`` and sampling the next challenge; the</span>
+<span class="sd">    point is the challenge list reversed (SP1's insert-at-front). ``dense_eval``</span>
+<span class="sd">    is ``D(z_final)`` — the indicator factor is reproved by the inner sumcheck,</span>
+<span class="sd">    not folded into the eval. Mirrors ``inner_sumcheck``'s LSB-first idiom over a</span>
+<span class="sd">    flat Hadamard product (no branching program)."""</span>
+    <span class="n">state_a</span> <span class="o">=</span> <span class="n">dense</span>
+    <span class="n">state_b</span> <span class="o">=</span> <span class="n">indicator</span>
+    <span class="n">n_rounds</span> <span class="o">=</span> <span class="p">(</span><span class="n">state_a</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">-</span> <span class="mi">1</span><span class="p">)</span><span class="o">.</span><span class="n">bit_length</span><span class="p">()</span>
+    <span class="n">ef</span> <span class="o">=</span> <span class="n">claim</span><span class="o">.</span><span class="n">dtype</span>
+    <span class="n">ef_challenges</span> <span class="o">=</span> <span class="n">ChallengePolicy</span><span class="p">(</span><span class="n">ef</span><span class="p">)</span>
+    <span class="n">two</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">ef</span><span class="p">)</span>
+
+    <span class="n">cur</span> <span class="o">=</span> <span class="n">claim</span>
+    <span class="n">polys</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">challenges</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">_</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_rounds</span><span class="p">):</span>
+        <span class="n">p0a</span><span class="p">,</span> <span class="n">p1a</span> <span class="o">=</span> <span class="n">state_a</span><span class="p">[</span><span class="mi">0</span><span class="p">::</span><span class="mi">2</span><span class="p">],</span> <span class="n">state_a</span><span class="p">[</span><span class="mi">1</span><span class="p">::</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">p0b</span><span class="p">,</span> <span class="n">p1b</span> <span class="o">=</span> <span class="n">state_b</span><span class="p">[</span><span class="mi">0</span><span class="p">::</span><span class="mi">2</span><span class="p">],</span> <span class="n">state_b</span><span class="p">[</span><span class="mi">1</span><span class="p">::</span><span class="mi">2</span><span class="p">]</span>
+        <span class="n">s0</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">p0a</span> <span class="o">*</span> <span class="n">p0b</span><span class="p">)</span>
+        <span class="n">s_inf</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">p1a</span> <span class="o">-</span> <span class="n">p0a</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">p1b</span> <span class="o">-</span> <span class="n">p0b</span><span class="p">))</span>
+        <span class="n">coef</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">s0</span><span class="p">,</span> <span class="n">cur</span> <span class="o">-</span> <span class="n">two</span> <span class="o">*</span> <span class="n">s0</span> <span class="o">-</span> <span class="n">s_inf</span><span class="p">,</span> <span class="n">s_inf</span><span class="p">])</span>
+
+        <span class="c1"># One extension challenge per variable; fused absorb+squeeze, so byte</span>
+        <span class="c1"># for byte the same as observe + sample_challenge.</span>
+        <span class="n">transcript</span><span class="p">,</span> <span class="n">alpha</span> <span class="o">=</span> <span class="n">ef_challenges</span><span class="o">.</span><span class="n">observe_and_sample</span><span class="p">(</span><span class="n">transcript</span><span class="p">,</span> <span class="n">coef</span><span class="p">)</span>
+        <span class="n">state_a</span> <span class="o">=</span> <span class="n">p0a</span> <span class="o">+</span> <span class="n">alpha</span> <span class="o">*</span> <span class="p">(</span><span class="n">p1a</span> <span class="o">-</span> <span class="n">p0a</span><span class="p">)</span>
+        <span class="n">state_b</span> <span class="o">=</span> <span class="n">p0b</span> <span class="o">+</span> <span class="n">alpha</span> <span class="o">*</span> <span class="p">(</span><span class="n">p1b</span> <span class="o">-</span> <span class="n">p0b</span><span class="p">)</span>
+        <span class="n">cur</span> <span class="o">=</span> <span class="n">eval_coeffs</span><span class="p">(</span><span class="n">coef</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
+        <span class="n">polys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">coef</span><span class="p">)</span>
+        <span class="n">challenges</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span>
+
+    <span class="n">dense_eval</span> <span class="o">=</span> <span class="n">state_a</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">z_final</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">challenges</span><span class="p">)[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">polys</span><span class="p">),</span> <span class="n">z_final</span><span class="p">,</span> <span class="n">dense_eval</span><span class="p">,</span> <span class="n">transcript</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.inner_sumcheck_core" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">inner_sumcheck_core</span>
+
+
+<a href="#zorch.pcs.jagged.prover.inner_sumcheck_core" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">inner_sumcheck_core</span><span class="p">(</span>
+    <span class="n">merged</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">weights</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_row</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_trace</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="n">num_bits</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Branching-program sumcheck over a prebuilt (merged, weights).</p>
+<p>Polymorphic in the column count L = merged.shape[0]: per-column work is a
+vmap + fnp.sum over the real columns (no padding), so L can be a symbolic
+export dim. The 2*num_bits round loop is unrolled (num_bits concrete) — one
+fused zorch.duplex_fs kernel per round. weights is the column-eq table
+col_eq[:L]; the caller keeps z_col at its true length (n_c, unpadded) so those
+weights are exact even when L is a symbolic dim.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">257</span>
+<span class="normal">258</span>
+<span class="normal">259</span>
+<span class="normal">260</span>
+<span class="normal">261</span>
+<span class="normal">262</span>
+<span class="normal">263</span>
+<span class="normal">264</span>
+<span class="normal">265</span>
+<span class="normal">266</span>
+<span class="normal">267</span>
+<span class="normal">268</span>
+<span class="normal">269</span>
+<span class="normal">270</span>
+<span class="normal">271</span>
+<span class="normal">272</span>
+<span class="normal">273</span>
+<span class="normal">274</span>
+<span class="normal">275</span>
+<span class="normal">276</span>
+<span class="normal">277</span>
+<span class="normal">278</span>
+<span class="normal">279</span>
+<span class="normal">280</span>
+<span class="normal">281</span>
+<span class="normal">282</span>
+<span class="normal">283</span>
+<span class="normal">284</span>
+<span class="normal">285</span>
+<span class="normal">286</span>
+<span class="normal">287</span>
+<span class="normal">288</span>
+<span class="normal">289</span>
+<span class="normal">290</span>
+<span class="normal">291</span>
+<span class="normal">292</span>
+<span class="normal">293</span>
+<span class="normal">294</span>
+<span class="normal">295</span>
+<span class="normal">296</span>
+<span class="normal">297</span>
+<span class="normal">298</span>
+<span class="normal">299</span>
+<span class="normal">300</span>
+<span class="normal">301</span>
+<span class="normal">302</span>
+<span class="normal">303</span>
+<span class="normal">304</span>
+<span class="normal">305</span>
+<span class="normal">306</span>
+<span class="normal">307</span>
+<span class="normal">308</span>
+<span class="normal">309</span>
+<span class="normal">310</span>
+<span class="normal">311</span>
+<span class="normal">312</span>
+<span class="normal">313</span>
+<span class="normal">314</span>
+<span class="normal">315</span>
+<span class="normal">316</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">inner_sumcheck_core</span><span class="p">(</span>
+    <span class="n">merged</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">weights</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_row</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_trace</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+    <span class="n">num_bits</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Branching-program sumcheck over a prebuilt (merged, weights).</span>
+
+<span class="sd">    Polymorphic in the column count L = merged.shape[0]: per-column work is a</span>
+<span class="sd">    vmap + fnp.sum over the real columns (no padding), so L can be a symbolic</span>
+<span class="sd">    export dim. The 2*num_bits round loop is unrolled (num_bits concrete) — one</span>
+<span class="sd">    fused zorch.duplex_fs kernel per round. weights is the column-eq table</span>
+<span class="sd">    col_eq[:L]; the caller keeps z_col at its true length (n_c, unpadded) so those</span>
+<span class="sd">    weights are exact even when L is a symbolic dim."""</span>
+    <span class="n">n_vars</span> <span class="o">=</span> <span class="mi">2</span> <span class="o">*</span> <span class="n">num_bits</span>
+    <span class="n">t_matrix</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">asarray</span><span class="p">(</span><span class="n">_TRANSITION_ROWS</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="n">one</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">ones</span><span class="p">((),</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">two</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">ef_challenges</span> <span class="o">=</span> <span class="n">ChallengePolicy</span><span class="p">(</span><span class="n">dtype</span><span class="p">)</span>
+
+    <span class="k">def</span><span class="w"> </span><span class="nf">bp_all</span><span class="p">(</span><span class="n">buf</span><span class="p">:</span> <span class="n">Array</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Array</span><span class="p">:</span>
+        <span class="k">return</span> <span class="n">_bp_all</span><span class="p">(</span><span class="n">buf</span><span class="p">,</span> <span class="n">z_row</span><span class="p">,</span> <span class="n">z_trace</span><span class="p">,</span> <span class="n">t_matrix</span><span class="p">,</span> <span class="n">num_bits</span><span class="p">)</span>
+
+    <span class="c1"># claimed_sum = J̃(z_row, z_col, z_trace) = Σ_c eq(z_col,c)·bp_c — a fnp.sum,</span>
+    <span class="c1"># not eval_jagged_mle's ~1700-deep trace-time unroll (which compiles abysmally).</span>
+    <span class="n">claimed_sum</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">weights</span> <span class="o">*</span> <span class="n">bp_all</span><span class="p">(</span><span class="n">merged</span><span class="p">))</span>
+
+    <span class="c1"># SP1's prove_jagged_evaluation absorbs the claimed J̃ value before the</span>
+    <span class="c1"># rounds; its verifier re-absorbs it the same way.</span>
+    <span class="n">transcript</span> <span class="o">=</span> <span class="n">transcript</span><span class="o">.</span><span class="n">observe</span><span class="p">(</span><span class="n">claimed_sum</span><span class="p">)</span>
+
+    <span class="c1"># Eliminate LSB-first (column n_vars-1 down to 0), unrolled so each round's</span>
+    <span class="c1"># Fiat-Shamir absorb+squeeze lowers to its own fused zorch.duplex_fs kernel.</span>
+    <span class="c1"># bits_i reads merged since the round's column is untouched until its own step</span>
+    <span class="c1"># (merged == buf there).</span>
+    <span class="n">buf</span><span class="p">,</span> <span class="n">claim</span><span class="p">,</span> <span class="n">weights_c</span> <span class="o">=</span> <span class="n">merged</span><span class="p">,</span> <span class="n">claimed_sum</span><span class="p">,</span> <span class="n">weights</span>
+    <span class="n">polys</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="n">challenges</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Array</span><span class="p">]</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">round_idx</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">n_vars</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">):</span>
+        <span class="n">bits_i</span> <span class="o">=</span> <span class="n">merged</span><span class="p">[:,</span> <span class="n">round_idx</span><span class="p">]</span>
+        <span class="n">eq0</span> <span class="o">=</span> <span class="n">one</span> <span class="o">-</span> <span class="n">bits_i</span>
+        <span class="n">bp0</span> <span class="o">=</span> <span class="n">bp_all</span><span class="p">(</span><span class="n">buf</span><span class="o">.</span><span class="n">at</span><span class="p">[:,</span> <span class="n">round_idx</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+        <span class="n">bp1</span> <span class="o">=</span> <span class="n">bp_all</span><span class="p">(</span><span class="n">buf</span><span class="o">.</span><span class="n">at</span><span class="p">[:,</span> <span class="n">round_idx</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
+        <span class="n">p0</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">weights_c</span> <span class="o">*</span> <span class="n">eq0</span> <span class="o">*</span> <span class="n">bp0</span><span class="p">)</span>
+        <span class="n">p_inf</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">sum</span><span class="p">(</span><span class="n">weights_c</span> <span class="o">*</span> <span class="p">(</span><span class="n">bits_i</span> <span class="o">-</span> <span class="n">eq0</span><span class="p">)</span> <span class="o">*</span> <span class="p">(</span><span class="n">bp1</span> <span class="o">-</span> <span class="n">bp0</span><span class="p">))</span>
+        <span class="n">coef</span> <span class="o">=</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">([</span><span class="n">p0</span><span class="p">,</span> <span class="n">claim</span> <span class="o">-</span> <span class="n">two</span> <span class="o">*</span> <span class="n">p0</span> <span class="o">-</span> <span class="n">p_inf</span><span class="p">,</span> <span class="n">p_inf</span><span class="p">])</span>
+
+        <span class="c1"># One extension challenge per variable; fused absorb+squeeze, so byte</span>
+        <span class="c1"># for byte the same as observe + sample_challenge.</span>
+        <span class="n">transcript</span><span class="p">,</span> <span class="n">alpha</span> <span class="o">=</span> <span class="n">ef_challenges</span><span class="o">.</span><span class="n">observe_and_sample</span><span class="p">(</span><span class="n">transcript</span><span class="p">,</span> <span class="n">coef</span><span class="p">)</span>
+        <span class="n">buf</span> <span class="o">=</span> <span class="n">buf</span><span class="o">.</span><span class="n">at</span><span class="p">[:,</span> <span class="n">round_idx</span><span class="p">]</span><span class="o">.</span><span class="n">set</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span>
+        <span class="n">weights_c</span> <span class="o">=</span> <span class="n">weights_c</span> <span class="o">*</span> <span class="p">(</span><span class="n">alpha</span> <span class="o">*</span> <span class="n">bits_i</span> <span class="o">+</span> <span class="p">(</span><span class="n">one</span> <span class="o">-</span> <span class="n">alpha</span><span class="p">)</span> <span class="o">*</span> <span class="n">eq0</span><span class="p">)</span>
+        <span class="n">claim</span> <span class="o">=</span> <span class="n">eval_coeffs</span><span class="p">(</span><span class="n">coef</span><span class="p">,</span> <span class="n">alpha</span><span class="p">)</span>
+        <span class="n">polys</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">coef</span><span class="p">)</span>
+        <span class="n">challenges</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">alpha</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">polys</span><span class="p">),</span> <span class="n">fnp</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">challenges</span><span class="p">[::</span><span class="o">-</span><span class="mi">1</span><span class="p">]),</span> <span class="n">claimed_sum</span><span class="p">,</span> <span class="n">transcript</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.eval_round_core" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">eval_round_core</span>
+
+
+<a href="#zorch.pcs.jagged.prover.eval_round_core" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">eval_round_core</span><span class="p">(</span>
+    <span class="n">offsets</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">merged</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">weights</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">all_claims</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">dense</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_row</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_col</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">JaggedEvalMsg</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The whole eval-proof sumcheck over prebuilt column arrays, shape-polymorphic
+in the column count.</p>
+<p>All four column-indexed inputs share the column dim — <code>offsets</code> is
+<code>(L+1, n_d)</code>, <code>merged</code> <code>(L, 2·n_d)</code>, <code>weights</code> and <code>all_claims</code>
+<code>(L,)</code>. Every column-dependent step (the outer indicator's searchsorted
+gather, the outer <code>Σ D·J̃</code> Hadamard sumcheck, the inner branching-program
+sumcheck) runs over the REAL column count, so one <code>frx.export</code> binary serves
+every column count at real-size cost — no padding. The host builds <code>offsets</code>
+/ <code>merged</code> / <code>weights</code> from <code>col_heights</code>; taking them as arrays here is
+what lets the column dim be symbolic. <code>n_d = merged.shape[1] // 2</code>.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">319</span>
+<span class="normal">320</span>
+<span class="normal">321</span>
+<span class="normal">322</span>
+<span class="normal">323</span>
+<span class="normal">324</span>
+<span class="normal">325</span>
+<span class="normal">326</span>
+<span class="normal">327</span>
+<span class="normal">328</span>
+<span class="normal">329</span>
+<span class="normal">330</span>
+<span class="normal">331</span>
+<span class="normal">332</span>
+<span class="normal">333</span>
+<span class="normal">334</span>
+<span class="normal">335</span>
+<span class="normal">336</span>
+<span class="normal">337</span>
+<span class="normal">338</span>
+<span class="normal">339</span>
+<span class="normal">340</span>
+<span class="normal">341</span>
+<span class="normal">342</span>
+<span class="normal">343</span>
+<span class="normal">344</span>
+<span class="normal">345</span>
+<span class="normal">346</span>
+<span class="normal">347</span>
+<span class="normal">348</span>
+<span class="normal">349</span>
+<span class="normal">350</span>
+<span class="normal">351</span>
+<span class="normal">352</span>
+<span class="normal">353</span>
+<span class="normal">354</span>
+<span class="normal">355</span>
+<span class="normal">356</span>
+<span class="normal">357</span>
+<span class="normal">358</span>
+<span class="normal">359</span>
+<span class="normal">360</span>
+<span class="normal">361</span>
+<span class="normal">362</span>
+<span class="normal">363</span>
+<span class="normal">364</span>
+<span class="normal">365</span>
+<span class="normal">366</span>
+<span class="normal">367</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">eval_round_core</span><span class="p">(</span>
+    <span class="n">offsets</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">merged</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">weights</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">all_claims</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">dense</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_row</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">z_col</span><span class="p">:</span> <span class="n">Array</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">JaggedEvalMsg</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""The whole eval-proof sumcheck over prebuilt column arrays, shape-polymorphic</span>
+<span class="sd">    in the column count.</span>
+
+<span class="sd">    All four column-indexed inputs share the column dim — ``offsets`` is</span>
+<span class="sd">    ``(L+1, n_d)``, ``merged`` ``(L, 2·n_d)``, ``weights`` and ``all_claims``</span>
+<span class="sd">    ``(L,)``. Every column-dependent step (the outer indicator's searchsorted</span>
+<span class="sd">    gather, the outer ``Σ D·J̃`` Hadamard sumcheck, the inner branching-program</span>
+<span class="sd">    sumcheck) runs over the REAL column count, so one ``frx.export`` binary serves</span>
+<span class="sd">    every column count at real-size cost — no padding. The host builds ``offsets``</span>
+<span class="sd">    / ``merged`` / ``weights`` from ``col_heights``; taking them as arrays here is</span>
+<span class="sd">    what lets the column dim be symbolic. ``n_d = merged.shape[1] // 2``."""</span>
+    <span class="n">num_bits</span> <span class="o">=</span> <span class="n">merged</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">//</span> <span class="mi">2</span>
+
+    <span class="n">claim</span> <span class="o">=</span> <span class="n">outer_sumcheck_claim</span><span class="p">(</span><span class="n">all_claims</span><span class="p">,</span> <span class="n">z_col</span><span class="p">)</span>
+    <span class="n">indicator</span> <span class="o">=</span> <span class="n">partial_eval_core</span><span class="p">(</span><span class="n">offsets</span><span class="p">,</span> <span class="n">z_row</span><span class="p">,</span> <span class="n">z_col</span><span class="p">,</span> <span class="n">dense</span><span class="o">.</span><span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">outer_polys</span><span class="p">,</span> <span class="n">z_final</span><span class="p">,</span> <span class="n">dense_eval</span><span class="p">,</span> <span class="n">transcript</span> <span class="o">=</span> <span class="n">outer_sumcheck</span><span class="p">(</span>
+        <span class="n">dense</span><span class="p">,</span> <span class="n">indicator</span><span class="p">,</span> <span class="n">claim</span><span class="p">,</span> <span class="n">transcript</span>
+    <span class="p">)</span>
+    <span class="n">inner_polys</span><span class="p">,</span> <span class="n">inner_point</span><span class="p">,</span> <span class="n">inner_claimed_sum</span><span class="p">,</span> <span class="n">transcript</span> <span class="o">=</span> <span class="n">inner_sumcheck_core</span><span class="p">(</span>
+        <span class="n">merged</span><span class="p">,</span>
+        <span class="n">weights</span><span class="p">,</span>
+        <span class="n">z_row</span><span class="p">,</span>
+        <span class="n">z_final</span><span class="p">,</span>
+        <span class="n">transcript</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span>
+        <span class="n">num_bits</span><span class="o">=</span><span class="n">num_bits</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="n">msg</span> <span class="o">=</span> <span class="n">JaggedEvalMsg</span><span class="p">(</span>
+        <span class="n">outer_sumcheck_claim</span><span class="o">=</span><span class="n">claim</span><span class="p">,</span>
+        <span class="n">outer_sumcheck_polys</span><span class="o">=</span><span class="n">outer_polys</span><span class="p">,</span>
+        <span class="n">outer_sumcheck_point</span><span class="o">=</span><span class="n">z_final</span><span class="p">,</span>
+        <span class="n">dense_eval</span><span class="o">=</span><span class="n">dense_eval</span><span class="p">,</span>
+        <span class="n">inner_sumcheck_polys</span><span class="o">=</span><span class="n">inner_polys</span><span class="p">,</span>
+        <span class="n">inner_point</span><span class="o">=</span><span class="n">inner_point</span><span class="p">,</span>
+        <span class="n">inner_claimed_sum</span><span class="o">=</span><span class="n">inner_claimed_sum</span><span class="p">,</span>
+    <span class="p">)</span>
+    <span class="k">return</span> <span class="n">msg</span><span class="p">,</span> <span class="n">transcript</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.eval_column_arrays" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">eval_column_arrays</span>
+
+
+<a href="#zorch.pcs.jagged.prover.eval_column_arrays" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">eval_column_arrays</span><span class="p">(</span>
+    <span class="n">col_heights</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>Host-build the two height-dependent column arrays <code>eval_round_core</code>
+consumes: the offset tensor <code>(L+1, n_d)</code> and the merged prefix-bit
+buffer <code>(L, 2·n_d)</code>. Heights live in the array VALUES, so a jitted
+consumer taking these as traced arguments keys its compile on the
+<code>(L, n_d)</code> class alone.</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">370</span>
+<span class="normal">371</span>
+<span class="normal">372</span>
+<span class="normal">373</span>
+<span class="normal">374</span>
+<span class="normal">375</span>
+<span class="normal">376</span>
+<span class="normal">377</span>
+<span class="normal">378</span>
+<span class="normal">379</span>
+<span class="normal">380</span>
+<span class="normal">381</span>
+<span class="normal">382</span>
+<span class="normal">383</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">eval_column_arrays</span><span class="p">(</span>
+    <span class="n">col_heights</span><span class="p">:</span> <span class="n">Sequence</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span> <span class="o">*</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">Array</span><span class="p">,</span> <span class="n">Array</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""Host-build the two height-dependent column arrays ``eval_round_core``</span>
+<span class="sd">    consumes: the offset tensor ``(L+1, n_d)`` and the merged prefix-bit</span>
+<span class="sd">    buffer ``(L, 2·n_d)``. Heights live in the array VALUES, so a jitted</span>
+<span class="sd">    consumer taking these as traced arguments keys its compile on the</span>
+<span class="sd">    ``(L, n_d)`` class alone."""</span>
+    <span class="n">heights</span> <span class="o">=</span> <span class="nb">list</span><span class="p">(</span><span class="n">col_heights</span><span class="p">)</span>
+    <span class="n">l_max</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">heights</span><span class="p">)</span>
+    <span class="n">_</span><span class="p">,</span> <span class="n">n_d</span> <span class="o">=</span> <span class="n">build_jagged_layout</span><span class="p">(</span><span class="n">heights</span><span class="p">,</span> <span class="n">l_max</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">offsets</span> <span class="o">=</span> <span class="n">_offset_bit_tensor</span><span class="p">(</span><span class="n">heights</span><span class="p">,</span> <span class="n">l_max</span><span class="p">,</span> <span class="n">n_d</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="n">merged</span> <span class="o">=</span> <span class="n">merged_prefix_bits</span><span class="p">(</span><span class="n">heights</span><span class="p">,</span> <span class="n">n_d</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">offsets</span><span class="p">,</span> <span class="n">merged</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="zorch.pcs.jagged.prover.prove_jagged_eval" class="doc doc-heading">
+            <span class="doc doc-object-name doc-function-name">prove_jagged_eval</span>
+
+
+<a href="#zorch.pcs.jagged.prover.prove_jagged_eval" class="headerlink" title="Permanent link">&para;</a></h2>
+<div class="doc-signature highlight"><pre><span></span><code><span class="nf">prove_jagged_eval</span><span class="p">(</span>
+    <span class="n">inputs</span><span class="p">:</span> <span class="n">JaggedEvalInputs</span><span class="p">,</span>
+    <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span>
+    <span class="o">*</span><span class="p">,</span>
+    <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">JaggedEvalMsg</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]</span>
+</code></pre></div>
+
+    <div class="doc doc-contents ">
+
+        <p>The jagged PCS evaluation sumchecks over a <code>JaggedEvalInputs</code>.</p>
+<p>Runs the full sumcheck half: the outer Hadamard sumcheck <code>Sum D*J~</code> over
+the committed dense buffer (round polys + <code>dense_eval</code>), whose folded
+point <code>z_final</code> then feeds the inner branching-program sumcheck reproving
+<code>J~(z_row, z_col, z_final)</code>. See the module docstring for why both are
+bespoke loops, not <code>SumcheckRound</code>s.</p>
+<p>A function rather than a round: it reduces no carry — the layout it is
+handed is the layout it proves — so there is nothing for a recurrence to
+thread. Host-prepares the column arrays from <code>col_heights</code> then defers to
+<code>eval_round_core</code> (shape-polymorphic in the column count).</p>
+
+            <details class="quote">
+              <summary>Source code in <code>zorch/pcs/jagged/prover.py</code></summary>
+              <div class="highlight"><table class="highlighttable"><tr><td class="linenos"><div class="linenodiv"><pre><span></span><span class="normal">404</span>
+<span class="normal">405</span>
+<span class="normal">406</span>
+<span class="normal">407</span>
+<span class="normal">408</span>
+<span class="normal">409</span>
+<span class="normal">410</span>
+<span class="normal">411</span>
+<span class="normal">412</span>
+<span class="normal">413</span>
+<span class="normal">414</span>
+<span class="normal">415</span>
+<span class="normal">416</span>
+<span class="normal">417</span>
+<span class="normal">418</span>
+<span class="normal">419</span>
+<span class="normal">420</span>
+<span class="normal">421</span>
+<span class="normal">422</span>
+<span class="normal">423</span>
+<span class="normal">424</span>
+<span class="normal">425</span>
+<span class="normal">426</span>
+<span class="normal">427</span>
+<span class="normal">428</span>
+<span class="normal">429</span>
+<span class="normal">430</span>
+<span class="normal">431</span></pre></div></td><td class="code"><div><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">prove_jagged_eval</span><span class="p">(</span>
+    <span class="n">inputs</span><span class="p">:</span> <span class="n">JaggedEvalInputs</span><span class="p">,</span> <span class="n">transcript</span><span class="p">:</span> <span class="n">Transcript</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">dtype</span><span class="p">:</span> <span class="n">Any</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">tuple</span><span class="p">[</span><span class="n">JaggedEvalMsg</span><span class="p">,</span> <span class="n">Transcript</span><span class="p">]:</span>
+<span class="w">    </span><span class="sd">"""The jagged PCS evaluation sumchecks over a `JaggedEvalInputs`.</span>
+
+<span class="sd">    Runs the full sumcheck half: the outer Hadamard sumcheck ``Sum D*J~`` over</span>
+<span class="sd">    the committed dense buffer (round polys + ``dense_eval``), whose folded</span>
+<span class="sd">    point ``z_final`` then feeds the inner branching-program sumcheck reproving</span>
+<span class="sd">    ``J~(z_row, z_col, z_final)``. See the module docstring for why both are</span>
+<span class="sd">    bespoke loops, not ``SumcheckRound``s.</span>
+
+<span class="sd">    A function rather than a round: it reduces no carry — the layout it is</span>
+<span class="sd">    handed is the layout it proves — so there is nothing for a recurrence to</span>
+<span class="sd">    thread. Host-prepares the column arrays from ``col_heights`` then defers to</span>
+<span class="sd">    ``eval_round_core`` (shape-polymorphic in the column count).</span>
+<span class="sd">    """</span>
+    <span class="n">offsets</span><span class="p">,</span> <span class="n">merged</span><span class="p">,</span> <span class="n">weights</span> <span class="o">=</span> <span class="n">_eval_inputs</span><span class="p">(</span><span class="n">inputs</span><span class="o">.</span><span class="n">col_heights</span><span class="p">,</span> <span class="n">inputs</span><span class="o">.</span><span class="n">z_col</span><span class="p">,</span> <span class="n">dtype</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">eval_round_core</span><span class="p">(</span>
+        <span class="n">offsets</span><span class="p">,</span>
+        <span class="n">merged</span><span class="p">,</span>
+        <span class="n">weights</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="o">.</span><span class="n">all_claims</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="o">.</span><span class="n">dense</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="o">.</span><span class="n">z_row</span><span class="p">,</span>
+        <span class="n">inputs</span><span class="o">.</span><span class="n">z_col</span><span class="p">,</span>
+        <span class="n">transcript</span><span class="p">,</span>
+        <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">,</span>
+    <span class="p">)</span>
+</code></pre></div></td></tr></table></div>
+            </details>
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    <script id="__config" type="application/json">{"base": "../../../..", "features": ["navigation.top", "navigation.indexes", "content.code.copy", "search.suggest"], "search": "../../../../assets/javascripts/workers/search.f8cc74c7.min.js", "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}}</script>
+    
+    
+      <script src="../../../../assets/javascripts/bundle.60a45f97.min.js"></script>
+      
+    
+  </body>
+</html>
