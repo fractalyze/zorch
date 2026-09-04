@@ -20,6 +20,7 @@ py_library(
     ],
     visibility = ["//visibility:public"],
     deps = [
+        "//zorch:challenge",
         "//zorch:transcript",
         "//zorch/poly",
         "//zorch/sumcheck",

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import frx
 import frx.numpy as fnp
@@ -73,11 +73,7 @@ from zorch.sumcheck.jagged.types import (
     _InterpConsts,
     _JaggedSchedule,
 )
-from zorch.transcript import (
-    DuplexTranscript,
-    Transcript,
-    reinterpret_challenge,
-)
+from zorch.transcript import DuplexTranscript, Transcript
 
 if TYPE_CHECKING:
     from zorch.round import ProverRound
@@ -162,7 +158,6 @@ def prove_jagged_layer(
     """
     if caps is None:
         raise ValueError("a jagged layer proves under caps; pass RoundWidthCaps")
-    challenge_limbs = challenges.limbs_over(transcript.field)
     niv = layer.num_batch_variables
     nrv = eval_point.shape[0] - niv
     if nrv < 1:
@@ -186,7 +181,7 @@ def prove_jagged_layer(
         claim,
         eval_point,
         transcript,
-        challenge_limbs,
+        challenges,
         caps,
     )
 
@@ -201,7 +196,7 @@ def _prove_jagged_layer_from_ops(
     claim: Array,
     eval_point: Array,
     transcript: Transcript,
-    challenge_limbs: int,
+    challenges: ChallengePolicy,
     caps: RoundWidthCaps | None = None,
 ) -> tuple[Array, Transcript, JaggedLayerProof]:
     """One jagged layer's sumcheck from PREBUILT schedule operands — the shared
@@ -209,7 +204,15 @@ def _prove_jagged_layer_from_ops(
     and the standalone `prove_jagged_layer`. `row_counts` and the live triples
     ride as TRACED operands (never keying the jit) while `out_pairs` (the exact
     layout's static padded widths; None under caps) stays static like
-    `niv`/`caps`."""
+    `niv`/`caps`.
+
+    The caller's `ChallengePolicy` travels whole, not reduced to a limb count: the
+    policy is a soundness parameter (an extension challenge raises the soundness
+    floor over a base-field one) and the verifier draws from the one it was
+    configured with, so a prover that re-derived the challenge field from the
+    claim's dtype would be free to disagree with it. `_JaggedSchedule` still
+    carries the limb count for the reference oracle, derived here from that same
+    policy so the two cannot be chosen apart."""
     nrv = eval_point.shape[0] - niv
     eq_row = _expand_eq_slice(eval_point, niv, row=True)
     eq_int = _expand_eq_slice(eval_point, niv, row=False)
@@ -223,7 +226,7 @@ def _prove_jagged_layer_from_ops(
         _InterpConsts(naturals, inv_vand),
         nrv,
         niv,
-        challenge_limbs,
+        challenges.limbs_over(transcript.field),
         caps,
     )
     # The host round loop runs one fold-then-compute kernel per round, the FS hop
@@ -231,7 +234,7 @@ def _prove_jagged_layer_from_ops(
     # the whole loop traces into one program (the whole-scan `zorch.sumcheck`
     # megakernel was retired -- it never compiled at real sizes, mirroring #332's
     # drop of the dense megakernel).
-    out = _run_jagged_rounds(state, sched, transcript)
+    out = _run_jagged_rounds(state, sched, transcript, challenges)
     bound_point, advanced, polys, fn0, fn1, fd0, fd1 = out
     proof = JaggedLayerProof(lam, claim, polys, bound_point, fn0, fn1, fd0, fd1)
     return bound_point, advanced, proof
@@ -258,6 +261,7 @@ def _run_jagged_rounds(
     state: _JaggedState,
     sched: _JaggedSchedule,
     transcript: Transcript,
+    challenges: ChallengePolicy,
 ) -> tuple[Array, Transcript, Array, Array, Array, Array, Array]:
     """The per-layer device-FS sumcheck host loop: one fold-then-compute per round
     at the round's real (halving) state size, the Fiat-Shamir hop + reduce folded in
@@ -269,7 +273,13 @@ def _run_jagged_rounds(
     host dispatches collapse to one per layer. Each round emits the
     `zorch.sumcheck.round` marker (a recognizing emitter fuses it; an unclaimed
     marker decomposes inline, byte-identical to the eager body). Byte-identical to
-    the inline reference oracle in the tests."""
+    the inline reference oracle in the tests.
+
+    `challenges` is the caller's policy, not one rebuilt from `claim.dtype`: the
+    reference oracle squeezes `sched.challenge_limbs` words and reinterprets, so
+    the two rules have to come from ONE policy or the byte-match compares two
+    different Fiat-Shamir streams that happen to coincide on a base-field
+    transcript."""
     eq_row, eq_int, eval_point, lam, claim = (
         state.eq_row,
         state.eq_int,
@@ -279,7 +289,6 @@ def _run_jagged_rounds(
     )
     nrv, niv = sched.nrv, sched.niv
     row_counts = sched.row_counts
-    challenge_limbs = sched.challenge_limbs
     one = fnp.ones((), eval_point.dtype)
     eq_adj = one
     pad_adj = one
@@ -332,7 +341,7 @@ def _run_jagged_rounds(
     # Round 0 binds nothing yet, so its sum is the bare row poly (no fold).
     sum0 = _composite_sum_as_poly_row
     polys: list[Array] = []
-    challenges: list[Array] = []
+    round_challenges: list[Array] = []
     prev_r = one  # unused until the first fold (round 1)
     for rnd in range(nrv + niv):
         # z_cur = eval_point's coordinate for round rnd (== eval_point[-(rnd+1)]).
@@ -341,7 +350,6 @@ def _run_jagged_rounds(
         # ~one per round, one of the launch-flood kernels the eager fold pays).
         z_cur = eval_point[-(rnd + 1)]
         scalars = _RoundScalars(eq_adj, pad_adj, z_cur, claim, lam)
-        dtype = claim.dtype
         if rnd == 0:
             out_pairs = None if sched.out_pairs is None else sched.out_pairs[0]
             poly, planes = sum0(
@@ -404,11 +412,11 @@ def _run_jagged_rounds(
             poly, planes, eq_int = fix_int(
                 planes, eq_int, prev_r, scalars, consts, live
             )
-        # Device FS hop + reduce -- traced into the whole-layer jit (one fused
+        # FS hop + reduce -- traced into the whole-layer jit (one fused
         # region per round). z_cur was sliced statically at the loop top, so no
         # gather rides here.
         transcript, r, claim, pad_adj = _fs_reduce(
-            poly, transcript, pad_adj, z_cur, challenge_limbs, dtype
+            poly, transcript, pad_adj, z_cur, challenges
         )
         # Serialize the rounds' buffer assignment: unfenced, the scheduler
         # overlaps rounds and co-resides their cap-width plane intermediates, so
@@ -423,14 +431,14 @@ def _run_jagged_rounds(
         )
         transcript = cast(DuplexTranscript, transcript)  # barrier widens to Transcript
         polys.append(poly)
-        challenges.append(r)
+        round_challenges.append(r)
         if rnd == nrv - 1:
             eq_adj = pad_adj
             pad_adj = one
         prev_r = r
 
     fn0, fn1, fd0, fd1, stacked_challenges, stacked_polys = _finalize_layer(
-        planes, prev_r, challenges, polys
+        planes, prev_r, round_challenges, polys
     )
     return (
         stacked_challenges,
@@ -450,14 +458,15 @@ def _sample_lam_and_claim(
     transcript: DuplexTranscript,
     num_eval: Array,
     den_eval: Array,
-    n: int,
-    dtype: Any,
+    challenges: ChallengePolicy,
 ) -> tuple[DuplexTranscript, Array, Array]:
-    """The layer pre-carry: squeeze the batching `lam`, reinterpret it, and form the
-    claim `lam*num_eval + den_eval`. All device math, traced into the whole-layer
-    zone."""
-    transcript, raw = transcript.sample(n)
-    lam = reinterpret_challenge(raw, dtype)
+    """The layer pre-carry: squeeze the batching `lam` and form the claim
+    `lam*num_eval + den_eval`. All device math, traced into the whole-layer zone.
+
+    The policy owns both halves of a challenge -- how many transcript words to
+    squeeze and what field to read them as. Sampling through it is what keeps
+    those two from being chosen independently."""
+    transcript, lam = challenges.sample(transcript)
     return transcript, lam, lam * num_eval + den_eval
 
 
@@ -468,17 +477,19 @@ def _observe_openings_and_fold(
     d0: Array,
     d1: Array,
     point: Array,
-    n: int,
-    dtype: Any,
+    challenges: ChallengePolicy,
 ) -> tuple[DuplexTranscript, Array, Array, Array]:
     """Device-FS layer post-carry: absorb the four openings, squeeze the child
-    selector `r`, and fold the carry. The openings stack, `observe`, `sample`,
-    reinterpret, and `fold_carry` are all device math that trace into the whole-layer
-    zone -- the layer-boundary sibling of the per-round FS hop. `observe_and_sample`
-    fuses the absorb + squeeze exactly as the round FS does, so the transcript stream
-    is byte-identical to the split form."""
-    transcript, raw = transcript.observe_and_sample(fnp.stack([n0, n1, d0, d1]), n)
-    r = reinterpret_challenge(raw, dtype)
+    selector `r`, and fold the carry. The openings stack, the hop, and
+    `fold_carry` are all device math that trace into the whole-layer zone -- the
+    layer-boundary sibling of the per-round FS hop.
+
+    Absorb and squeeze must stay ONE hop: the `zorch.duplex_fs` marker wraps a
+    whole hop, and an absorb followed by a separate squeeze falls outside it and
+    scatters ~9 kernels."""
+    transcript, r = challenges.observe_and_sample(
+        transcript, fnp.stack([n0, n1, d0, d1])
+    )
     return transcript, *fold_carry(n0, n1, d0, d1, point, r)
 
 
@@ -488,7 +499,7 @@ def _prove_jagged_layer_round(
     row_counts: Array,
     live: list[Array],
     out_pairs: tuple[int, ...] | None,
-    challenge_limbs: int,
+    challenges: ChallengePolicy,
     caps: RoundWidthCaps | None,
     claim: LayerClaim,
     transcript: Transcript,
@@ -501,15 +512,19 @@ def _prove_jagged_layer_round(
     never bakes the schedule into the trace. A module-level function (no
     implicit `self`) so the chain can drop a round -- and free its layer --
     the moment it builds the next (the one-live-layer release
-    `ChainedJaggedProveTest` pins)."""
+    `ChainedJaggedProveTest` pins).
+
+    `challenges` is the consumer's configured policy, carried in rather than
+    rebuilt from `num_eval.dtype`: the policy names the challenge FIELD, which is
+    a soundness parameter, and the verifier round draws lam, every per-variable
+    fold and the child selector from the policy it was configured with."""
     num_eval, den_eval, eval_point = claim
-    dtype = num_eval.dtype
     transcript = cast(DuplexTranscript, transcript)
     # The per-layer carry brackets the round loop: sample lam + the batched claim
     # before, absorb the openings + sample + fold the child selector after. All
     # device math, traced into the whole-layer jit.
     transcript, lam, claim = _sample_lam_and_claim(
-        transcript, num_eval, den_eval, challenge_limbs, dtype
+        transcript, num_eval, den_eval, challenges
     )
     point, transcript, proof = _prove_jagged_layer_from_ops(
         planes,
@@ -521,7 +536,7 @@ def _prove_jagged_layer_round(
         claim,
         eval_point,
         transcript,
-        challenge_limbs,
+        challenges,
         caps,
     )
     n0, n1 = proof.numerator_0, proof.numerator_1
@@ -533,8 +548,7 @@ def _prove_jagged_layer_round(
         d0,
         d1,
         point,
-        challenge_limbs,
-        dtype,
+        challenges,
     )
     return (num_eval, den_eval, eval_point), transcript, proof
 
@@ -542,7 +556,7 @@ def _prove_jagged_layer_round(
 # Shared by every `JaggedGkrLayerRound(jit=True)`. The schedule operand
 # (`row_counts`) rides TRACED, not static, so its values leave the jit key:
 # the zone keys only on the operand SHAPES plus the static `niv` /
-# `challenge_limbs` / `caps` / `out_pairs` (`nrv` is read from `eval_point`'s
+# `challenges` / `caps` / `out_pairs` (`nrv` is read from `eval_point`'s
 # length inside; `out_pairs` is None under caps, so the capped pyramid shares
 # one key). The derived schedule shrank the schedule state from the
 # hundreds-of-MB per-round gather arrays to the one KB-scale counts vector —
@@ -564,7 +578,7 @@ def _jagged_round_zone(
     denominator_1: Array,
     row_counts: Array,
     niv: int,
-    challenge_limbs: int,
+    challenges: ChallengePolicy,
     caps: RoundWidthCaps | None,
     out_pairs: tuple[int, ...] | None,
     claim: LayerClaim,
@@ -584,7 +598,7 @@ def _jagged_round_zone(
         row_counts,
         live,
         out_pairs,
-        challenge_limbs,
+        challenges,
         caps,
         claim,
         transcript,
@@ -593,7 +607,7 @@ def _jagged_round_zone(
 
 def _jagged_round_via_zone(
     layer: JaggedGkrLayer,
-    challenge_limbs: int,
+    challenges: ChallengePolicy,
     caps: RoundWidthCaps | None,
     layer_bufs: LayerBuffers | None,
     claim: LayerClaim,
@@ -645,7 +659,7 @@ def _jagged_round_via_zone(
         *planes,
         layer.row_counts,
         niv,
-        challenge_limbs,
+        challenges,
         caps,
         None,
         claim,
@@ -682,10 +696,14 @@ class JaggedGkrLayerRound(ProverRound):
         # `partial` closes over the args, not `self`, so the chain frees the
         # round -- and its layer -- the moment it builds the next. Pass ONE
         # `layer_bufs` per chain (None materializes the cap pad fresh).
-        policy = challenges
-        challenge_limbs = policy.base_limbs
+        #
+        # The POLICY travels, not a limb count derived from it: the policy names
+        # the challenge field, and the verifier round draws from the one it was
+        # configured with, so reducing it here would let the two disagree. It is
+        # a frozen, value-equal dataclass, so it rides the zone's static args
+        # without splitting the trace across same-config rounds.
         self._call = partial(
-            _jagged_round_via_zone, layer, challenge_limbs, caps, layer_bufs
+            _jagged_round_via_zone, layer, challenges, caps, layer_bufs
         )
 
     def __call__(

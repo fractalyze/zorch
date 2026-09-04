@@ -188,11 +188,34 @@ py_test(
     # needs the cuda,cpu invocation.
     tags = ["needs_cpu_backend"],
     deps = [
+        "//zorch:challenge",
         "//zorch:transcript",
+        # FsEntryPointTest watches the FS *call sites*, so it needs them present:
+        # the jagged round hop it drives, and (for the import guard, which scans
+        # the runfiles tree) the prover packages that reach the transcript.
+        "//zorch/logup_gkr",
+        "//zorch/sumcheck/jagged",
         "//zorch/testkit:koalabear16",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "challenge_packing_test",
+    size = "small",
+    srcs = ["challenge_packing_test.py"],
+    # The sweep scans the runfiles tree, so the packages that draw challenges
+    # have to be present or it passes by finding nothing.
+    deps = [
+        "//zorch:challenge",
+        "//zorch:transcript",
+        "//zorch/logup_gkr",
+        "//zorch/pcs/jagged:prover",
+        "//zorch/pcs/whir",
+        "//zorch/sumcheck/jagged",
+        requirement("absl_py"),
     ] + GPU_PLUGIN_DEPS,
 )

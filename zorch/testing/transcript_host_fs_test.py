@@ -5,6 +5,9 @@ sponge. Every test compares `fs_on_host=True` against the default device path on
 same inputs."""
 from __future__ import annotations
 
+import ast
+import pathlib
+from dataclasses import replace
 from typing import Any
 from unittest import mock
 
@@ -12,11 +15,14 @@ import frx
 import frx.numpy as fnp
 import zk_dtypes
 from absl.testing import absltest, parameterized
-from frx import tree_util
+from frx import Array, tree_util
 
+import zorch
 from zorch import transcript as transcript_mod
+from zorch.challenge import ChallengePolicy
+from zorch.sumcheck.jagged.fs import _fs_reduce
 from zorch.testkit.koalabear16 import koalabear16_perm
-from zorch.testkit.random_field import rand_field
+from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.transcript import (
     DuplexState,
     DuplexTranscript,
@@ -221,6 +227,198 @@ class ScopedHostAbsorbTest(parameterized.TestCase):
             frx.jit(lambda t, x: t.absorb_on_host(x))(
                 self._new(), rand_field(9, (8,), F)
             )
+
+
+class _RecordingFs:
+    """A `_FsBackend` that records which entry points it was asked for and
+    delegates. Installed on a transcript so a test can assert a *call site*
+    reaches the backend, rather than naming one backend's body directly.
+
+    Every method forwards to `inner`, never back through the transcript: a
+    delegate that re-entered `t.observe_and_sample(...)` would recurse through
+    this same spy."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.calls: list[str] = []
+
+    @property
+    def on_host(self) -> bool:
+        return bool(self.inner.on_host)
+
+    def observe(self, t: DuplexTranscript, values: Array) -> DuplexTranscript:
+        self.calls.append("observe")
+        return self.inner.observe(t, values)
+
+    def sample(self, t: DuplexTranscript, n: int) -> tuple[DuplexTranscript, Array]:
+        self.calls.append("sample")
+        return self.inner.sample(t, n)
+
+    def observe_and_sample(
+        self, t: DuplexTranscript, values: Array, n: int
+    ) -> tuple[DuplexTranscript, Array]:
+        self.calls.append("observe_and_sample")
+        return self.inner.observe_and_sample(t, values, n)
+
+    def check_witness(
+        self, t: DuplexTranscript, witness: Array, *, pow_bits: int
+    ) -> tuple[DuplexTranscript, Array]:
+        self.calls.append("check_witness")
+        return self.inner.check_witness(t, witness, pow_bits=pow_bits)
+
+
+class FsEntryPointTest(parameterized.TestCase):
+    """Every Fiat-Shamir hop reaches the transcript's `fs` backend.
+
+    `_FsBackend` exists so the device/host choice is structural -- "every method
+    routes through the backend and so cannot silently ignore the host placement".
+    The transcript's own methods hold that line (the class above checks the
+    results). What escapes it is a *caller* that names a backend body directly:
+    such a hop is pinned to that body's backend and a `fs_on_host=True` prove
+    silently keeps running it on the device. These tests watch the callers.
+
+    Not skipped on CPU: routing is Python dispatch, so it is backend-independent.
+    """
+
+    def _spied(self, fs_on_host: bool) -> tuple[DuplexTranscript, _RecordingFs]:
+        t = DuplexTranscript.new(koalabear16_perm(), rate=8, fs_on_host=fs_on_host)
+        spy = _RecordingFs(t.fs)
+        return replace(t, fs=spy), spy
+
+    @parameterized.named_parameters(("device", False), ("host", True))
+    def test_jagged_round_hop_routes_through_the_backend(
+        self, fs_on_host: bool
+    ) -> None:
+        """The sumcheck per-round hop -- the hottest FS call site in a jagged
+        LogUp-GKR prove, ~78% of its hops -- must reach the backend. It once called
+        the device body `_observe_and_sample_marked` directly, so `fs_on_host=True`
+        left every round on the device."""
+        t, spy = self._spied(fs_on_host)
+        t_out, _, _, _ = _fs_reduce(
+            rand_ext_field(1, (4,), F, EF),  # round poly, coefficient form
+            t,
+            rand_ext_field(2, (), F, EF),  # pad_adj
+            rand_ext_field(3, (), F, EF),  # z_cur
+            ChallengePolicy(EF),
+        )
+        self.assertEqual(spy.calls, ["observe_and_sample"])
+        self.assertIs(t_out.fs, spy)
+
+    def test_no_module_imports_a_private_fs_body(self) -> None:
+        """Nothing outside `transcript.py` may import a private name from it.
+
+        The private FS bodies (`_observe_and_sample_marked`, `_observe_and_sample_body`,
+        `_observe_body`, `_sample_body`) are backend implementations, one per
+        placement; the entry points are the `DuplexTranscript` methods. Importing a
+        body is how a call site leaves the `_FsBackend` contract, so the import is
+        what this forbids -- statically, for every module at once, which a
+        behavioural test can only do one call site at a time. Tests are exempt:
+        they cover the bodies deliberately."""
+        root = pathlib.Path(zorch.__file__).parent
+        offenders, scanned = [], set()
+        for path in sorted(root.rglob("*.py")):
+            rel = path.relative_to(root)
+            # By PATH, not by basename: `zorch/lnp/transcript.py` and
+            # `zorch/testkit/transcript.py` are ordinary call sites that a
+            # `rel.name` test would silently wave through.
+            if rel.as_posix() == "transcript.py" or "testing" in rel.parts:
+                continue
+            scanned.add(rel.as_posix())
+            for node in ast.walk(ast.parse(path.read_text())):
+                if not isinstance(node, ast.ImportFrom):
+                    continue
+                if node.module != "zorch.transcript":
+                    continue
+                offenders += [
+                    f"{rel}:{node.lineno} imports {a.name}"
+                    for a in node.names
+                    if a.name.startswith("_")
+                ]
+        # This walks the runfiles tree, which holds only what the target depends
+        # on -- so an unlisted dep would shrink the scan to nothing and the test
+        # would pass having checked no code at all. Name the modules that must be
+        # in it, so a thin closure fails here instead of going quiet.
+        self.assertContainsSubset(
+            {"challenge.py", "sumcheck/jagged/fs.py", "logup_gkr/jagged_prover.py"},
+            scanned,
+            "the FS callers are missing from the runfiles tree -- add their "
+            "targets to this test's deps, the scan is not covering them",
+        )
+        self.assertEqual(
+            offenders,
+            [],
+            "call these through the DuplexTranscript methods, not the private "
+            "backend bodies:\n  " + "\n  ".join(offenders),
+        )
+
+
+class HostFsFfiTargetTest(parameterized.TestCase):
+    """`set_host_fs_ffi_target` moves EVERY host hop onto the FFI, eager included.
+
+    The eager hops are the ones that matter. A jagged prove runs ~101 hops, ~98 of
+    them inside jitted layer zones where they cost nothing at the margin; the
+    three at stage boundaries run eagerly, and on the resident path each one ships
+    five state leaves to the CPU and back for 0.43us of hashing. Those three were
+    the whole host-vs-device gap, so a regression that quietly leaves them on the
+    resident path is a ~2ms regression that no correctness test would catch.
+
+    Dispatch only, so this runs on any backend -- the handler itself is the
+    consumer's and needs a GPU.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.addCleanup(transcript_mod.set_host_fs_ffi_target, None)
+        transcript_mod.set_host_fs_ffi_target(None)
+
+    def _transcript(self) -> DuplexTranscript:
+        return DuplexTranscript.new(koalabear16_perm(), rate=8, fs_on_host=True)
+
+    def _spy_on_ffi(self) -> list[tuple[int, bool, str]]:
+        """Replace the eager FFI wrapper with a recorder that returns the
+        transcript untouched, so no handler is needed. It records the target as
+        well as the shape: the wrapper caches a compiled hop, so which target a
+        call is keyed to is part of what has to be right."""
+        seen: list[tuple[int, bool, str]] = []
+
+        def fake(n: int, absorbs: bool, target: str) -> Any:
+            seen.append((n, absorbs, target))
+
+            def run(t: Any, *rest: Any) -> Any:
+                out = fnp.zeros(max(n, 1), t.field)
+                return (t, out)
+
+            return run
+
+        self.enter_context(
+            mock.patch.object(transcript_mod, "_host_hop_ffi_eager", fake)
+        )
+        return seen
+
+    def test_no_target_keeps_the_resident_eager_path(self) -> None:
+        """Without a target the eager hop stays on the resident sponge, which is
+        the faster path when nothing traced is involved."""
+        seen = self._spy_on_ffi()
+        t, _ = self._transcript().observe_and_sample(rand_field(9, (4,), F), 1)
+        self.assertEqual(seen, [])
+        self.assertTrue(transcript_mod._on_host(t.state.sponge_state))
+
+    @parameterized.named_parameters(
+        ("observe_and_sample", "observe_and_sample"),
+        ("sample", "sample"),
+        ("observe", "observe"),
+    )
+    def test_target_routes_every_eager_entry_point(self, method: str) -> None:
+        seen = self._spy_on_ffi()
+        transcript_mod.set_host_fs_ffi_target("a_consumers_target")
+        t = self._transcript()
+        if method == "sample":
+            t.sample(1)
+        elif method == "observe":
+            t.observe(rand_field(9, (4,), F))
+        else:
+            t.observe_and_sample(rand_field(9, (4,), F), 1)
+        self.assertLen(seen, 1, f"{method} did not reach the FFI target")
 
 
 if __name__ == "__main__":
