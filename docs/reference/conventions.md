@@ -259,11 +259,13 @@ drifts from a hand-maintained re-export list. The one exception is a
 oracles.
 
 Tests draw field and curve-point elements as the Montgomery-form dtypes —
-every `zk_dtypes` family that ships a `_mont` sibling (`koalabear_mont`,
-`koalabearx4_mont`, the babybear/goldilocks families, `bn254_sf_mont`, and
-the bn254 G1/G2 `affine`/`jacobian`/`xyzz` point types): Montgomery is the
-production encoding the GPU kernels compute in, so tests exercise the
-arithmetic path the prover ships. Reach for the bare canonical dtypes only
+every `zk_dtypes` family whose `_mont` sibling is the production encoding
+(`koalabear_mont`, `koalabearx4_mont`, the babybear family, `bn254_sf_mont`,
+and the bn254 G1/G2 `affine`/`jacobian`/`xyzz` point types): Montgomery is
+the encoding the GPU kernels compute in, so tests exercise the arithmetic
+path the prover ships. Goldilocks is the exception — its canonical dtype is
+the production one and its Montgomery sibling is deprecated, so tests use plain
+`goldilocks`. Reach for the other bare canonical dtypes only
 when a test is *about* the canonical integer encoding itself, and mark that
 line `# canonical-encoding test` — the `mont-test-dtypes` pre-commit hook
 rejects any other bare-canonical use in a `*_test.py`.
