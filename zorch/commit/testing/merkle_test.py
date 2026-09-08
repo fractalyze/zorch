@@ -14,7 +14,7 @@ import frx
 import frx.numpy as fnp
 from absl.testing import absltest
 from frx import Array
-from zk_dtypes import goldilocks_mont
+from zk_dtypes import goldilocks
 from zk_dtypes import koalabear_mont as F
 
 from zorch.commit.merkle import MerkleTree, Opening
@@ -480,7 +480,7 @@ class CommitDtypeRejectionTest(absltest.TestCase):
 
     def test_commit_rejects_wrong_field_matrix(self) -> None:
         sponge, comp, _ = koalabear16_merkle()
-        wrong_field = fnp.arange(8 * 8, dtype=goldilocks_mont).reshape(8, 8)
+        wrong_field = fnp.arange(8 * 8, dtype=goldilocks).reshape(8, 8)
         with self.assertRaises(TypeError):
             MerkleTree(sponge, comp).commit(wrong_field)
 

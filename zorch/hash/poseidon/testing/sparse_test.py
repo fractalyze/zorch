@@ -22,7 +22,7 @@ import numpy as np
 from absl.testing import absltest
 from zk_dtypes import (
     babybear_mont,
-    goldilocks_mont,  # wider than an int64, for the gate test
+    goldilocks,  # wider than an int64, for the gate test
     koalabear_mont,  # a distinct field, for dtype-guard tests
     pfinfo,
 )
@@ -41,7 +41,7 @@ from zorch.hash.poseidon.sparse import (
 # The field prime the canonical-int reference reduces mod.
 _BABYBEAR_P = pfinfo(babybear_mont).modulus
 # 2^64 - 2^32 + 1 — past what an int64 marker attribute holds.
-_GOLDILOCKS_P = pfinfo(goldilocks_mont).modulus
+_GOLDILOCKS_P = pfinfo(goldilocks).modulus
 
 # A small width-4 config. alpha=7 is coprime to p-1 for this field, so the S-box
 # is a permutation. half_full_rounds=2 -> one pre-partial and one post-partial
@@ -108,13 +108,13 @@ def _wide_field_params() -> SparsePoseidonParams:
     constants ride as operands whatever their magnitude — so those stay small."""
 
     def fld(rows: object) -> fnp.ndarray:
-        return _field(rows, goldilocks_mont)
+        return _field(rows, goldilocks)
 
     mds = ((_GOLDILOCKS_P - 1, 3, 1, 4), (1, 2, 3, 1), (4, 1, 2, 3), (3, 4, 1, 2))
     return SparsePoseidonParams(
         **{
             **_param_kwargs(),
-            "dtype": goldilocks_mont,
+            "dtype": goldilocks,
             "initial_arc": fld(_INITIAL_ARC),
             "full_rc_pre": fld(_FULL_RC_PRE),
             "transition_rc": fld(_TRANSITION_RC),
@@ -286,10 +286,10 @@ def _big_schedule() -> _Schedule:
 
 def _sparse_partial_multiplies(width: int) -> int:
     """How many multiply primitives the partial layer traces to at `width`."""
-    dot_row = fnp.arange(width, dtype=goldilocks_mont)
-    col_vec = fnp.arange(width - 1, dtype=goldilocks_mont)
-    tail = fnp.arange(width - 1, dtype=goldilocks_mont)
-    active = fnp.arange(1, dtype=goldilocks_mont)[0]
+    dot_row = fnp.arange(width, dtype=goldilocks)
+    col_vec = fnp.arange(width - 1, dtype=goldilocks)
+    tail = fnp.arange(width - 1, dtype=goldilocks)
+    active = fnp.arange(1, dtype=goldilocks)[0]
     jaxpr = frx.make_jaxpr(apply_sparse_partial)(dot_row, col_vec, active, tail).jaxpr
     return sum(1 for eqn in jaxpr.eqns if eqn.primitive.name == "mul")
 
@@ -326,11 +326,11 @@ class SparsePoseidonManyPartialRoundsTest(absltest.TestCase):
 
     def test_byte_matches_reference_at_production_scale(self) -> None:
         sched = _big_schedule()
-        perm = SparsePoseidon(sched.params(goldilocks_mont))
+        perm = SparsePoseidon(sched.params(goldilocks))
 
         rng = np.random.default_rng(1)
         canon = rng.integers(1, _GOLDILOCKS_P, size=sched.width, dtype=np.uint64)
-        state = _field(canon, goldilocks_mont)
+        state = _field(canon, goldilocks)
         got = [int(x) for x in _to_canon(perm.permute(state))]
         want = _reference_permute([int(x) for x in canon], sched)
         self.assertEqual(got, want)
@@ -416,7 +416,7 @@ class SparsePoseidonMarkerEmissionTest(absltest.TestCase):
         self.assertEqual(perm.fused_region_version, 0)
         txt = (
             frx.jit(perm.permute)
-            .lower(fnp.arange(_WIDTH, dtype=goldilocks_mont))
+            .lower(fnp.arange(_WIDTH, dtype=goldilocks))
             .as_text()
         )
         self.assertEqual(txt.count("stablehlo.composite"), 1, txt)

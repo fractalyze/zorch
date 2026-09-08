@@ -343,7 +343,7 @@ class GrindTest(absltest.TestCase):
         # The uint32 counter/bit-check (frx x64 off) can't represent a field
         # whose order exceeds 32 bits; both entry points must say so plainly
         # rather than fail with an opaque narrowing-convert error.
-        wide = zk_dtypes.goldilocks_mont
+        wide = zk_dtypes.goldilocks
         with self.assertRaises(GrindError):
             cheap_transcript(wide).grind(8)
         with self.assertRaises(GrindError):
