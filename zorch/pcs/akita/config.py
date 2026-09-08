@@ -161,6 +161,15 @@ class Decomposition:
             raise ValueError(
                 f"Decomposition.covering: magnitude must be >= 0, got {magnitude}"
             )
+        if log_base == 1 and magnitude > 0:
+            # The balanced digit set at `B = 2` is `{-1, 0}`, so the upper end
+            # of `representable` is 0 at every digit count and the search below
+            # would climb forever rather than converge.
+            raise ValueError(
+                "Decomposition.covering: balanced base-2 digits reach no "
+                f"positive value, so magnitude {magnitude} is unreachable; "
+                "log_base must be >= 2"
+            )
         num_digits = 1
         while True:
             candidate = cls(log_base, num_digits)

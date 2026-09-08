@@ -94,10 +94,14 @@ digits recompose to it uniquely — which is why recomposition is part of the
 opening predicate and not a caller's afterthought.
 
 Two consequences the hash-based instances do not share. The commitment is
-**additively homomorphic**, the property a folding consumer needs and a Merkle
-root cannot give. And every number that decides the scheme — ring degree,
-modulus chain, digit base and count, module height — is a value the consumer
-supplies (`pcs/akita/config.py`), because the catalog of parameter points a
+**additively homomorphic in the digit witness** — `A·s₁ + A·s₂ = A·(s₁+s₂)`,
+while the summed norm stays under `β` — which is what a folding consumer needs
+and a Merkle root cannot give. It does not reach the polynomials themselves:
+balanced digits carry, so the digits of `p + q` are not the digits of `p` plus
+those of `q`, and folding at that level owes a carry-aware step this layer does
+not supply. And every number that decides the scheme — ring degree, modulus
+chain, digit base and count, module height — is a value the consumer supplies
+(`pcs/akita/config.py`), because the catalog of parameter points a
 downstream prover ships is *its* data; a scheme carrying literals here would be
 one deployment's scheme wearing a general name. The challenge set is a
 `ChallengePolicy` for the same reason: which subset of the ring a challenge is

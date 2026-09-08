@@ -106,9 +106,13 @@ class ChallengePolicyConformanceTest(absltest.TestCase):
         self.assertIsInstance(FixedWeightTernary(_D, _WEIGHT), ChallengePolicy)
 
     def test_the_lnp_challenge_set_conforms_without_knowing_the_seam(self) -> None:
-        self.assertIsInstance(
-            ChallengeParams(d=_D, kappa=2, eta=59, k=32), ChallengePolicy
-        )
+        policy = ChallengeParams(d=_D, kappa=2, eta=59, k=32)
+        self.assertIsInstance(policy, ChallengePolicy)
+        # Structural conformance alone would pass on a policy whose parser
+        # reads a different count than `bytes_needed` quotes; only a draw
+        # through `squeeze_challenge` exercises that pairing.
+        _, challenge = squeeze_challenge(_transcript(), b"c", policy)
+        self.assertLen(challenge, _D)
 
 
 if __name__ == "__main__":

@@ -81,6 +81,13 @@ class DecompositionTest(parameterized.TestCase):
             _, shorter_high = Decomposition(8, covering.num_digits - 1).representable
             self.assertLess(shorter_high, magnitude)
 
+    def test_covering_refuses_a_base_that_reaches_no_positive_value(self) -> None:
+        # `{-1, 0}` digits cover only non-positive values, so the search for a
+        # digit count has no answer to converge on.
+        with self.assertRaisesRegex(ValueError, "base-2"):
+            Decomposition.covering(1, 1)
+        self.assertEqual(Decomposition.covering(1, 0), Decomposition(1, 1))
+
     def test_refuses_a_degenerate_base(self) -> None:
         with self.assertRaisesRegex(ValueError, "log_base"):
             Decomposition(0, 4)
