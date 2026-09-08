@@ -25,7 +25,7 @@ py_test(
         requirement("hash_frx"),
         requirement("lattice_frx"),
         requirement("numpy"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
 
 py_test(

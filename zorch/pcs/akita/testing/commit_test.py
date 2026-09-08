@@ -19,7 +19,7 @@ import zk_dtypes
 from absl.testing import absltest
 from lattice_frx.ring import Eval, RnsRing
 
-from zorch.commit.ajtai import _equal
+from zorch.commit.ajtai import commitments_equal
 from zorch.pcs.akita.commit import AkitaCommitter, _balanced_lift
 from zorch.pcs.akita.config import AkitaConfig, Decomposition, SisProfile
 from zorch.testkit.random_field import rand_field
@@ -132,7 +132,7 @@ class AkitaCommitTest(absltest.TestCase):
             self.committer.scheme.commit(self.committer.matrix, ring.ntt(left)),
             self.committer.scheme.commit(self.committer.matrix, ring.ntt(right)),
         )
-        self.assertTrue(_equal(summed, parts))
+        self.assertTrue(commitments_equal(summed, parts))
 
     def test_decompose_refuses_a_batch_of_the_wrong_arity(self) -> None:
         with self.assertRaisesRegex(ValueError, "expected 2 polynomials"):

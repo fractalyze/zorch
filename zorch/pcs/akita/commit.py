@@ -39,10 +39,10 @@ from typing import TYPE_CHECKING, TypeAlias
 import numpy as np
 import zk_dtypes
 from frx import Array
-from lattice_frx import gadget, rns
+from lattice_frx import gadget
 from lattice_frx.ring import Coeff, Eval
 
-from zorch.commit.ajtai import AjtaiCommitment
+from zorch.commit.ajtai import AjtaiCommitment, centered_lift
 from zorch.pcs.akita.config import AkitaConfig
 from zorch.pcs.stage import Committer
 
@@ -158,7 +158,7 @@ class AkitaCommitter:
         """
         config = self.config
         degree = config.profile.degree
-        coefficients = self._centered(opening)
+        coefficients = centered_lift("recompose", config.profile.ring, opening)
         planes: list[list[int]] = []
         for digit in range(config.decomposition.num_digits):
             plane: list[int] = []
@@ -173,24 +173,6 @@ class AkitaCommitter:
             out.append(values[offset : offset + length])
             offset += blocks * degree
         return out
-
-    def _centered(self, opening: Coeff) -> list[int]:
-        """The witness's balanced lift, flat in `[column, coefficient]` order.
-
-        The full-chain reconstruction rather than limb 0's, for the reason the
-        commitment algebra's own bound check gives: a single-limb lift accepts
-        residues whose other limbs disagree, so the two would answer differently
-        about the same opening.
-        """
-        if not isinstance(opening, Coeff):
-            raise TypeError(
-                f"recompose: the witness is a coefficient-domain element "
-                f"(digits are coefficients), got {type(opening).__name__}"
-            )
-        host = np.stack(
-            [np.asarray(limb).astype(np.uint64).reshape(-1) for limb in opening.limbs]
-        )
-        return rns.reconstruct_centered(host, self.config.profile.moduli)
 
 
 def _balanced_lift(poly: Array) -> list[int]:
