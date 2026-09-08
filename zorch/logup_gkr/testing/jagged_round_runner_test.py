@@ -12,6 +12,7 @@ import zk_dtypes
 from absl.testing import absltest, parameterized
 from frx import Array
 
+from zorch.challenge import ChallengePolicy
 from zorch.logup_gkr._jagged_types import _DEGREE, _JaggedState, _Planes
 from zorch.logup_gkr.circuit import JaggedGkrLayer
 from zorch.logup_gkr.jagged_prover import _run_jagged_rounds
@@ -85,6 +86,11 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         self, layer: JaggedGkrLayer, lam: Array, z: Array, challenge_limbs: int = 1
     ) -> None:
         state, meta, naturals, inv_vand, nrv, niv = self._setup(layer, lam, z)
+        # The runner draws through the consumer's policy; the oracle draws
+        # `challenge_limbs` raw squeezes and reinterprets. Deriving the policy
+        # from the claim's field here is what makes the two agree, and a
+        # mismatch is exactly what the byte-match below would catch.
+        challenges = ChallengePolicy(state.claim.dtype)
         # The runner's schedule carries the derived-schedule fields
         # (row_counts operand + live triples + the exact layout's static
         # padded widths); `meta` — the host-built explicit schedule — feeds
@@ -104,7 +110,7 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
         # `_run_jagged_rounds` runs under the consumer's whole-layer jit (its FS hop
         # traces into the layer kernel); under jit it must reproduce the unrolled
         # eager reference byte-for-byte.
-        got = frx.jit(lambda tr: _run_jagged_rounds(state, sched, tr))(
+        got = frx.jit(lambda tr: _run_jagged_rounds(state, sched, tr, challenges))(
             cheap_transcript(KB)
         )
         self._assert_matches_reference(ref, got, "jit")
@@ -126,9 +132,9 @@ class RoundRunnerMatchesReferenceTest(parameterized.TestCase):
                 caps,
             )
             label = "fixed-slack" if slack else "fixed-tight"
-            got_fixed = frx.jit(lambda tr: _run_jagged_rounds(state, fixed_sched, tr))(
-                cheap_transcript(KB)
-            )
+            got_fixed = frx.jit(
+                lambda tr: _run_jagged_rounds(state, fixed_sched, tr, challenges)
+            )(cheap_transcript(KB))
             self._assert_matches_reference(ref, got_fixed, label)
 
     @staticmethod

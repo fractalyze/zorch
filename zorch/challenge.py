@@ -77,12 +77,30 @@ class ChallengePolicy:
         transcript, raw = transcript.sample(count * limbs)
         return transcript, self._regroup(raw, count, limbs)
 
+    def observe_and_sample_many(
+        self, transcript: TranscriptT, values: Array, count: int
+    ) -> tuple[TranscriptT, Array]:
+        """Absorb `values` and squeeze `count` challenges in ONE transcript hop.
+
+        The many-challenge form of `observe_and_sample`, for the same reason
+        `sample_many` exists and for one more: a hop is the unit that costs. An
+        eager hop -- one outside any traced region, as at a stage boundary -- runs
+        ~75us against 0.43us of hashing, nearly all of it dispatch, so a head that
+        spells this as observe, observe, sample pays three of them for one
+        Fiat-Shamir step. Absorbing a concatenation is byte-identical to absorbing
+        the parts in order (the sponge appends to its rate buffer), so a caller
+        with several messages should join them rather than absorb each."""
+        limbs = self.limbs_over(transcript.field)
+        transcript, raw = transcript.observe_and_sample(values, count * limbs)
+        return transcript, self._regroup(raw, count, limbs)
+
     def observe_and_sample(
         self, transcript: TranscriptT, values: Array
     ) -> tuple[TranscriptT, Array]:
-        # The absorb and the squeeze stay one hop: splitting them into `observe`
-        # then `sample` bypasses the duplex-FS fusion marker and scatters ~9
-        # kernels per round, which `zorch`'s fusion rule does not allow.
-        limbs = self.limbs_over(transcript.field)
-        transcript, raw = transcript.observe_and_sample(values, limbs)
-        return transcript, self._regroup(raw, 1, limbs)[0]
+        """Absorb `values` and squeeze one challenge of this policy's dtype — the
+        FS entry point whenever the caller wants a *typed field* challenge. The
+        limbs<->dtype packing lives here and nowhere else, so a prover and its
+        verifier cannot disagree about it; a caller that wants raw squeezes in the
+        transcript's own field calls `transcript.observe_and_sample` directly."""
+        transcript, challenges = self.observe_and_sample_many(transcript, values, 1)
+        return transcript, challenges[0]

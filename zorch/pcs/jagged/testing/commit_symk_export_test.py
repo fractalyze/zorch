@@ -18,14 +18,14 @@ import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
 from frx import Array, export
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.poseidon2.poseidon2 import Poseidon2
+from hash_frx.sponge import Sponge, SpongeParams
 from zk_dtypes import koalabear_mont as BF
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
 from zorch.commit.smcs import SingleMatrixCommitmentScheme
 from zorch.commit.testing.sp1_koalabear16 import koalabear16_params
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
-from zorch.hash.sponge import Sponge, SpongeParams
 
 _LOG_S = 6
 _S = 1 << _LOG_S

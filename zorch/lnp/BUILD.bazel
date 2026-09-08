@@ -1,0 +1,123 @@
+load("@rules_python//python:defs.bzl", "py_library")
+load("@zorch_pip//:requirements.bzl", "requirement")
+
+py_library(
+    name = "challenge",
+    srcs = [
+        "__init__.py",
+        "challenge.py",
+    ],
+    visibility = ["//visibility:public"],
+    # lattice-frx wheels come off the Fractalyze index (lattice-frx#18).
+    deps = [
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "transcript",
+    srcs = ["transcript.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch:byte_transcript",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "wire",
+    srcs = ["wire.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//zorch/commit:ajtai",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "masking",
+    srcs = ["masking.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":challenge",
+        ":transcript",
+        ":wire",
+        "//zorch:byte_transcript",
+        "//zorch/commit:ajtai",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "opening",
+    srcs = ["opening.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":masking",
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "quadratic",
+    srcs = ["quadratic.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":masking",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "eval",
+    srcs = ["eval.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":opening",
+        ":quadratic",
+        ":transcript",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "exact",
+    srcs = ["exact.py"],
+    visibility = ["//visibility:public"],
+    # `:range` is an annotation-only import — `require_no_wraparound` reads
+    # a leg it is handed and never builds one — but the arrow is real and
+    # `range.py` does not point back, so the graph stays acyclic.
+    deps = [
+        ":eval",
+        ":quadratic",
+        ":range",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)
+
+py_library(
+    name = "range",
+    srcs = ["range.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        ":eval",
+        ":masking",
+        ":quadratic",
+        ":transcript",
+        ":wire",
+        "//zorch:byte_transcript",
+        requirement("lattice_frx"),
+        requirement("numpy"),
+    ],
+)

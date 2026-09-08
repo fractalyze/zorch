@@ -35,12 +35,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import frx.numpy as fnp
 import numpy as np
 from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
+from hash_frx.fusion import fused_region
+from hash_frx.sha256 import (
+    Sha256State,
+    sha256_stream_absorb,
+    sha256_stream_finalize,
+    sha256_stream_init,
+)
 
 from zorch.byte_transcript import (
     KIND_SCALAR,
@@ -50,25 +57,13 @@ from zorch.byte_transcript import (
     OP_LABEL,
     OP_OBSERVE,
     OP_SQUEEZE,
+    _len8,
     _validate_pow_bits,
 )
-from zorch.fusion import fused_region
-from zorch.grind import GRIND_WINDOW, grind_search
-from zorch.hash.sha256 import (
-    Sha256State,
-    sha256_stream_absorb,
-    sha256_stream_finalize,
-    sha256_stream_init,
-)
+from zorch.grind import grind_search, grind_window_for, leading_zero_bits_ok
 
 # SHA-256 digest width — the PoW state digest and every squeeze block are 32 B.
 _DIGEST_BYTES = 32
-
-
-def _len8(n: int) -> bytes:
-    """A length / count as 8 little-endian bytes (the transcript's only integer
-    encoding — fixint u64-LE everywhere)."""
-    return int(n).to_bytes(8, "little")
 
 
 def _const_u8(data: bytes) -> Array:
@@ -82,13 +77,13 @@ def _u32_le_bytes(values: Array) -> Array:
 
 
 # ============================================================================
-# Squeeze-hop fusion marker. `zorch.sha256` marks the COMPRESSION; this marks
+# Squeeze-hop fusion marker. `hash_frx.sha256` marks the COMPRESSION; this marks
 # the whole squeeze around it — the same layering `zorch.duplex_fs` adds over
-# `zorch.poseidon2`, for the same reason.
+# `hash_frx.poseidon2`, for the same reason.
 #
 # A squeeze is `absorb(framing) -> counter-squeeze -> re-absorb`. The streaming
 # state is branchless, so each absorb compresses speculatively and selects and
-# finalize emits both padding candidates: four `zorch.sha256` regions, each a
+# finalize emits both padding candidates: four `hash_frx.sha256` regions, each a
 # fusion barrier, so the scalar bookkeeping between them cannot merge either.
 # That is ~14 GPU launches per `sample_scalar`, and on a latency-bound prove the
 # cost is the launch count, not the arithmetic.
@@ -143,6 +138,8 @@ def _sha256_squeeze_zone(
     `zorch.sha256_squeeze` composite, so an eager caller fires a single fused FS
     kernel. `inline=True` keeps a call site already inside an outer jit
     byte-identical (mirrors `transcript._duplex_fs_zone`)."""
+    if nbytes == 0:
+        return _squeeze_hop(state, framing, nbytes)
     h, pending, counts, squeezed = fused_region(
         _sha256_squeeze_region,
         state.h,
@@ -154,17 +151,6 @@ def _sha256_squeeze_zone(
         nbytes=nbytes,
     )
     return Sha256State(h, pending, counts), squeezed
-
-
-def _leading_zero_bits_ok(digests: Array, bits: int) -> Array:
-    """Whether each digest (uint8 `[B, 32]`) has >= `bits` leading zero bits,
-    big-endian (digest[..., 0] most significant). Traceable; byte-identical to
-    `byte_transcript._leading_zero_bits_ok`."""
-    full, extra = divmod(bits, 8)
-    ok = fnp.all(digests[:, :full] == 0, axis=1)
-    if extra:
-        ok = ok & ((digests[:, full] >> np.uint8(8 - extra)) == 0)
-    return ok
 
 
 @partial(register_dataclass, data_fields=["state"], meta_fields=["dtype"])
@@ -184,7 +170,7 @@ class Sha256FieldTranscript:
 
     @property
     def has_dedicated_fusion(self) -> bool:
-        # The COMPRESSION lowers to a GPU kernel via the zorch.sha256 marker.
+        # The COMPRESSION lowers to a GPU kernel via the hash_frx.sha256 marker.
         # Says nothing about the hop above it: a squeeze also carries the
         # zorch.sha256_squeeze marker, which only fuses where a vendor emits it.
         return True
@@ -216,11 +202,34 @@ class Sha256FieldTranscript:
         built as ONE absorb payload. Byte-identical to the byte transcript's
         `observe_scalar` per element; distinct from `observe` (the KIND tag
         differs)."""
+        return self._absorb(self._scalar_observe_wire(value))
+
+    def _scalar_observe_wire(self, value: Array) -> Array:
+        """`observe_scalar`'s payload: `[OP_OBSERVE, KIND_SCALAR] || elem_bytes`
+        per element, in order. Split out so `observe_scalar_and_sample` can put
+        the same bytes on the stream as part of a draw's framing."""
         vals_u8 = self._elem_bytes(value).reshape(-1, self._item_bytes())
         framing = fnp.broadcast_to(
             _const_u8(bytes([OP_OBSERVE, KIND_SCALAR])), (vals_u8.shape[0], 2)
         )
-        return self._absorb(fnp.concatenate([framing, vals_u8], axis=1).reshape(-1))
+        return fnp.concatenate([framing, vals_u8], axis=1).reshape(-1)
+
+    def _sample_scalar_after(
+        self, payload: Array
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """Put `payload` on the stream and draw a scalar, as ONE marked region —
+        the BLAKE3 row's `_sample_scalar_after`, on this wire."""
+        framing = fnp.concatenate(
+            [payload, _const_u8(bytes([OP_SQUEEZE, KIND_SCALAR]))]
+        )
+        state, squeezed = _sha256_squeeze_zone(self.state, framing, self._item_bytes())
+        return replace(self, state=state), self._u8_to_elems(squeezed, 1)[0]
+
+    def observe_scalar_and_sample(
+        self, value: Array
+    ) -> tuple[Sha256FieldTranscript, Array]:
+        """`observe_scalar` then `sample_scalar`, as one marked region."""
+        return self._sample_scalar_after(self._scalar_observe_wire(value))
 
     def observe_label(self, label: bytes) -> Sha256FieldTranscript:
         """Absorb a domain-separation label `[OP_LABEL] || len8(len) || label`.
@@ -279,12 +288,19 @@ class Sha256FieldTranscript:
         lo4 = _u32_le_bytes(fnp.asarray(witness, fnp.uint32).reshape(1))[0]
         return fnp.concatenate([lo4, fnp.zeros(4, fnp.uint8)])
 
-    def _absorb_witness(self, witness: Array) -> Sha256FieldTranscript:
+    def _witness_wire(self, witness: Array) -> Array:
+        """The witness's wire bytes, framing included: `[OP_BYTES] || len8(8) ||
+        nonce_le8`. Split out from `_absorb_witness` so `grind_and_sample` can
+        put the same bytes on the stream as part of a draw's framing instead of
+        as an absorb of its own."""
         framing = _const_u8(bytes([OP_BYTES]) + _len8(8))
-        return self._absorb(fnp.concatenate([framing, self._witness_bytes(witness)]))
+        return fnp.concatenate([framing, self._witness_bytes(witness)])
+
+    def _absorb_witness(self, witness: Array) -> Sha256FieldTranscript:
+        return self._absorb(self._witness_wire(witness))
 
     def grind(
-        self, pow_bits: int, *, chunk: int = GRIND_WINDOW
+        self, pow_bits: int, *, chunk: int | None = None
     ) -> tuple[Sha256FieldTranscript, Array]:
         """Find a proof-of-work witness — the lowest nonce whose
         `SHA256(state_digest || nonce_le8)` has `pow_bits` leading zero bits —
@@ -293,13 +309,20 @@ class Sha256FieldTranscript:
         (`zorch.grind.grind_search` windowed device search); does not raise on
         an exhausted search: `check_witness` is the soundness gate, so which
         witness the search returns is soundness-neutral."""
+        witness = self._find_witness(pow_bits, chunk)
+        return self._absorb_witness(witness), witness
+
+    def _find_witness(self, pow_bits: int, chunk: int | None) -> Array:
+        """The PoW search alone, with nothing absorbed. `grind` puts the witness
+        on the wire itself; `grind_and_sample` folds it into a draw's framing."""
         _validate_pow_bits(pow_bits, _DIGEST_BYTES)
+        if chunk is None:
+            chunk = grind_window_for(pow_bits)
         if chunk < 1:
             raise ValueError(f"chunk must be >= 1, got {chunk}")
         if pow_bits == 0:
             # No work required: the canonical zero witness always passes.
-            witness = fnp.zeros((), fnp.uint32)
-            return self._absorb_witness(witness), witness
+            return fnp.zeros((), fnp.uint32)
         pow_state = self._pow_state()
 
         def check_batch(counters: Array) -> Array:
@@ -307,12 +330,20 @@ class Sha256FieldTranscript:
                 [_u32_le_bytes(counters), fnp.zeros((counters.shape[0], 4), fnp.uint8)],
                 axis=1,
             )
-            return _leading_zero_bits_ok(
+            return leading_zero_bits_ok(
                 sha256_stream_finalize(pow_state, nonce8), pow_bits
             )
 
-        witness = grind_search(check_batch, 2**32, chunk)
-        return self._absorb_witness(witness), witness
+        return grind_search(check_batch, 2**32, chunk)
+
+    def grind_and_sample(
+        self, pow_bits: int, *, chunk: int | None = None
+    ) -> tuple[Sha256FieldTranscript, Array, Array]:
+        """Grind, then draw one scalar challenge, as ONE marked region — the
+        BLAKE3 row's `grind_and_sample`, on this wire."""
+        witness = self._find_witness(pow_bits, chunk)
+        t, challenge = self._sample_scalar_after(self._witness_wire(witness))
+        return t, witness, challenge
 
     def check_witness(
         self, witness: Array, *, pow_bits: int
@@ -328,7 +359,7 @@ class Sha256FieldTranscript:
         else:
             nonce8 = self._witness_bytes(witness)[None, :]
             digs = sha256_stream_finalize(self._pow_state(), nonce8)
-            ok = _leading_zero_bits_ok(digs, pow_bits)[0]
+            ok = leading_zero_bits_ok(digs, pow_bits)[0]
         return self._absorb_witness(witness), ok
 
     # ---- element <-> byte serde ----
@@ -345,3 +376,12 @@ class Sha256FieldTranscript:
         return lax.bitcast_convert_type(
             u8.reshape(n, self._item_bytes()), self.dtype
         ).reshape(n)
+
+
+if TYPE_CHECKING:
+    from zorch.transcript import Transcript
+
+    # Seam-conformance pin (docs/reference/conventions.md). Neither field
+    # transcript has an in-tree consumer, so without this `Transcript` drift
+    # would fail nowhere rather than late.
+    _t: type[Transcript] = Sha256FieldTranscript

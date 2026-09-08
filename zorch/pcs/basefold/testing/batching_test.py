@@ -7,12 +7,12 @@ import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabearx4_mont as EF
 
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.basefold.batching import (
     batch_staggered,
     partial_lagrange,
     sample_staggered_coeffs,
 )
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 

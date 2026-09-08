@@ -1,0 +1,15 @@
+{
+  "name": "zorch",
+  "owner": {
+    "name": "Fractalyze",
+    "url": "https://github.com/fractalyze"
+  },
+  "description": "Agent skills for consuming zorch",
+  "plugins": [
+    {
+      "name": "zorch",
+      "description": "Usage guide for building proof systems on zorch: install, block APIs, field-dtype rules, consumer boundary.",
+      "source": "./"
+    }
+  ]
+}

@@ -28,13 +28,13 @@ from zk_dtypes import koalabear_mont as F
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.basefold.choreography import BasefoldChoreography
 from zorch.pcs.basefold.config import BasefoldConfig, CadenceProof
 from zorch.pcs.basefold.kernel import SumcheckKernel
 from zorch.pcs.basefold.prover import BasefoldProver, BasefoldProverData
 from zorch.pcs.basefold.verifier import BasefoldVerifier
 from zorch.poly.multilinear import mle_evals_to_coeffs
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_field
 from zorch.transcript import DuplexTranscript, Transcript, TranscriptT
 

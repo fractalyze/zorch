@@ -22,10 +22,10 @@ from enum import IntEnum
 import frx
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.compression import Compression
+from hash_frx.sponge import Sponge
 
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.hash.compression import Compression
-from zorch.hash.sponge import Sponge
 from zorch.utils.bits import log2_strict_usize
 
 

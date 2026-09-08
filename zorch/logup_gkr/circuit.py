@@ -39,8 +39,8 @@ from functools import cache, partial
 import frx
 import frx.numpy as fnp
 from frx import Array
+from hash_frx.fusion import fused_region
 
-from zorch._composite import composite
 from zorch.sumcheck.prover import (
     SUMCHECK_ROUND_MARKER,
     SUMCHECK_ROUND_MARKER_VERSION,
@@ -392,7 +392,7 @@ def _jagged_transition_core(
     intermediates); an unclaiming compiler runs the decomposition inline,
     byte-identical. The compile keys on (input width, output width, batch
     count, dtypes) alone -- capacity constants, never one input's layout."""
-    return composite(
+    return fused_region(
         partial(_transition_composite_decomp, out_width=out_width),
         numerator_0,
         numerator_1,
@@ -437,6 +437,15 @@ def jagged_layer_transition(
         num_out = len(host)
         if out_width is None:
             out_width = sum(host)
+        elif out_width < sum(host):
+            # Truncation is the consumer's obligation only where the counts are
+            # traced; a host schedule states its own live size, so the one case
+            # a guard CAN see is worth catching -- a too-narrow capacity
+            # otherwise surfaces much later as a dead-region read.
+            raise ValueError(
+                f"out_width {out_width} cannot hold the schedule's live size "
+                f"({sum(host)}); widen the capacity for this transition"
+            )
     if num_out != layer.num_batches:
         raise ValueError(
             f"schedule must cover all {layer.num_batches} batches, got "

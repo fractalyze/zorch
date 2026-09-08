@@ -16,18 +16,18 @@ import dataclasses
 import frx.numpy as fnp
 from absl.testing import absltest, parameterized
 from frx import Array
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.sponge import Sponge, SpongeParams
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.strided_merkle import StridedMerkleTree
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
-from zorch.hash.sponge import Sponge, SpongeParams
 from zorch.pcs.whir.config import WhirParams
 from zorch.pcs.whir.prover import WhirProver
 from zorch.pcs.whir.scheme import EqWhirScheme, WhirScheme
 from zorch.pcs.whir.verifier import WhirVerifier
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_ext_field, rand_field
 from zorch.transcript import DuplexTranscript, TranscriptT
 

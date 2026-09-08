@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest import mock
 
+import frx
 import frx.numpy as fnp
 import numpy as np
 import zk_dtypes  # noqa: F401  (registers the binary_field_* dtypes)
@@ -10,8 +12,10 @@ from absl.testing import absltest, parameterized
 from frx import Array, lax
 
 from zorch.utils.binary_field import (
+    _ELEMENTS_TARGET_PROGRAMS,
     _to_limbs,
     bit_select_xor_reduce,
+    bit_select_xor_reduce_stacked,
     byte_select_xor_reduce,
     field_bit_width,
     pack,
@@ -28,6 +32,14 @@ def _rand_field(dtype: Any, n: int, seed: int) -> Array:
         0, 1 << 32, size=(n, n_lanes), dtype=np.uint32
     )
     return lax.bitcast_convert_type(fnp.asarray(raw), dtype)
+
+
+def _selector_bits(selectors: Array, n: int) -> np.ndarray:
+    """`selectors`' bits as a {0,1} `(n, W)` array, LSB-first — the host-side view
+    of what `bit_select_xor_reduce` selects on."""
+    return np.unpackbits(
+        np.asarray(selectors).view(np.uint8).reshape(n, -1), axis=1, bitorder="little"
+    )
 
 
 def _coeff_u8(coeffs: Array) -> np.ndarray:
@@ -66,11 +78,7 @@ class BinaryFieldReprTest(parameterized.TestCase):
 
         by_element = bit_select_xor_reduce(selectors, element_values, reduce="elements")
         by_bit = bit_select_xor_reduce(selectors, bit_values, reduce="bits")
-        bits = np.unpackbits(
-            np.asarray(selectors).view(np.uint8).reshape(11, -1),
-            axis=1,
-            bitorder="little",
-        )
+        bits = _selector_bits(selectors, 11)
         element_limbs = np.asarray(_to_limbs(element_values))
         bit_limbs = np.asarray(_to_limbs(bit_values))
         want_by_element = np.zeros((width, element_limbs.shape[1]), np.uint32)
@@ -84,6 +92,139 @@ class BinaryFieldReprTest(parameterized.TestCase):
             np.asarray(_to_limbs(by_element)), want_by_element
         )
         np.testing.assert_array_equal(np.asarray(_to_limbs(by_bit)), want_by_bit)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_elements_spans_device_tiles(
+        self, dtype: Any
+    ) -> None:
+        """`n` crossing several 128-row device tiles plus a partial tail — the
+        shapes where a tiled lowering can drop, double-count, or misalign
+        rows (the small-`n` tests above never leave the first tile)."""
+        width = field_bit_width(dtype)
+        n = 3 * 128 + 37
+        selectors = _rand_field(dtype, n, 7)
+        values = _rand_field(dtype, n, 8)
+
+        got = bit_select_xor_reduce(selectors, values, reduce="elements")
+
+        bits = np.unpackbits(
+            np.asarray(selectors).view(np.uint8).reshape(n, -1),
+            axis=1,
+            bitorder="little",
+        )
+        value_limbs = np.asarray(_to_limbs(values))
+        want = np.zeros((width, value_limbs.shape[1]), np.uint32)
+        for i in range(n):
+            for bit in range(width):
+                if bits[i, bit]:
+                    want[bit] ^= value_limbs[i]
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_elements_batches_over_shared_selectors(
+        self, dtype: Any
+    ) -> None:
+        """`reduce="elements"` accepts a selectors-major `(n, N)` values stack
+        against `(n,)` selectors and returns `(N, W)`: row `k` equals the
+        single-claim reduction against column `values[:, k]`. The ring-switch
+        batched-open path reads the shared selectors (the packed witness) once
+        for all `N` claims."""
+        width = field_bit_width(dtype)
+        n, batch = 11, 3
+        selectors = _rand_field(dtype, n, 20)
+        values = _rand_field(dtype, n * batch, 21).reshape(n, batch)
+
+        batched = bit_select_xor_reduce(selectors, values, reduce="elements")
+        self.assertEqual(batched.shape, (batch, width))
+
+        for k in range(batch):
+            one = bit_select_xor_reduce(selectors, values[:, k], reduce="elements")
+            np.testing.assert_array_equal(
+                np.asarray(_to_limbs(batched[k])), np.asarray(_to_limbs(one))
+            )
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_stacked_equals_summing_the_claims(
+        self, dtype: Any
+    ) -> None:
+        """The stacked form equals XOR-summing `N` separate `reduce="bits"`
+        reductions — the identity the one-pass kernel exists to preserve. Unlike
+        the batched `elements` form above, each claim brings its OWN selectors,
+        so this cannot be expressed by sharing one selector set."""
+        width = field_bit_width(dtype)
+        n, claims = 11, 3
+        selectors = [_rand_field(dtype, n, 30 + k) for k in range(claims)]
+        values = [_rand_field(dtype, width, 40 + k) for k in range(claims)]
+
+        got = bit_select_xor_reduce_stacked(selectors, values)
+        self.assertEqual(got.shape, (n,))
+
+        want = _to_limbs(bit_select_xor_reduce(selectors[0], values[0], reduce="bits"))
+        for k in range(1, claims):
+            want = want ^ _to_limbs(
+                bit_select_xor_reduce(selectors[k], values[k], reduce="bits")
+            )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), np.asarray(want))
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_stacked_spans_and_pads_the_row_tile(
+        self, dtype: Any
+    ) -> None:
+        """The stacked kernel tiles `n` in 64-row blocks and zero-pads the tail.
+        The 11-row case above fits one block with padding; this crosses a block
+        boundary AND leaves a partial tail, so a pad that contributed garbage
+        rather than zero would show up here."""
+        width = field_bit_width(dtype)
+        n, claims = 141, 2
+        selectors = [_rand_field(dtype, n, 50 + k) for k in range(claims)]
+        values = [_rand_field(dtype, width, 60 + k) for k in range(claims)]
+
+        got = bit_select_xor_reduce_stacked(selectors, values)
+        self.assertEqual(got.shape, (n,))
+
+        want = _to_limbs(bit_select_xor_reduce(selectors[0], values[0], reduce="bits"))
+        for k in range(1, claims):
+            want = want ^ _to_limbs(
+                bit_select_xor_reduce(selectors[k], values[k], reduce="bits")
+            )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), np.asarray(want))
+
+    def test_bit_select_xor_reduce_stacked_rejects_mismatched_stacks(self) -> None:
+        """Selectors and values must stack the same number of claims. Silently
+        zipping to the shorter one would drop a claim from the sum and still
+        return a well-shaped result."""
+        dtype = _DTYPES[0]
+        width = field_bit_width(dtype)
+        selectors = [_rand_field(dtype, 11, 70 + k) for k in range(3)]
+        values = [_rand_field(dtype, width, 80 + k) for k in range(2)]
+        with self.assertRaisesRegex(ValueError, "same number of claims"):
+            bit_select_xor_reduce_stacked(selectors, values)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_elements_spans_multiple_tiles(
+        self, dtype: Any
+    ) -> None:
+        """The `elements` GPU kernel walks `n` in a serial loop and zero-pads the
+        tail, neither of which the 11-row shapes above reach — they fit in one
+        iteration with nothing to pad.
+
+        Size off `_ELEMENTS_TARGET_PROGRAMS` rather than a literal so the case
+        survives a grid retune. The 4x covers a row tile up to 4 (the kernels
+        pick their own `block`, so it is not importable); the odd remainder is
+        what forces the tail padding."""
+        n = 4 * _ELEMENTS_TARGET_PROGRAMS + 17
+
+        selectors = _rand_field(dtype, n, 8)
+        values = _rand_field(dtype, n, 9)
+
+        got = bit_select_xor_reduce(selectors, values, reduce="elements")
+
+        bits = _selector_bits(selectors, n)
+        limbs = np.asarray(_to_limbs(values))
+        want = np.bitwise_xor.reduce(
+            np.where(bits[..., None], limbs[:, None, :], np.uint32(0)), axis=0
+        )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
 
     @parameterized.parameters(*_DTYPES)
     def test_bit_select_xor_reduce_accepts_unpacked_rows(self, dtype: Any) -> None:
@@ -100,6 +241,99 @@ class BinaryFieldReprTest(parameterized.TestCase):
                 if rows[i, bit]:
                     want[i] ^= value_limbs[bit]
         np.testing.assert_array_equal(np.asarray(_to_limbs(got)), want)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_bit_select_xor_reduce_portable_arm_still_matches(self, dtype: Any) -> None:
+        """The portable expression, on a machine whose backend has handlers.
+
+        Every backend this runs on now takes an accelerated arm for both
+        reductions at these dtypes, so without forcing the fallback the portable
+        expression is dead code in the test suite — and it is what any future
+        backend, and any shape outside a handler's coverage, lands on.
+        `default_backend` is what the dispatch keys on, so naming a platform
+        with no handler is the whole fixture.
+
+        The cache clears are load-bearing, not hygiene: the dispatch runs inside
+        `bit_select_xor_reduce`'s own `jit`, so the chosen arm is baked into the
+        traced jaxpr. Without the first clear a same-shape call from an earlier
+        test returns its cached FFI trace and the patch does nothing; without
+        the second this test's portable trace is what a later same-shape call
+        gets. Both directions were observed before the clears went in.
+        """
+        width = field_bit_width(dtype)
+        selectors = _rand_field(dtype, 11, 2)
+        element_values = _rand_field(dtype, 11, 3)
+        bit_values = _rand_field(dtype, width, 4)
+
+        bit_select_xor_reduce.clear_cache()
+        try:
+            with mock.patch.object(frx, "default_backend", lambda: "no-such-backend"):
+                by_element = bit_select_xor_reduce(
+                    selectors, element_values, reduce="elements"
+                )
+                by_bit = bit_select_xor_reduce(selectors, bit_values, reduce="bits")
+        finally:
+            bit_select_xor_reduce.clear_cache()
+
+        bits = _selector_bits(selectors, 11)
+        element_limbs = np.asarray(_to_limbs(element_values))
+        bit_limbs = np.asarray(_to_limbs(bit_values))
+        want_by_element = np.zeros((width, element_limbs.shape[1]), np.uint32)
+        want_by_bit = np.zeros((11, bit_limbs.shape[1]), np.uint32)
+        for i in range(11):
+            for bit in range(width):
+                if bits[i, bit]:
+                    want_by_element[bit] ^= element_limbs[i]
+                    want_by_bit[i] ^= bit_limbs[bit]
+        np.testing.assert_array_equal(
+            np.asarray(_to_limbs(by_element)), want_by_element
+        )
+        np.testing.assert_array_equal(np.asarray(_to_limbs(by_bit)), want_by_bit)
+
+    @parameterized.parameters(*_DTYPES)
+    def test_cpu_routes_only_the_shapes_with_host_handlers(self, dtype: Any) -> None:
+        """Which shapes reach the host custom call, and — the load-bearing half
+        — which must not.
+
+        An unregistered platform raises rather than falling back, so widening
+        the CPU arms to a shape with no host handler is not a slow path, it is a
+        crash. `xla#550` registered two handlers; the batched stack and the
+        unpacked 0/1 matrix have none, and the unpacked matrix is what
+        flock-zorch's fold passes. Asserted on the lowering rather than by
+        running, so this holds on any backend and on a wheel that predates the
+        handlers.
+        """
+        width = field_bit_width(dtype)
+        n = 11
+        selectors = _rand_field(dtype, n, 30)
+        elements = _rand_field(dtype, n, 31)
+        bit_values = _rand_field(dtype, width, 32)
+        batched = _rand_field(dtype, n * 3, 33).reshape(n, 3)
+        unpacked = fnp.asarray(
+            np.random.default_rng(34).integers(0, 2, size=(n, width), dtype=np.uint8)
+        )
+
+        def lowered(*args: Any, reduce: str) -> str:
+            bit_select_xor_reduce.clear_cache()
+            try:
+                with mock.patch.object(frx, "default_backend", lambda: "cpu"):
+                    return bit_select_xor_reduce.lower(*args, reduce=reduce).as_text()
+            finally:
+                bit_select_xor_reduce.clear_cache()
+
+        elements_target = "frx_bit_select_xor_reduce_elements"
+        bytes_target = "frx_bit_select_xor_reduce_packed_bytes"
+
+        self.assertIn(elements_target, lowered(selectors, elements, reduce="elements"))
+        self.assertIn(bytes_target, lowered(selectors, bit_values, reduce="bits"))
+
+        batched_text = lowered(selectors, batched, reduce="elements")
+        self.assertNotIn(elements_target, batched_text)
+        self.assertNotIn(bytes_target, batched_text)
+
+        unpacked_text = lowered(unpacked, bit_values, reduce="bits")
+        self.assertNotIn(elements_target, unpacked_text)
+        self.assertNotIn(bytes_target, unpacked_text)
 
     @parameterized.parameters(*_DTYPES)
     def test_byte_select_xor_reduce_accepts_packed_rows(self, dtype: Any) -> None:

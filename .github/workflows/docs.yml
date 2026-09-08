@@ -1,0 +1,88 @@
+# Copyright 2026 The Zorch Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     https://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Docs site: build on every PR that can change it (a broken build fails the
+# PR, not the deploy), publish gh-pages on every main push. mkdocstrings
+# imports zorch to read signatures, so the job installs the CPU-tier runtime
+# stack from requirements-docs.in — no CUDA wheels, no GPU runner.
+#
+# This publishes a single `latest` off main. Per-release versioned docs (mike)
+# are a deliberate follow-up: they belong in release.yml next to the existing
+# version gates, not here.
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths:
+      - "docs/**"
+      - "zorch/**"
+      - "mkdocs.yml"
+      - "requirements-docs.in"
+      - "tools/gen_ref_pages.py"
+      - "tools/site/**"
+      - "skills/using-zorch/**"
+      - ".github/workflows/docs.yml"
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The build imports the PR's zorch code (mkdocstrings reads signatures), so
+  # this job runs arbitrary changed code: it gets a read-only, non-persisted
+  # token. Only the main-only deploy job below holds a write token.
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install docs toolchain
+        run: |
+          pip install -r requirements-docs.in \
+            --extra-index-url https://fractalyze.github.io/pypi/simple/
+      - name: Build
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: mkdocs build
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install docs toolchain
+        run: |
+          pip install -r requirements-docs.in \
+            --extra-index-url https://fractalyze.github.io/pypi/simple/
+      - name: Deploy to gh-pages
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          mkdocs gh-deploy --force

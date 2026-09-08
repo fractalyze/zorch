@@ -19,7 +19,6 @@ from zk_dtypes import koalabearx4_mont as EF
 from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.merkle import MerkleTree
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
-from zorch.hash.poseidon2.testing.koalabear16 import koalabear16_perm
 from zorch.pcs.basefold.prover import (
     BasefoldProver,
     BasefoldProverData,
@@ -30,6 +29,7 @@ from zorch.pcs.basefold.verifier import BasefoldVerifier, _verify_batch_body
 from zorch.pcs.stage import OpeningClaim, OpeningProof, OpeningWitness
 from zorch.poly.multilinear import eval_mle
 from zorch.testkit.jit_cache import assert_single_trace
+from zorch.testkit.koalabear16 import koalabear16_perm
 from zorch.testkit.random_field import rand_ext_field
 from zorch.transcript import DuplexTranscript
 

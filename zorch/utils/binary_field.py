@@ -17,10 +17,12 @@ limbs, so a `uint64` limb would reject the 32-bit tower level (`binary_field_t5`
 """
 from __future__ import annotations
 
+from collections.abc import Sequence
 from functools import partial
 from typing import Any, Literal
 
 import frx
+import frx.ffi
 import frx.numpy as fnp
 from frx import Array, lax
 from frx.experimental import pallas as pl
@@ -30,6 +32,30 @@ _LIMB = fnp.uint32
 _LIMB_BITS = 32
 _BIT = fnp.binary_field_t0  # F_2 = GF(2)
 _SELECT_BLOCK = 128
+
+# `frx.default_backend()` reports the CUDA backend as `"gpu"`, not `"cuda"`.
+#
+# The accelerated select-XOR paths branch on which backend, not merely on "not
+# CPU", and this comment is the one place that says why — the branches
+# themselves only note what is local to them.
+#
+# The three backends differ in *route*: CUDA reaches its kernels through Pallas
+# plus one hand kernel behind FFI, Metal through plugin custom calls only,
+# having no Pallas at all, and CPU through host FFI handlers that ship in the
+# frx wheel. They also differ in *coverage*, which is what makes the branches
+# asymmetric rather than a single "is accelerated" test. Metal and CPU both
+# have the unbatched 128-bit `elements` reduce and the packed-byte gather, and
+# both take the portable oracle for the batched stack, the non-128 widths, and
+# the unpacked 0/1 selector matrix. Anything that is none of the three takes the
+# portable oracle throughout.
+#
+# Adding a backend to an arm whose handler it lacks does NOT degrade to the
+# oracle — the custom call raises on an unregistered platform. So each arm names
+# exactly who has a handler for that shape, and the two CPU arms below are the
+# two host handlers that exist, not a blanket "CPU is accelerated".
+_CUDA = "gpu"
+_METAL = "metal"
+_CPU = "cpu"
 
 BitSelectReduction = Literal["bits", "elements"]
 
@@ -109,32 +135,145 @@ def _xor_reduce_rows(x: Array) -> Array:
     return result
 
 
-# The elements reduction sums over all `n` selectors into a tiny `(W, L)` output.
-# Gridding on that output gives only `W*L` programs, each serial over `n` — at
-# flock m=28 that is 512 programs looping 16384 blocks, ~18x slower than the
-# sibling `bits` kernel purely from under-parallelization. Instead grid over `n`:
-# each program XOR-folds `iters` sub-blocks of `_ELEMENTS_BLOCK` rows into one
-# `(W, L)` accumulator — reading every selector/value once, not `W` times — and
-# the per-program partials are XOR-combined. XOR is associative, so the result is
-# bit-identical to a serial reduction. `_ELEMENTS_TARGET_PROGRAMS` bounds the
-# partials array so the large-`m` shapes #504 cared about stay in memory.
-# rows per materialized (BLOCK, W, L) tile; < 256 so _xor_reduce_rows cannot carry
-_ELEMENTS_BLOCK = 32
 _ELEMENTS_TARGET_PROGRAMS = 8192
+
+
+def _elements_grid(n: int, block: int) -> tuple[int, int, int, int]:
+    """The `n`-parallel grid plan both elements kernels share:
+    `(iters, rows_per_program, programs, padded_n)`.
+
+    Gridding on the tiny `(W, L)` output would give only `W*L` programs, each
+    serial over `n` — at flock m=28 that is 512 programs looping 16384 blocks,
+    ~18x slower than the sibling `bits` kernel purely from under-parallelization.
+    Instead grid over `n`: each program folds `iters` `block`-row steps into one
+    accumulator, reading every selector/value once; the per-program partials are
+    then XOR-combined. `_ELEMENTS_TARGET_PROGRAMS` bounds the partials array so
+    the large-`m` shapes (#504) stay in memory."""
+    iters = max(1, -(-n // (block * _ELEMENTS_TARGET_PROGRAMS)))
+    rows_per_program = block * iters
+    programs = -(-n // rows_per_program)
+    padded_n = programs * rows_per_program
+    return iters, rows_per_program, programs, padded_n
 
 
 def _bit_select_reduce_elements_pallas(
     selectors: Array, values: Array, width: int, limbs: int
 ) -> Array:
-    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output, parallel over n."""
+    """Pallas lowering for `(n,) x (n,) -> (W, L)` limb output, parallel over n.
+
+    Each step reads a `block`-row tile of both streams into a `(block, W, L)`
+    accumulator, folded to `(W, L)` once per program by [`_xor_reduce_rows`]:
+    the in-loop update must stay elementwise, since per-row indexing does not
+    lower on Pallas GPU (`slice`) and an in-loop parity fold is shuffle-bound.
+    """
     n = selectors.shape[0]
-    block = _ELEMENTS_BLOCK
-    iters = max(1, -(-n // (block * _ELEMENTS_TARGET_PROGRAMS)))
-    rows_per_program = block * iters
-    programs = -(-n // rows_per_program)
-    padded_n = programs * rows_per_program
+    # block=2 balances load width against accumulator register pressure
+    # (measured optimum on the RTX 5090 target); wider tiles stream faster only
+    # with the accumulate removed, so the constraint is acc-stream interaction,
+    # not bandwidth.
+    block = 2
+    iters, rows_per_program, programs, padded_n = _elements_grid(n, block)
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
     values = fnp.pad(values, ((0, padded_n - n), (0, 0)))
+
+    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
+        program = pl.program_id(0)
+        shifts = fnp.arange(_LIMB_BITS, dtype=_LIMB)
+        base = program * rows_per_program + fnp.arange(block, dtype=fnp.int32)
+
+        def body(step: Array, acc: Array) -> Array:
+            rows = base + step * block
+            sel = selector_ref[rows, :]
+            val = value_ref[rows, :]
+            bits = ((sel[:, :, None] >> shifts) & 1).reshape(block, width)
+            # 0/1 bits -> 0/~0 masks: the AND select keeps the hot loop in the
+            # LOP3 class instead of integer multiply, and a padded zero row
+            # selects nothing.
+            mask = _LIMB(0) - bits
+            return acc ^ (mask[:, :, None] & val[:, None, :])
+
+        acc = lax.fori_loop(0, iters, body, fnp.zeros((block, width, limbs), _LIMB))
+        out_ref[program] = _xor_reduce_rows(acc)
+
+    partials = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((programs, width, limbs), _LIMB),
+        grid=(programs,),
+        compiler_params=plgpu.CompilerParams(),
+        name="bit_select_xor_reduce_elements",
+    )(selectors, values)
+    return lax.reduce_xor(partials, (0,))
+
+
+def _bit_select_reduce_elements_ffi(selectors_l: Array, values_l: Array) -> Array:
+    """Plugin custom-call lowering for the `(n,) x (n,) -> (W, L)` reduce at
+    `W = 128`.
+
+    CUDA, Metal and CPU each register a handler for this target and XLA selects
+    by platform, so this is one lowering rather than three. The call site still
+    has to name those platforms: an unregistered one raises rather than falling
+    back to the portable expression. Each device kernel
+    holds the XOR accumulator in registers while both operand streams pass
+    through on-chip scratch — shared memory on CUDA, threadgroup memory on
+    Metal — decoupling the accumulate from the load stream, which the Pallas
+    lowerings cannot express (Triton has no scratch memory; Mosaic-GPU cannot
+    partition rows across warps). The host handler is a flat scan that skips a
+    whole selector word when it is clear; what it buys over the portable
+    expression is not the scan but never materializing the `(n, W, L)`
+    selection. XOR commutes, so the result is byte-identical to
+    [`_bit_select_reduce_elements_pallas`] for any kernel grid.
+    """
+    return frx.ffi.ffi_call(
+        "frx_bit_select_xor_reduce_elements",
+        frx.ShapeDtypeStruct((128, 4), _LIMB),
+    )(selectors_l, values_l)
+
+
+def _bit_select_packed_bytes_ffi(selectors: Array, values: Array, limbs: int) -> Array:
+    """Plugin custom-call lowering for packed-byte `(n, B/8) x (B,) -> (n, L)`.
+
+    Drop-in for [`_bit_select_packed_bytes_pallas`], down to sharing its
+    [`_byte_xor_table`]: `reduce="bits"` and [`byte_select_xor_reduce`] are the
+    same reduction over the bit axis, so one kernel serves both.
+
+    Metal and CPU both route here; CUDA has a Pallas lowering for this shape and
+    does not. The table is `(W/8, 256, L)` — 64 KiB at W=128, L=4 — which is
+    what makes the host handler a cache-resident scan rather than a gather.
+    """
+    table = _byte_xor_table(values, selectors.shape[1], limbs)
+    return frx.ffi.ffi_call(
+        "frx_bit_select_xor_reduce_packed_bytes",
+        frx.ShapeDtypeStruct((selectors.shape[0], limbs), _LIMB),
+    )(selectors, table)
+
+
+def _bit_select_reduce_elements_batched_pallas(
+    selectors: Array, values: Array, width: int, limbs: int
+) -> Array:
+    """Batched `(n,) selectors x (n, N) values -> (N, W, L)` limb output.
+
+    The single-claim [`_bit_select_reduce_elements_pallas`] with the selectors —
+    the shared packed witness — and their bit-decomposition read once per row and
+    XOR-accumulated against all `N` value vectors, so a batched ring-switch open
+    reads the witness once instead of once per claim. Parallel over `n`; the
+    per-program partials are XOR-combined.
+
+    `values` is selectors-major `(n, N, L)`: the shared row axis leads so the
+    device load is a leading-axis gather (`value_ref[rows]`), the one indexing
+    form the Triton lowering handles here. The batch `N` rides as a kernel-array
+    axis, which the lowering needs power-of-2 sized, so `N` is padded up to the
+    next power of two with zero value rows (a zero row XOR-reduces to zero) and
+    sliced back. `N` a power of two (the flock two-claim open) pads to itself."""
+    n, batch, _ = values.shape
+    batch_pad = 1 << (batch - 1).bit_length()
+    # One row per step: the batch axis already supplies the register-level
+    # width the single-claim kernel gets from its row tile; widening both
+    # regresses.
+    block = 1
+    iters, rows_per_program, programs, padded_n = _elements_grid(n, block)
+    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
+    # Pad rows (axis 0) to the grid and the batch (axis 1) up to a power of two.
+    values = fnp.pad(values, ((0, padded_n - n), (0, batch_pad - batch), (0, 0)))
 
     def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
         program = pl.program_id(0)
@@ -147,53 +286,23 @@ def _bit_select_reduce_elements_pallas(
                 + fnp.arange(block, dtype=fnp.int32)
             )
             sel = selector_ref[rows, :]
-            val = value_ref[rows, :]
-            bits = ((sel[:, :, None] >> shifts) & 1).reshape(block, width)
-            return acc ^ _xor_reduce_rows(bits[:, :, None] * val[:, None, :])
+            bits = ((sel[:, :, None] >> shifts) & 1).reshape(width)
+            val = value_ref[rows, :, :].reshape(batch_pad, limbs)
+            # (W,) bit-select each of the N value rows -> (N, W, L).
+            return acc ^ bits[None, :, None] * val[:, None, :]
 
         out_ref[program] = lax.fori_loop(
-            0, iters, body, fnp.zeros((width, limbs), _LIMB)
+            0, iters, body, fnp.zeros((batch_pad, width, limbs), _LIMB)
         )
 
     partials = pl.pallas_call(
         kernel,
-        out_shape=frx.ShapeDtypeStruct((programs, width, limbs), _LIMB),
+        out_shape=frx.ShapeDtypeStruct((programs, batch_pad, width, limbs), _LIMB),
         grid=(programs,),
         compiler_params=plgpu.CompilerParams(),
-        name="bit_select_xor_reduce_elements",
+        name="bit_select_xor_reduce_elements_batched",
     )(selectors, values)
-    return lax.reduce_xor(partials, (0,))
-
-
-def _bit_select_reduce_bits_pallas(
-    selectors: Array, values: Array, width: int, limbs: int
-) -> Array:
-    """Pallas lowering for `(n,) x (W,) -> (n, L)` limb output."""
-    n = selectors.shape[0]
-    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
-    selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
-
-    def kernel(selector_ref: Any, value_ref: Any, out_ref: Any) -> None:
-        block = pl.program_id(0)
-        limb = pl.program_id(1)
-        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
-        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
-        for selector_limb in range(limbs):
-            packed = selector_ref[rows, selector_limb]
-            for shift in range(_LIMB_BITS):
-                bit = selector_limb * _LIMB_BITS + shift
-                value = value_ref[bit, limb]
-                acc ^= fnp.where(((packed >> shift) & 1) != 0, value, 0)
-        out_ref[rows, limb] = acc
-
-    out = pl.pallas_call(
-        kernel,
-        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
-        grid=(padded_n // _SELECT_BLOCK, limbs),
-        compiler_params=plgpu.CompilerParams(),
-        name="bit_select_xor_reduce_bits",
-    )(selectors, values)
-    return out[:n]
+    return lax.reduce_xor(partials, (0,))[:batch]
 
 
 def _bit_select_unpacked_bits_pallas(
@@ -225,42 +334,137 @@ def _bit_select_unpacked_bits_pallas(
     return out[:n]
 
 
+def _bit_select_packed_bytes_stacked_pallas(
+    selectors: Sequence[Array], values: Array, limbs: int
+) -> Array:
+    """Pallas lowering for `N x (n, B/8)` selectors and `(N, B)` values `-> (n, L)`.
+
+    The claims arrive as separate operands rather than one `(N, n, B/8)` array
+    because concatenating them is the cost this kernel exists to avoid: each is
+    `n * B/8` bytes, so stacking would spend the output traffic the fused pass
+    saves. Only the tables are stacked — `(B/8, 256, L)` is 64 KiB at `B = 128`
+    over four limbs, so `N` of them sit together for free.
+
+    The claim axis unrolls into the same program the single-claim kernel runs:
+    one selector-row pass per claim, one accumulator, one output write.
+    """
+    n, n_bytes = selectors[0].shape
+    block_rows = 64
+    padded_n = ((n + block_rows - 1) // block_rows) * block_rows
+    # A padded row selects byte 0 in every position, and `_byte_xor_table` maps
+    # byte 0 to the empty XOR, so the pad contributes zero rather than garbage.
+    padded = [fnp.pad(s, ((0, padded_n - n), (0, 0))) for s in selectors]
+
+    tables = fnp.stack(
+        [_byte_xor_table(values[claim], n_bytes, limbs) for claim in range(len(padded))]
+    )
+
+    def kernel(*refs: Any) -> None:
+        *selector_refs, table_ref, out_ref = refs
+        block = pl.program_id(0)
+        rows = block * block_rows + fnp.arange(block_rows, dtype=fnp.int32)
+        acc = fnp.zeros((block_rows, limbs), dtype=_LIMB)
+        for claim, selector_ref in enumerate(selector_refs):
+            for byte_index in range(n_bytes):
+                value = selector_ref[rows, byte_index].astype(fnp.int32)
+                acc ^= table_ref[claim, byte_index, value, :]
+        out_ref[rows, :] = acc
+
+    out = pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
+        grid=(padded_n // block_rows,),
+        compiler_params=plgpu.CompilerParams(num_warps=2),
+        name="bit_select_xor_reduce_stacked_packed_bytes",
+    )(*padded, tables)
+    return out[:n]
+
+
 def _bit_select_packed_bytes_pallas(
     selectors: Array, values: Array, limbs: int
 ) -> Array:
     """Pallas lowering for packed-byte `(n, B/8) x (B,) -> (n, L)`."""
     n, n_bytes = selectors.shape
-    padded_n = ((n + _SELECT_BLOCK - 1) // _SELECT_BLOCK) * _SELECT_BLOCK
+    # Keep all storage limbs in the same program.  Splitting limbs across the
+    # grid rereads every selector byte once per limb, paying one global-memory
+    # pass per limb.  A 64-row tile exposes enough blocks to saturate the GPU
+    # while reusing each selector load across all limbs.
+    block_rows = 64
+    padded_n = ((n + block_rows - 1) // block_rows) * block_rows
     selectors = fnp.pad(selectors, ((0, padded_n - n), (0, 0)))
 
-    # Flock-core's UniSkipFoldTable: table[j, v] XORs the eight weights selected
-    # by byte value v in byte position j. At k_skip=6 this is 8*256*16 = 32 KiB.
-    byte_values = values.reshape(n_bytes, 8, limbs)
-    byte = fnp.arange(256, dtype=_LIMB)
-    shift = fnp.arange(8, dtype=_LIMB)
-    selected = ((byte[:, None] >> shift[None, :]) & 1).astype(_LIMB)
-    table = lax.reduce_xor(
-        selected[None, :, :, None] * byte_values[:, None, :, :], (2,)
-    )
+    table = _byte_xor_table(values, n_bytes, limbs)
 
     def kernel(selector_ref: Any, table_ref: Any, out_ref: Any) -> None:
         block = pl.program_id(0)
-        limb = pl.program_id(1)
-        rows = block * _SELECT_BLOCK + fnp.arange(_SELECT_BLOCK, dtype=fnp.int32)
-        acc = fnp.zeros((_SELECT_BLOCK,), dtype=_LIMB)
+        rows = block * block_rows + fnp.arange(block_rows, dtype=fnp.int32)
+        acc = fnp.zeros((block_rows, limbs), dtype=_LIMB)
         for byte_index in range(n_bytes):
             value = selector_ref[rows, byte_index].astype(fnp.int32)
-            acc ^= table_ref[byte_index, value, limb]
-        out_ref[rows, limb] = acc
+            acc ^= table_ref[byte_index, value, :]
+        out_ref[rows, :] = acc
 
     out = pl.pallas_call(
         kernel,
         out_shape=frx.ShapeDtypeStruct((padded_n, limbs), _LIMB),
-        grid=(padded_n // _SELECT_BLOCK, limbs),
-        compiler_params=plgpu.CompilerParams(),
+        grid=(padded_n // block_rows,),
+        compiler_params=plgpu.CompilerParams(num_warps=2),
         name="bit_select_xor_reduce_packed_bytes",
     )(selectors, table)
     return out[:n]
+
+
+def _byte_xor_table(values: Array, n_bytes: int, limbs: int) -> Array:
+    """Build the `(n_bytes, 256, limbs)` per-byte-position XOR table."""
+    byte_values = values.reshape(n_bytes, 8, limbs)
+    byte = fnp.arange(256, dtype=_LIMB)
+    shift = fnp.arange(8, dtype=_LIMB)
+    selected = ((byte[:, None] >> shift[None, :]) & 1).astype(_LIMB)
+    return lax.reduce_xor(selected[None, :, :, None] * byte_values[:, None, :, :], (2,))
+
+
+def _bit_select_wide_packed_bytes_pallas(
+    selectors: Array, values: Array, limbs: int
+) -> Array:
+    """Packed-byte selection with one lane-parallel program per output row."""
+    n, n_bytes = selectors.shape
+    # Eight adjacent gathers per warp give the L2 much better locality than a
+    # 128-wide vector on this table-shaped access.  Keep the 256 steps as a
+    # loop: unrolling them saves only ~10% kernel time but makes full-prover
+    # compilation prohibitively large.
+    lanes = 8
+    if n_bytes % lanes:
+        pad = lanes - n_bytes % lanes
+        selectors = fnp.pad(selectors, ((0, 0), (0, pad)))
+        values = fnp.pad(values, ((0, pad * 8), (0, 0)))
+    padded_bytes = selectors.shape[1]
+
+    table = _byte_xor_table(values, padded_bytes, limbs)
+
+    def kernel(selector_ref: Any, table_ref: Any, out_ref: Any) -> None:
+        row = pl.program_id(0)
+        lane = fnp.arange(lanes, dtype=fnp.int32)
+
+        def body(step: Array, acc: Array) -> Array:
+            byte_index = step * lanes + lane
+            value = selector_ref[row, byte_index].astype(fnp.int32)
+            return acc ^ table_ref[byte_index, value, :]
+
+        acc = lax.fori_loop(
+            0,
+            padded_bytes // lanes,
+            body,
+            fnp.zeros((lanes, limbs), dtype=_LIMB),
+        )
+        out_ref[row, :] = _xor_reduce_rows(acc)
+
+    return pl.pallas_call(
+        kernel,
+        out_shape=frx.ShapeDtypeStruct((n, limbs), _LIMB),
+        grid=(n,),
+        compiler_params=plgpu.CompilerParams(num_warps=1),
+        name="bit_select_xor_reduce_wide_packed_bytes",
+    )(selectors, table)
 
 
 @frx.jit
@@ -271,10 +475,10 @@ def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
     bits `8*j .. 8*j+7` least-significant-bit first. `values` is a binary-field
     vector `(B,)`; the result `(n,)` XORs `values[b]` wherever row bit `b` is set.
 
-    On GPU a 256-entry XOR table per byte position feeds a Pallas gather, matching
-    flock-core's `UniSkipFoldTable`: the kernel reads `B/8` selector bytes per row
-    and never expands the `(n, B)` bit matrix. CPU keeps a compact source-level
-    expression as the portable oracle.
+    Where a kernel exists, a 256-entry XOR table per byte position feeds the
+    gather, matching flock-core's `UniSkipFoldTable`: the kernel reads `B/8`
+    selector bytes per row and never expands the `(n, B)` bit matrix. Backends
+    without one keep a compact source-level expression as the portable oracle.
     """
     if selectors.ndim != 2 or values.ndim != 1:
         raise ValueError("packed-byte bit selection expects 2D selectors and 1D values")
@@ -296,8 +500,16 @@ def byte_select_xor_reduce(selectors: Array, values: Array) -> Array:
 
     limbs = field_bit_width(values.dtype) // _LIMB_BITS
     values_l = _to_limbs(values)
-    if frx.default_backend() == "gpu":
-        out_l = _bit_select_packed_bytes_pallas(selectors, values_l, limbs)
+    backend = frx.default_backend()
+    if backend == _CUDA:
+        if selectors.shape[1] <= 16:
+            out_l = _bit_select_packed_bytes_pallas(selectors, values_l, limbs)
+        else:
+            out_l = _bit_select_wide_packed_bytes_pallas(selectors, values_l, limbs)
+    elif backend == _METAL:
+        # One kernel covers every row width, so Metal needs no wide/narrow
+        # split: the gather is `S` table loads per row either way.
+        out_l = _bit_select_packed_bytes_ffi(selectors, values_l, limbs)
     else:
         shifts = fnp.arange(8, dtype=fnp.uint8)
         unpacked = ((selectors[:, :, None] >> shifts) & 1).reshape(
@@ -325,19 +537,30 @@ def bit_select_xor_reduce(
     the result has the selectors' shape: each result `i` XORs `values[b]`
     wherever bit `b` of selector `i` is set.
 
+    `reduce="elements"` also batches: a selectors-major `values` of shape
+    `(n, N)` reduces all `N` columns against the shared selectors in one pass —
+    the result is `(N, W)`, row `k` the reduction against `values[:, k]`. A
+    batched ring-switch open uses this so the packed witness (the selectors) is
+    read once for all `N` claims instead of once per claim.
+
     For `reduce="bits"`, selectors may instead be an explicit Boolean/integer
     0/1 matrix of shape `(n, B)` with `values.shape == (B,)`. This is the form
     used when a consumer already holds unpacked witness rows.
 
-    On GPU the Pallas lowering streams directly into the limb output. It never
-    materializes the broadcast `(n, W, L)` selection; its working set is one
-    fixed-size register block. CPU uses the compact source-level expression so
-    the primitive remains portable and easy to validate.
+    Where a kernel exists, the lowering streams directly into the limb output.
+    It never materializes the broadcast `(n, W, L)` selection; its working set
+    is one fixed-size register block. Backends without one use the compact
+    source-level expression so the primitive remains portable and easy to
+    validate.
     """
-    if values.ndim != 1 or selectors.ndim not in (1, 2):
+    if selectors.ndim not in (1, 2):
         raise ValueError(
-            "bit-select XOR reduction expects 1D values and 1D packed or 2D "
-            "unpacked selectors"
+            "bit-select XOR reduction expects 1D packed or 2D unpacked selectors"
+        )
+    if values.ndim not in (1, 2):
+        raise ValueError(
+            "bit-select XOR reduction expects 1D values, or a 2D (n, N) stack "
+            'for batched reduce="elements"'
         )
     if selectors.shape[0] == 0:
         raise ValueError("bit-select XOR reduction requires at least one selector")
@@ -356,7 +579,12 @@ def bit_select_xor_reduce(
             )
         limbs = field_bit_width(values.dtype) // _LIMB_BITS
         values_l = _to_limbs(values)
-        if frx.default_backend() == "gpu":
+        # Metal is deliberately absent: its accelerated lowering gathers packed
+        # selector bytes, and these selectors are an explicit 0/1 matrix whose
+        # bit count need not be a multiple of 8. Packing it to reach the kernel
+        # would cost a pass over the (n, B) matrix the kernel exists to avoid
+        # materializing, so Metal keeps the portable expression here.
+        if frx.default_backend() == _CUDA:
             out_l = _bit_select_unpacked_bits_pallas(selectors, values_l, limbs)
         else:
             selected = selectors.astype(_LIMB)
@@ -374,18 +602,41 @@ def bit_select_xor_reduce(
     values_l = _to_limbs(values)
 
     if reduce == "elements":
-        if values.shape != selectors.shape:
+        # `values` is `(n,)` for one claim or a selectors-major `(n, N)` stack
+        # for N claims that share the selectors (the ring-switch batched-open
+        # path: the packed witness is read once for all N). The reduced axis —
+        # the one matching the selectors — leads in both.
+        batched = values.ndim == 2
+        if values.shape[0] != selectors.shape[0]:
             raise ValueError(
-                f'values must match selectors for reduce="elements": '
-                f"{values.shape} vs {selectors.shape}"
+                f"values must match selectors on the reduced (leading) axis for "
+                f'reduce="elements": {values.shape} vs {selectors.shape}'
             )
-        if frx.default_backend() == "gpu":
-            out_l = _bit_select_reduce_elements_pallas(
-                selectors_l, values_l, width, limbs
+        backend = frx.default_backend()
+        # One lowering, not three: each backend registers a handler for this
+        # target and XLA selects by platform. The set stays explicit because an
+        # unregistered platform raises rather than falling back, so it has to
+        # name exactly who has a handler. Metal and CPU appear in no arm below,
+        # which is why their batched stacks and non-128 widths take the portable
+        # expression until one is measured to matter.
+        if backend in (_CUDA, _METAL, _CPU) and not batched and width == 128:
+            out_l = _bit_select_reduce_elements_ffi(selectors_l, values_l)
+        elif backend == _CUDA:
+            elements_pallas = (
+                _bit_select_reduce_elements_batched_pallas
+                if batched
+                else _bit_select_reduce_elements_pallas
             )
+            out_l = elements_pallas(selectors_l, values_l, width, limbs)
         else:
-            bits = _bits(selectors)
-            out_l = lax.reduce_xor(bits[:, :, None] * values_l[:, None, :], (0,))
+            bits = _bits(selectors)  # (n, width)
+            if batched:
+                # (n, width) x (n, N, limbs) -> (N, width, limbs)
+                out_l = lax.reduce_xor(
+                    bits[:, None, :, None] * values_l[:, :, None, :], (0,)
+                )
+            else:
+                out_l = lax.reduce_xor(bits[:, :, None] * values_l[:, None, :], (0,))
         return _from_limbs(out_l, values.dtype)
 
     if reduce == "bits":
@@ -394,8 +645,19 @@ def bit_select_xor_reduce(
                 f'values must have shape ({width},) for reduce="bits", got '
                 f"{values.shape}"
             )
-        if frx.default_backend() == "gpu":
-            out_l = _bit_select_reduce_bits_pallas(selectors_l, values_l, width, limbs)
+        backend = frx.default_backend()
+        if backend in (_CUDA, _METAL, _CPU):
+            selector_bytes = lax.bitcast_convert_type(selectors_l, fnp.uint8).reshape(
+                selectors.shape[0], width // 8
+            )
+            # Metal and CPU share the custom call; only CUDA has a Pallas
+            # lowering for this shape.
+            packed_bytes = (
+                _bit_select_packed_bytes_pallas
+                if backend == _CUDA
+                else _bit_select_packed_bytes_ffi
+            )
+            out_l = packed_bytes(selector_bytes, values_l, limbs)
         else:
             bits = _bits(selectors)
             out_l = lax.reduce_xor(bits[:, :, None] * values_l[None, :, :], (1,))
@@ -404,6 +666,85 @@ def bit_select_xor_reduce(
     raise ValueError(
         f'unknown reduction axis {reduce!r}; expected "bits" or "elements"'
     )
+
+
+def bit_select_xor_reduce_stacked(
+    selectors: Sequence[Array], values: Sequence[Array]
+) -> Array:
+    """XOR-sum of `N` independent `reduce="bits"` reductions, in one pass.
+
+    `N x (n,)` selectors and `N x (W,)` values `-> (n,)`, computing
+    `out[i] = Σ_k Σ_b bit_b(selectors[k][i]) · values[k][b]`.
+
+    Distinct from the batched `reduce="elements"` form, which shares ONE selector
+    set across the stack: here every claim brings its own selectors *and* its own
+    values, and only their sum is ever read. That is why this is a separate entry
+    point rather than another `reduce=` mode — and 2D selectors already mean an
+    unpacked 0/1 matrix under `reduce="bits"`.
+
+    The claims stay separate arrays on purpose. Reducing each one and summing
+    afterwards costs `N` full-length writes plus a read of each, which is what
+    this removes; taking a pre-stacked `(N, n)` would put that same traffic back
+    as the concatenation. At `N = 2` and `n = 2^25` over GF(2^128) the one-pass
+    form moves 1.5 GiB against 3.5 GiB.
+
+    Callers that need the individual reductions must not use this — the summands
+    never exist.
+    """
+    if len(selectors) != len(values):
+        raise ValueError(
+            "selectors and values must stack the same number of claims: "
+            f"{len(selectors)} vs {len(values)}"
+        )
+    if not selectors:
+        raise ValueError("stacked bit-select XOR reduction requires at least one claim")
+    values_dtype = fnp.dtype(values[0].dtype)
+    if not values_dtype.name.startswith("binary_field"):
+        raise ValueError("bit-select XOR reduction values must use a binary field")
+    width = field_bit_width(values[0].dtype)
+    for claim, (s, v) in enumerate(zip(selectors, values)):
+        if s.ndim != 1 or s.shape[0] == 0:
+            raise ValueError(
+                f"claim {claim}: selectors must be a non-empty 1D vector, got {s.shape}"
+            )
+        if s.shape != selectors[0].shape:
+            raise ValueError(
+                f"claim {claim}: every claim reduces the same number of selectors, "
+                f"got {s.shape} against {selectors[0].shape}"
+            )
+        if fnp.dtype(s.dtype) != values_dtype or fnp.dtype(v.dtype) != values_dtype:
+            raise ValueError(
+                "bit-select XOR reduction requires selectors and values of the "
+                "same binary-field dtype"
+            )
+        if v.shape != (width,):
+            raise ValueError(
+                f"claim {claim}: values must have shape ({width},), got {v.shape}"
+            )
+
+    if frx.default_backend() == _CUDA:
+        values_l = fnp.stack([_to_limbs(v) for v in values])  # (N, W, L), 2 KiB a claim
+        selector_bytes = [
+            lax.bitcast_convert_type(_to_limbs(s), fnp.uint8).reshape(
+                s.shape[0], width // 8
+            )
+            for s in selectors
+        ]
+        out_l = _bit_select_packed_bytes_stacked_pallas(
+            selector_bytes, values_l, width // _LIMB_BITS
+        )
+    else:
+
+        def one_claim(s: Array, v: Array) -> Array:
+            return lax.reduce_xor(_bits(s)[:, :, None] * _to_limbs(v)[None, :, :], (1,))
+
+        # Literally the single-claim `reduce="bits"` expression, XOR-summed —
+        # so the oracle the kernel is validated against is the reduction this
+        # module already trusts, not a second derivation of it.
+        out_l = one_claim(selectors[0], values[0])
+        for s, v in zip(selectors[1:], values[1:]):
+            out_l = out_l ^ one_claim(s, v)
+    return _from_limbs(out_l, values_dtype)
 
 
 def unpack(x: Array) -> Array:

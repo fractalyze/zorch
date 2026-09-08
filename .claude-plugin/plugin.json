@@ -1,0 +1,9 @@
+{
+  "name": "zorch",
+  "description": "Usage guide for building proof systems on zorch: install, block APIs, field-dtype rules, consumer boundary.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Fractalyze",
+    "url": "https://github.com/fractalyze"
+  }
+}

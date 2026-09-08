@@ -140,12 +140,12 @@ commitment and PCS prover data skip straight to the prover's opening role.
 public output-and-layer-count claim to an input-layer claim for a consumer's PCS
 opening.
 
-`JaggedLogUpGkrProver` / `JaggedLogUpGkrVerifier` reduce those same claim types
-over the jagged layout, so a consumer picks a layout by construction and the seam
-does not move. Only the witness and layer proofs differ, which generalizes:
+The jagged layout reuses those same claim types — a consumer drives
+`jagged_prover`'s layer rounds from its own seam. Only the witness and layer
+proofs differ, which generalizes:
 **per-input structure is witness, per-class structure is role configuration** —
 the jagged fold schedule rides the witness, the round width caps configure the
-role once.
+rounds once.
 
 ## State and ownership rules
 

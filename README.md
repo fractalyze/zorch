@@ -176,8 +176,27 @@ build, the FRX compile-cache rule — lives in [`docs/reference/development.md`]
 
 ## Documentation
 
+- **Docs site:** <https://fractalyze.github.io/zorch/>
 - **Task-indexed docs hub:** [`docs/README.md`](docs/README.md) — indexes every
   design doc by what you're trying to do.
+
+### Agent skill
+
+[`skills/using-zorch`](skills/using-zorch) packages this guide for AI coding
+agents — install commands, block import paths, field-dtype rules, and the
+consumer boundary — so an agent writing code *against* zorch in your repo has
+them on hand. Install with any agent via [skills.sh](https://skills.sh):
+
+```sh
+npx skills add fractalyze/zorch
+```
+
+or as a Claude Code plugin:
+
+```text
+/plugin marketplace add fractalyze/zorch
+/plugin install zorch@zorch
+```
 
 ## License
 

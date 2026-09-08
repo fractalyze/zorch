@@ -35,7 +35,7 @@ them during the opening — a claim carrying them would be unconstructible.
 **A committer plus an opening stage, not one `Pcs`.** `commit` / `open` are the
 prover's, `verify` the verifier's, split for the two reasons
 [sumcheck](sumcheck.md) splits its roles: `open` is an interactive sub-protocol
-threading the [Fiat-Shamir transcript](hash.md), and the sides hold **asymmetric
+threading the [Fiat-Shamir transcript](transcript.md), and the sides hold **asymmetric
 keys** — a KZG prover key is O(degree), its verifier key three group elements. A
 deployed verifier must never carry the prover's, so the boundary is a type. The
 Merkle [`commit`](commit.md) has neither property and stays unified; the split
@@ -159,7 +159,7 @@ of three tiers, and which tier an op takes is the only thing that varies:
   portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT.
 - **GPU blessed primitive** — a dedicated `stablehlo` op or custom emitter
   (run-fast): KZG's `lax.msm` (commit and the opening proof), the
-  [poseidon2](hash.md) permutation behind FRI's and BaseFold's Merkle layers, the
+  [poseidon2](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md) permutation behind FRI's and BaseFold's Merkle layers, the
   NTT (the RS LDE in both FRI and BaseFold commit).
 - **CPU-legalized primitive** — `lax.pairing_check` for KZG `verify`, which has no
   GPU kernel; the verifier is O(1), so the host round-trip (MSM on GPU →

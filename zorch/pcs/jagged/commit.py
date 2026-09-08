@@ -7,12 +7,17 @@ Merkle-committed via the SMCS, then bound to the region's row/column structure.
 The commit half of the jagged PCS — it produces the ``StackedRound`` the stacked
 open (``zorch.pcs.jagged.open``) consumes.
 
-``jit=True`` runs the commit as two ``@jit`` zones cut on the K (stacked column
-count) compile key — the ``stacked_basefold_open`` zoning recipe. Only the
-encode + leaf-hash prologue's shapes carry K; the Merkle fold's O(depth)
-compile — the dominant one — keys on the leaf count ``S*blowup`` alone, so it
-compiles once per process and is shared by every shard. Byte-identical to eager
-either way (the zone cut sits on the leaf-digest layer both paths compute).
+``jit=True`` runs the commit as three ``@jit`` zones — the
+``stacked_basefold_open`` zoning recipe. Only the encode + leaf-hash prologue's
+shapes carry K (the stacked column count); the Merkle fold's O(depth) compile —
+the dominant one — keys on the leaf count ``S*blowup`` plus the
+identity-hashed ``smcs`` static, so it compiles once per leaf count for each
+long-lived ``SingleMatrixCommitmentScheme`` (the shard prover holds one for
+its lifetime; a fresh instance recompiles) and is shared by every shard of
+that height; the root/structure bind tail —
+the only counts-shaped work, a two-permute graph — recompiles per chip count
+without ever touching the fold. Byte-identical to eager either way (the zone
+cuts sit on the leaf-digest and raw-root layers both paths compute).
 """
 
 from __future__ import annotations
@@ -73,29 +78,41 @@ def _prologue(
     return message.T, smcs.hash_leaves(codeword, column_major=True)
 
 
-# K-independent zone: the O(depth) Merkle fold plus the root/structure binds —
-# the commit's dominant compile. No shape here carries K (the leaf-digest layer
-# is [S*blowup, digest_elems] and K enters the separator preimage as the traced
-# ``shape_params`` value), so it compiles once and is shared by every shard of
-# one (S, blowup, chip-count) configuration.
-def _fold_bind(
+# Leaf-count zone: the O(depth) Merkle fold — the commit's dominant compile.
+# The only shape here is the [S*blowup, digest_elems] leaf-digest layer, so it
+# keys on the leaf count alone and compiles once per (S, blowup) — shared by
+# every shard regardless of K or chip count. Keeping the counts-shaped bind
+# tail out is what makes that true: with it inside, every distinct chip count
+# re-paid this whole O(depth) graph for a two-permute tail.
+def _fold(
+    smcs: SingleMatrixCommitmentScheme, leaf_digests: Array
+) -> tuple[Array, list[Array]]:
+    return smcs.fold_leaf_digests(leaf_digests)
+
+
+# Counts-shaped zone: the root/structure binds. Recompiles per chip count
+# (the row/column-count length), but its graph is two sponge hashes + two
+# compressions over the 8-element raw root, so that compile is trivial. K
+# enters the separator preimage as the traced ``shape_params`` value, never as
+# a compile key.
+def _bind(
     smcs: SingleMatrixCommitmentScheme,
-    leaf_digests: Array,
+    raw_root: Array,
     shape_params: Array,
     row_counts: Array,
     column_counts: Array,
-) -> tuple[Array, list[Array], Array]:
-    raw_root, digest_layers = smcs.fold_leaf_digests(leaf_digests)
+) -> tuple[Array, Array]:
     commitment = smcs.bind_root(raw_root, shape_params)
     bound = smcs.bind_structure(commitment, row_counts, column_counts)
-    return bound, digest_layers, commitment
+    return bound, commitment
 
 
 # ``smcs`` keys these zones by object identity (the scheme defines no
 # __eq__/__hash__), so every call site must reuse one instance per process or
 # each fresh instance silently recompiles the whole poseidon2/Merkle pipeline.
 _prologue_jit = frx.jit(_prologue, static_argnames=("smcs", "log_blowup"))
-_fold_bind_jit = frx.jit(_fold_bind, static_argnames=("smcs",))
+_fold_jit = frx.jit(_fold, static_argnames=("smcs",))
+_bind_jit = frx.jit(_bind, static_argnames=("smcs",))
 
 
 def commit_region(
@@ -108,7 +125,7 @@ def commit_region(
     """Commit a packed region; returns ``(bound_commitment, prover_data)``.
 
     ``jit`` fuses each zone (the module docstring) — required at rsp scale on a
-    32 GB device; eager runs the same two bodies un-fused. Byte-identical either
+    32 GB device; eager runs the same three bodies un-fused. Byte-identical either
     way. The ~6 GB blow-up codeword never leaves this function: the open
     re-encodes it from ``mle``, so it never stays device-resident."""
     message = region.block
@@ -124,8 +141,9 @@ def commit_region(
     mle, leaf_digests = (_prologue_jit if jit else _prologue)(
         smcs, message, log_blowup=log_blowup
     )
-    bound, digest_layers, commitment = (_fold_bind_jit if jit else _fold_bind)(
-        smcs, leaf_digests, shape_params, row_counts, column_counts
+    raw_root, digest_layers = (_fold_jit if jit else _fold)(smcs, leaf_digests)
+    bound, commitment = (_bind_jit if jit else _bind)(
+        smcs, raw_root, shape_params, row_counts, column_counts
     )
     return bound, TraceCommitData(
         dense=region.dense,

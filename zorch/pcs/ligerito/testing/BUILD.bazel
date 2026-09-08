@@ -16,14 +16,29 @@ py_test(
         "//zorch/coding:reed_solomon",
         "//zorch/commit:merkle",
         "//zorch/commit/testing:koalabear16",
-        "//zorch/hash/poseidon2/testing:koalabear16",
         "//zorch/pcs:fold",
         "//zorch/pcs/ligerito",
         "//zorch/poly",
+        "//zorch/testkit:koalabear16",
         "//zorch/testkit:random_field",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_test(
+    name = "fold_and_message_test",
+    # Traces the marked region alone -- no prove, no transcript permute, so it
+    # runs on CI unlike the `local_only` round-trip above.
+    size = "small",
+    srcs = ["fold_and_message_test.py"],
+    deps = [
+        "//zorch/pcs/ligerito",
+        "//zorch/sumcheck",
+        requirement("absl_py"),
+        requirement("frx"),
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )

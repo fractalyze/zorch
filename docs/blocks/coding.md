@@ -3,8 +3,8 @@
 ## Why this module exists
 
 PCS, FRI, and Basefold all bottom out in one operation: a linear code's
-`encode`. `coding` factors that shared concept the way `hash/` factors symmetric
-primitives — a `LinearCode` Protocol seam plus concrete codes — so a proof
+`encode`. `coding` factors that shared concept the way the symmetric layer
+factors hashes — a `LinearCode` Protocol seam plus concrete codes — so a proof
 system depends on "a linear code", not on Reed-Solomon specifically. Reed-Solomon
 is the first code; Brakedown and others drop into the same seam when a consumer
 needs one. They are not carried before then: an unused second code is surface to

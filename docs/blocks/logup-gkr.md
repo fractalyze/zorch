@@ -9,10 +9,9 @@ epic issue [fractalyze/zorch#1](https://github.com/fractalyze/zorch/issues/1).
 `LogUpGkrProver` / `LogUpGkrVerifier` (`zorch/logup_gkr/stage.py`) are the stage
 roles: they reduce a `LogUpOutputClaim` — the public fractional-sum output and
 layer count — to an `InputLayerClaim`, the evaluation claim a consumer's PCS
-opening closes. `JaggedLogUpGkrProver` / `JaggedLogUpGkrVerifier`
-(`zorch/logup_gkr/jagged_stage.py`) reduce the *same* claim types over the jagged
-layout, so a consumer picks a layout by construction and the stage seam does not
-move; only the witness and the layer proofs differ.
+opening closes. The jagged layout reuses those claim types: a consumer proving
+over it drives `jagged_prover`'s layer rounds from its own stage seam, so only
+the witness and the layer proofs differ.
 
 `GkrLayerRound` and the per-variable sumcheck rounds are the recurrence inside
 those roles, driven layer by layer. They are internal: the pyramid is a round

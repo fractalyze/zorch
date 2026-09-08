@@ -20,11 +20,12 @@ https://github.com/fractalyze/sp1/blob/cc4eb1f38/slop/crates/koala-bear/src/koal
 
 from __future__ import annotations
 
+from functools import cache
+
 import frx.numpy as fnp
 import numpy as np
+from hash_frx.poseidon2.params import Poseidon2Params
 from zk_dtypes import koalabear_mont as F
-
-from zorch.hash.poseidon2.params import Poseidon2Params
 
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 
@@ -225,8 +226,14 @@ _INTERNAL_DIAG = [
 _MONTY_INVERSE = 0x3F010000
 
 
+@cache
 def koalabear16_params() -> Poseidon2Params:
-    """SP1's koalabear width-16 Poseidon2 parameters."""
+    """SP1's koalabear width-16 Poseidon2 parameters.
+
+    Shared rather than rebuilt: frozen params compare by value, so a rebuild is
+    indistinguishable to a caller while paying the constant transfers and the
+    host readbacks `Poseidon2Params` does to seed its value key.
+    """
     internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
     internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
     monty_inverse = fnp.array(_MONTY_INVERSE, dtype=F)

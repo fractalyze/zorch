@@ -31,7 +31,7 @@ from typing import TYPE_CHECKING, Protocol, Self
 import numpy as np
 
 if TYPE_CHECKING:
-    from zorch.hash.byte_hash import ByteHash
+    from hash_frx.byte_hash import ByteHash
 
 # Wire vocabulary — the Merlin-over-hash framing (op byte, then operands).
 OP_DOMAIN = 0x01
@@ -95,16 +95,17 @@ class ByteHashTranscript:
     returns a new transcript whose `buffer` is the running absorbed-byte stream. A
     host object (a `bytes` buffer, not a jit-traced pytree); the `ByteHash` chooses
     the squeeze substrate — `HostSha256` (host `hashlib`) or `Sha256` (the
-    `zorch.sha256` device marker). Byte-identical whichever is injected."""
+    `hash_frx.sha256` device marker). Byte-identical whichever is injected."""
 
     buffer: bytes
     byte_hash: ByteHash
 
     @property
     def has_dedicated_fusion(self) -> bool:
-        # Delegates to the hash — as `DuplexSponge.has_dedicated_fusion` delegates
-        # to its `Permutation`. Names no concrete hash.
-        return self.byte_hash.has_dedicated_fusion
+        # One-kernel-ness is a fact about the injected hash's backend routing,
+        # which the transcript cannot know — the same deferral hash-frx's
+        # `DuplexSponge` makes to its `Permutation`. Names no concrete hash.
+        return self.byte_hash.fusion_path.is_one_kernel
 
     @classmethod
     def new(cls, domain: bytes, byte_hash: ByteHash) -> ByteHashTranscript:
@@ -175,7 +176,7 @@ class ByteHashTranscript:
         leading zero bits. Tests a window of nonces per `digest` call (window 1 for
         a host hash = sequential early-exit); tiles windows until a hit — unbounded,
         never returns an unchecked nonce."""
-        window = _GRIND_WINDOW if self.byte_hash.has_dedicated_fusion else 1
+        window = _GRIND_WINDOW if self.byte_hash.fusion_path.is_one_kernel else 1
         base = 0
         while True:
             batch = np.stack(

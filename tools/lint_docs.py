@@ -67,6 +67,9 @@ EXTERNAL_PREFIXES = (
     "jax_",
     "jit_",
     "xla_",
+    # StableHLO dialect op spellings (`stablehlo.shift_right_arithmetic`, …):
+    # owned by the compiler stack; a doc quotes them from lowering errors.
+    "stablehlo.",
 )
 
 # Op names owned by the compiler stack rather than by a Python module: docs cite

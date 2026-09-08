@@ -1,0 +1,98 @@
+# Docs site: the hand-written WHY pages under docs/ plus an API reference
+# generated from the source tree at build time (tools/gen_ref_pages.py).
+# Build: `mkdocs build` in a venv carrying requirements-docs.in.
+# Deploys: .github/workflows/docs.yml publishes gh-pages on every main push.
+site_name: zorch
+site_description: FRX-native building blocks for proof systems
+repo_url: https://github.com/fractalyze/zorch
+repo_name: fractalyze/zorch
+edit_uri: edit/main/
+
+docs_dir: docs
+
+# The hand-written design docs are contributor-facing prose; they render on
+# GitHub (linked from the Guide pages) and stay off the site, which is the
+# task-oriented consumer surface. Every site page is generated
+# (tools/gen_ref_pages.py), so the whole tree is excluded.
+exclude_docs: |
+  blocks/
+  schemes/
+  composition/
+  reference/
+  README.md
+
+# Rebuild the dev server when build-time page sources change too.
+watch:
+  - tools/site
+  - skills/using-zorch
+  - tools/gen_ref_pages.py
+
+theme:
+  name: material
+  icon:
+    logo: material/cube-outline
+  features:
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - search.suggest
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        title: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        title: Light mode
+
+plugins:
+  - search
+  - gen-files:
+      scripts:
+        - tools/gen_ref_pages.py
+  - literate-nav:
+      nav_file: SUMMARY.md
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: google
+            show_source: true
+            show_signature_annotations: true
+            separate_signature: true
+            members_order: source
+            filters: ["!^_"]
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Get started: getting-started.md
+  - Guides:
+      - Assembling a prover: guide/building-on-zorch.md
+      - Keeping code fused: guide/frx-and-fusion.md
+      - Setup & troubleshooting: guide/setup.md
+  - Reference:
+      - Blocks & imports: guide/blocks.md
+      - Field-dtype sharp bits: guide/field-dtypes.md
+  - Design digest: design.md
+  - API: api/

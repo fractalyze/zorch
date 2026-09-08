@@ -181,6 +181,17 @@ jobs:
           print(f"tag {tag} matches packaged final version {tag_version}")
           PY
 
+      # The agent skill (skills/using-zorch) documents the *released* surface —
+      # its version strings and docs links pin one release. A release cut
+      # without bumping the skill ships a guide describing the previous
+      # package, so it is gated here exactly like the version string above:
+      # forgetting fails the release instead of shipping stale guidance. The
+      # check is offline (string/link consistency only); the releaser runs
+      # `tools/check_skill.py --imports` against the new wheel when bumping.
+      - name: Check agent skill matches packaged version
+        if: github.event_name == 'release'
+        run: python3 tools/check_skill.py
+
   build:
     name: Build sdist + wheel
     needs: [validate-tag]

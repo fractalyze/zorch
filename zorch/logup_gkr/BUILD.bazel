@@ -14,7 +14,6 @@ py_library(
         "_jagged_types.py",
         "circuit.py",
         "jagged_prover.py",
-        "jagged_stage.py",
         "jagged_verifier.py",
         "prover.py",
         "stage.py",
@@ -32,5 +31,6 @@ py_library(
         "//zorch/sumcheck/jagged",
         "//zorch/utils:bits",
         requirement("frx"),
+        requirement("hash_frx"),
     ],
 )

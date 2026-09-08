@@ -30,6 +30,37 @@ pytest -n <physical cores>
 `bazel test //...` remains the single source of truth for "all tests pass"
 ([`conventions.md`](conventions.md)); it parallelizes per target on its own.
 
+### A `py_test` that touches an frx backend needs `GPU_PLUGIN_DEPS`
+
+Any `py_test` whose imports *initialize* an frx backend — directly, or
+transitively through `zorch.byte_transcript`, `hash_frx`, or a test fixture
+that pulls either in — must append `+ GPU_PLUGIN_DEPS` to its `deps`:
+
+```starlark
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+py_test(
+    name = "my_test",
+    srcs = ["my_test.py"],
+    deps = [
+        "//zorch:byte_transcript",
+        requirement("numpy"),
+    ] + GPU_PLUGIN_DEPS,
+)
+```
+
+Without it the GPU leg dies with `Backend 'cuda' is not in the list of known
+backends` **before reaching any assertion**.
+
+Two things make this cost a red run rather than a local failure:
+
+- **`bazel test` locally cannot reproduce it.** The local invocation does not
+  set `FRX_PLATFORMS=cuda`, so the target is green on your machine and red on
+  CI. Green locally is not evidence here.
+- **"The neighbouring target omits it" is not a valid inference.** A sibling
+  test may import only pure-numpy libraries (`lattice_frx` alone, say) and
+  legitimately need no plugin. Decide from *this* target's own import closure.
+
 ## Developing against a local Fractalyze XLA build
 
 The pinned venv installs the `jax` / `frxlib` / `frx-cuda12-pjrt` /

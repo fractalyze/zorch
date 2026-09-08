@@ -17,7 +17,7 @@ py_test(
 
 py_test(
     name = "eq_test",
-    size = "small",
+    size = "medium",
     srcs = ["eq_test.py"],
     deps = [
         "//zorch/poly",

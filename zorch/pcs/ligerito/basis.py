@@ -49,14 +49,32 @@ class CommitBasis:
     pre: Callable[[Array], Array]
     expand: Callable[[Array, Array], Array]
 
-    def proximity_basis(self, points_s: Array, one: Array) -> Array:
+    def proximity_basis(self, points_s: Array, weights: Array) -> Array:
         """`(Q, num_vars) -> (Q, 2^num_vars)`: the basis vector each opened
-        coordinate evaluates the folded witness against, so
-        `codeword[.., s] == <row, proximity_basis(...)[s]>`. One definition for
-        the prover's induce, the verifier's induce, and the verifier's terminal
-        residual check — they would desynchronize the glued sumcheck if they
-        drifted."""
-        return frx.vmap(lambda p: self.expand(p, one))(points_s)
+        coordinate evaluates the folded witness against, scaled by that row's
+        weight —
+
+            <row, proximity_basis(points, w)[s]> == w_s · codeword[.., s]
+
+        which is the module invariant exactly when `w` is one. One definition
+        for the prover's induce, the verifier's induce, and the verifier's
+        terminal residual check — they would desynchronize the glued sumcheck if
+        they drifted.
+
+        `weights` is `(Q,)` to scale each row, or 0-d to share one value. It
+        SEEDS the expansion rather than scaling its output, which is why it is a
+        parameter rather than something the caller applies afterwards: both
+        `expand` conventions thread the weight into the tensor product they
+        build, where it rides multiplies that already exist, whereas scaling the
+        result costs a GF multiply per output element — `Q·2^num_vars` of them.
+        A caller batching rows (`Σ_s w_s·basis(p_s)`) should therefore pass its
+        coefficients here and reduce, rather than reduce and scale. GF
+        multiplication is associative and exact, so the two spellings are
+        byte-equal.
+        """
+        return frx.vmap(self.expand, in_axes=(0, None if weights.ndim == 0 else 0))(
+            points_s, weights
+        )
 
 
 def _bit_reverse_matrix(matrix: Array) -> Array:
@@ -65,12 +83,12 @@ def _bit_reverse_matrix(matrix: Array) -> Array:
     return frx.lax.bit_reverse(reversed_rows, dimensions=(1,))
 
 
-def _eval_expand(point: Array, one: Array) -> Array:
-    return expand_eq_to_hypercube(point, one)
+def _eval_expand(point: Array, weight: Array) -> Array:
+    return expand_eq_to_hypercube(point, weight)
 
 
-def _monomial_expand(point: Array, one: Array) -> Array:
-    return expand_monomial_to_hypercube(point[::-1], one)
+def _monomial_expand(point: Array, weight: Array) -> Array:
+    return expand_monomial_to_hypercube(point[::-1], weight)
 
 
 # zorch native: commit encodes `mle_evals_to_coeffs`, so a codeword coordinate is
