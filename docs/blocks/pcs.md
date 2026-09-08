@@ -82,6 +82,42 @@ codeword *rows*, so the whole batch binds under a **single** root where the
 others return one per polynomial. The seam permits this because `commitment` is
 scheme-defined, and the input convention stays uniform.
 
+### akita (transparent, module-lattice)
+
+Binding from MSIS rather than from a hash or a pairing, which is the axis this
+family adds to the three above. `commit` is `t = A·s` over `Z_q[X]/(X^d+1)`
+(`zorch/commit/ajtai.py`), and the scheme layer is exactly the step that
+produces an `s` short enough for that to bind: balanced base-`2^w` digits of the
+polynomial's coefficients, laid out as ring elements. Binding then says something
+about the polynomial rather than about an arbitrary short vector, because the
+digits recompose to it uniquely — which is why recomposition is part of the
+opening predicate and not a caller's afterthought.
+
+Two consequences the hash-based instances do not share. The commitment is
+**additively homomorphic in the digit witness** — `A·s₁ + A·s₂ = A·(s₁+s₂)`,
+while the summed norm stays under `β` — which is what a folding consumer needs
+and a Merkle root cannot give. It does not reach the polynomials themselves:
+balanced digits carry, so the digits of `p + q` are not the digits of `p` plus
+those of `q`, and folding at that level owes a carry-aware step this layer does
+not supply. And every number that decides the scheme — ring degree, modulus
+chain, digit base and count, module height — is a value the consumer supplies
+(`pcs/akita/config.py`), because the catalog of parameter points a
+downstream prover ships is *its* data; a scheme carrying literals here would be
+one deployment's scheme wearing a general name. The challenge set is a
+`ChallengePolicy` for the same reason: which subset of the ring a challenge is
+drawn from fixes the knowledge error and the norm growth of the response, so it
+is the surrounding protocol's decision to make and this scheme's to accept.
+
+The digit decomposition is a **host** step — exact integer arithmetic over the
+balanced lift, which no lane holds — so `commit` materialises its input before
+the traced `matvec`. That is the substrate's boundary rather than this layer's
+choice (lattice-frx's `gadget`), and it is the one place this instance departs
+from the one-device-zone rule below.
+
+The opening protocol and its same-point batching are not here yet: today the
+package is the committer plus the digit-level opening predicate, so it does not
+satisfy the opening stage roles the instances above do.
+
 ## Instance anatomy
 
 Every *instance* follows one shape — shared wire types,
@@ -156,7 +192,8 @@ The PCS seam is agnostic; each instance's `commit`/`open`/`verify` lowers down o
 of three tiers, and which tier an op takes is the only thing that varies:
 
 - **GPU normal-form** — element-wise field ops + the inherent `Σ`/NTT (compile-fast,
-  portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT.
+  portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT,
+  Akita's module `matvec` (per-limb field mul-add over the RNS chain).
 - **GPU blessed primitive** — a dedicated `stablehlo` op or custom emitter
   (run-fast): KZG's `lax.msm` (commit and the opening proof), the
   [poseidon2](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md) permutation behind FRI's and BaseFold's Merkle layers, the

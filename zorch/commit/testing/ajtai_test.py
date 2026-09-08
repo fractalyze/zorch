@@ -20,7 +20,7 @@ from zorch.commit.ajtai import (
     AbdlopPair,
     AjtaiCommitment,
     BdlopCommitment,
-    _equal,
+    commitments_equal,
 )
 
 # NTT-friendly 36-bit pair from lattice-frx's own suite; d kept small for
@@ -202,11 +202,11 @@ class BdlopTest(absltest.TestCase):
         r2 = _ternary_witness(self.ring, self.rng, _COLS)
         c1 = self.scheme.commit(self.b0, self.b1, message, r1)
         c2 = self.scheme.commit(self.b0, self.b1, message, r2)
-        self.assertFalse(_equal(c1.t0, c2.t0))
+        self.assertFalse(commitments_equal(c1.t0, c2.t0))
         # t1 = B1·r + m must move with r too — checking t0 alone would let a
         # regression that drops the B1·r term hide behind verify, which
         # recomputes through the same implementation.
-        self.assertFalse(_equal(c1.t1, c2.t1))
+        self.assertFalse(commitments_equal(c1.t1, c2.t1))
 
     def test_commit_traces_under_jit(self) -> None:
         message = self._message()

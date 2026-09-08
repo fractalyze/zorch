@@ -81,7 +81,9 @@ class AjtaiCommitment:
         see the module docstring."""
         if not _within_bound(self.ring, opening, self.beta_inf):
             return False
-        return _equal(self.commit(matrix, self.ring.ntt(opening)), commitment)
+        return commitments_equal(
+            self.commit(matrix, self.ring.ntt(opening)), commitment
+        )
 
 
 @partial(frx.tree_util.register_dataclass, data_fields=["t0", "t1"], meta_fields=[])
@@ -144,7 +146,7 @@ class BdlopCommitment:
         if not _within_bound(self.ring, randomness, self.beta_inf):
             return False
         recomputed = self.commit(b0, b1, message, randomness)
-        return _equal(recomputed.t0, commitment.t0) and _equal(
+        return commitments_equal(recomputed.t0, commitment.t0) and commitments_equal(
             recomputed.t1, commitment.t1
         )
 
@@ -255,28 +257,20 @@ class AbdlopCommitment:
             )
 
 
-def _linf_within(host: np.ndarray, q_moduli: tuple[int, ...], beta_inf: int) -> bool:
-    """The one norm policy every opening predicate here shares: ℓ∞ over the
-    *centered* reconstruction. Named once because the two ported
-    reconstructions differ at exactly `Q/2` (see lattice-frx's `rns.py`),
-    so which one the bound reads is a pinned choice, not a detail."""
-    return norms.linf(rns.reconstruct_centered(host, q_moduli)) <= beta_inf
-
-
 def _within_bound_host(ring: HostSplitRing, stacked: np.ndarray, beta_inf: int) -> bool:
-    """`‖·‖∞ ≤ β` over the full centered reconstruction, the host-array
-    twin of `_within_bound`: the `(k, limbs, d)` batch flattens into one
+    """`‖·‖∞ ≤ β` over the balanced lift, the host-array twin of
+    `_within_bound`: the `(k, limbs, d)` batch flattens into one
     `(limbs, k·d)` reconstruction because ℓ∞ of a batch is the ℓ∞ of its
     concatenation. The domain gate has no work to do here — the
     partial-split ring is coefficient-domain by construction."""
     host = np.transpose(stacked, (1, 0, 2)).reshape(len(ring.q_moduli), -1)
-    return _linf_within(host, ring.q_moduli, beta_inf)
+    return norms.linf(rns.reconstruct_centered(host, ring.q_moduli)) <= beta_inf
 
 
 def _equal_host(a: np.ndarray, b: np.ndarray) -> bool:
     """Exact equality on host stacks. `np.array_equal` already refuses a
     shape mismatch (a truncated RNS chain included); the dtype check keeps
-    the same never-raise role as `_equal`'s — a different dtype is a
+    the same never-raise role as `commitments_equal`'s — a different dtype is a
     different-ring `False`, not an error."""
     return a.dtype == b.dtype and bool(np.array_equal(a, b))
 
@@ -290,30 +284,44 @@ def _require_lead(name: str, element: Coeff | Eval, lead: tuple[int, ...]) -> No
         raise ValueError(f"{name}: leading axes {got}, want {lead}")
 
 
-def _within_bound(ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
-    """`‖·‖∞ ≤ β` over the full centered reconstruction of every coefficient.
+def centered_lift(name: str, ring: RnsRing, batched: Coeff) -> list[int]:
+    """Every coefficient's balanced lift, flat in `[element, coefficient]`
+    order.
 
-    `Coeff` only — a norm of NTT values is a bug wearing a plausible shape,
-    and this guard is the one domain gate both schemes' verifies share. The
-    batch flattens into one reconstruction because ℓ∞ of a batch is the ℓ∞
-    of its concatenation, and the reconstruction is per-coefficient; the
-    full-chain lift (not limb 0's) is deliberate — a single-limb lift would
-    accept an opening whose other limbs disagree. `astype(np.uint64)` is the
-    field dtype's own exact canonical conversion, so the host `(limbs, N)`
-    contract is composed from the dtype layer rather than re-derived.
+    `Coeff` only — a lift of NTT values is a bug wearing a plausible shape,
+    and this guard is the one domain gate the opening predicates share. Two
+    pinned choices ride in it: the full chain rather than limb 0's, since a
+    single-limb lift accepts a value whose other limbs disagree; and
+    `reconstruct_centered` rather than the mixed-radix reading, which differs
+    from it at exactly `Q/2` (lattice-frx's `rns.py`). `astype(np.uint64)` is
+    the field dtype's own exact canonical conversion, so the host
+    `(limbs, N)` contract composes from the dtype layer rather than being
+    re-derived.
+
+    Public for `require_stack`'s reason: a scheme layer above judges an
+    opening against *this* lift, and both sides of an opening must agree on
+    which one was taken, so a second spelling would be a second definition to
+    keep in step.
     """
     if not isinstance(batched, Coeff):
         raise TypeError(
-            f"verify: opening values must be Coeff (the norm is a "
+            f"{name}: values must be Coeff (the balanced lift is a "
             f"coefficient-domain notion), got {type(batched).__name__}"
         )
     host = np.stack(
         [np.asarray(limb).astype(np.uint64).reshape(-1) for limb in batched.limbs]
     )
-    return _linf_within(host, ring.q_moduli, beta_inf)
+    return rns.reconstruct_centered(host, ring.q_moduli)
 
 
-def _equal(a: Eval, b: Eval) -> bool:
+def _within_bound(ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
+    """`‖·‖∞ ≤ β` over the balanced lift of every coefficient. The batch
+    flattens into one lift because ℓ∞ of a batch is the ℓ∞ of its
+    concatenation."""
+    return norms.linf(centered_lift("verify", ring, batched)) <= beta_inf
+
+
+def commitments_equal(a: Eval, b: Eval) -> bool:
     """Exact per-limb equality on the host.
 
     A different limb count is a different RNS chain, i.e. a different ring:
@@ -322,6 +330,10 @@ def _equal(a: Eval, b: Eval) -> bool:
     never-raise role — comparing across two field dtypes is a different-ring
     `False`, not an error — and keeps the comparison on the vectorized field
     arrays instead of boxing every coefficient into a Python int.
+
+    Public for the same reason as `centered_lift`: the scheme layers above
+    compare the commitments this one produces, and those two decisions are
+    what equality on an RNS element means here.
     """
     if len(a.limbs) != len(b.limbs):
         return False
