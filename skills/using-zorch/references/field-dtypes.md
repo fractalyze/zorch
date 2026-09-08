@@ -1,7 +1,7 @@
 # Field dtypes: writing finite-field arithmetic
 
 zorch computes over native finite-field dtypes from `zk_dtypes`
-(`goldilocks_mont`, `babybear`, the `*x3`/`*x4` extensions, …), lowered by
+(`goldilocks`, `babybear`, the `*x3`/`*x4` extensions, …), lowered by
 Fractalyze XLA. Every op reduces mod p in the canonical representation. Arrays
 are FRX arrays; use `frx.numpy` (imported as `fnp` throughout zorch) the way
 you would `jax.numpy`.
