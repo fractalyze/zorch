@@ -264,7 +264,7 @@ every `zk_dtypes` family whose `_mont` sibling is the production encoding
 and the bn254 G1/G2 `affine`/`jacobian`/`xyzz` point types): Montgomery is
 the encoding the GPU kernels compute in, so tests exercise the arithmetic
 path the prover ships. Goldilocks is the exception — its canonical dtype is
-the production one and `goldilocks_mont` is deprecated, so tests use plain
+the production one and its Montgomery sibling is deprecated, so tests use plain
 `goldilocks`. Reach for the other bare canonical dtypes only
 when a test is *about* the canonical integer encoding itself, and mark that
 line `# canonical-encoding test` — the `mont-test-dtypes` pre-commit hook
