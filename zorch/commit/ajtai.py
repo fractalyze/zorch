@@ -75,11 +75,29 @@ class AjtaiCommitment:
         _require_lead("commit: witness", witness, (self.cols,))
         return self.ring.matvec(matrix, witness)
 
+    def commit_batch(self, matrix: Eval, witnesses: Eval) -> Eval:
+        """`A·s_b` for every witness of a batch under one matrix:
+        `[batch, cols] → [batch, rows]`.
+
+        One `matvec`, not a loop over `commit`: the matrix enters with a
+        length-1 batch axis and broadcasts along it, so a scheme whose
+        commitment is per-block — a two-tier layout's inner images — stays one
+        device unit however many blocks it has.
+        """
+        _require_lead("commit_batch: matrix", matrix, (self.rows, self.cols))
+        lead = tuple(witnesses.limbs[0].shape[:-1])
+        if len(lead) != 2 or lead[1] != self.cols:
+            raise ValueError(
+                f"commit_batch: witnesses leading axes {lead}, want "
+                f"(batch, {self.cols})"
+            )
+        return self.ring.matvec(self.ring.stack([matrix]), witnesses)
+
     def verify(self, matrix: Eval, commitment: Eval, opening: Coeff) -> bool:
         """The opening predicate: `‖opening‖∞ ≤ β` on the balanced lift, and
         the opening re-commits to `commitment`. Host boundary by design —
         see the module docstring."""
-        if not _within_bound(self.ring, opening, self.beta_inf):
+        if not within_bound("verify", self.ring, opening, self.beta_inf):
             return False
         return commitments_equal(
             self.commit(matrix, self.ring.ntt(opening)), commitment
@@ -143,7 +161,7 @@ class BdlopCommitment:
     ) -> bool:
         """An opening is the revealed `(message, randomness)` pair, taken
         bare — mirroring `commit`'s own signature and the Ajtai sibling."""
-        if not _within_bound(self.ring, randomness, self.beta_inf):
+        if not within_bound("verify", self.ring, randomness, self.beta_inf):
             return False
         recomputed = self.commit(b0, b1, message, randomness)
         return commitments_equal(recomputed.t0, commitment.t0) and commitments_equal(
@@ -259,7 +277,7 @@ class AbdlopCommitment:
 
 def _within_bound_host(ring: HostSplitRing, stacked: np.ndarray, beta_inf: int) -> bool:
     """`‖·‖∞ ≤ β` over the balanced lift, the host-array twin of
-    `_within_bound`: the `(k, limbs, d)` batch flattens into one
+    `within_bound`: the `(k, limbs, d)` batch flattens into one
     `(limbs, k·d)` reconstruction because ℓ∞ of a batch is the ℓ∞ of its
     concatenation. The domain gate has no work to do here — the
     partial-split ring is coefficient-domain by construction."""
@@ -314,11 +332,17 @@ def centered_lift(name: str, ring: RnsRing, batched: Coeff) -> list[int]:
     return rns.reconstruct_centered(host, ring.q_moduli)
 
 
-def _within_bound(ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
+def within_bound(name: str, ring: RnsRing, batched: Coeff, beta_inf: int) -> bool:
     """`‖·‖∞ ≤ β` over the balanced lift of every coefficient. The batch
     flattens into one lift because ℓ∞ of a batch is the ℓ∞ of its
-    concatenation."""
-    return norms.linf(centered_lift("verify", ring, batched)) <= beta_inf
+    concatenation.
+
+    Public for `centered_lift`'s reason, one layer up: a scheme whose
+    commitment has two tiers bounds a tier that no `verify` here owns, and a
+    second spelling of the bound would be a second definition of what an
+    opening is short *against*.
+    """
+    return norms.linf(centered_lift(name, ring, batched)) <= beta_inf
 
 
 def commitments_equal(a: Eval, b: Eval) -> bool:
