@@ -72,6 +72,18 @@ a sponge's block loop batches into one `permute`, which collapses to one GPU
 kernel once the permutation is captured (the poseidon2 fusion path,
 [#25](https://github.com/fractalyze/zorch/issues/25)).
 
+## Byte pins across a lowering change
+
+Retiring a hash marker changes how a permutation lowers, never what it computes,
+so only the bytes can tell the two apart.
+`zorch/testing/hash_byte_pin_test.py` pins the exact byte string each consumed
+surface produces — the Poseidon2 duplex transcript, the Merkle root, and the
+SHA-256 transcript on both its device-marker and `hashlib` substrates — in
+canonical wire form rather than as field values, since a representation change
+breaks a verifier exactly as a changed value does. It carries no `local_only`
+tag and no composite-`vmap`, the two things that would keep it off the frx
+pin-bump PR where a lowering change actually arrives.
+
 ## Out of scope
 
 Loop-carrying large-`N` permutations await the in-kernel-loop emitter (#25);
