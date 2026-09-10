@@ -144,6 +144,29 @@ class AjtaiTest(absltest.TestCase):
         with self.assertRaises(ValueError):
             self.scheme.commit(self.matrix, self.ring.ntt(witness))
 
+    def test_commit_batch_agrees_with_committing_each_witness(self) -> None:
+        """One matrix over a batch of witnesses, per block — the shape a
+        two-tier scheme's inner tier commits in."""
+        witnesses = [_ternary_witness(self.ring, self.rng, _COLS) for _ in range(4)]
+        batched = self.scheme.commit_batch(
+            self.matrix, self.ring.ntt(self.ring.stack(witnesses))
+        )
+        for index, witness in enumerate(witnesses):
+            one = self.scheme.commit(self.matrix, self.ring.ntt(witness))
+            _assert_equal_limbs(Eval(tuple(limb[index] for limb in batched.limbs)), one)
+
+    def test_commit_batch_rejects_a_witness_batch_of_the_wrong_width(self) -> None:
+        wide = self.ring.stack(
+            [_ternary_witness(self.ring, self.rng, _COLS + 1) for _ in range(2)]
+        )
+        with self.assertRaisesRegex(ValueError, "commit_batch: witnesses"):
+            self.scheme.commit_batch(self.matrix, self.ring.ntt(wide))
+
+    def test_commit_batch_rejects_an_unbatched_witness(self) -> None:
+        witness = _ternary_witness(self.ring, self.rng, _COLS)
+        with self.assertRaisesRegex(ValueError, "commit_batch: witnesses"):
+            self.scheme.commit_batch(self.matrix, self.ring.ntt(witness))
+
 
 class BdlopTest(absltest.TestCase):
     def setUp(self) -> None:
@@ -184,7 +207,7 @@ class BdlopTest(absltest.TestCase):
         self.assertFalse(self.scheme.verify(self.b0, self.b1, commitment, message, big))
 
     def test_a_wrong_domain_randomness_raises(self) -> None:
-        """The domain gate is `_within_bound`'s, shared by both schemes —
+        """The domain gate is `within_bound`'s, shared by both schemes —
         this pins the BDLOP side, which a verify-level guard once missed."""
         message = self._message()
         randomness = _ternary_witness(self.ring, self.rng, _COLS)
