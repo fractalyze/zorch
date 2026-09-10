@@ -59,6 +59,22 @@ class ChallengePolicy(Protocol):
         ...
 
 
+@runtime_checkable
+class BoundedChallengePolicy(ChallengePolicy, Protocol):
+    """A challenge set that also bounds every draw's ℓ1 norm.
+
+    What a fold needs before any challenge is drawn: each folded term grows the
+    response by at most `max_l1` times the witness bound, and whether the ring
+    modulus lifts that exactly is a property of the parameter point, so it is
+    settled where the point is set rather than by the first unlucky transcript.
+    """
+
+    @property
+    def max_l1(self) -> int:
+        """An upper bound on `‖c‖₁` for every challenge `from_bytes` returns."""
+        ...
+
+
 @dataclass(frozen=True)
 class FixedWeightTernary:
     """`weight` nonzero coefficients in `{-1, +1}`, the rest zero.
@@ -86,6 +102,11 @@ class FixedWeightTernary:
             self.weight, self.degree, self.fail_prob
         )
 
+    @property
+    def max_l1(self) -> int:
+        """Exactly `weight`: every nonzero coefficient is ±1."""
+        return self.weight
+
     def from_bytes(self, data: bytes | bytearray | np.ndarray) -> np.ndarray:
         return fixed_weight_ternary(data, self.weight, self.degree, self.fail_prob)
 
@@ -110,3 +131,4 @@ def squeeze_challenge(
 
 if TYPE_CHECKING:
     _: type[ChallengePolicy] = FixedWeightTernary
+    _bounded: type[BoundedChallengePolicy] = FixedWeightTernary

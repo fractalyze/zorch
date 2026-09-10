@@ -124,20 +124,45 @@ downstream prover ships is *its* data; a scheme carrying literals here would be
 one deployment's scheme wearing a general name. The challenge set is a
 `ChallengePolicy` for the same reason: which subset of the ring a challenge is
 drawn from fixes the knowledge error and the norm growth of the response, so it
-is the surrounding protocol's decision to make and this scheme's to accept.
+is the surrounding protocol's decision to make and this scheme's to accept. The opening asks one thing more
+of it — a bound on every draw's ℓ1 norm (`BoundedChallengePolicy`) — so that
+whether `Q` lifts the folded response exactly is settled where the parameter
+point is set, not by the first unlucky transcript.
 
 Both digit decompositions are a **host** step — exact integer arithmetic over
 the balanced lift, which no lane holds — so `commit` materialises twice, once
 before each tier's traced `matvec`. That is the substrate's boundary rather than
-this layer's choice (lattice-frx's `gadget`), and it is the one place this
-instance departs from the one-device-zone rule below. Neither `matvec` splits
+this layer's choice (lattice-frx's `gadget`). With the opening's own host
+steps — the lift that bounds and recomposes a response, and a byte transcript
+whose ring challenges are rejection-sampled — it is where this instance departs
+from the one-device-zone rule below. Neither `matvec` splits
 per block: the inner tier is one batched product over the block axis
 (`AjtaiCommitment.commit_batch`), so the device side stays two units however
 many blocks the batch has.
 
-The opening protocol and its same-point batching are not here yet: today the
-package is the committer plus the digit-level opening predicate, so it does not
-satisfy the opening stage roles the instances above do.
+**The opening is one fold.** `AkitaProver.open` sends the inner images and,
+per super-block of the claimed polynomial, a ring partial of its evaluation;
+it then folds the digit witness over super-blocks with sparse ring challenges
+into one short response. `AkitaVerifier.verify` checks the images against the
+payload, the claimed values against the partials, and the fold's norm, inner
+and evaluation relations — `pcs/akita/wire.py` states the three and the
+transcript order. Nothing recurses: the images travel in the proof instead of
+into a next fold's witness, so the proof grows with the block count — a
+verified opening, not a succinct one. Claims at one point share every weight
+and so one response, and the packed layout groups claims by point under one
+set of images. A claim on a *virtual* product of committed polynomials — each
+factor owning a slice of the leading variables, all sharing the trailing ones
+— reduces to one claim per factor by a sumcheck over the shared variables
+(`pcs/akita/virtual.py`), after which the packed opening serves the factors.
+
+The halves keep the instance anatomy below — the verifier module never imports
+the prover module — but not its mypy stage pin. The stage roles' transcript
+parameter is bound to the field `Transcript`, while the ring challenges are
+rejection-sampled from a byte stream, which is what `ByteTranscript` is for; so
+the pair is `open`/`verify` over a `ByteTranscript`, the stance `zorch/lnp`
+takes for the same reason. The verifier also holds the committer, unlike the
+pairing instances: every matrix the committer applies is one the verifier
+re-applies, so there is no proving-only key to keep out of its reach.
 
 ## Instance anatomy
 
@@ -214,7 +239,8 @@ of three tiers, and which tier an op takes is the only thing that varies:
 
 - **GPU normal-form** — element-wise field ops + the inherent `Σ`/NTT (compile-fast,
   portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT,
-  Akita's two module `matvec`s (per-limb field mul-add over the RNS chain).
+  Akita's module `matvec`s and its opening fold (per-limb field mul-add over
+  the RNS chain).
 - **GPU blessed primitive** — a dedicated `stablehlo` op or custom emitter
   (run-fast): KZG's `lax.msm` (commit and the opening proof), the
   [poseidon2](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md) permutation behind FRI's and BaseFold's Merkle layers, the
