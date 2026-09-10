@@ -85,7 +85,7 @@ scheme-defined, and the input convention stays uniform.
 ### akita (transparent, module-lattice)
 
 Binding from MSIS rather than from a hash or a pairing, which is the axis this
-family adds to the three above. `commit` is `t = A·s` over `Z_q[X]/(X^d+1)`
+family adds to the three above. The algebra is `A·s` over `Z_q[X]/(X^d+1)`
 (`zorch/commit/ajtai.py`), and the scheme layer is exactly the step that
 produces an `s` short enough for that to bind: balanced base-`2^w` digits of the
 polynomial's coefficients, laid out as ring elements. Binding then says something
@@ -93,14 +93,32 @@ about the polynomial rather than about an arbitrary short vector, because the
 digits recompose to it uniquely — which is why recomposition is part of the
 opening predicate and not a caller's afterthought.
 
-Two consequences the hash-based instances do not share. The commitment is
+**The commitment has two tiers, and that is a statement about the opening.** The
+witness is cut into blocks — one ring element's worth of coefficients each — and
+the inner tier commits every block separately, `t_b = A·s_b`. The opening
+protocol folds those with a per-block ring challenge, and its inner relation is
+`Σ_b c_b·t_b = A·(Σ_b c_b·s_b)`: an identity a verifier can only state because
+it can name the individual `t_b`. A single flat `t = A·s` over the whole batch
+is one sum they cannot be recovered from, so nothing turns a folded response
+back into the payload — which is why the one-tier layout cannot carry an
+opening at all. So the prover retains the images and an **outer** commitment
+binds them: `u = B·t̂`, over `t̂` the digit decomposition of the images, since a
+ring element modulo `Q` is no shorter than the witness it came from and MSIS
+binds only short things. `u` is the public payload and what a transcript
+absorbs. The decomposition therefore appears twice, with separate parameters,
+because the two tiers are sized against different magnitudes — a prime field
+for the inner, `Q` for the outer.
+
+Two consequences the hash-based instances do not share. The inner tier is
 **additively homomorphic in the digit witness** — `A·s₁ + A·s₂ = A·(s₁+s₂)`,
 while the summed norm stays under `β` — which is what a folding consumer needs
 and a Merkle root cannot give. It does not reach the polynomials themselves:
 balanced digits carry, so the digits of `p + q` are not the digits of `p` plus
 those of `q`, and folding at that level owes a carry-aware step this layer does
-not supply. And every number that decides the scheme — ring degree, modulus
-chain, digit base and count, module height — is a value the consumer supplies
+not supply. Those same carries are why the outer tier has no homomorphism at
+all — its witness is the digits of the inner images. And every number that
+decides the scheme — ring degree, modulus chain, digit base and count, module
+height — is a value the consumer supplies
 (`pcs/akita/config.py`), because the catalog of parameter points a
 downstream prover ships is *its* data; a scheme carrying literals here would be
 one deployment's scheme wearing a general name. The challenge set is a
@@ -108,11 +126,14 @@ one deployment's scheme wearing a general name. The challenge set is a
 drawn from fixes the knowledge error and the norm growth of the response, so it
 is the surrounding protocol's decision to make and this scheme's to accept.
 
-The digit decomposition is a **host** step — exact integer arithmetic over the
-balanced lift, which no lane holds — so `commit` materialises its input before
-the traced `matvec`. That is the substrate's boundary rather than this layer's
-choice (lattice-frx's `gadget`), and it is the one place this instance departs
-from the one-device-zone rule below.
+Both digit decompositions are a **host** step — exact integer arithmetic over
+the balanced lift, which no lane holds — so `commit` materialises twice, once
+before each tier's traced `matvec`. That is the substrate's boundary rather than
+this layer's choice (lattice-frx's `gadget`), and it is the one place this
+instance departs from the one-device-zone rule below. Neither `matvec` splits
+per block: the inner tier is one batched product over the block axis
+(`AjtaiCommitment.commit_batch`), so the device side stays two units however
+many blocks the batch has.
 
 The opening protocol and its same-point batching are not here yet: today the
 package is the committer plus the digit-level opening predicate, so it does not
@@ -193,7 +214,7 @@ of three tiers, and which tier an op takes is the only thing that varies:
 
 - **GPU normal-form** — element-wise field ops + the inherent `Σ`/NTT (compile-fast,
   portable): KZG's quotient division and Horner, FRI's `fri_fold` and the RS NTT,
-  Akita's module `matvec` (per-limb field mul-add over the RNS chain).
+  Akita's two module `matvec`s (per-limb field mul-add over the RNS chain).
 - **GPU blessed primitive** — a dedicated `stablehlo` op or custom emitter
   (run-fast): KZG's `lax.msm` (commit and the opening proof), the
   [poseidon2](https://github.com/fractalyze/hash-frx/blob/main/docs/blocks/hash.md) permutation behind FRI's and BaseFold's Merkle layers, the

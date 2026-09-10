@@ -16,6 +16,9 @@ from zorch.pcs.akita.config import AkitaConfig, Decomposition, SisProfile
 
 _D = 64
 _Q = (34359753217, 34359754753)
+# The narrowest outer decomposition this chain admits: what the outer tier
+# shortens is a ring coefficient modulo `Q`, so the digit count follows `Q`.
+_OUTER = Decomposition.covering(8, (_Q[0] * _Q[1]) // 2)
 
 
 class SisProfileTest(absltest.TestCase):
@@ -102,8 +105,10 @@ class AkitaConfigTest(absltest.TestCase):
         super().setUp()
         self.config = AkitaConfig(
             profile=SisProfile(_D, _Q),
-            decomposition=Decomposition(8, 4),
-            rows=2,
+            inner_decomposition=Decomposition(8, 4),
+            outer_decomposition=_OUTER,
+            inner_rows=2,
+            outer_rows=3,
             message_lens=(_D, _D + 5, 1),
         )
 
@@ -111,33 +116,59 @@ class AkitaConfigTest(absltest.TestCase):
         self.assertEqual(self.config.blocks_per_message, (1, 2, 1))
         self.assertEqual(self.config.blocks, 4)
 
-    def test_module_width_is_one_column_per_digit_and_block(self) -> None:
-        self.assertEqual(self.config.cols, 4 * 4)
+    def test_inner_width_is_one_column_per_digit_plane(self) -> None:
+        self.assertEqual(self.config.inner_cols, 4)
 
-    def test_columns_are_digit_major_and_cover_the_module(self) -> None:
+    def test_images_are_one_module_vector_per_block(self) -> None:
+        self.assertEqual(self.config.images, 4 * 2)
+
+    def test_outer_width_is_one_column_per_digit_and_image(self) -> None:
+        self.assertEqual(self.config.outer_cols, _OUTER.num_digits * 8)
+
+    def test_witness_columns_are_block_major_and_cover_the_module(self) -> None:
         columns = [
-            self.config.column(digit, block)
-            for digit in range(self.config.decomposition.num_digits)
+            self.config.column(block, digit)
             for block in range(self.config.blocks)
+            for digit in range(self.config.inner_cols)
         ]
-        self.assertEqual(columns, list(range(self.config.cols)))
+        self.assertEqual(columns, list(range(self.config.blocks * 4)))
 
     def test_column_refuses_an_index_outside_the_module(self) -> None:
         with self.assertRaisesRegex(ValueError, "digit"):
-            self.config.column(4, 0)
-        with self.assertRaisesRegex(ValueError, "block"):
             self.config.column(0, 4)
+        with self.assertRaisesRegex(ValueError, "block"):
+            self.config.column(4, 0)
 
-    def test_beta_is_the_digit_bound(self) -> None:
-        self.assertEqual(self.config.beta_inf, self.config.decomposition.beta_inf)
+    def test_betas_are_the_two_digit_bounds(self) -> None:
+        self.assertEqual(
+            self.config.inner_beta_inf, self.config.inner_decomposition.beta_inf
+        )
+        self.assertEqual(self.config.outer_beta_inf, _OUTER.beta_inf)
 
     def test_refuses_an_empty_batch(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one message"):
-            AkitaConfig(SisProfile(_D, _Q), Decomposition(8, 4), 2, ())
+            AkitaConfig(SisProfile(_D, _Q), Decomposition(8, 4), _OUTER, 2, 3, ())
 
     def test_refuses_a_module_with_no_rows(self) -> None:
-        with self.assertRaisesRegex(ValueError, "rows"):
-            AkitaConfig(SisProfile(_D, _Q), Decomposition(8, 4), 0, (_D,))
+        with self.assertRaisesRegex(ValueError, "inner_rows"):
+            AkitaConfig(SisProfile(_D, _Q), Decomposition(8, 4), _OUTER, 0, 3, (_D,))
+        with self.assertRaisesRegex(ValueError, "outer_rows"):
+            AkitaConfig(SisProfile(_D, _Q), Decomposition(8, 4), _OUTER, 2, 0, (_D,))
+
+    def test_refuses_an_outer_decomposition_too_narrow_for_the_ring(self) -> None:
+        # The inner tier's own exactness is `gadget`'s to refuse at commit time
+        # — the field it decomposes is not part of this parameter point — but
+        # `Q` is, so a digit count that cannot represent a ring coefficient is
+        # caught where it was written down.
+        with self.assertRaisesRegex(ValueError, "outer_decomposition reaches"):
+            AkitaConfig(
+                SisProfile(_D, _Q),
+                Decomposition(8, 4),
+                Decomposition(_OUTER.log_base, _OUTER.num_digits - 1),
+                2,
+                3,
+                (_D,),
+            )
 
 
 if __name__ == "__main__":

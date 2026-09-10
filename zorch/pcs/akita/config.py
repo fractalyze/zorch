@@ -14,12 +14,20 @@ Three objects, because they are chosen against three different pressures:
 - `SisProfile` — the ring `Z_q[X]/(X^d+1)` the commitment lives in. Its
   degree and modulus chain are picked against MSIS hardness at a target
   security level.
-- `Decomposition` — base-`2^w` balanced digits. Picked against the *field*
-  being committed: enough digits to represent every coefficient exactly,
-  and a base small enough that the digit norm stays far under `q`.
-- `AkitaConfig` — the two together plus the module height, which is where
-  the derived shapes live: how many ring elements the decomposed witness
-  occupies, and hence how wide the public matrix must be.
+- `Decomposition` — base-`2^w` balanced digits. Picked against the values it
+  shortens: enough digits to represent every one of them exactly, and a base
+  small enough that the digit norm stays far under `q`.
+- `AkitaConfig` — a profile, both decompositions, and the two module heights,
+  which is where the derived shapes live: how many ring elements the decomposed
+  witness occupies per block, how many inner images that produces, and hence
+  how wide each of the two public matrices must be.
+
+The decomposition appears **twice** for the same reason it appears at all. The
+inner tier shortens the committed field coefficients; the outer tier shortens
+the inner images, which are ring elements modulo `Q` and so no shorter than the
+witness they came from. The two are separate parameters because they are sized
+against different magnitudes — a prime field for the inner, `Q` itself for the
+outer — and against different widths.
 
 Binding strength is *not* checked here, matching the stance of the
 commitment algebra below it (`zorch/commit/ajtai.py`): MSIS hardness at a
@@ -181,24 +189,38 @@ class Decomposition:
 
 @dataclass(frozen=True)
 class AkitaConfig:
-    """A parameter point plus the batch it commits, and the module shape both
-    force.
+    """A parameter point plus the batch it commits, and the two module shapes
+    both force.
 
     `message_lens` carries one length per committed polynomial rather than a
     single total, because each is padded to a whole number of ring elements
     *individually*. Concatenating first would let one polynomial's tail share
     a ring element with the next one's head, and an opening that has to name
     a polynomial then names a fraction of a ring element.
+
+    **The block is the unit both tiers are stated over.** One block is one ring
+    element's worth of coefficients across every digit plane, so its witness
+    `s_b` is `inner_decomposition.num_digits` ring elements wide and its inner
+    image is `A·s_b`. That is the axis the opening protocol folds along, which
+    is why the layout is per block rather than one flat vector over the batch.
     """
 
     profile: SisProfile
-    decomposition: Decomposition
-    rows: int
+    inner_decomposition: Decomposition
+    outer_decomposition: Decomposition
+    inner_rows: int
+    outer_rows: int
     message_lens: tuple[int, ...]
 
     def __post_init__(self) -> None:
-        if self.rows < 1:
-            raise ValueError(f"AkitaConfig: rows must be >= 1, got {self.rows}")
+        if self.inner_rows < 1:
+            raise ValueError(
+                f"AkitaConfig: inner_rows must be >= 1, got {self.inner_rows}"
+            )
+        if self.outer_rows < 1:
+            raise ValueError(
+                f"AkitaConfig: outer_rows must be >= 1, got {self.outer_rows}"
+            )
         if not self.message_lens:
             raise ValueError("AkitaConfig: at least one message length is required")
         for length in self.message_lens:
@@ -206,6 +228,18 @@ class AkitaConfig:
                 raise ValueError(
                     f"AkitaConfig: message lengths must be >= 1, got {length}"
                 )
+        # Only the outer tier can be gated here: what it decomposes is a ring
+        # element, whose magnitude `Q` is part of this parameter point. The
+        # inner tier decomposes the *consumer's* field, which arrives at commit
+        # time, so its exactness stays `gadget.decompose`'s to refuse.
+        magnitude = self.profile.modulus >> 1
+        low, high = self.outer_decomposition.representable
+        if low > -magnitude or high < magnitude:
+            raise ValueError(
+                f"AkitaConfig: outer_decomposition reaches [{low}, {high}], too "
+                f"narrow for the balanced lift of a ring element modulo Q "
+                f"([-{magnitude}, {magnitude}])"
+            )
 
     @property
     def blocks_per_message(self) -> tuple[int, ...]:
@@ -219,29 +253,45 @@ class AkitaConfig:
         return sum(self.blocks_per_message)
 
     @property
-    def cols(self) -> int:
-        """Module width: one column per (digit, block) pair.
-
-        The pairing is **digit-major** — column `digit * blocks + block` —
-        following the orientation `gadget.decompose_vector` already returns,
-        so the layout is read off the substrate rather than transposed into a
-        second convention. Both sides of an opening index columns by this
-        formula, so it is pinned here and nowhere else.
-        """
-        return self.decomposition.num_digits * self.blocks
+    def inner_cols(self) -> int:
+        """Module width of one block's witness: one column per digit plane."""
+        return self.inner_decomposition.num_digits
 
     @property
-    def beta_inf(self) -> int:
-        """The opening bound: the digit bound, since the witness *is* digits."""
-        return self.decomposition.beta_inf
+    def images(self) -> int:
+        """Ring elements the inner images occupy: `inner_rows` per block."""
+        return self.blocks * self.inner_rows
 
-    def column(self, digit: int, block: int) -> int:
-        """The column index of one digit plane's block — the `cols` formula
-        as the accessor callers use, so no call site re-derives it."""
-        if not 0 <= digit < self.decomposition.num_digits:
-            raise ValueError(
-                f"column: digit {digit} outside [0, {self.decomposition.num_digits})"
-            )
+    @property
+    def outer_cols(self) -> int:
+        """Module width of the outer commitment: one column per (digit, image).
+
+        The pairing is **digit-major** — column `digit * images + image` —
+        following the orientation `gadget.decompose_vector` already returns, so
+        the layout is read off the substrate rather than transposed into a
+        second convention. The inner witness is laid out the other way round
+        (block-major) because *its* digit axis is the one a `matvec` contracts;
+        nothing contracts the outer digit axis.
+        """
+        return self.outer_decomposition.num_digits * self.images
+
+    @property
+    def inner_beta_inf(self) -> int:
+        """The bound on a witness opening: the digit bound, since the witness
+        *is* digits."""
+        return self.inner_decomposition.beta_inf
+
+    @property
+    def outer_beta_inf(self) -> int:
+        """The bound on the outer digit table."""
+        return self.outer_decomposition.beta_inf
+
+    def column(self, block: int, digit: int) -> int:
+        """The index of one block's digit plane in the flattened witness — the
+        block-major layout as the accessor callers use, so no call site
+        re-derives it."""
         if not 0 <= block < self.blocks:
             raise ValueError(f"column: block {block} outside [0, {self.blocks})")
-        return digit * self.blocks + block
+        if not 0 <= digit < self.inner_cols:
+            raise ValueError(f"column: digit {digit} outside [0, {self.inner_cols})")
+        return block * self.inner_cols + digit
