@@ -124,7 +124,10 @@ downstream prover ships is *its* data; a scheme carrying literals here would be
 one deployment's scheme wearing a general name. The challenge set is a
 `ChallengePolicy` for the same reason: which subset of the ring a challenge is
 drawn from fixes the knowledge error and the norm growth of the response, so it
-is the surrounding protocol's decision to make and this scheme's to accept.
+is the surrounding protocol's decision to make and this scheme's to accept. The opening asks one thing more
+of it — a bound on every draw's ℓ1 norm (`BoundedChallengePolicy`) — so that
+whether `Q` lifts the folded response exactly is settled where the parameter
+point is set, not by the first unlucky transcript.
 
 Both digit decompositions are a **host** step — exact integer arithmetic over
 the balanced lift, which no lane holds — so `commit` materialises twice, once

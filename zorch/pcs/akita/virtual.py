@@ -170,6 +170,10 @@ def squeeze_field(
     A draw at or past `p` is discarded and the next one taken, so no residue is
     favoured and nothing is reduced by hand. Both roles replay the same draws,
     so a rejection costs bytes, never agreement.
+
+    Its own loop rather than lattice-frx's `uniform_from_bytes`, the draw
+    `zorch/lnp` uses: that sampler caps the modulus at 2^64, and this field is
+    the consumer's — a pairing-friendly scalar field is 254 bits.
     """
     modulus = int(zk_dtypes.pfinfo(dtype).modulus)
     bits = modulus.bit_length()

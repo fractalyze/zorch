@@ -15,7 +15,7 @@ import frx.numpy as fnp
 from frx import Array
 
 from zorch.byte_transcript import ByteTranscript
-from zorch.pcs.akita.challenge import ChallengePolicy
+from zorch.pcs.akita.challenge import BoundedChallengePolicy
 from zorch.pcs.akita.commit import AkitaCommitter, AkitaProverData
 from zorch.pcs.akita.config import AkitaConfig
 from zorch.pcs.akita.virtual import (
@@ -41,6 +41,7 @@ from zorch.pcs.akita.wire import (
     observe_responses,
     observe_statement,
     packed_layout,
+    require_exact_fold,
 )
 from zorch.pcs.stage import OpeningProof, OpeningWitness
 from zorch.poly.eq import expand_eq_to_hypercube
@@ -56,7 +57,10 @@ class AkitaProver:
     and its verifier must hold the same one.
     """
 
-    def __init__(self, committer: AkitaCommitter, policy: ChallengePolicy) -> None:
+    def __init__(
+        self, committer: AkitaCommitter, policy: BoundedChallengePolicy
+    ) -> None:
+        require_exact_fold(committer.config, policy)
         self.committer = committer
         self.policy = policy
 

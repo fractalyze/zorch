@@ -11,6 +11,8 @@ the verifier's business, and only a malformed one is the caller's.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import frx
 import frx.numpy as fnp
 import numpy as np
@@ -102,6 +104,25 @@ def _ints(values: frx.Array) -> list[int]:
     return [int(v) for v in np.asarray(values).astype(object).reshape(-1)]
 
 
+@dataclass(frozen=True)
+class _UnderstatedPolicy:
+    """Draws as the wrapped policy does, but claims a tighter ℓ1 bound than
+    its draws keep."""
+
+    drawn: FixedWeightTernary
+
+    @property
+    def bytes_needed(self) -> int:
+        return self.drawn.bytes_needed
+
+    def from_bytes(self, data: bytes | bytearray | np.ndarray) -> np.ndarray:
+        return self.drawn.from_bytes(data)
+
+    @property
+    def max_l1(self) -> int:
+        return 1
+
+
 class AkitaOpeningTest(absltest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -133,7 +154,7 @@ class AkitaOpeningTest(absltest.TestCase):
     ) -> None:
         expected = [
             int(np.asarray(eval_mle(self.polys[message], point)).astype(object))
-            for message, point in zip(messages, points)
+            for message, point in zip(messages, points, strict=True)
         ]
         self.assertEqual(_ints(values), expected)
 
@@ -279,6 +300,41 @@ class AkitaOpeningTest(absltest.TestCase):
         claim = AkitaOpeningClaim(self.commitment, (_point(72, 1),), (0,))
         with self.assertRaisesRegex(ValueError, "takes a point of 9"):
             packed_layout(self.config, claim)
+
+    def test_refuses_a_message_claimed_twice_at_one_point(self) -> None:
+        point = _point(73, 1)
+        claim = AkitaOpeningClaim(self.commitment, (point, point), (1, 1))
+        with self.assertRaisesRegex(ValueError, "claimed twice"):
+            packed_layout(self.config, claim)
+
+    def test_refuses_a_parameter_point_too_narrow_for_the_fold(self) -> None:
+        # A 12-bit modulus cannot lift a fold over 4 super-blocks of β = 128
+        # digits under weight-8 challenges (norm 4096 ≥ Q/2), so neither role
+        # accepts the point — before any proof exists to judge.
+        modulus = int(zk_dtypes.pfinfo(_FIELD).modulus)
+        profile = SisProfile(_D, (3329,))
+        config = AkitaConfig(
+            profile=profile,
+            inner_decomposition=Decomposition.covering(_LOG_BASE, modulus // 2),
+            outer_decomposition=Decomposition.covering(_LOG_BASE, profile.modulus // 2),
+            inner_rows=2,
+            outer_rows=2,
+            message_lens=(512,),
+        )
+        committer = _committer(config)
+        policy = FixedWeightTernary(_D, _WEIGHT)
+        for role in (AkitaProver, AkitaVerifier):
+            with self.subTest(role=role.__name__):
+                with self.assertRaisesRegex(ValueError, "too narrow to open"):
+                    role(committer, policy)
+
+    def test_refuses_a_policy_that_breaks_its_bound(self) -> None:
+        prover = AkitaProver(
+            self.committer, _UnderstatedPolicy(FixedWeightTernary(_D, _WEIGHT))
+        )
+        claim = AkitaOpeningClaim(self.commitment, (_point(74, 0),), (0,))
+        with self.assertRaisesRegex(ValueError, "past its own bound"):
+            prover.open(claim, OpeningWitness(self.data), _transcript())
 
 
 if __name__ == "__main__":

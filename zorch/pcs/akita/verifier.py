@@ -21,7 +21,7 @@ from lattice_frx.ring import Coeff, Eval
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import commitments_equal, within_bound
-from zorch.pcs.akita.challenge import ChallengePolicy
+from zorch.pcs.akita.challenge import BoundedChallengePolicy
 from zorch.pcs.akita.commit import AkitaCommitter
 from zorch.pcs.akita.virtual import (
     VirtualClaim,
@@ -47,6 +47,7 @@ from zorch.pcs.akita.wire import (
     observe_responses,
     observe_statement,
     packed_layout,
+    require_exact_fold,
 )
 from zorch.pcs.stage import OpeningProof
 from zorch.poly.eq import eval_eq
@@ -56,7 +57,10 @@ from zorch.sumcheck.reduce import reduce_evals
 class AkitaVerifier:
     """Checks an `AkitaProver` opening against the payload it claims."""
 
-    def __init__(self, committer: AkitaCommitter, policy: ChallengePolicy) -> None:
+    def __init__(
+        self, committer: AkitaCommitter, policy: BoundedChallengePolicy
+    ) -> None:
+        require_exact_fold(committer.config, policy)
         self.committer = committer
         self.policy = policy
 
@@ -164,13 +168,6 @@ class AkitaVerifier:
         bound = config.inner_beta_inf * sum(
             int(np.abs(challenge).sum()) for member in drawn for challenge in member
         )
-        if bound >= config.profile.modulus >> 1:
-            raise ValueError(
-                f"verify: a fold of {len(group.messages)} messages over "
-                f"{group.super_blocks} super-blocks reaches norm {bound}, past "
-                "the exact lift at Q/2; the parameter point is too narrow for "
-                "this opening"
-            )
         if not within_bound("verify", ring, response, bound):
             return False
 
@@ -186,11 +183,7 @@ class AkitaVerifier:
             ring, response, config.inner_decomposition.log_base, group.point.dtype
         )
         contracted = (position[:, None] * folded).sum(axis=0)
-        expected = fnp.zeros((degree,), group.point.dtype)
-        for partial, member in zip(partials, drawn):
-            for super_block, challenge in enumerate(member):
-                expected = expected + _negacyclic_scale(challenge, partial[super_block])
-        return _field_equal(contracted, expected)
+        return _field_equal(contracted, _negacyclic_fold(drawn, partials))
 
     def _require_shapes(
         self,
@@ -235,23 +228,26 @@ def _require_coeff(name: str, element: Coeff, lead: tuple[int, ...]) -> None:
         raise ValueError(f"{name} leading axes {got}, want {lead}")
 
 
-def _negacyclic_scale(challenge: np.ndarray, poly: Array) -> Array:
-    """`c·E` in `F[X]/(X^d+1)` for a short integer challenge: one signed shift
-    per nonzero coefficient, since `X^i` wraps with a sign flip and the
-    challenge is sparse. The sign goes on by subtraction, never as a factor: a
-    negative Python integer times a field array wraps as a u64 instead of
-    negating, and silently yields a wrong element."""
-    degree = poly.shape[0]
-    out = fnp.zeros_like(poly)
-    for shift in np.flatnonzero(challenge).tolist():
-        coefficient = int(challenge[shift])
-        rotated = fnp.concatenate([-poly[degree - shift :], poly[: degree - shift]])
-        term = rotated * abs(coefficient)
-        if coefficient > 0:
-            out = out + term
-        else:
-            out = out - term
-    return out
+def _negacyclic_fold(challenges: GroupChallenges, partials: Array) -> Array:
+    """`Σ_member Σ_s c_s·E_s` in `F[X]/(X^d+1)` as one product and one
+    reduction.
+
+    Each short integer challenge becomes its signed negacyclic matrix on the
+    host — entry `(j, i)` is `c_{j-i}`, negated where `j - i` wraps below zero
+    — and enters the field through Python integers: a negative integer scaled
+    into a field array wraps as a u64 instead of negating.
+    """
+    degree = partials.shape[-1]
+    rows = np.arange(degree)[:, None]
+    cols = np.arange(degree)[None, :]
+    wrap = (rows - cols) % degree
+    sign = np.where(rows >= cols, 1, -1)
+    matrices = np.array(
+        [[challenge[wrap] * sign for challenge in drawn] for drawn in challenges],
+        dtype=np.int64,
+    )
+    lifted = fnp.asarray(matrices.astype(object).astype(partials.dtype))
+    return (lifted * partials[:, :, None, :]).sum(axis=(0, 1, 3))
 
 
 def _field_equal(a: Array, b: Array) -> bool:

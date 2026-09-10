@@ -84,7 +84,7 @@ def _virtual_value(
     """`V(point)` from the product's whole table, `[x_1, …, x_m, y]` MSB-first."""
     shared = point.shape[0] - sum(widths)
     table = fnp.ones((1 << shared,), _FIELD)
-    for message, width in zip(messages, widths):
+    for message, width in zip(messages, widths, strict=True):
         table = table[..., None, :] * polys[message].reshape(1 << width, 1 << shared)
     return eval_mle(table.reshape(-1), point)
 
@@ -144,7 +144,7 @@ class AkitaVirtualTest(absltest.TestCase):
             _ints(expected),
             [
                 int(np.asarray(eval_mle(self.polys[m], p)).astype(object))
-                for m, p in zip(checked.messages, checked.points)
+                for m, p in zip(checked.messages, checked.points, strict=True)
             ],
         )
 

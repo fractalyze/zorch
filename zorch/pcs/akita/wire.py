@@ -9,14 +9,16 @@ coefficient `ℓ` inside one ring element; its eq weight is then `B_s·Q_p·I_�
 The prover sends each super-block's ring partial `E_s = Σ_p Q_p·F_{s,p}` over
 the field, so the claimed value is `Σ_s B_s·⟨I, E_s⟩`. It then folds the digit
 witness over super-blocks with sparse ring challenges, `z_p = Σ_s c_s·s_{s,p}`,
-and the verifier checks the three relations that make the partials honest —
-upstream Akita's fold relations ("Semantic relations in an Akita fold",
-eqs. 12a and 13):
+and the verifier checks the three relations that make the partials honest,
+upstream Akita's fold relations (eqs. 12a and 13 of the reference below):
 
 - `‖z‖∞ ≤ β·Σ_s ‖c_s‖₁`, the norm an honest fold of `β`-short digits reaches;
 - `A·z_p = Σ_s c_s·t_{s,p}`, against inner images the outer payload binds;
 - `Σ_p Q_p·Σ_h 2^{w·h}·z_{p,h} = Σ_s c_s·E_s` over the field: the challenge
   folds super-blocks while `Q` contracts positions, so the two commute.
+
+Reference:
+  https://github.com/LayerZero-Labs/akita/blob/029ceceaba879a0d9bf80a47d2e08534e630457d/book/src/how/proving/akita-fold.md#L629-L704
 
 Nothing recurses. The images travel in the proof and are checked against the
 payload directly, where upstream commits them into the next fold's witness, so
@@ -63,7 +65,7 @@ from lattice_frx.ring import Coeff, Eval, RnsRing
 
 from zorch.byte_transcript import ByteTranscript
 from zorch.commit.ajtai import centered_lift
-from zorch.pcs.akita.challenge import ChallengePolicy, squeeze_challenge
+from zorch.pcs.akita.challenge import BoundedChallengePolicy, squeeze_challenge
 from zorch.pcs.akita.commit import AkitaCommitment
 from zorch.pcs.akita.config import AkitaConfig
 from zorch.pcs.stage import OpeningClaim
@@ -201,24 +203,61 @@ def packed_layout(
                 f"packed_layout: points mix {dtype} and {point.dtype}; one batch "
                 "is committed in one field"
             )
-        by_point.setdefault(field_bytes(point), []).append(index)
+        grouped = by_point.setdefault(field_bytes(point), [])
+        if any(claim.messages[other] == message for other in grouped):
+            raise ValueError(
+                f"packed_layout: message {message} is claimed twice at one point"
+            )
+        grouped.append(index)
 
     groups = []
     for members in by_point.values():
         messages = tuple(claim.messages[index] for index in members)
         # Equal points have equal lengths, so every member has these blocks.
         blocks = config.blocks_per_message[messages[0]]
-        positions = 1 << ((blocks.bit_length() - 1) // 2)
+        positions, super_blocks = split_blocks(blocks)
         groups.append(
             ClaimGroup(
                 claim.points[members[0]],
                 tuple(members),
                 messages,
                 positions,
-                blocks // positions,
+                super_blocks,
             )
         )
     return tuple(groups)
+
+
+def split_blocks(blocks: int) -> tuple[int, int]:
+    """`(positions, super_blocks)` for a power-of-two block count: the balanced
+    split, which evens the partials against the response."""
+    positions = 1 << ((blocks.bit_length() - 1) // 2)
+    return positions, blocks // positions
+
+
+def require_exact_fold(config: AkitaConfig, policy: BoundedChallengePolicy) -> None:
+    """Refuse a parameter point whose modulus cannot lift the largest fold the
+    batch admits.
+
+    A response is read through its balanced lift, exact only below `Q/2`. The
+    largest group folds every same-length message (a group holds distinct
+    messages at one point) over all its super-blocks, each term growing the
+    response by at most `max_l1·β`.
+    """
+    terms: dict[int, int] = {}
+    for length, blocks in zip(config.message_lens, config.blocks_per_message):
+        if length & (length - 1):
+            continue  # no multilinear point opens it
+        terms[length] = terms.get(length, 0) + split_blocks(blocks)[1]
+    if not terms:
+        return
+    bound = config.inner_beta_inf * policy.max_l1 * max(terms.values())
+    if bound >= config.profile.modulus >> 1:
+        raise ValueError(
+            f"require_exact_fold: the largest fold this batch admits reaches norm "
+            f"{bound}, past the exact lift at Q/2 = {config.profile.modulus >> 1}; "
+            "the parameter point is too narrow to open it"
+        )
 
 
 def ring_bytes(element: Coeff | Eval) -> bytes:
@@ -273,7 +312,7 @@ def observe_partials(
 def draw_fold_challenges(
     transcript: ByteTranscript,
     layout: Sequence[ClaimGroup],
-    policy: ChallengePolicy,
+    policy: BoundedChallengePolicy,
     degree: int,
 ) -> tuple[ByteTranscript, FoldChallenges]:
     """Step 6: one challenge per member super-block, in group, then member,
@@ -292,6 +331,12 @@ def draw_fold_challenges(
                         f"draw_fold_challenges: the policy draws "
                         f"{challenge.shape[0]} coefficients, the ring has "
                         f"degree {degree}"
+                    )
+                norm = int(np.abs(challenge).sum())
+                if norm > policy.max_l1:
+                    raise ValueError(
+                        f"draw_fold_challenges: the policy drew a challenge of "
+                        f"ℓ1 norm {norm}, past its own bound {policy.max_l1}"
                     )
                 drawn.append(challenge)
             members.append(tuple(drawn))
@@ -319,24 +364,24 @@ def fold_blocks(
     table `[blocks, ...]`: the witness on the prover's side, the images on the
     verifier's — the two sides of `A·z_p = Σ_s c_s·t_{s,p}`.
 
-    One broadcast product per member over its `[super_blocks, positions, ...]`
-    view, rather than a product per block.
+    One broadcast product and one reduction per limb: members stack along the
+    super-block axis, each with its own challenges, so the fold stays one unit
+    however many claims share the point.
     """
     trailing = (1,) * (table.limbs[0].ndim - 2)
-    folded = []
-    for message, drawn in zip(group.messages, challenges):
-        weights = ring.ntt(ring.stack([ring.from_signed(c) for c in drawn]))
-        limbs = []
-        for weight, limb in zip(weights.limbs, table.limbs):
-            # `[super_blocks, d]` against the view: over positions and any
-            # module axes between them and the coefficients.
-            shaped = weight.reshape(weight.shape[0], 1, *trailing, weight.shape[-1])
-            limbs.append((shaped * group.view(config, message, limb)).sum(axis=0))
-        folded.append(Eval(tuple(limbs)))
-    total = folded[0]
-    for term in folded[1:]:
-        total = ring.add(total, term)
-    return total
+    weights = ring.ntt(
+        ring.stack([ring.from_signed(c) for drawn in challenges for c in drawn])
+    )
+    limbs = []
+    for weight, limb in zip(weights.limbs, table.limbs):
+        views = fnp.concatenate(
+            [group.view(config, message, limb) for message in group.messages]
+        )
+        # `[members·super_blocks, d]` against the stacked views: over positions
+        # and any module axes between them and the coefficients.
+        shaped = weight.reshape(weight.shape[0], 1, *trailing, weight.shape[-1])
+        limbs.append((shaped * views).sum(axis=0))
+    return Eval(tuple(limbs))
 
 
 def digits_to_field(ring: RnsRing, digits: Coeff, log_base: int, dtype: Any) -> Array:
