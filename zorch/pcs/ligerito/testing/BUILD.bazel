@@ -42,3 +42,17 @@ py_test(
         requirement("zk_dtypes"),
     ] + GPU_PLUGIN_DEPS,
 )
+
+py_test(
+    name = "basis_test",
+    # Pure array algebra over the basis singletons -- no transcript permute,
+    # so it runs on CI unlike the `local_only` round-trip.
+    size = "small",
+    srcs = ["basis_test.py"],
+    deps = [
+        "//zorch/pcs/ligerito",
+        "//zorch/testkit:random_field",
+        requirement("absl_py"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

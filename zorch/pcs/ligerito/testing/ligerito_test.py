@@ -362,10 +362,10 @@ class LigeritoChoreographyTest(parameterized.TestCase):
 
 class LigeritoBasisConventionTest(parameterized.TestCase):
     """Round-trips of the coefficient-basis conventions: the `monomial_commit`
-    knob (bit-reversed raw commit + monomial proximity expansion + reversed
-    lane weights) and the raw-basis entries (`open_with_basis` /
-    `verify_with_basis`, driven through a choreography that binds no point),
-    separately and combined."""
+    knob (raw-coefficient commit order + bit-reversed raw commit + monomial
+    proximity expansion + reversed lane weights) and the raw-basis entries
+    (`open_with_basis` / `verify_with_basis`, driven through a choreography that
+    binds no point), separately and combined."""
 
     @parameterized.named_parameters(
         dict(testcase_name="monomial_point_entry", monomial=True, basis_entry=False),
@@ -393,8 +393,14 @@ class LigeritoBasisConventionTest(parameterized.TestCase):
         verifier: LigeritoVerifier[Transcript] = LigeritoVerifier(
             _make_code, tree, cfg, chor
         )
-        f = _rand_ef(3, (1 << cfg.num_vars,))
-        root, pdata = prover.commit([f])
+        witness = _rand_ef(3, (1 << cfg.num_vars,))
+        root, pdata = prover.commit([witness])
+        # `commit` takes the basis's own witness order and derives the
+        # multilinear the recursion folds: the monomial convention is handed raw
+        # coefficient order and bit-reverses it, the eval basis folds what it
+        # was handed.
+        f = frx.lax.bit_reverse(witness, dimensions=(0,)) if monomial else witness
+        self.assertEqual(pdata.f.tolist(), f.tolist())
         if basis_entry:
             # A RAW basis (not an eq expansion) — the batched-claim shape the
             # entry exists for.
