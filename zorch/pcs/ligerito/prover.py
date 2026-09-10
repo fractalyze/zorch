@@ -22,14 +22,17 @@ The final level sends the folded residual in the clear; its proximity ties the
 residual to the last committed matrix directly (no sumcheck needed), and the
 sumcheck's terminal claim closes against `Σ_x residual(x)·B(x)`.
 
-The commit basis — the `(pre, expand)` pair fixing how a codeword coordinate
-reads back as a point-eval of the committed row — is a `CommitBasis`
-(`ligerito/basis.py`), selected by `LigeritoConfig.monomial_commit`. The default
-`EVAL_BASIS` encodes `mle_evals_to_coeffs(matrix)`, cancelling the `TensorCode`
-seam's `coeffs_to_evals` so both the proximity RHS and the value check read as
-clean `eval_mle`s of the *eval-basis* witness (`encode(w)[s] ==
+The commit basis — fixing how a codeword coordinate reads back as a point-eval
+of the committed row, and which witness order `commit` is handed — is a
+`CommitBasis` (`ligerito/basis.py`), selected by
+`LigeritoConfig.monomial_commit`. The default `EVAL_BASIS` encodes
+`mle_evals_to_coeffs(matrix)`, cancelling the `TensorCode` seam's
+`coeffs_to_evals` so both the proximity RHS and the value check read as clean
+`eval_mle`s of the *eval-basis* witness (`encode(w)[s] ==
 eval_mle(coeffs_to_evals(w), eval_point(s))`); `MONOMIAL_BASIS` is the raw-lane
-(coefficient) convention a byte-fixed consumer needs (flock, #32).
+(coefficient) convention a byte-fixed consumer needs (flock, #32), and takes its
+witness in that raw order so the initial commit permutes once instead of
+three times.
 
 Reuses `pcs/basefold`'s staggered partial-Lagrange batching for the per-level
 `α` weights and `pcs/fold`'s query machinery (`open_rows`). Every transcript
@@ -94,10 +97,22 @@ def _compressed_round(dtype: Any) -> CompressedProductRound:
     return CompressedProductRound(challenges=ChallengePolicy(dtype))
 
 
-# Jitted commit body, keyed on code + tree + interleave by value (#214): commit
-# never reads the query count, so provers differing only in `queries` reuse this
-# compiled function rather than re-tracing. `basis` is static too — its `.pre` is
-# the encode pre-transform (the singletons are identity-stable keys).
+def _check_message_len(witness: Array, log_interleave: int, code: TensorCode) -> None:
+    """Reject a level whose code was built for a different message (encoded) axis
+    than the interleave lanes leave."""
+    rho = witness.shape[0] >> log_interleave
+    if code.message_len != rho:
+        raise ValueError(
+            f"code.message_len={code.message_len} must equal the message length "
+            f"{rho} (= 2^(vars - interleave))"
+        )
+
+
+# Jitted commit bodies, keyed on code + tree + interleave by value (#214): commit
+# never reads the query count, so provers differing only in `queries` reuse these
+# compiled functions rather than re-tracing. `basis` is static too — its
+# transforms are the encode pre-transforms (the singletons are identity-stable
+# keys).
 @partial(frx.jit, static_argnames=("log_interleave", "code", "tree", "basis"))
 def _commit(
     witness: Array,
@@ -106,28 +121,47 @@ def _commit(
     tree: MerkleTree,
     basis: CommitBasis = EVAL_BASIS,
 ) -> CommittedMatrix:
-    """Ligero-commit the `witness` as a matrix whose interleave lanes are its high
-    `log_interleave` variables and whose message (encoded) axis is the low ones,
-    encoding `basis.pre(matrix)` so a codeword coordinate reads back as
-    `<row, basis.expand(eval_point(s))>` (see `zorch.pcs.ligerito.basis`). Reads
-    only `basis.pre`; the paired `basis.expand` is the open/verify side."""
-    kappa = 1 << log_interleave
-    rho = witness.shape[0] // kappa
-    if code.message_len != rho:
-        raise ValueError(
-            f"code.message_len={code.message_len} must equal the message length "
-            f"{rho} (= 2^(vars - interleave))"
-        )
-    matrix = witness.reshape(kappa, rho)
-    cm = commit_matrix(code, tree, matrix, pre=basis.pre)
-    return cm
+    """Ligero-commit a level's folded `witness` as a matrix whose interleave lanes
+    are its high `log_interleave` variables and whose message (encoded) axis is
+    the low ones, encoding `basis.pre(matrix)` so a codeword coordinate reads back
+    as `<row, basis.expand(eval_point(s))>` (see `zorch.pcs.ligerito.basis`).
+    Reads only `basis.pre`; the paired `basis.expand` is the open/verify side.
+
+    The re-commit path: `witness` comes straight off the sumcheck fold, already
+    in the order the open folds. The initial commit is `_commit_initial`."""
+    _check_message_len(witness, log_interleave, code)
+    matrix = witness.reshape(1 << log_interleave, code.message_len)
+    return commit_matrix(code, tree, matrix, pre=basis.pre)
+
+
+@partial(frx.jit, static_argnames=("log_interleave", "code", "tree", "basis"))
+def _commit_initial(
+    witness: Array,
+    log_interleave: int,
+    code: TensorCode,
+    tree: MerkleTree,
+    basis: CommitBasis,
+) -> tuple[Array, CommittedMatrix]:
+    """Commit `M_0` from a `witness` in the basis's own commit order, returning
+    the multilinear the open folds alongside it.
+
+    Splits from `_commit` because only here is the witness's order the caller's
+    to choose: `basis.initial_matrix` builds the encode input from it directly
+    instead of permuting `basis.witness_pre`'s output back into place — the same
+    matrix, by the `basis` module invariant, with the permutations that cancel
+    never run."""
+    _check_message_len(witness, log_interleave, code)
+    matrix = basis.initial_matrix(witness, log_interleave)
+    return basis.witness_pre(witness), commit_matrix(code, tree, matrix)
 
 
 @dataclass(frozen=True)
 class LigeritoProverData:
-    """Retained witness from `LigeritoProver.commit`: the eval-basis multilinear
-    `f` and the initial matrix commitment `M_0`. `open` runs the recursion off
-    these."""
+    """Retained witness from `LigeritoProver.commit`: the multilinear `f` the
+    sumcheck folds — `basis.witness_pre` of the committed witness, so the
+    eval basis retains what it was handed and the monomial basis its
+    bit-reversal — and the initial matrix commitment `M_0`. `open` runs the
+    recursion off these."""
 
     f: Array
     initial: CommittedMatrix
@@ -165,13 +199,19 @@ class LigeritoProver(
         self, polys: Sequence[Array]
     ) -> tuple[LigeritoCommitment, LigeritoProverData]:
         """Commit one multilinear as the initial Ligero matrix `M_0` (interleave =
-        `fold_ks[0]` lanes)."""
+        `fold_ks[0]` lanes).
+
+        The polynomial arrives in the commit basis's own order, which is the
+        eval-basis order under the default and raw coefficient order under
+        `monomial_commit` — `basis.witness_pre` derives the multilinear the open
+        folds, so a caller that hands the monomial basis a bit-reversed witness
+        gets a different (wrong) root rather than an error."""
         if len(polys) != 1:
             raise ValueError(
                 f"Ligerito commits exactly one polynomial, got {len(polys)}"
             )
-        f = polys[0]
-        num_vars = log2_strict_usize(f.shape[0])
+        witness = polys[0]
+        num_vars = log2_strict_usize(witness.shape[0])
         if num_vars != self.config.num_vars:
             raise ValueError(
                 f"polynomial has {num_vars} variables, config expects "
@@ -180,7 +220,7 @@ class LigeritoProver(
         k0 = self.config.fold_ks[0]
         code0 = self._code(0, 1 << (num_vars - k0))
         basis = select_commit_basis(self.config.monomial_commit)
-        initial = _commit(f, k0, code0, self.tree, basis=basis)
+        f, initial = _commit_initial(witness, k0, code0, self.tree, basis=basis)
         return initial.root, LigeritoProverData(f=f, initial=initial)
 
     def prove(

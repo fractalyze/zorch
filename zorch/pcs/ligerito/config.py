@@ -77,9 +77,11 @@ class LigeritoConfig:
         codeword coordinate becomes the monomial-basis evaluation
         `<slice, expand_monomial(reversed(eval_point(s)))>`, the proximity glue
         expands monomially, and the verifier's lane weights bit-reverse (eq of
-        the reversed fold challenges). Prover and verifier both derive from it;
-        the recursion's algebra is the same up to the basis change, only the
-        committed and glued bytes differ.
+        the reversed fold challenges). It also fixes the order `commit` takes
+        its witness in — raw coefficient order, which the prover bit-reverses
+        into the multilinear the open folds. Prover and verifier both derive
+        from it; the recursion's algebra is the same up to the basis change,
+        only the committed and glued bytes differ.
     """
 
     num_vars: int
