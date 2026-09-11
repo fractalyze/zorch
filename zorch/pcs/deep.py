@@ -38,6 +38,8 @@ def deep_composition(
     opening_pos: Sequence[int],
     vf: Array,
     domain: Array,
+    vf_pows: Array | None = None,
+    columns_leading: bool = False,
 ) -> Array:
     """``f(x) = Σ_m vf^m · (col_m(x) − evals[m]) / (domain − xis[opening_pos[m]])``
     on ``domain`` — the DEEP-ALI batched quotient.
@@ -47,17 +49,43 @@ def deep_composition(
     extension one (``evals``/``xis``/``vf`` are the extension).
     ``opening_pos[m]`` selects column ``m``'s point. Returns the ``(N,)`` codeword.
 
+    ``columns_leading=True`` takes the same columns transposed — ``(B, N)`` and
+    ``(C, N)`` — which is how a producer that transforms along the last axis
+    (an LDE, say) already holds them. Reading a column is then contiguous, so
+    consecutive rows land in consecutive addresses and the warp coalesces;
+    row-major makes the same reads a full row apart. Prefer this form when the
+    caller can supply it, with one exception: at large ``M`` this kernel holds
+    every column live at once, and elements-per-thread × live columns is what
+    exhausts the register file. The compiler unrolls precisely because these
+    reads are contiguous, so this layout is where that pressure lands first.
+    Splitting the batch across several calls and summing the partial numerators
+    keeps each kernel narrow enough to avoid it.
+
     ``M = B + C`` is static, so the loop unrolls: each column's ``vf^m·(col − eval)``
     numerator accumulates into a per-opening-point running sum, then one reciprocal
     per distinct point divides — a fused elementwise graph by construction, no
     ``(N, M)`` intermediate and no ``axis`` reduction. Field addition is exact, so
-    the accumulation order does not affect the result."""
-    b, c = base_cols.shape[1], ext_cols.shape[1]
+    the accumulation order does not affect the result.
+
+    ``vf_pows`` (``(M,)``) overrides the default ascending ``vf^m`` when the
+    caller fixes a different power-to-column assignment — e.g. descending,
+    where column 0 carries the highest power (a Horner-style accumulation
+    order). It is also a performance lever: derived in-graph the powers are an
+    M-long dependent chain the compiler may fold into the per-row body, which
+    is far more expensive than loading them under ``columns_leading`` and
+    marginally cheaper than loading them row-major. Materialize them outside
+    the jit whenever ``columns_leading`` is set."""
+    axis = 0 if columns_leading else 1
+    b, c = base_cols.shape[axis], ext_cols.shape[axis]
     m = b + c
-    vf_pows = powers(vf, m)
+    if vf_pows is None:
+        vf_pows = powers(vf, m)
     numer_by_opening: dict[int, Array] = {}
     for col in range(m):
-        column = base_cols[:, col] if col < b else ext_cols[:, col - b]
+        if columns_leading:
+            column = base_cols[col] if col < b else ext_cols[col - b]
+        else:
+            column = base_cols[:, col] if col < b else ext_cols[:, col - b]
         term = vf_pows[col] * (column - evals[col])  # (N,); base − ext promotes
         o = opening_pos[col]
         numer_by_opening[o] = (
