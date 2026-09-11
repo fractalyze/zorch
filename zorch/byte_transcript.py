@@ -9,12 +9,12 @@ ops fused into the round body, vs a byte hash whose Fiat-Shamir chain is strictl
 sequential and runs on the host.
 
 `ByteHashTranscript` holds a `bytes` buffer and an injected `ByteHash`
-(`hash/byte_hash.py`); the digest substrate — host `HostSha256` or the device
-`Sha256` marker — is a value it carries, not a class it hardcodes. Its
-`has_dedicated_fusion` delegates to that hash, exactly as `DuplexSponge` delegates
-to its `Permutation`. So the same construction backs both a host byte challenger
-(inject `HostSha256()`) and the device-byte row of the taxonomy (inject
-`Sha256()`); the two are byte-identical.
+(hash-frx's `byte_hash.py`); the digest substrate — the device `Sha256` marker,
+or a host oracle looping `hashlib` — is a value it carries, not a class it
+hardcodes. Its `has_dedicated_fusion` delegates to that hash, exactly as
+`DuplexSponge` delegates to its `Permutation`. So the same construction backs
+both a host byte challenger (inject `testkit.byte_hash.HostSha256()`) and the
+device-byte row of the taxonomy (inject `Sha256()`); the two are byte-identical.
 
 The construction — op-tagged absorb, `HASH(buffer || ctr)` counter-squeeze (SHA-256
 is not an XOF), and re-absorb of the squeezed bytes — is a standard Merlin-style
@@ -94,7 +94,7 @@ class ByteHashTranscript:
     """Merlin-style byte duplex over an injected `ByteHash`. Functional: every op
     returns a new transcript whose `buffer` is the running absorbed-byte stream. A
     host object (a `bytes` buffer, not a jit-traced pytree); the `ByteHash` chooses
-    the squeeze substrate — `HostSha256` (host `hashlib`) or `Sha256` (the
+    the squeeze substrate — a host `hashlib` oracle or `Sha256` (the
     `hash_frx.sha256` device marker). Byte-identical whichever is injected."""
 
     buffer: bytes

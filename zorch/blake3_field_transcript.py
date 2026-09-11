@@ -42,7 +42,8 @@ import frx.numpy as fnp
 import numpy as np
 from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
-from hash_frx.blake3 import blake3
+from hash_frx.blake3.modes import BLOCK_LEN, hash_mode, unmarked_hash
+from hash_frx.blake3.rows import xof
 from hash_frx.blake3.streaming import Blake3Stream, blake3_stream_init
 from hash_frx.fusion import fused_region
 
@@ -67,7 +68,7 @@ _DIGEST_BYTES = 32
 _POW_PREIMAGE_BYTES = _DIGEST_BYTES + 8
 # Hash mode, hoisted so it is not rebuilt per trace. Only the wide-pre-image arm
 # of `_pow_digests` passes it — the marked entry is hash-mode by construction.
-_MODE = blake3.hash_mode()
+_MODE = hash_mode()
 
 
 def _const_u8(data: bytes) -> Array:
@@ -454,9 +455,9 @@ class Blake3FieldTranscript:
             ],
             axis=1,
         )
-        if self.pow_preimage_bytes > blake3.BLOCK_LEN:
-            return blake3.unmarked_hash(rows, _MODE, _DIGEST_BYTES)
-        return blake3.xof(rows, _DIGEST_BYTES)
+        if self.pow_preimage_bytes > BLOCK_LEN:
+            return unmarked_hash(rows, _MODE, _DIGEST_BYTES)
+        return xof(rows, _DIGEST_BYTES)
 
     def _witness_wire(self, witness: Array) -> Array:
         """The witness's wire bytes, framing included: `[OP_BYTES] || len8(8) ||

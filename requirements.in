@@ -34,10 +34,17 @@ zk-dtypes==0.0.17
 # zorch so `sig-frx` can share it without taking a proving-block dependency, so
 # zorch imports it rather than owning a copy.
 #
-# It pulls in `blake3` (the BLAKE3 team's Rust binding) transitively, because
-# hash-frx ships host byte-hash rows that the standard library cannot back.
-# Prebuilt wheels on every platform zorch supports, so no Rust toolchain.
-hash-frx==0.2.0.dev20260820080354
+# It used to pull in `blake3` transitively, for host byte-hash rows it no longer
+# ships (fractalyze/hash-frx#324 left every row device-only); the pin below now
+# carries that binding directly, for tests.
+hash-frx==0.2.0.dev20260911005315
+# TEST-ONLY: `//zorch/testkit:byte_hash`'s `HostBlake3` is the out-of-tree oracle
+# the BLAKE3 transcript suites hash against, and BLAKE3 is the one family with no
+# `hashlib` fallback to serve instead. It is here rather than in
+# `requirements-dev.in` because only this file feeds `@zorch_pip`, which is where
+# a bazel target reaches it; what keeps it out of the wheel is `pyproject.toml`,
+# which declares the runtime deps. Prebuilt wheels everywhere, so no Rust.
+blake3
 # The lattice substrate (negacyclic ring + NTT, RNS, norms) behind the
 # module-lattice commitments in `zorch/commit/ajtai.py`. Same layering story
 # as hash-frx: it sits BELOW zorch (enc-frx and sig-frx share it), so zorch

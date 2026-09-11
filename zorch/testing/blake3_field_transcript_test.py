@@ -29,9 +29,8 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
-from hash_frx.blake3 import blake3
-from hash_frx.blake3.blake3 import BLAKE3_MARKER
-from hash_frx.blake3.byte_hashes import HostBlake3
+from hash_frx.blake3.modes import BLOCK_LEN
+from hash_frx.blake3.rows import BLAKE3_MARKER
 
 from zorch.blake3_field_transcript import (
     BLAKE3_FINALIZE_MARKER,
@@ -42,13 +41,14 @@ from zorch.byte_transcript import (
     _leading_zero_bits_ok,
     _len8,
 )
+from zorch.testkit.byte_hash import HostBlake3
 
 _DIGEST_BYTES = 32
 _NO_PADDING = _DIGEST_BYTES + 8
 # The width at which `_pow_digests` stops taking the marked entry, so these two
 # straddle that boundary rather than merely being wide.
-_ONE_BLOCK = blake3.BLOCK_LEN
-_TWO_BLOCKS = 2 * blake3.BLOCK_LEN
+_ONE_BLOCK = BLOCK_LEN
+_TWO_BLOCKS = 2 * BLOCK_LEN
 # The grinds here run at bits <= 8, so a hit lands far inside one window. The
 # default 2^16 would compress 64x more candidates per call for the same answer;
 # `grind_search` tiles windows, so a wider search would still return this nonce.

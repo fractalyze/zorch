@@ -18,6 +18,7 @@ py_test(
     srcs = ["byte_transcript_test.py"],
     deps = [
         "//zorch:byte_transcript",
+        "//zorch/testkit:byte_hash",
         requirement("absl_py"),
         requirement("hash_frx"),
     ] + GPU_PLUGIN_DEPS,
@@ -51,6 +52,7 @@ py_test(
         "//zorch:byte_transcript",
         "//zorch:prove",
         "//zorch/sumcheck",
+        "//zorch/testkit:byte_hash",
         requirement("absl_py"),
         requirement("frx"),
         requirement("hash_frx"),
@@ -70,6 +72,7 @@ py_test(
         "//zorch:prove",
         "//zorch:sha256_field_transcript",
         "//zorch/sumcheck",
+        "//zorch/testkit:byte_hash",
         requirement("absl_py"),
         requirement("frx"),
         requirement("hash_frx"),

@@ -116,7 +116,7 @@ blake3==1.0.9 \
     --hash=sha256:f65d77eb05331495485048f6804f53885b192b998acb7e6fe1487d941bf08435 \
     --hash=sha256:f9d8b6c6af52a8ff499debf5fd15d7395e0ed837ec2a80fd828b4c6b970de3ed \
     --hash=sha256:fe3c59f8a7b5460fd374b264559c5da7af0a33657a9eca95fff6d843f02cde9e
-    # via hash-frx
+    # via -r requirements.in
 frx==0.10.2.dev20260910150749 \
     --hash=sha256:5ed9593ddb594a7fec87f4a0a19d7a5882e3b4aad53378803398c65afabe3ed2
     # via
@@ -136,8 +136,8 @@ frxlib==0.10.2.dev20260910150749 \
     # via
     #   -r requirements.in
     #   frx
-hash-frx==0.2.0.dev20260820080354 \
-    --hash=sha256:1ed07554c0c1452324c0c5e3cb781e5ef8486b3a02eb06258caf7059a2e78382
+hash-frx==0.2.0.dev20260911005315 \
+    --hash=sha256:8f007f675648ae1f0ba4dacd61869e6ef6863d860b6768a5fd47e2e5b9edf59b
     # via -r requirements.in
 lattice-frx==0.0.1.dev20260826211222 \
     --hash=sha256:aef2d9cd3f105541267902e7f2bad43db47f529858f468ffc11ffc73a5a3c640

@@ -42,7 +42,7 @@ import numpy as np
 from frx import Array, jit, lax
 from frx.tree_util import register_dataclass
 from hash_frx.fusion import fused_region
-from hash_frx.sha256 import (
+from hash_frx.sha256.sha256 import (
     Sha256State,
     sha256_stream_absorb,
     sha256_stream_finalize,

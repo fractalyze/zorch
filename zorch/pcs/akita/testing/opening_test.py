@@ -18,7 +18,6 @@ import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256
 from lattice_frx.ring import Eval, RnsRing
 
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
@@ -36,6 +35,7 @@ from zorch.pcs.akita.wire import (
 from zorch.pcs.stage import OpeningProof, OpeningWitness
 from zorch.poly.eq import expand_eq_to_hypercube
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.byte_hash import HostSha256
 from zorch.testkit.random_field import rand_field
 
 # The NTT-friendly 36-bit pair `commit_test` uses, at a degree kept small for

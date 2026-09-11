@@ -39,7 +39,6 @@ py_library(
     deps = [
         requirement("frx"),
         requirement("hash_frx"),
-        requirement("numpy"),
         requirement("zk_dtypes"),
     ],
 )
@@ -54,5 +53,23 @@ py_library(
         "//zorch:transcript",
         requirement("frx"),
         requirement("hash_frx"),
+    ],
+)
+
+# Public: the host oracles the byte-transcript suites hash against, here because
+# hash-frx dropped its Host* rows (fractalyze/hash-frx#324). Consumers' byte
+# transcripts need the same differential partner.
+py_library(
+    name = "byte_hash",
+    testonly = True,
+    srcs = [
+        "__init__.py",
+        "byte_hash.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        requirement("blake3"),
+        requirement("hash_frx"),
+        requirement("numpy"),
     ],
 )
