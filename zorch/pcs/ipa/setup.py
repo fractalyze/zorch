@@ -5,7 +5,7 @@ IPA is transparent (no trusted setup): the parameters are a fixed Pedersen basis
 `G = (G_0, …, G_{n-1})` and one independent generator `U` that carries the inner
 product, both sampled from public randomness ("nothing-up-my-sleeve"). Prover and
 verifier hold the *same* `IpaKey` — the degenerate case of the seam's
-prover-key/verifier-key split, as with `FriParams`.
+prover-key/verifier-key split, as with `DeepFriParams`.
 
 The structural contrast with KZG worth stating: KZG's verifier key is O(1) (three
 fixed group elements), but **IPA's verifier needs the full size-`n` basis `G`** —

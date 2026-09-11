@@ -2,7 +2,7 @@ load("@rules_python//python:defs.bzl", "py_library")
 load("@zorch_pip//:requirements.bzl", "requirement")
 
 py_library(
-    name = "fri",
+    name = "deep_fri",
     srcs = [
         "__init__.py",
         "config.py",
@@ -16,8 +16,10 @@ py_library(
         "//zorch:transcript",
         "//zorch/coding:foldable_code",
         "//zorch/commit:merkle",
+        "//zorch/pcs:deep",
         "//zorch/pcs:fold",
         "//zorch/pcs:stage",
+        "//zorch/poly",
         requirement("frx"),
     ],
 )

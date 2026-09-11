@@ -29,7 +29,7 @@ py_test(
         "//zorch/commit/testing:koalabear16",
         "//zorch/pcs:stage",
         "//zorch/pcs/basefold",
-        "//zorch/pcs/fri",
+        "//zorch/pcs/deep_fri",
         "//zorch/pcs/kzg",
         "//zorch/pcs/kzg/testing:srs",
         "//zorch/testkit:koalabear16",

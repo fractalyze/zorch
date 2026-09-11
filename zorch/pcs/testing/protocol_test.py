@@ -22,9 +22,9 @@ from zorch.coding.reed_solomon import ReedSolomon
 from zorch.commit.testing.koalabear16 import koalabear16_merkle
 from zorch.pcs.basefold.prover import BasefoldProver
 from zorch.pcs.basefold.verifier import BasefoldVerifier
-from zorch.pcs.fri.config import FriParams
-from zorch.pcs.fri.prover import FriProver
-from zorch.pcs.fri.verifier import FriVerifier
+from zorch.pcs.deep_fri.config import DeepFriParams
+from zorch.pcs.deep_fri.prover import DeepFriProver
+from zorch.pcs.deep_fri.verifier import DeepFriVerifier
 from zorch.pcs.kzg.prover import KzgProver
 from zorch.pcs.kzg.testing.srs import toy_srs
 from zorch.pcs.kzg.verifier import KzgVerifier
@@ -71,21 +71,23 @@ def _round_trip(
 
 
 class SeamRoundTripTest(absltest.TestCase):
-    def test_fri(self) -> None:
+    def test_deep_fri(self) -> None:
         _, _, tree = koalabear16_merkle()
-        params = FriParams(
+        params = DeepFriParams(
             code=ReedSolomon(message_len=4, blowup=2, dtype=KB),
             tree=tree,
             num_rounds=2,
             num_queries=3,
         )
-        coeffs = fnp.array([1, 2, 3, 4], dtype=KB)
-        z = fnp.array(2, dtype=KB)
+        # Two polys at two points: the seam carries the batch, the scheme
+        # covers it with one composition and one fold chain.
+        polys = [fnp.array([1, 2, 3, 4], dtype=KB), fnp.array([5, 6, 7, 8], dtype=KB)]
+        points = [fnp.array(2, dtype=KB), fnp.array(11, dtype=KB)]
         ok = _round_trip(
-            FriProver(params),
-            FriVerifier(params),
-            [coeffs],
-            [z],
+            DeepFriProver(params),
+            DeepFriVerifier(params),
+            polys,
+            points,
             lambda: cheap_transcript(KB),
         )
         self.assertTrue(bool(ok))

@@ -40,7 +40,7 @@ fusion-friendly.
 On a coset `h·H` the fold takes the same `shift` the encoder used, and its
 output lives on the squared coset `h²·H²` — each layer's shift is the previous
 one squared. The seam `fold`/`fold_values` apply the right per-level shift
-internally; both `pcs/fri` and `pcs/basefold` fold and query through the seam.
+internally; both `pcs/deep_fri` and `pcs/basefold` fold and query through the seam.
 
 ## Codeword order is the code's identity
 

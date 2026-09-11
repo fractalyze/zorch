@@ -3,9 +3,9 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
-    name = "fri_test",
+    name = "deep_fri_test",
     size = "small",
-    srcs = ["fri_test.py"],
+    srcs = ["deep_fri_test.py"],
     # composite-vmap; CI's published frxlib can't run it. .bazelrc.ci excludes the
     # local_only tag from CI (full rationale there); local bazel runs it.
     tags = ["local_only"],
@@ -13,7 +13,7 @@ py_test(
         "//zorch:transcript",
         "//zorch/coding:reed_solomon",
         "//zorch/commit/testing:koalabear16",
-        "//zorch/pcs/fri",
+        "//zorch/pcs/deep_fri",
         "//zorch/testkit:jit_cache",
         "//zorch/testkit:transcript",
         requirement("absl_py"),
