@@ -14,7 +14,7 @@ import frx
 import frx.numpy as fnp
 import numpy as np
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256, Sha256
+from hash_frx.sha256.sha256 import Sha256
 
 from zorch.byte_transcript import KIND_SCALAR, OP_SQUEEZE, ByteHashTranscript
 from zorch.grind import GRIND_WINDOW, MIN_GRIND_WINDOW, grind_window_for
@@ -25,6 +25,7 @@ from zorch.sha256_field_transcript import (
     _sha256_squeeze_zone,
     _squeeze_hop,
 )
+from zorch.testkit.byte_hash import HostSha256
 
 
 class Sha256FieldTranscriptTest(absltest.TestCase):

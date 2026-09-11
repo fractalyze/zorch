@@ -15,7 +15,6 @@ import math
 from collections.abc import Sequence
 
 import numpy as np
-from hash_frx.sha256 import HostSha256
 from lattice_frx.split_ring import HostSplitRing
 
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
@@ -23,6 +22,7 @@ from zorch.commit.ajtai import AbdlopCommitment
 from zorch.lnp.challenge import ChallengeParams
 from zorch.lnp.masking import BimodalMasking, Masking
 from zorch.lnp.quadratic import AffineImage, lift_slots
+from zorch.testkit.byte_hash import HostSha256
 
 # One ~32-bit split prime (≡ 5 mod 8; `find_nearest_split_primes(32, 1)`)
 # and a small degree keep the schoolbook ring affordable; the challenge

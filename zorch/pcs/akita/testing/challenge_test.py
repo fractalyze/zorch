@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import numpy as np
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256
 from lattice_frx.sampler import fixed_weight_ternary_bytes_needed
 
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
@@ -22,6 +21,7 @@ from zorch.pcs.akita.challenge import (
     FixedWeightTernary,
     squeeze_challenge,
 )
+from zorch.testkit.byte_hash import HostSha256
 
 _D = 64
 _WEIGHT = 8

@@ -23,7 +23,6 @@ from __future__ import annotations
 from functools import cache
 
 import frx.numpy as fnp
-import numpy as np
 from hash_frx.poseidon2.params import Poseidon2Params
 from zk_dtypes import koalabear_mont as F
 
@@ -234,8 +233,6 @@ def koalabear16_params() -> Poseidon2Params:
     indistinguishable to a caller while paying the constant transfers and the
     host readbacks `Poseidon2Params` does to seed its value key.
     """
-    internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
-    internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
     monty_inverse = fnp.array(_MONTY_INVERSE, dtype=F)
     return Poseidon2Params(
         width=_WIDTH,
@@ -245,7 +242,7 @@ def koalabear16_params() -> Poseidon2Params:
         internal_rounds=_IR,
         external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
         external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
-        internal_constants=fnp.array(internal_rc, dtype=F),
+        internal_constants=fnp.array(_INTERNAL_RC, dtype=F),
         internal_diag=fnp.multiply(fnp.array(_INTERNAL_DIAG, dtype=F), monty_inverse),
         internal_j_scale=monty_inverse,
     )

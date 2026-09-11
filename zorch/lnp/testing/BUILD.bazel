@@ -4,6 +4,7 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_library(
     name = "lnp_fixture",
+    testonly = True,
     srcs = [
         "__init__.py",
         "lnp_fixture.py",
@@ -15,6 +16,7 @@ py_library(
         "//zorch/lnp:challenge",
         "//zorch/lnp:masking",
         "//zorch/lnp:quadratic",
+        "//zorch/testkit:byte_hash",
         requirement("hash_frx"),
         requirement("lattice_frx"),
         requirement("numpy"),
@@ -40,6 +42,7 @@ py_test(
     deps = [
         "//zorch:byte_transcript",
         "//zorch/lnp:transcript",
+        "//zorch/testkit:byte_hash",
         requirement("absl_py"),
         requirement("hash_frx"),
         requirement("lattice_frx"),

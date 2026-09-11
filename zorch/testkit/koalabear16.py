@@ -18,7 +18,6 @@ from dataclasses import replace
 from functools import cache
 
 import frx.numpy as fnp
-import numpy as np
 from hash_frx.poseidon2.params import Poseidon2Params
 from hash_frx.poseidon2.poseidon2 import Poseidon2
 from zk_dtypes import koalabear_mont as F
@@ -243,13 +242,14 @@ def koalabear16_params() -> Poseidon2Params:
 
     Shared rather than rebuilt: the params are frozen and compare by value, so
     two builds are indistinguishable to a caller while each one pays six
-    host->device constant transfers, a `__post_init__` lane check that reads
-    `internal_constants` back to host, and a cold `_value_key`/`_hash` memo
-    that pulls every constant array back via `.tobytes()`. A caller building a
+    host->device constant transfers and a cold `_value_key`/`_hash` memo that
+    pulls every constant array back via `.tobytes()`. A caller building a
     transcript per iteration pays all of that per iteration.
+
+    `internal_constants` is one constant per internal round, not a width-wide
+    row: the partial round acts on lane 0, so lanes 1..w-1 would be structurally
+    zero and `Poseidon2Params` does not carry them.
     """
-    internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
-    internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
     return Poseidon2Params(
         width=_WIDTH,
         dtype=F,
@@ -258,7 +258,7 @@ def koalabear16_params() -> Poseidon2Params:
         internal_rounds=_IR,
         external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
         external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
-        internal_constants=fnp.array(internal_rc, dtype=F),
+        internal_constants=fnp.array(_INTERNAL_RC, dtype=F),
         internal_diag=fnp.array(_INTERNAL_DIAG, dtype=F),
     )
 

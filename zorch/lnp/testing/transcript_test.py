@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import numpy as np
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256
 
 from zorch.byte_transcript import ByteHashTranscript
 from zorch.lnp.transcript import absorb_stacks, stack_bytes
+from zorch.testkit.byte_hash import HostSha256
 
 _LIMBS, _D = 2, 4
 

@@ -15,7 +15,6 @@ import frx.numpy as fnp
 import numpy as np
 import zk_dtypes
 from absl.testing import absltest
-from hash_frx.sha256 import HostSha256
 from lattice_frx.ring import Eval, RnsRing
 
 from zorch.byte_transcript import ByteHashTranscript, ByteTranscript
@@ -27,6 +26,7 @@ from zorch.pcs.akita.verifier import AkitaVerifier
 from zorch.pcs.akita.virtual import VirtualClaim, VirtualProof, shared_vars
 from zorch.pcs.stage import OpeningWitness
 from zorch.poly.multilinear import eval_mle
+from zorch.testkit.byte_hash import HostSha256
 from zorch.testkit.random_field import rand_field
 
 _Q = (34359753217, 34359754753)
