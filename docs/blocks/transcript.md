@@ -27,14 +27,13 @@ re-absorb) over an injected hash. "Host vs device" is not two classes but *which
 `hash_frx.sha256` marker — and `has_dedicated_fusion` delegates to it, exactly as
 `DuplexSponge` delegates to its `Permutation`. Both injections are byte-identical.
 
-`HostSha256` is zorch's own, in `testkit/byte_hash.py`. hash-frx ships only
-device rows (fractalyze/hash-frx#324), so a caller wanting a host digest brings
-`hashlib` — the testkit pair wraps it, and the `blake3` binding beside it, as the
-out-of-tree oracle the byte-transcript suites hash against.
+`HostSha256` is zorch's own, in `testkit/byte_hash.py`, which holds it and its
+BLAKE3 sibling as the out-of-tree oracles these suites hash against — and says
+why a host row is zorch's to own.
 
 `Sha256FieldTranscript` is the **scan-threadable** surface: it keeps SHA-256's
 incremental state (`Sha256State`, a fixed-shape pytree in
-[hash-frx's `sha256.py`](https://github.com/fractalyze/hash-frx/blob/main/hash_frx/sha256.py))
+[hash-frx's `sha256/sha256.py`](https://github.com/fractalyze/hash-frx/blob/main/hash_frx/sha256/sha256.py))
 instead
 of a growing buffer, so a byte-Fiat-Shamir round loop folds through one device
 program (`zorch.sumcheck.prove`'s `lax.scan`). Its slice framing is byte-identical

@@ -56,9 +56,9 @@ py_library(
     ],
 )
 
-# Public: the host oracles the byte-transcript suites hash against, here because
-# hash-frx dropped its Host* rows (fractalyze/hash-frx#324). Consumers' byte
-# transcripts need the same differential partner.
+# Public: the host oracles the byte-transcript suites hash against. A consumer's
+# byte transcript needs the same differential partner; `byte_hash.py` says why
+# they live here.
 py_library(
     name = "byte_hash",
     testonly = True,

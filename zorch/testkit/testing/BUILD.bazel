@@ -3,6 +3,17 @@ load("@zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 py_test(
+    name = "byte_hash_test",
+    size = "small",
+    srcs = ["byte_hash_test.py"],
+    deps = [
+        "//zorch/testkit:byte_hash",
+        requirement("absl_py"),
+        requirement("numpy"),
+    ],
+)
+
+py_test(
     name = "koalabear16_test",
     size = "small",
     srcs = ["koalabear16_test.py"],

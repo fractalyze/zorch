@@ -247,8 +247,8 @@ def koalabear16_params() -> Poseidon2Params:
     transcript per iteration pays all of that per iteration.
 
     `internal_constants` is one constant per internal round, not a width-wide
-    row: the partial round acts on lane 0, so lanes 1..w-1 are structurally zero
-    and hash-frx's params stopped carrying them.
+    row: the partial round acts on lane 0, so lanes 1..w-1 would be structurally
+    zero and `Poseidon2Params` does not carry them.
     """
     return Poseidon2Params(
         width=_WIDTH,

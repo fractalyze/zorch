@@ -6,19 +6,21 @@ byte-exactness of the device rows by running the same transcript twice: once ove
 the device row (`Sha256`, `Blake3`) and once over an independent implementation of
 the same standard. These are that independent side.
 
-They live here, and not in hash-frx, because hash-frx removed every `Host*` row
-(fractalyze/hash-frx#324): every row it ships now takes a tracer and returns an
-`Array`, so the package has one answer to "may this call sit inside a traced
-region" instead of two. A caller wanting a host digest reaches for `hashlib`, and
-BLAKE3 — the one family the standard library does not carry — reaches for the
-`blake3` binding as an out-of-tree oracle. zorch is such a caller twice over: the
-byte transcript is host-shaped by construction (a `bytes` buffer read back per
-squeeze), and its suites need an oracle that shares no code with the row under
-test.
+They live here, and not in hash-frx, because every row hash-frx ships is a device
+row (fractalyze/hash-frx#324): it takes a tracer and returns an `Array`, so the
+package has one answer to "may this call sit inside a traced region" rather than
+two. A host digest is the caller's to make — `hashlib`, and for BLAKE3, the one
+family the standard library does not carry, the `blake3` binding. zorch is such a
+caller twice over: the byte transcript is host-shaped by construction (a `bytes`
+buffer read back per squeeze), and its suites need an oracle that shares no code
+with the row under test.
 
 So these are **not** a second implementation of the seam for production use. They
-are the differential partner, and the `blake3` binding they need is a test-only
-dependency (`requirements-dev.in`), never a runtime one.
+are the differential partner, and `blake3` is a test dependency only. It is
+declared in `requirements.in`, which feeds `@zorch_pip` and is the only one of the
+requirements files a bazel target can reach; what keeps it out of the `pyzorch`
+wheel is `pyproject.toml`, which declares the runtime dependencies and does not
+name it.
 
 `fusion_path` is GENERIC: one call is a Python loop, not one device unit, so
 `is_one_kernel` is False and `ByteHashTranscript` grinds against them one nonce at
